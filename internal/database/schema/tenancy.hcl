@@ -230,6 +230,61 @@ table "org_settings" {
   }
 }
 
+# Each org's model API keys, one per provider, encrypted with AES-GCM (package modelkeys).
+table "org_model_keys" {
+  schema = schema.public
+  column "org_id" {
+    null = false
+    type = uuid
+  }
+  # The kind's provider, e.g. anthropic.
+  column "provider" {
+    null = false
+    type = text
+  }
+  # A modelkeys.Kinds name, e.g. claude-code-oauth-token.
+  column "kind" {
+    null = false
+    type = text
+  }
+  column "ciphertext" {
+    null = false
+    type = bytea
+  }
+  column "nonce" {
+    null = false
+    type = bytea
+  }
+  # The key's last characters, so admins can tell keys apart.
+  column "hint" {
+    null = false
+    type = text
+    default = ""
+  }
+  column "updated_by" {
+    null = true
+    type = uuid
+  }
+  column "updated_at" {
+    null = false
+    type = timestamptz
+    default = sql("now()")
+  }
+  primary_key { columns = [column.org_id, column.provider] }
+  foreign_key "org_model_keys_org_id_fkey" {
+    columns = [column.org_id]
+    ref_columns = [table.orgs.column.id]
+    on_delete = CASCADE
+    on_update = NO_ACTION
+  }
+  foreign_key "org_model_keys_updated_by_fkey" {
+    columns = [column.updated_by]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+}
+
 # Runs executed in a Kubernetes Job or container. The run reports back through the run API.
 table "sandbox_runs" {
   schema = schema.public
