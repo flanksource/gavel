@@ -95,8 +95,14 @@ func (c GavelConfig) validateRuntime() error {
 		if err := runconfig.Validate(config.Options, true); err != nil {
 			return fmt.Errorf("lint.linters.%s.options: %w", name, err)
 		}
-		if !slices.Contains(BuiltinLinterNames, name) {
-			return fmt.Errorf("unknown linter %q in lint.linters", name)
+		builtin := slices.Contains(BuiltinLinterNames, name)
+		switch {
+		case builtin && len(config.Command) > 0:
+			return fmt.Errorf("lint.linters.%s declares a command, but %s is a built-in linter; name the command linter differently", name, name)
+		case !builtin && len(config.Command) == 0:
+			return fmt.Errorf("unknown linter %q in lint.linters; declare its command to add an external linter", name)
+		case len(config.Includes) > 0 && len(config.Command) == 0:
+			return fmt.Errorf("lint.linters.%s.includes applies only to a linter declared by command", name)
 		}
 		if len(config.Config) > 0 && name != "uir" {
 			return fmt.Errorf("lint.linters.%s.config: native config documents are supported only for uir", name)

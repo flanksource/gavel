@@ -24,6 +24,11 @@ var (
 	// ErrRunResumeModeMismatch means a caller tried to resume one nonterminal
 	// Captain operation using a different Gavel step kind.
 	ErrRunResumeModeMismatch = errors.New("native TODO run resume mode mismatch")
+
+	// ErrRunResumeProviderMismatch means a caller tried to resume a conversation
+	// on a provider family other than the one that holds it: a provider session
+	// id is meaningless to any other family's agent.
+	ErrRunResumeProviderMismatch = errors.New("native TODO run resume provider mismatch")
 )
 
 // ErrRunOwnedElsewhere reports that a TODO already has a live run, driven by a

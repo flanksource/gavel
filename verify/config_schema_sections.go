@@ -46,6 +46,10 @@ func lintSchema() map[string]any {
 						"enabled": boolProp(
 							"Force the linter on (true) or off (false). Omit to keep the linter's built-in " +
 								"default."),
+						"command": stringArray("Declares an external linter under this name, which must not be a built-in's: " +
+							"the argv of a command printing one gavel LinterResult as a JSON array, run with --format json " +
+							"and the files to lint appended, exiting 0 without failures and 1 with them."),
+						"includes": stringArray("Globs of the files a command linter lints. Empty lints every file."),
 					},
 				),
 			),

@@ -50,6 +50,18 @@ gavel commit --force
 | `--ai-fix[=true\|false]` | Override automatic AI repair for commit lint findings |
 | `--ai-fix-max-iterations` | Override the positive repair iteration limit, which defaults to three |
 
+## Projects advanced options
+
+On a phone, open **Projects**, choose a project, and tap a changed file to review its full-width diff. Use **Previous file** and **Next file** to move through the changes, and **Include in commit** to select each file. **Files** returns to the file list while retaining your selection. The commit button stays at the bottom of the screen; its options menu opens the advanced form. The worktree picker keeps review and commit scoped to the chosen checkout.
+
+The Projects page provides schema-driven advanced forms for commit, lint, and test. Options inherit project configuration and command defaults until explicitly changed. Opening a form or editing another field does not save inherited defaults as overrides.
+
+Commit grouping reveals its maximum commit count; enabling it clears an explicit message, and disabling it clears the count override. Lint, secrets, repair, and module tidying use Inherit / Enabled / Disabled toggles. Enabling lint repair reveals a positive iteration limit. Leave that limit unset to inherit configuration, otherwise three iterations are used.
+
+The commit AI runtime bar offers execution mode, provider/model selection, and reasoning effort. Unspecified controls inherit the configured runtime. Grouping models, fallback models, temperature, and cache overrides remain available through the CLI and project configuration. The advanced form excludes these overrides from remembered options and submissions.
+
+The forms remember explicit choices in v2 browser storage. Older preferences are ignored without migration, and commit/lint file selections always come from the current selection. Formatting, database, and server-management switches remain CLI options. Historical commit retries retain their saved requests; an invalid old request must be requeued through the updated form.
+
 ## Repair lint findings
 
 Configure commit repair independently of commit-message generation:
