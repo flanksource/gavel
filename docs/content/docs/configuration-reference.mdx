@@ -200,6 +200,8 @@ Settings for `gavel lint`.
 | `lint.ignore[].file` | string | — | — | Match the violation's file path using doublestar globs (`"pkg/**/*.go"`). |
 | `lint.linters.<name>.enabled` | bool | linter default | later layer wins per linter | Force a linter on/off. Omit to use the linter's built-in default. |
 | `lint.linters.uir.config` | object | — | standard config layering | Complete native UIR document, written to a temporary project `.uir.d/` fragment; [UIR integration](/docs/linter-uir). |
+| `lint.linters.<name>.command` | string[] | — | standard config layering | Declares an external linter named `<name>` (not a built-in's name): the argv of a command that prints one gavel `LinterResult` report; [command linters](/docs/linter-command). |
+| `lint.linters.<name>.includes` | string[] | every file | standard config layering | Globs of the files a command linter lints. |
 
 An ignore rule matches only when **every** populated field matches; an empty
 rule (no `rule`/`source`/`file`) never matches.

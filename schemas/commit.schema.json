@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gavel:project-action:commit:v2",
+  "title": "Commit options",
+  "description": "Commit selected project files. Leave options unset to inherit project configuration and command defaults.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["files"],
+  "x-columns": "auto",
+  "x-column-min-width": "18rem",
+  "x-order": ["files", "message", "commit-all", "max-commits", "lint", "lint-secrets", "ai-fix", "ai-fix-max-iterations", "tidy", "model", "mode", "effort", "precommit", "force", "dry-run", "add-metadata"],
+  "x-on-load": [
+    {"when": {"properties": {"commit-all": {"const": true}}}, "show": ["max-commits"]},
+    {"when": {"required": ["max-commits"]}, "show": ["max-commits"]},
+    {"when": {"properties": {"ai-fix": {"const": "true"}}}, "show": ["ai-fix-max-iterations"]},
+    {"when": {"required": ["ai-fix-max-iterations"]}, "show": ["ai-fix-max-iterations"]},
+    {"when": {"properties": {"ai-fix": {"const": "false"}}}, "hide": ["ai-fix-max-iterations"]}
+  ],
+  "allOf": [
+    {"if": {"required": ["commit-all"], "properties": {"commit-all": {"const": true}}}, "then": {"properties": {"message": {"type": "string", "maxLength": 0, "x-hidden": true}}}},
+    {"if": {"required": ["max-commits"], "properties": {"max-commits": {"minimum": 1}}}, "then": {"properties": {"message": {"type": "string", "maxLength": 0, "x-hidden": true}}}}
+  ],
+  "properties": {
+    "files": {"type": "array", "title": "Selected files", "description": "Current project changes to commit. Paths are checked against the working tree before queuing.", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}, "x-hidden": false, "x-col-span": "full", "x-clicky-order": 10},
+    "message": {"type": "string", "title": "Commit message", "description": "Optional conventional commit message. Leave blank for AI generation. Grouped commits receive individual generated messages.", "format": "textarea", "x-col-span": "full", "x-clicky-order": 20},
+    "commit-all": {"type": "boolean", "title": "Split into logical commits", "description": "Group only the selected files. Enabling grouping clears an explicit message; disabling it clears grouping overrides.", "x-clicky-order": 30, "x-on-change": [{"when": {"const": true}, "reset": ["message"]}, {"when": {"const": false}, "reset": ["max-commits"]}]},
+    "max-commits": {"type": "integer", "minimum": 1, "multipleOf": 1, "title": "Maximum logical commits", "description": "Leave unset to inherit commit.maxCommits, otherwise seven. Excludes the generated-files commit. Setting this also enables grouping.", "x-hidden": true, "x-input-suffix": "commits", "x-clicky-order": 40},
+    "lint": {"type": "string", "enum": ["", "true", "false"], "title": "Lint checks", "description": "Choose Inherit to use commit.lint.enabled.", "x-enum-labels": {"": "Inherit", "true": "Enabled", "false": "Disabled"}, "x-enum-display": "segmented", "x-clicky-order": 60},
+    "lint-secrets": {"type": "string", "enum": ["", "true", "false"], "title": "Secret checks", "description": "Choose Inherit to use commit.lint.secrets; enabled by default.", "x-enum-labels": {"": "Inherit", "true": "Enabled", "false": "Disabled"}, "x-enum-display": "segmented", "x-clicky-order": 70},
+    "ai-fix": {"type": "string", "enum": ["", "true", "false"], "title": "Repair lint findings", "description": "Choose Inherit to use commit.lint.aiFix. Disabling repair clears its iteration override.", "x-enum-labels": {"": "Inherit", "true": "Enabled", "false": "Disabled"}, "x-enum-display": "segmented", "x-clicky-order": 80, "x-on-change": [{"when": {"const": "false"}, "reset": ["ai-fix-max-iterations"]}]},
+    "ai-fix-max-iterations": {"type": "integer", "minimum": 1, "multipleOf": 1, "title": "Maximum repair iterations", "description": "Leave unset to inherit commit.lint.aiFixMaxIterations, otherwise three. An explicit limit must be positive.", "x-hidden": true, "x-input-suffix": "rounds", "x-clicky-order": 90},
+    "tidy": {"type": "string", "enum": ["", "true", "false"], "title": "Tidy Go modules", "description": "Choose Inherit to use commit.tidy.enabled. Can stage go.mod and go.sum updates.", "x-enum-labels": {"": "Inherit", "true": "Enabled", "false": "Disabled"}, "x-enum-display": "segmented", "x-clicky-order": 100},
+    "model": {"type": "string", "title": "Message model", "description": "Optional Captain selector, for example agent:sonnet. Inherits the configured commit message model.", "x-clicky-order": 110},
+    "mode": {"type": "string", "title": "Model execution mode", "description": "Optional Captain execution mode override.", "x-clicky-order": 120, "x-help-display": "hover"},
+    "effort": {"type": "string", "title": "Reasoning effort", "description": "Optional reasoning effort supported by the selected model.", "x-clicky-order": 130, "x-help-display": "hover"},
+    "precommit": {"type": "string", "default": "fail", "enum": ["fail", "skip"], "title": "Precommit checks", "description": "Fail on gitignore and linked-dependency findings, or explicitly skip these checks.", "x-enum-display": "radio", "x-enum-descriptions": {"fail": "Block the commit on findings.", "skip": "Skip gitignore and linked-dependency checks."}, "x-clicky-order": 170},
+    "force": {"type": "boolean", "default": false, "title": "Skip commit hooks", "description": "Skip configured commit hooks. Lint and precommit options are controlled separately.", "x-clicky-order": 180},
+    "dry-run": {"type": "boolean", "default": false, "title": "Preview without committing", "description": "Generate the proposed messages without creating commits. AI generation still runs.", "x-clicky-order": 190},
+    "add-metadata": {"type": "boolean", "default": true, "title": "Include session metadata", "description": "Append issue and session trailers when session metadata is available. Enabled by default.", "x-clicky-order": 200}
+  }
+}

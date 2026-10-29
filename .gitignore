@@ -101,3 +101,16 @@ go.work.sum
 /.new
 pr/ui/test-results/
 /pico.save
+docs/
+site/
+# Keep configuration guidance with the option schema.
+!docs/
+/docs/*
+!/docs/content/
+/docs/content/*
+!/docs/content/docs/
+/docs/content/docs/*
+!/docs/content/docs/configuration-reference.mdx
+!/docs/content/docs/commits.mdx
+!/docs/content/docs/prompt-overrides.mdx
+!/docs/content/docs/external-issues.mdx

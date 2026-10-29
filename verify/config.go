@@ -183,6 +183,12 @@ type LintLinterConfig struct {
 	Args    []string               `yaml:"args,omitempty" json:"args,omitempty"`
 	Runtime processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Config  map[string]any         `yaml:"config,omitempty" json:"config,omitempty"`
+	// Command declares an external linter under this entry's name: the argv
+	// of a command speaking gavel's report protocol (linters.ParseReport),
+	// run with --format json and the files to lint appended.
+	Command []string `yaml:"command,omitempty" json:"command,omitempty"`
+	// Includes are the globs of the files Command lints; empty is every file.
+	Includes []string `yaml:"includes,omitempty" json:"includes,omitempty"`
 }
 
 func (c LintConfig) IsLinterEnabled(name string, defaultEnabled bool) bool {
