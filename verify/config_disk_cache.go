@@ -34,7 +34,7 @@ func loadConfigLayers(dir string, layers []gavelConfigLayer) ([]GavelConfig, err
 	if err != nil {
 		return nil, err
 	}
-	path := dirs.State("config-cache.json")
+	path := configDiskCachePath(dirs)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create config cache: %w", err)
 	}
@@ -61,6 +61,13 @@ func loadConfigLayers(dir string, layers []gavelConfigLayer) ([]GavelConfig, err
 		}
 	}
 	return configs, nil
+}
+
+// configDiskCachePath is the root's cache file in the user cache directory:
+// reading configuration must never leave a checkout dirty.
+func configDiskCachePath(dirs workspace.Dirs) string {
+	root := sha256.Sum256([]byte(dirs.Root()))
+	return filepath.Join(dirs.User.Cache, "config", hex.EncodeToString(root[:8])+".json")
 }
 
 func readConfigDiskCache(path, root string) (configDiskCache, error) {

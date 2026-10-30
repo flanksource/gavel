@@ -202,7 +202,11 @@ func TestSaveGavelConfig_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, cfg.AI.Model.Name, loaded.AI.Model.Name)
-	assert.Equal(t, cfg.Lint.Ignore, loaded.Lint.Ignore)
+	// A file rule resolves relative to the .gavel.yaml that declared it.
+	assert.Equal(t, []LintIgnoreRule{
+		{Rule: "errcheck", Source: "golangci-lint"},
+		{baseDir: dir, Rule: "no-unused-vars", File: "src/legacy.ts"},
+	}, loaded.Lint.Ignore)
 }
 
 func TestLoadGavelConfig_WithFixtures(t *testing.T) {
