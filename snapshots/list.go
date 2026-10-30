@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +44,8 @@ type RunInfo struct {
 
 	LintViolations int `json:"lintViolations"`
 	LintLinters    int `json:"lintLinters"`
+	LintIgnored    int `json:"lintIgnored,omitempty"`
+	LintDismissed  int `json:"lintDismissed,omitempty"`
 }
 
 // LastRun returns the summary of the snapshot last.json points at. A missing pointer is the
@@ -322,6 +325,21 @@ func LoadRun(workDir, runID string) (*testui.Snapshot, error) {
 	return &snap, nil
 }
 
+// LoadRunFile decodes the run snapshot at path, a local file such as the
+// Location SavePerRun returns for a workspace without blob storage; a
+// blob-backed run is read with LoadRun.
+func LoadRunFile(path string) (*testui.Snapshot, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read run snapshot %s: %w", path, err)
+	}
+	var snap testui.Snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, fmt.Errorf("decode run snapshot %s: %w", path, err)
+	}
+	return &snap, nil
+}
+
 func loadRun(store blob.Store, workDir, key string) (*testui.Snapshot, error) {
 	data, err := readKey(store, key)
 	if err != nil {
@@ -355,6 +373,8 @@ func runInfo(snap testui.Snapshot, name, path string, started time.Time) RunInfo
 		}
 		info.LintLinters++
 		info.LintViolations += len(lr.Violations)
+		info.LintIgnored += len(lr.Ignored)
+		info.LintDismissed += len(lr.Dismissed)
 	}
 	if snap.Metadata != nil {
 		info.Ended = snap.Metadata.Ended.UTC()

@@ -14,11 +14,13 @@ import (
 )
 
 type IgnoreRequest struct {
-	Source  string `json:"source,omitempty"`
-	Rule    string `json:"rule,omitempty"`
-	File    string `json:"file,omitempty"`
-	Line    int    `json:"line,omitempty"`
-	WorkDir string `json:"work_dir,omitempty"`
+	Source string `json:"source,omitempty"`
+	Rule   string `json:"rule,omitempty"`
+	File   string `json:"file,omitempty"`
+	Line   int    `json:"line,omitempty"`
+	// Fingerprint ignores one occurrence wherever it moves; see linters.AssignFingerprints.
+	Fingerprint string `json:"fingerprint,omitempty"`
+	WorkDir     string `json:"work_dir,omitempty"`
 }
 
 type IgnoreResponse struct {
@@ -37,8 +39,8 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Rule == "" && req.Source == "" && req.File == "" {
-		http.Error(w, "at least one of rule, source, or file is required", http.StatusBadRequest)
+	if req.Rule == "" && req.Source == "" && req.File == "" && req.Fingerprint == "" {
+		http.Error(w, "at least one of rule, source, file, or fingerprint is required", http.StatusBadRequest)
 		return
 	}
 	if req.Line < 0 || (req.Line > 0 && req.File == "") {
@@ -64,7 +66,7 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newRule := verify.LintIgnoreRule{Source: req.Source, Rule: req.Rule, File: req.File, Line: req.Line}
+	newRule := verify.LintIgnoreRule{Source: req.Source, Rule: req.Rule, File: req.File, Line: req.Line, Fingerprint: req.Fingerprint}
 	if !slices.Contains(repoCfg.Lint.Ignore, newRule) {
 		repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRule)
 		if err := verify.SaveGavelConfig(root, repoCfg); err != nil {

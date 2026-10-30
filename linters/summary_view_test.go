@@ -179,6 +179,26 @@ func TestSummaryView_CollapsesPerFile(t *testing.T) {
 	}
 }
 
+// One violation fixed at three places in two files counts once under its rule
+// but lists both files, each with its own number of places.
+func TestSummaryView_ListsEveryFileOfAMultiLocationViolation(t *testing.T) {
+	v := mkViolation("a.xml", 4, "plan-warning", "FileID is implicitly converted")
+	v.Locations = []models.ViolationLocation{{File: "a.xml", Line: 4}, {File: "a.xml", Line: 12}, {File: "b.xml", Line: 9}}
+	view := NewSummaryView([]*LinterResult{{Linter: "oipa-transaction", Success: true, Violations: []models.Violation{v}}}, 5)
+	rule := view.GetChildren()[0].GetChildren()[0].(*ruleSummaryNode)
+	if len(rule.violations) != 1 {
+		t.Fatalf("expected the rule to count 1 violation, got %d", len(rule.violations))
+	}
+	var got []string
+	for _, child := range rule.GetChildren() {
+		n := child.(*locationSummaryNode)
+		got = append(got, fmt.Sprintf("%s=%d", n.violation.File, n.count))
+	}
+	if strings.Join(got, ",") != "a.xml=2,b.xml=1" {
+		t.Fatalf("file children = %v, want a.xml=2,b.xml=1", got)
+	}
+}
+
 func TestSummaryView_TrailerUsesFileCountNotViolationCount(t *testing.T) {
 	// 3 files, rule limit=2 -> 2 file children + trailer of 1 (not N-2).
 	vs := []models.Violation{

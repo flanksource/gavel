@@ -18,6 +18,7 @@ import (
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/verify"
 )
 
 // Linter represents a generic linter that can analyze files
@@ -240,6 +241,18 @@ type LinterResult struct {
 	// persisted or replayed result still names its transcript.
 	SessionID       string `json:"session_id,omitempty"`
 	ConfigurationID string `json:"configuration_id,omitempty"`
+	// Ignored holds the violations a lint.ignore rule matched, kept out of
+	// Violations so verdicts and counts skip them while history can still
+	// say what was hidden and by which rule.
+	Ignored []IgnoredViolation `json:"ignored,omitempty"`
+	// Dismissed holds the violations a reviewer set aside for this run only;
+	// see DismissViolations.
+	Dismissed []models.Violation `json:"dismissed,omitempty"`
+}
+
+type IgnoredViolation struct {
+	Violation models.Violation      `json:"violation"`
+	Rule      verify.LintIgnoreRule `json:"rule"`
 }
 
 type LinterStatus string

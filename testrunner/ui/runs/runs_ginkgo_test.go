@@ -138,3 +138,34 @@ var _ = Describe("Handler", func() {
 		Expect(get("/api/tests").Body.String()).To(Equal(latestBody))
 	})
 })
+
+var _ = Describe("Lint diff", func() {
+	It("compares a lint run with the previous lint run, skipping test-only runs between them", func() {
+		workDir := GinkgoT().TempDir()
+		save := func(started time.Time, snap testui.Snapshot) string {
+			snap.Metadata = &testui.SnapshotMetadata{Started: started, Ended: started.Add(time.Minute)}
+			_, err := snapshots.SavePerRun(workDir, &snap, started, "")
+			Expect(err).NotTo(HaveOccurred())
+			return traces.RunID(started)
+		}
+		lint := func(fingerprints ...string) testui.Snapshot {
+			result := &linters.LinterResult{Linter: "vale"}
+			for _, fp := range fingerprints {
+				result.Violations = append(result.Violations, models.Violation{Fingerprint: fp})
+			}
+			return testui.Snapshot{Status: testui.SnapshotStatus{LintRun: true}, Lint: []*linters.LinterResult{result}}
+		}
+		review := save(testStarted, lint("kept", "fixed"))
+		save(testStarted.Add(time.Hour), testui.Snapshot{Tests: []parsers.Test{{Name: "TestPasses", Passed: true}}})
+		fix := save(testStarted.Add(2*time.Hour), lint("kept"))
+		handler := runs.Handler(runs.Options{WorkDir: workDir, Latest: http.NotFoundHandler()})
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, runs.Mount+"/"+fix+runs.LintDiffPath, nil))
+
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		var diff runs.LintDiff
+		Expect(json.Unmarshal(rec.Body.Bytes(), &diff)).To(Succeed())
+		Expect(diff).To(Equal(runs.LintDiff{Previous: review, LintDiff: snapshots.LintDiff{Fixed: []string{"fixed"}, Persisting: []string{"kept"}}}))
+	})
+})

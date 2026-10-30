@@ -299,7 +299,7 @@ func (n *ruleSummaryNode) GetChildren() []api.TreeNode {
 	}
 	byFile := map[string]*fileBucket{}
 	var order []string
-	for _, v := range n.violations {
+	for _, v := range violationSites(n.violations) {
 		b, ok := byFile[v.File]
 		if !ok {
 			b = &fileBucket{file: v.File, first: v}
@@ -323,6 +323,24 @@ func (n *ruleSummaryNode) GetChildren() []api.TreeNode {
 		children = append(children, &moreLocationsNode{remaining: remaining})
 	}
 	return children
+}
+
+// violationSites is each place the violations apply: every location of a
+// violation one fix resolves at several places, else the violation itself.
+func violationSites(vs []models.Violation) []models.Violation {
+	var sites []models.Violation
+	for _, v := range vs {
+		if len(v.Locations) < 2 {
+			sites = append(sites, v)
+			continue
+		}
+		for _, l := range v.Locations {
+			site := v
+			site.File, site.Line, site.Column, site.Locations = l.File, l.Line, l.Column, nil
+			sites = append(sites, site)
+		}
+	}
+	return sites
 }
 
 type locationSummaryNode struct {
