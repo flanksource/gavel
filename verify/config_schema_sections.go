@@ -20,7 +20,7 @@ func lintSchema() map[string]any {
 				"Rules that suppress matching lint violations. Each rule matches when every populated "+
 					"field matches; an empty rule never matches. Appended across layers.",
 				object(
-					"A single lint-ignore rule. At least one of rule/source/file must be set.",
+					"A single lint-ignore rule. At least one of rule/source/file/fingerprint must be set.",
 					map[string]any{
 						"rule": stringProp(
 							"Match the violation's rule ID. Accepts literals, `*` globs (\"acme-*\"), and " +
@@ -33,6 +33,9 @@ func lintSchema() map[string]any {
 						"line": intProp(
 							"Match only the violation reported on this 1-based line, ignoring one occurrence. " +
 								"Requires file; the rule stops matching once the code moves."),
+						"fingerprint": stringProp(
+							"Match one occurrence by the fingerprint gavel reports for it (linter, rule, anchor and " +
+								"message, without the line), so the rule survives code shifting. line is then only a hint."),
 					},
 				),
 			),

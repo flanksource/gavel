@@ -42,6 +42,28 @@ var _ = Describe("Nested lint configuration", func() {
 		Expect(applyPostLintFilters(results, root, nil)).To(Succeed())
 		Expect(results[0].Violations).To(HaveExactElements(WithTransform(func(v models.Violation) string { return v.File }, Equal("guide.md"))))
 	})
+	It("keeps what an ignore hid, with its rule, and matches a fingerprint after the finding moves", func() {
+		message := "'is' is repeated!"
+		review := func(line int) []*linters.LinterResult {
+			return []*linters.LinterResult{{Linter: "markdown-review", WorkDir: root, Violations: []models.Violation{
+				{File: "guide.md", Line: line, Rule: &models.Rule{Method: "Repetition"}, Message: &message},
+				{File: "guide.md", Line: line + 1, Rule: &models.Rule{Method: "Spelling"}, Message: &message},
+			}}}
+		}
+		first := review(3)
+		Expect(FilterConfiguredViolations(first, root)).To(Succeed())
+		repeated := first[0].Violations[0].Fingerprint
+		Expect(os.WriteFile(filepath.Join(root, ".gavel.yaml"), []byte("lint: {ignore: [{fingerprint: "+repeated+"}]}\n"), 0o600)).To(Succeed())
+
+		shifted := review(30)
+		Expect(FilterConfiguredViolations(shifted, root)).To(Succeed())
+
+		Expect(shifted[0].Violations).To(HaveExactElements(WithTransform(func(v models.Violation) string { return v.Rule.Method }, Equal("Spelling"))))
+		Expect(shifted[0].Ignored).To(HaveExactElements(SatisfyAll(
+			WithTransform(func(i linters.IgnoredViolation) int { return i.Violation.Line }, Equal(30)),
+			WithTransform(func(i linters.IgnoredViolation) string { return i.Rule.Fingerprint }, Equal(repeated)),
+		)))
+	})
 	It("keeps files owned by a different linter's nested project", func() {
 		Expect(os.WriteFile(filepath.Join(child, ".gavel.yaml"), []byte("lint: {options: {fix: false}}\n"), 0o600)).To(Succeed())
 		other, exists := builtinLinterRegistry(child).Get("ruff")

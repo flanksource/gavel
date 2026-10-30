@@ -122,17 +122,23 @@ func (p *RestartPolicy) UnmarshalYAML(node *yamlv3.Node) error {
 // `*` globs ("acme-*"), and `!`-prefixed negations. File uses doublestar
 // globs so directory traversal patterns ("pkg/**/*.go") behave as expected.
 // Line narrows a File rule to one occurrence; it never matches without File.
-// At least one of Rule/Source/File must be set; an empty rule never matches.
+// Fingerprint names one occurrence by its linters.AssignFingerprints identity,
+// which survives code shifting, so Line is then only a hint for readers.
+// At least one of Rule/Source/File/Fingerprint must be set; an empty rule never matches.
 type LintIgnoreRule struct {
-	baseDir string
-	Rule    string `yaml:"rule,omitempty" json:"rule,omitempty"`
-	Source  string `yaml:"source,omitempty" json:"source,omitempty"`
-	File    string `yaml:"file,omitempty" json:"file,omitempty"`
-	Line    int    `yaml:"line,omitempty" json:"line,omitempty"`
+	baseDir     string
+	Rule        string `yaml:"rule,omitempty" json:"rule,omitempty"`
+	Source      string `yaml:"source,omitempty" json:"source,omitempty"`
+	File        string `yaml:"file,omitempty" json:"file,omitempty"`
+	Line        int    `yaml:"line,omitempty" json:"line,omitempty"`
+	Fingerprint string `yaml:"fingerprint,omitempty" json:"fingerprint,omitempty"`
 }
 
 func (r LintIgnoreRule) MatchesViolation(v models.Violation, workDir string) bool {
-	if r.Line != 0 && (r.File == "" || v.Line != r.Line) {
+	if r.Fingerprint != "" && v.Fingerprint != r.Fingerprint {
+		return false
+	}
+	if r.Fingerprint == "" && r.Line != 0 && (r.File == "" || v.Line != r.Line) {
 		return false
 	}
 	if r.Source != "" {
@@ -166,7 +172,7 @@ func (r LintIgnoreRule) MatchesViolation(v models.Violation, workDir string) boo
 			return false
 		}
 	}
-	return r.Rule != "" || r.Source != "" || r.File != ""
+	return r.Rule != "" || r.Source != "" || r.File != "" || r.Fingerprint != ""
 }
 
 type LintConfig struct {

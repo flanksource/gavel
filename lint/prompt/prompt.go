@@ -181,6 +181,9 @@ func Run(ctx context.Context, opts Options) ([]*linters.LinterResult, error) {
 		Publisher: opts.Publisher, OnEvent: opts.OnEvent,
 	})
 	exclusions.FilterResults(results)
+	if err := lint.FilterConfiguredViolations(results, workDir); err != nil {
+		return nil, fmt.Errorf("apply lint.ignore to prompt findings: %w", err)
+	}
 	return results, nil
 }
 

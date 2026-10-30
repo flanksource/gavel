@@ -127,6 +127,9 @@ func runLint(ctx context.Context, opts LintOptions) (any, error) {
 				rerunOpts.Context = rctx
 				rerunOpts.OutputTee = output.StdoutWriter()
 				return executeLintRerun(rerunOpts, req)
+			},
+			Fix: func(fctx context.Context, req testui.LintFixRequest, output *testui.RerunOutputBuffer, current []*linters.LinterResult) ([]*linters.LinterResult, *testui.LintFixRecord, error) {
+				return runScopedAIFix(fctx, opts, req, output, current)
 			}})
 		if err != nil {
 			return nil, err
@@ -171,18 +174,20 @@ func runLint(ctx context.Context, opts LintOptions) (any, error) {
 			Linters:       opts.Linters,
 			Runtime:       opts.AIRuntimeOptions,
 			MaxIterations: opts.AIFixMaxIters,
+			// lint.Run, not lint.Execute: --baseline must hold across iterations,
+			// or the fixer is asked to repair violations that predate the change.
 			ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
-				rerunOpts := opts
+				rerunOpts := runOpts
 				rerunOpts.Selection = opts.Selection.Fresh()
 				rerunOpts.Context = rctx
 				rerunOpts.AIFix = false
-				return lint.Execute(rerunOpts)
+				return lint.Run(rctx, rerunOpts)
 			},
 		}, allResults)
 		if fixErr != nil {
 			return nil, fmt.Errorf("ai-fix: %w", fixErr)
 		}
-		allResults = fixed
+		allResults = fixed.FinalResults
 	}
 
 	if uiServer != nil {
@@ -223,6 +228,9 @@ type lintUIOptions struct {
 	PersistRerun func(*testui.Snapshot) error
 	// Rerun re-runs the lint for a rerun request from the UI.
 	Rerun func(context.Context, testui.RerunRequest, *testui.RerunOutputBuffer) ([]*linters.LinterResult, error)
+	// Fix repairs the findings a UI fix request names in current, returning
+	// the re-linted results and what the fix did.
+	Fix func(ctx context.Context, req testui.LintFixRequest, output *testui.RerunOutputBuffer, current []*linters.LinterResult) ([]*linters.LinterResult, *testui.LintFixRecord, error)
 }
 
 // startLintUI starts the browser UI for a lint run, marking the initial run in
@@ -241,30 +249,54 @@ func startLintUI(opts lintUIOptions) (*testui.Server, error) {
 		srv.SetStopFunc(standaloneUIStop(cancelRerun))
 		srv.BeginRun("lint")
 		srv.SetLintResults(nil)
+		srv.SetLintFix(nil)
 		results, err := opts.Rerun(rerunCtx, req, output)
-		if err != nil {
+		return finishLintUIRun(srv, opts.PersistRerun, results, err)
+	})
+	if opts.Fix != nil {
+		srv.SetLintFixFunc(func(req testui.LintFixRequest, output *testui.RerunOutputBuffer) error {
+			clicky.ClearGlobalTasks()
+			fixCtx, cancelFix := newStopContext(opts.Context, 0)
+			defer cancelFix()
+			srv.SetStopFunc(standaloneUIStop(cancelFix))
+			current := srv.Snapshot().Lint
+			srv.BeginRun("lint")
+			results, record, err := opts.Fix(fixCtx, req, output, current)
+			if err != nil {
+				srv.SetLintResults(current)
+			} else {
+				srv.SetLintFix(record)
+			}
+			return finishLintUIRun(srv, opts.PersistRerun, results, err)
+		})
+	}
+	return srv, nil
+}
+
+// finishLintUIRun publishes a UI-started lint run's results and saves it as a
+// run of its own, so history keeps every rerun and fix.
+func finishLintUIRun(srv *testui.Server, persist func(*testui.Snapshot) error, results []*linters.LinterResult, runErr error) error {
+	if runErr != nil {
+		srv.SetRunError(runErr)
+		srv.MarkDone()
+		return runErr
+	}
+	srv.SetLintResults(results)
+	snapshot := srv.Snapshot()
+	snapshot.Tests = nil
+	snapshot.Status.Running = false
+	snapshot.Metadata.Kind = "lint"
+	snapshot.Metadata.Ended = time.Now().UTC()
+	snapshot.Git = snapshots.GitInfo(srv.GitRoot())
+	if persist != nil {
+		if err := persist(&snapshot); err != nil {
 			srv.SetRunError(err)
 			srv.MarkDone()
 			return err
 		}
-		srv.SetLintResults(results)
-		snapshot := srv.Snapshot()
-		snapshot.Tests = nil
-		snapshot.Status.Running = false
-		snapshot.Metadata.Kind = "lint"
-		snapshot.Metadata.Ended = time.Now().UTC()
-		snapshot.Git = snapshots.GitInfo(srv.GitRoot())
-		if opts.PersistRerun != nil {
-			if err := opts.PersistRerun(&snapshot); err != nil {
-				srv.SetRunError(err)
-				srv.MarkDone()
-				return err
-			}
-		}
-		srv.MarkDone()
-		return nil
-	})
-	return srv, nil
+	}
+	srv.MarkDone()
+	return nil
 }
 
 type lintUIResultOptions struct {

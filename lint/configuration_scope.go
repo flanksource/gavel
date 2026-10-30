@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"time"
@@ -120,12 +121,17 @@ func configScopes(inv linterInvocation, scopes []string) []string {
 	return slices.Clip(result)
 }
 
-func filterConfiguredViolations(results []*linters.LinterResult, workDir string) error {
+// FilterConfiguredViolations fingerprints every violation, then moves those a
+// layered .gavel.yaml lint.ignore rule matches into the result's Ignored. It is
+// the one ignore layer for configured linters and prompt reviews alike;
+// workDir stands in for a result without its own.
+func FilterConfiguredViolations(results []*linters.LinterResult, workDir string) error {
 	configs := map[string]verify.GavelConfig{}
 	for _, result := range results {
 		if result == nil {
 			continue
 		}
+		linters.AssignFingerprints(result)
 		root := result.WorkDir
 		if root == "" {
 			root = workDir
@@ -134,7 +140,7 @@ func filterConfiguredViolations(results []*linters.LinterResult, workDir string)
 		for _, violation := range result.Violations {
 			dir := root
 			if violation.File != "" {
-				dir = filepath.Dir(resolveLintPath(root, violation.File))
+				dir = configDir(filepath.Dir(resolveLintPath(root, violation.File)))
 			}
 			cfg, exists := configs[dir]
 			if !exists {
@@ -148,8 +154,25 @@ func filterConfiguredViolations(results []*linters.LinterResult, workDir string)
 			probe := &linters.LinterResult{WorkDir: root, Violations: []models.Violation{violation}}
 			linters.FilterIgnoredViolations([]*linters.LinterResult{probe}, cfg.Lint.Ignore)
 			kept = append(kept, probe.Violations...)
+			result.Ignored = append(result.Ignored, probe.Ignored...)
 		}
 		result.Violations = kept
 	}
 	return nil
+}
+
+// configDir is the directory whose .gavel.yaml chain governs dir: dir itself,
+// or for a deleted or virtual path its nearest existing ancestor, since a
+// directory that does not exist declares no configuration of its own.
+func configDir(dir string) string {
+	for {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return dir
+		}
+		dir = parent
+	}
 }

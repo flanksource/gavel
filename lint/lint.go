@@ -302,9 +302,12 @@ func applyPostLintFilters(results []*linters.LinterResult, workDir string, files
 		logger.Infof("Filtered %d gitignored violations in %s", filtered, workDir)
 	}
 	if workDir == "" {
+		for _, result := range results {
+			linters.AssignFingerprints(result)
+		}
 		return nil
 	}
-	return filterConfiguredViolations(results, workDir)
+	return FilterConfiguredViolations(results, workDir)
 }
 
 // Group is one git root and the files (relative to it) scoped to that root.

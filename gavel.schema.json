@@ -2510,10 +2510,14 @@
           "description": "Rules that suppress matching lint violations. Each rule matches when every populated field matches; an empty rule never matches. Appended across layers.",
           "items": {
             "additionalProperties": false,
-            "description": "A single lint-ignore rule. At least one of rule/source/file must be set.",
+            "description": "A single lint-ignore rule. At least one of rule/source/file/fingerprint must be set.",
             "properties": {
               "file": {
                 "description": "Match the violation's file path using doublestar globs (e.g. \"pkg/**/*.go\").",
+                "type": "string"
+              },
+              "fingerprint": {
+                "description": "Match one occurrence by the fingerprint gavel reports for it (linter, rule, anchor and message, without the line), so the rule survives code shifting. line is then only a hint.",
                 "type": "string"
               },
               "line": {
