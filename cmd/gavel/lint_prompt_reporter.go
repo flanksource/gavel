@@ -77,7 +77,11 @@ func (r *promptLintReporter) UpsertLintResult(result *linters.LinterResult) {
 	if r.finished || r.err != nil {
 		return
 	}
-	result = r.filtered(result)
+	result, err := r.filtered(result)
+	if err != nil {
+		r.fail(err)
+		return
+	}
 	index := slices.IndexFunc(r.snapshot.Lint, func(old *linters.LinterResult) bool {
 		return old.Linter == result.Linter && old.WorkDir == result.WorkDir
 	})
@@ -90,11 +94,15 @@ func (r *promptLintReporter) UpsertLintResult(result *linters.LinterResult) {
 		}
 		if result.InFlight() {
 			result.Violations = append(slices.Clone(previous.Violations), result.Violations...)
-			result = r.filtered(result)
+			result.Ignored = append(slices.Clone(previous.Ignored), result.Ignored...)
+			if result, err = r.filtered(result); err != nil {
+				r.fail(err)
+				return
+			}
 		}
 		r.snapshot.Lint[index] = result
 	}
-	err := snapshots.WriteSnapshot(r.path, &r.snapshot)
+	err = snapshots.WriteSnapshot(r.path, &r.snapshot)
 	if err == nil && r.options.Publisher != nil {
 		r.options.Publisher.UpsertLintResult(result)
 	}
@@ -126,9 +134,12 @@ func (r *promptLintReporter) RemoveLintResult(linter, workDir string) {
 	}
 }
 
-func (r *promptLintReporter) filtered(result *linters.LinterResult) *linters.LinterResult {
+// filtered drops --exclude rules and repeated findings, then applies lint.ignore
+// through the same layer as configured linters.
+func (r *promptLintReporter) filtered(result *linters.LinterResult) (*linters.LinterResult, error) {
 	copy := *result
 	copy.Violations = []models.Violation{}
+	copy.Ignored = slices.Clone(result.Ignored)
 	seen := map[promptFindingKey]bool{}
 	for _, violation := range r.exclusions.Filter(result.Linter, slices.Clone(result.Violations)) {
 		key := promptFindingIdentity(result, violation)
@@ -137,7 +148,16 @@ func (r *promptLintReporter) filtered(result *linters.LinterResult) *linters.Lin
 			seen[key] = true
 		}
 	}
-	return &copy
+	if err := lint.FilterConfiguredViolations([]*linters.LinterResult{&copy}, r.options.Options.WorkDir); err != nil {
+		return nil, fmt.Errorf("apply lint.ignore to %s findings: %w", result.Linter, err)
+	}
+	return &copy, nil
+}
+
+// fail records the first reporting error and cancels the run with it.
+func (r *promptLintReporter) fail(err error) {
+	r.err = err
+	r.options.Cancel(err)
 }
 
 func promptFindingIdentity(result *linters.LinterResult, violation models.Violation) promptFindingKey {
@@ -207,7 +227,11 @@ func (r *promptLintReporter) Finish(results []*linters.LinterResult, runErr erro
 	if results != nil {
 		r.snapshot.Lint = make([]*linters.LinterResult, len(results))
 		for index, result := range results {
-			r.snapshot.Lint[index] = r.filtered(result)
+			filtered, err := r.filtered(result)
+			if err != nil {
+				return nil, err
+			}
+			r.snapshot.Lint[index] = filtered
 		}
 	}
 	r.finished = true

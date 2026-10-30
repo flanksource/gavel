@@ -255,8 +255,15 @@ func formatViolationLine(linter string, v models.Violation) string {
 	if v.Line > 0 {
 		loc = fmt.Sprintf("%s:%d", loc, v.Line)
 	}
+	line := fmt.Sprintf("  %s [%s] %s", loc, linter, msg)
 	if rule != "" {
-		return fmt.Sprintf("  %s [%s/%s] %s", loc, linter, rule, msg)
+		line = fmt.Sprintf("  %s [%s/%s] %s", loc, linter, rule, msg)
 	}
-	return fmt.Sprintf("  %s [%s] %s", loc, linter, msg)
+	if len(v.Locations) < 2 {
+		return line
+	}
+	for _, l := range v.Locations {
+		line += strings.TrimRight(fmt.Sprintf("\n      at %s %s", l, l.Message), " ")
+	}
+	return line
 }

@@ -71,7 +71,7 @@ var _ = Describe("Prompt lint reporter", func() {
 		reporter.UpsertLintResult(&linters.LinterResult{Linter: "review", WorkDir: root, Violations: []models.Violation{excluded, finding}})
 		snapshot, err := snapshots.LoadRunFile(reporter.path)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(snapshot.Lint[0].Violations).To(Equal([]models.Violation{finding}))
+		Expect(unfingerprinted(snapshot.Lint[0].Violations)).To(Equal([]models.Violation{finding}))
 		Expect(output.String()).NotTo(ContainSubstring(*excluded.Message))
 	})
 
@@ -84,7 +84,7 @@ var _ = Describe("Prompt lint reporter", func() {
 		reporter.UpsertLintResult(result)
 		snapshot, err := snapshots.LoadRunFile(reporter.path)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(snapshot.Lint[0].Violations).To(Equal([]models.Violation{finding, second}))
+		Expect(unfingerprinted(snapshot.Lint[0].Violations)).To(Equal([]models.Violation{finding, second}))
 		Expect(strings.Count(output.String(), *second.Message)).To(Equal(1))
 	})
 
@@ -113,7 +113,7 @@ var _ = Describe("Prompt lint reporter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(final.Status.Stopped).To(BeTrue())
 		Expect(final.Error).To(ContainSubstring("context canceled"))
-		Expect(final.Lint[0].Violations).To(Equal([]models.Violation{finding}))
+		Expect(unfingerprinted(final.Lint[0].Violations)).To(Equal([]models.Violation{finding}))
 		persisted, err := snapshots.LoadRunFile(reporter.path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(persisted).To(Equal(final))
@@ -128,7 +128,7 @@ var _ = Describe("Prompt lint reporter", func() {
 		snapshot, err := snapshots.LoadRunFile(reporter.path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(snapshot.Status.Running).To(BeFalse())
-		Expect(snapshot.Lint[0].Violations).To(Equal([]models.Violation{finding}))
+		Expect(unfingerprinted(snapshot.Lint[0].Violations)).To(Equal([]models.Violation{finding}))
 	})
 
 	It("surfaces a disk failure without corrupting the last valid snapshot", func() {
@@ -147,3 +147,16 @@ var _ = Describe("Prompt lint reporter", func() {
 		Expect(persisted).To(Equal(previous))
 	})
 })
+
+// unfingerprinted strips the fingerprint the ignore layer assigns, so a spec can
+// compare findings with the ones it authored.
+func unfingerprinted(violations []models.Violation) []models.Violation {
+	GinkgoHelper()
+	out := make([]models.Violation, len(violations))
+	for i, v := range violations {
+		Expect(v.Fingerprint).NotTo(BeEmpty(), "every reported finding is fingerprinted")
+		v.Fingerprint = ""
+		out[i] = v
+	}
+	return out
+}

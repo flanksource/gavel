@@ -121,6 +121,18 @@ func TestLintIgnoreRule_MatchesViolation(t *testing.T) {
 			match: false,
 		},
 		{
+			name:  "fingerprint matches its occurrence on any line",
+			rule:  LintIgnoreRule{Fingerprint: "ca88741f1bc4e36e", File: "pkg/foo.go", Line: 12},
+			v:     models.Violation{File: "pkg/foo.go", Line: 40, Fingerprint: "ca88741f1bc4e36e"},
+			match: true,
+		},
+		{
+			name:  "fingerprint does not match another occurrence",
+			rule:  LintIgnoreRule{Fingerprint: "ca88741f1bc4e36e"},
+			v:     models.Violation{File: "pkg/foo.go", Line: 12, Fingerprint: "ca88741f1bc4e36e-1"},
+			match: false,
+		},
+		{
 			name:  "line without file never matches",
 			rule:  LintIgnoreRule{Rule: "errcheck", Line: 12},
 			v:     models.Violation{File: "pkg/foo.go", Line: 12, Rule: &models.Rule{Method: "errcheck"}},

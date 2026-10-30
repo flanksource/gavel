@@ -199,13 +199,14 @@ Settings for `gavel lint`.
 | `lint.ignore[].source` | string | — | — | Match the emitting linter (`golangci-lint`, `eslint`, `betterleaks`, …). Same matcher syntax as `rule`. |
 | `lint.ignore[].file` | string | — | — | Match the violation's file path using doublestar globs (`"pkg/**/*.go"`). |
 | `lint.ignore[].line` | int | — | — | Match only the violation on this 1-based line, ignoring one occurrence. Requires `file`; the rule stops matching once the code moves. |
+| `lint.ignore[].fingerprint` | string | — | — | Match one occurrence by the `fingerprint` gavel reports for it (linter, rule, anchor and message, without the line), so the rule survives code shifting; `line` is then only a hint. |
 | `lint.linters.<name>.enabled` | bool | linter default | later layer wins per linter | Force a linter on/off. Omit to use the linter's built-in default. |
 | `lint.linters.uir.config` | object | — | standard config layering | Complete native UIR document, written to a temporary project `.uir.d/` fragment; [UIR integration](/docs/linter-uir). |
 | `lint.linters.<name>.command` | string[] | — | standard config layering | Declares an external linter named `<name>` (not a built-in's name): the argv of a command that prints one gavel `LinterResult` report; [command linters](/docs/linter-command). |
 | `lint.linters.<name>.includes` | string[] | every file | standard config layering | Globs of the files a command linter lints. |
 
 An ignore rule matches only when **every** populated field matches; an empty
-rule (no `rule`/`source`/`file`) never matches.
+rule (no `rule`/`source`/`file`/`fingerprint`) never matches.
 
 ## `commit`
 

@@ -89,6 +89,25 @@ func TestResolveSpecFormatsViolationsWithRuleAndLocation(t *testing.T) {
 	}
 }
 
+// One fix at several places: the agent must see every place, not only the
+// first, or it fixes one statement and the re-lint still reports the rest.
+func TestResolveSpecListsEveryLocationOfAMultiLocationViolation(t *testing.T) {
+	first := models.ViolationLocation{File: "rules/a/XMLData.xml", Line: 4, Message: "statement a1"}
+	second := models.ViolationLocation{File: "rules/b/XMLData.xml", Line: 9, Message: "statement b2"}
+	v := violation(first.File, "FileID is implicitly converted", "convert", first.Line)
+	v.Locations = []models.ViolationLocation{first, second}
+	spec, err := renderLintPrompt(ResolveOptions{Base: api.Spec{Model: api.Model{Name: "agent:sonnet"}}, Dir: "/repo", Results: resultsWith("oipa-transaction", v)})
+	if err != nil {
+		t.Fatalf("ResolveSpec err: %v", err)
+	}
+	want := "  rules/a/XMLData.xml:4 [oipa-transaction/convert] FileID is implicitly converted\n" +
+		"      at rules/a/XMLData.xml:4 statement a1\n" +
+		"      at rules/b/XMLData.xml:9 statement b2"
+	if !strings.Contains(spec.Prompt.User, want) {
+		t.Errorf("prompt does not list both locations under the violation; want %q in %q", want, spec.Prompt.User)
+	}
+}
+
 func TestResolveSpecSkipsSkippedAndEmptyResults(t *testing.T) {
 	res := []*linters.LinterResult{
 		{Linter: "skipped", Skipped: true, Violations: []models.Violation{violation("x", "x", "X", 1)}},
