@@ -23,12 +23,15 @@ import (
 )
 
 type Server struct {
-	mu               sync.RWMutex
-	revision         atomic.Uint64
-	encoding         snapshotEncodingCache
-	tests            []parsers.Test
-	lint             []*linters.LinterResult
-	lintRun          bool
+	mu       sync.RWMutex
+	revision atomic.Uint64
+	encoding snapshotEncodingCache
+	tests    []parsers.Test
+	lint     []*linters.LinterResult
+	lintRun  bool
+	// dismissed holds the fingerprints a reviewer set aside for this server's
+	// lifetime; every lint result that arrives is filtered by it.
+	dismissed        map[string]bool
 	benchCmp         *bench.BenchComparison
 	fixtureBenchmark *FixtureBenchmarkState
 	performance      *fixtures.BenchmarkPerformance
@@ -54,6 +57,8 @@ type Server struct {
 	basePath string
 
 	rerunMu       sync.Mutex
+	lintFixFn     LintFixFunc
+	lintFix       *LintFixRecord
 	rerunFn       RerunFunc
 	rerunOutput   *RerunOutputBuffer
 	stopFn        func()
@@ -172,6 +177,7 @@ func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.benchCmp = snapshot.Bench
 	s.fixtureBenchmark = snapshot.FixtureBenchmark
 	s.performance = snapshot.Performance
+	s.lintFix = snapshot.LintFix
 	s.runError = snapshot.Error
 	s.logTail = snapshot.LogTail
 	s.metadata = cloneSnapshotMetadata(snapshot.Metadata)
@@ -199,6 +205,7 @@ func (s *Server) SetResults(tests []parsers.Test) {
 func (s *Server) SetLintResults(results []*linters.LinterResult) {
 	s.mu.Lock()
 	s.lint = results
+	linters.DismissViolations(s.lint, s.dismissed)
 	s.lintRun = true
 	s.mu.Unlock()
 	s.notify()
@@ -208,6 +215,7 @@ func (s *Server) SetLintResults(results []*linters.LinterResult) {
 // or appends it, so a result can appear while it is still pending or running.
 func (s *Server) UpsertLintResult(result *linters.LinterResult) {
 	s.mu.Lock()
+	linters.DismissViolations([]*linters.LinterResult{result}, s.dismissed)
 	i := slices.IndexFunc(s.lint, func(r *linters.LinterResult) bool {
 		return r.Linter == result.Linter && r.WorkDir == result.WorkDir
 	})
@@ -374,6 +382,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
+	mux.HandleFunc("/api/lint/dismiss", s.handleLintDismiss)
+	mux.HandleFunc("/api/lint/fix", s.handleLintFix)
 	mux.HandleFunc("/api/tests/edit", s.handleTestEdit)
 	mux.HandleFunc("/api/file", s.handleFileSource)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
@@ -550,6 +560,7 @@ func (s *Server) snapshotWithTasks(taskTests []parsers.Test) Snapshot {
 			LintRun:           s.lintRun,
 			Traces:            s.tracesStatusLocked(),
 			StopSupported:     s.stopFn != nil,
+			LintFixSupported:  s.lintFixFn != nil,
 			TestEditSupported: s.testEditSupportedLocked(),
 			Stopped:           stopped,
 			StopMessage:       stopMessage,
@@ -559,6 +570,7 @@ func (s *Server) snapshotWithTasks(taskTests []parsers.Test) Snapshot {
 		Bench:            s.benchCmp,
 		FixtureBenchmark: s.fixtureBenchmark,
 		Performance:      s.performance,
+		LintFix:          s.lintFix,
 		Error:            s.runError,
 		LogTail:          s.logTail,
 	}

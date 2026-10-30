@@ -12,7 +12,7 @@ import {
   findNodeByRoutePath,
   isProcessExited,
   totalLintViolations,
-  violationIgnoreAction,
+  violationIgnoreActions,
   type LintAction,
   type LintFilters,
   type LintGrouping,
@@ -23,11 +23,12 @@ import {
   type Violation,
 } from '@flanksource/clicky-ui/data';
 import { lintFindings, testFindings, type FileFinding, type FileRef, type FileReviewView } from '@flanksource/clicky-ui/file-findings';
-import { Button, Tabs } from '@flanksource/clicky-ui/components';
+import { Button, DropdownMenu, Tabs } from '@flanksource/clicky-ui/components';
 import {
   UiArrowLeft,
   UiBeaker,
   UiChartLineUp,
+  UiEyeClosed,
   UiFileCode,
   UiHistory,
   UiListChecks,
@@ -445,10 +446,13 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     if (finding.kind !== 'lint') return null;
     const linter = linterByFinding.get(findingKey(finding));
     if (!linter) throw new Error(`no linter recorded for the finding at ${finding.file}:${finding.line}`);
-    const violation: Violation = finding.rule ? { rule: { method: finding.rule } } : {};
-    const action = violationIgnoreAction({ violation, linter, file: finding.file, workDir: finding.workDir ?? '' });
+    const violation: Violation = {
+      ...(finding.rule ? { rule: { method: finding.rule } } : {}),
+      ...(finding.line ? { line: finding.line } : {}),
+    };
+    const ignores = violationIgnoreActions({ violation, linter, file: finding.file, workDir: finding.workDir ?? '' });
     const source = sourceUrlByFinding.get(findingKey(finding));
-    if (!action && !source) return null;
+    if (ignores.length === 0 && !source) return null;
     return (
       <>
         {source && (
@@ -456,10 +460,17 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
             <a href={source} target="_blank" rel="noreferrer" title={`Open ${finding.file}:${finding.line ?? ''} at its source`}>Open source</a>
           </Button>
         )}
-        {action && (
-          <Button type="button" size="sm" variant="outline" className="h-6 gap-1 px-2 text-xs text-muted-foreground" title={action.title} disabled={ignoreBusy} onClick={() => void onIgnore(action)}>
-            {action.label}
-          </Button>
+        {ignores.length > 0 && (
+          <DropdownMenu
+            label="Ignore"
+            icon={UiEyeClosed}
+            variant="outline"
+            size="sm"
+            align="right"
+            title="Add an ignore rule to .gavel.yaml"
+            menuLabel="Ignore scope"
+            items={ignores.map(action => ({ label: action.label, title: action.title, disabled: ignoreBusy, onSelect: () => void onIgnore(action) }))}
+          />
         )}
       </>
     );

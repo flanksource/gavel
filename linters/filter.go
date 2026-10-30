@@ -3,13 +3,15 @@ package linters
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/gavel/verify"
 )
 
-// FilterIgnoredViolations removes violations matching any ignore rule from results in place.
+// FilterIgnoredViolations moves violations matching any ignore rule from each
+// result's Violations to its Ignored, with the first rule that matched.
 // Violation file paths are relativized against each result's WorkDir before matching,
 // so that relative ignore-rule globs match absolute violation paths.
 // Returns the total number of filtered violations.
@@ -29,14 +31,9 @@ func FilterIgnoredViolations(results []*LinterResult, rules []verify.LintIgnoreR
 					v.File = rel
 				}
 			}
-			match := false
-			for _, rule := range rules {
-				if rule.MatchesViolation(v, result.WorkDir) {
-					match = true
-					break
-				}
-			}
-			if match {
+			index := slices.IndexFunc(rules, func(rule verify.LintIgnoreRule) bool { return rule.MatchesViolation(v, result.WorkDir) })
+			if index >= 0 {
+				result.Ignored = append(result.Ignored, IgnoredViolation{Violation: v, Rule: rules[index]})
 				filtered++
 			} else {
 				kept = append(kept, v)

@@ -662,6 +662,7 @@ func buildLintByLinterFile(results []*linters.LinterResult, filters lintRouteFil
 				byLinter[result.Linter] = bucket
 			}
 			file := relLintPath(violation.File, result.WorkDir)
+			violation = relLintLocations(violation, result.WorkDir)
 			if file == "" {
 				rule := lintRuleName(violation)
 				if _, ok := bucket.NoFileRules[rule]; !ok {
@@ -734,6 +735,7 @@ func buildLintByLinterRuleFile(results []*linters.LinterResult, filters lintRout
 				rules[rule] = bucket
 			}
 			file := relLintPath(violation.File, result.WorkDir)
+			violation = relLintLocations(violation, result.WorkDir)
 			if file == "" {
 				bucket.NoFileViolations = append(bucket.NoFileViolations, violation)
 				continue
@@ -781,6 +783,7 @@ func buildLintByFileLinterRule(results []*linters.LinterResult, filters lintRout
 				continue
 			}
 			file := relLintPath(violation.File, result.WorkDir)
+			violation = relLintLocations(violation, result.WorkDir)
 			meta[result.Linter] = result
 			if file == "" {
 				if _, ok := byNoFileLinter[result.Linter]; !ok {
@@ -885,15 +888,33 @@ func lintViolationNode(linterName, file string, violation models.Violation) *Vie
 	if msg != "" {
 		name = name + " " + msg
 	}
+	status := statusFromSeverity(violation.Severity)
+	var children []*ViewNode
+	if len(violation.Locations) > 1 {
+		name = fmt.Sprintf("%s (%d locations)", name, len(violation.Locations))
+		for _, l := range violation.Locations {
+			children = append(children, &ViewNode{
+				Name:      strings.TrimSpace(l.String() + " " + l.Message),
+				Kind:      "lint-location",
+				Status:    status,
+				Framework: "lint",
+				File:      l.File,
+				Line:      l.Line,
+				Message:   l.Message,
+				Command:   linterName,
+			})
+		}
+	}
 	return &ViewNode{
 		Name:      name,
 		Kind:      "violation",
-		Status:    statusFromSeverity(violation.Severity),
+		Status:    status,
 		Framework: "lint",
 		File:      file,
 		Line:      violation.Line,
 		Message:   msg,
 		Command:   linterName,
+		Children:  children,
 	}
 }
 
@@ -1076,7 +1097,7 @@ func buildLintFolderNodes(root *lintFileTreeNode, meta map[string]*linters.Linte
 func lintNodeViolationCount(nodes []*ViewNode) int {
 	total := 0
 	for _, node := range nodes {
-		if len(node.Children) == 0 {
+		if node.Kind == "violation" || len(node.Children) == 0 {
 			total++
 			continue
 		}
@@ -1317,6 +1338,21 @@ func slugify(input string) string {
 		return "node"
 	}
 	return out
+}
+
+// relLintLocations rebases a violation's locations on workDir as relLintPath
+// does its file, copying them so the run's own result keeps its paths.
+func relLintLocations(v models.Violation, workDir string) models.Violation {
+	if len(v.Locations) == 0 {
+		return v
+	}
+	locations := make([]models.ViolationLocation, len(v.Locations))
+	for i, l := range v.Locations {
+		l.File = relLintPath(l.File, workDir)
+		locations[i] = l
+	}
+	v.Locations = locations
+	return v
 }
 
 func relLintPath(file, workDir string) string {

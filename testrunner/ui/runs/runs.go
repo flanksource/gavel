@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -24,6 +25,9 @@ const (
 	// ListPath answers the listing at the root and under every run's prefix,
 	// so the page can always reach it relative to its own base path.
 	ListPath = "/api/runs"
+	// LintDiffPath, under a run's prefix, compares that run's lint findings
+	// with the previous lint run's.
+	LintDiffPath = "/api/lint-diff"
 
 	defaultPageSize = 50
 	maxPageSize     = 200
@@ -103,6 +107,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveList(w, r, runID)
 		return
 	}
+	if "/"+rest == LintDiffPath {
+		h.serveLintDiff(w, runID)
+		return
+	}
 	srv, err := h.server(runID, prefix)
 	if errors.Is(err, blob.ErrNotFound) {
 		http.NotFound(w, r)
@@ -168,6 +176,54 @@ func (h *handler) serveList(w http.ResponseWriter, r *http.Request, current stri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(page) //nolint:errcheck
+}
+
+// LintDiff is a run's lint findings against the previous lint run's; Previous
+// is empty when the run is the first, and then every open finding is new.
+type LintDiff struct {
+	Previous string `json:"previous,omitempty"`
+	snapshots.LintDiff
+}
+
+func (h *handler) serveLintDiff(w http.ResponseWriter, runID string) {
+	diff, err := h.lintDiff(runID)
+	if errors.Is(err, blob.ErrNotFound) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(diff) //nolint:errcheck
+}
+
+func (h *handler) lintDiff(runID string) (LintDiff, error) {
+	cur, err := snapshots.LoadRun(h.opts.WorkDir, runID)
+	if err != nil {
+		return LintDiff{}, err
+	}
+	previous, err := snapshots.PreviousLintRun(h.opts.WorkDir, runID)
+	if err != nil {
+		return LintDiff{}, err
+	}
+	var result LintDiff
+	var prev *testui.Snapshot
+	if previous != nil {
+		result.Previous = previous.RunID
+		if prev, err = snapshots.LoadRun(h.opts.WorkDir, previous.RunID); err != nil {
+			return LintDiff{}, err
+		}
+	}
+	var prevLint []*linters.LinterResult
+	if prev != nil {
+		prevLint = prev.Lint
+	}
+	if result.LintDiff, err = snapshots.DiffLint(prevLint, cur.Lint); err != nil {
+		return LintDiff{}, fmt.Errorf("%s: %w", runID, err)
+	}
+	return result, nil
 }
 
 func pageSize(raw string) (int, error) {

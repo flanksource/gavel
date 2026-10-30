@@ -113,6 +113,33 @@ func TestBuildLintByLinterRuleFileGroupsRulesBeforeFolders(t *testing.T) {
 	}
 }
 
+// One fix at three places across two files is one violation: counted once
+// under its rule, listing each place (relative to the work dir) beneath it.
+func TestBuildLintByLinterRuleFileListsEveryLocationUnderOneViolation(t *testing.T) {
+	v := testViolation("rules/a/XMLData.xml", 4, "plan-warning")
+	v.Locations = []models.ViolationLocation{
+		{File: "/tmp/work/rules/a/XMLData.xml", Line: 4, Message: "statement a1"},
+		{File: "rules/a/XMLData.xml", Line: 12, Message: "statement a2"},
+		{File: "rules/b/XMLData.xml", Line: 9, Message: "statement b1"},
+	}
+	results := []*linters.LinterResult{{Linter: "oipa-transaction", WorkDir: "/tmp/work", Violations: []models.Violation{v}}}
+
+	linter := buildLintByLinterRuleFile(results, lintRouteFilters{Grouping: "linter-rule-file"})[0]
+	rule := mustChildByName(t, linter.Children, "plan-warning (1)")
+	node := rule
+	for _, name := range []string{"rules (1)", "a (1)", "XMLData.xml (1)", "rules/a/XMLData.xml:4 violation (3 locations)"} {
+		node = mustChildByName(t, node.Children, name)
+	}
+	file := node
+	want := []string{"rules/a/XMLData.xml:4 statement a1", "rules/a/XMLData.xml:12 statement a2", "rules/b/XMLData.xml:9 statement b1"}
+	if got := names(file.Children); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("location children = %v, want %v", got, want)
+	}
+	if file.Children[2].Kind != "lint-location" || file.Children[2].File != "rules/b/XMLData.xml" || file.Children[2].Line != 9 {
+		t.Fatalf("location node = %#v, want a lint-location on rules/b/XMLData.xml:9", file.Children[2])
+	}
+}
+
 func TestBuildLintByFileLinterRuleCollapsesCheckoutPrefix(t *testing.T) {
 	results := []*linters.LinterResult{{
 		Linter:  "betterleaks",

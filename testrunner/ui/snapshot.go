@@ -45,6 +45,7 @@ type SnapshotStatus struct {
 	// kept none.
 	Traces            *TracesStatus `json:"traces,omitempty"`
 	StopSupported     bool          `json:"stop_supported,omitempty"`
+	LintFixSupported  bool          `json:"lint_fix_supported,omitempty"`
 	TestEditSupported bool          `json:"test_edit_supported"`
 	Stopped           bool          `json:"stopped,omitempty"`
 	StopMessage       string        `json:"stop_message,omitempty"`
@@ -59,6 +60,8 @@ type Snapshot struct {
 	Bench            *bench.BenchComparison         `json:"bench,omitempty"`
 	FixtureBenchmark *FixtureBenchmarkState         `json:"fixture_benchmark,omitempty"`
 	Performance      *fixtures.BenchmarkPerformance `json:"performance,omitempty"`
+	// LintFix is the scoped AI fix whose re-lint produced Lint, if any.
+	LintFix *LintFixRecord `json:"lint_fix,omitempty"`
 
 	// Error explains why the run produced no (or only partial) results — a
 	// setup failure, a timeout, a crashed runner. Consumers treat a
