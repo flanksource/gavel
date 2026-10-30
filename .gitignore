@@ -114,3 +114,4 @@ site/
 !/docs/content/docs/commits.mdx
 !/docs/content/docs/prompt-overrides.mdx
 !/docs/content/docs/external-issues.mdx
+go.work*

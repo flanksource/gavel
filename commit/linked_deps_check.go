@@ -706,7 +706,7 @@ func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, 
 		for f := range unstage {
 			files = append(files, f)
 		}
-		if err := resetFiles(p.WorkDir, files); err != nil {
+		if err := resetFiles(ctx, p.WorkDir, files); err != nil {
 			return CheckOutcome{}, fmt.Errorf("unstage: %w", err)
 		}
 		outcome.Unstaged = files
@@ -715,7 +715,7 @@ func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, 
 	if len(upgrades) > 0 {
 		gitRoot := rootOrWorkDir(p)
 		for file, ups := range upgrades {
-			if err := applyGoModReplaceUpgrade(p.WorkDir, gitRoot, file, ups); err != nil {
+			if err := applyGoModReplaceUpgrade(ctx, p.WorkDir, gitRoot, file, ups); err != nil {
 				return outcome, fmt.Errorf("apply go.mod upgrade for %s: %w", file, err)
 			}
 			outcome.Upgraded = append(outcome.Upgraded, file)

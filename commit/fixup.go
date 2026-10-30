@@ -67,7 +67,7 @@ func validateFixupOptions(opts Options) error {
 // runs after all fixup + leftover commits exist, with a no-op sequence
 // editor so the rebase is non-interactive.
 func runFixup(ctx context.Context, opts Options) (*Result, error) {
-	if err := stageFiles(opts.WorkDir, opts.Stage, opts.Config); err != nil {
+	if err := stageFiles(ctx, opts.WorkDir, opts.Stage, opts.Config); err != nil {
 		return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
 	}
 
@@ -160,10 +160,10 @@ func runFixup(ctx context.Context, opts Options) (*Result, error) {
 
 	stagedSet := source.Files
 	for _, route := range routes {
-		if err := restageOnly(opts.WorkDir, stagedSet, route.Files); err != nil {
+		if err := restageOnly(ctx, opts.WorkDir, stagedSet, route.Files); err != nil {
 			return result, fmt.Errorf("restage for fixup of %s: %w", shortHash(route.Hash), err)
 		}
-		hash, commitErr := commitFixup(opts.WorkDir, route.Hash)
+		hash, commitErr := commitFixup(ctx, opts.WorkDir, route.Hash)
 		if commitErr != nil {
 			return result, fmt.Errorf("git commit --fixup=%s: %w", shortHash(route.Hash), commitErr)
 		}
@@ -177,7 +177,7 @@ func runFixup(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if len(leftovers) > 0 {
-		if err := restageOnly(opts.WorkDir, stagedSet, leftovers); err != nil {
+		if err := restageOnly(ctx, opts.WorkDir, stagedSet, leftovers); err != nil {
 			return result, fmt.Errorf("restage leftover files: %w", err)
 		}
 		leftoverOpts := opts
@@ -268,11 +268,11 @@ func resolveFixupBase(workDir string) (string, error) {
 // restageOnly resets every file in the original staged set, then re-stages
 // just `keep`. Used between fixup-route iterations so each commit captures
 // exactly that route's files.
-func restageOnly(workDir string, original, keep []string) error {
-	if err := resetFiles(workDir, original); err != nil {
+func restageOnly(ctx context.Context, workDir string, original, keep []string) error {
+	if err := resetFiles(ctx, workDir, original); err != nil {
 		return err
 	}
-	return addFiles(workDir, keep)
+	return addFiles(ctx, workDir, keep)
 }
 
 // runAutosquash runs `git rebase -i --autosquash <base>` non-interactively

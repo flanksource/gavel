@@ -47,8 +47,8 @@ var _ = Describe("runInteractiveStaging", func() {
 		}
 		var resetCalled bool
 		var added []string
-		resetAllStagedFn = func(string) error { resetCalled = true; return nil }
-		addFilesFunc = func(_ string, files []string) error { added = files; return nil }
+		resetAllStagedFn = func(context.Context, string) error { resetCalled = true; return nil }
+		addFilesFunc = func(_ context.Context, _ string, files []string) error { added = files; return nil }
 
 		paths, err := runInteractiveStaging(context.TODO(), opts)
 		Expect(err).ToNot(HaveOccurred())
@@ -77,12 +77,12 @@ var _ = Describe("runInteractiveStaging", func() {
 		var rmPaths []string
 		var rmCalledBeforeAdd bool
 		var addCalled bool
-		gitRmCachedFunc = func(_ string, paths []string) error {
+		gitRmCachedFunc = func(_ context.Context, _ string, paths []string) error {
 			rmPaths = paths
 			rmCalledBeforeAdd = !addCalled
 			return nil
 		}
-		addFilesFunc = func(_ string, _ []string) error { addCalled = true; return nil }
+		addFilesFunc = func(_ context.Context, _ string, _ []string) error { addCalled = true; return nil }
 
 		_, err := runInteractiveStaging(context.TODO(), opts)
 		Expect(err).ToNot(HaveOccurred())
@@ -440,9 +440,9 @@ func installOrchestratorStubs() func() {
 	prevPicker := runTreePickerFunc
 	prevSummaries := startCandidateSummariesFunc
 	gatherStatusFunc = func(string) (*status.Result, error) { return &status.Result{}, nil }
-	resetAllStagedFn = func(string) error { return nil }
-	addFilesFunc = func(string, []string) error { return nil }
-	gitRmCachedFunc = func(string, []string) error { return nil }
+	resetAllStagedFn = func(context.Context, string) error { return nil }
+	addFilesFunc = func(context.Context, string, []string) error { return nil }
+	gitRmCachedFunc = func(context.Context, string, []string) error { return nil }
 	runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
 		return treePickerResult{}, nil
 	}
