@@ -198,6 +198,7 @@ Settings for `gavel lint`.
 | `lint.ignore[].rule` | string | — | — | Match the violation's rule ID. Accepts literals, `*` globs (`"acme-*"`), and `!`-prefixed negations. |
 | `lint.ignore[].source` | string | — | — | Match the emitting linter (`golangci-lint`, `eslint`, `betterleaks`, …). Same matcher syntax as `rule`. |
 | `lint.ignore[].file` | string | — | — | Match the violation's file path using doublestar globs (`"pkg/**/*.go"`). |
+| `lint.ignore[].line` | int | — | — | Match only the violation on this 1-based line, ignoring one occurrence. Requires `file`; the rule stops matching once the code moves. |
 | `lint.linters.<name>.enabled` | bool | linter default | later layer wins per linter | Force a linter on/off. Omit to use the linter's built-in default. |
 | `lint.linters.uir.config` | object | — | standard config layering | Complete native UIR document, written to a temporary project `.uir.d/` fragment; [UIR integration](/docs/linter-uir). |
 | `lint.linters.<name>.command` | string[] | — | standard config layering | Declares an external linter named `<name>` (not a built-in's name): the argv of a command that prints one gavel `LinterResult` report; [command linters](/docs/linter-command). |

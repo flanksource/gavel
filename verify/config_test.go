@@ -109,6 +109,24 @@ func TestLintIgnoreRule_MatchesViolation(t *testing.T) {
 			match: true,
 		},
 		{
+			name:  "occurrence matches its file and line",
+			rule:  LintIgnoreRule{Rule: "errcheck", File: "pkg/foo.go", Line: 12},
+			v:     models.Violation{File: "pkg/foo.go", Line: 12, Rule: &models.Rule{Method: "errcheck"}},
+			match: true,
+		},
+		{
+			name:  "occurrence does not match another line of the file",
+			rule:  LintIgnoreRule{Rule: "errcheck", File: "pkg/foo.go", Line: 12},
+			v:     models.Violation{File: "pkg/foo.go", Line: 13, Rule: &models.Rule{Method: "errcheck"}},
+			match: false,
+		},
+		{
+			name:  "line without file never matches",
+			rule:  LintIgnoreRule{Rule: "errcheck", Line: 12},
+			v:     models.Violation{File: "pkg/foo.go", Line: 12, Rule: &models.Rule{Method: "errcheck"}},
+			match: false,
+		},
+		{
 			name:  "rule wildcard matches anything",
 			rule:  LintIgnoreRule{Rule: "*", Source: "betterleaks"},
 			v:     models.Violation{Source: "betterleaks", Rule: &models.Rule{Method: "anything"}},

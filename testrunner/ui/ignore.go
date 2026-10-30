@@ -17,6 +17,7 @@ type IgnoreRequest struct {
 	Source  string `json:"source,omitempty"`
 	Rule    string `json:"rule,omitempty"`
 	File    string `json:"file,omitempty"`
+	Line    int    `json:"line,omitempty"`
 	WorkDir string `json:"work_dir,omitempty"`
 }
 
@@ -40,6 +41,10 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "at least one of rule, source, or file is required", http.StatusBadRequest)
 		return
 	}
+	if req.Line < 0 || (req.Line > 0 && req.File == "") {
+		http.Error(w, fmt.Sprintf("line %d needs a file and must be positive", req.Line), http.StatusBadRequest)
+		return
+	}
 
 	s.mu.Lock()
 	root := s.resolveGitRootLocked(req.WorkDir)
@@ -59,7 +64,7 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newRule := verify.LintIgnoreRule{Source: req.Source, Rule: req.Rule, File: req.File}
+	newRule := verify.LintIgnoreRule{Source: req.Source, Rule: req.Rule, File: req.File, Line: req.Line}
 	if !slices.Contains(repoCfg.Lint.Ignore, newRule) {
 		repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRule)
 		if err := verify.SaveGavelConfig(root, repoCfg); err != nil {
