@@ -40,7 +40,7 @@ type hostedLanding struct {
 }
 
 func newHostedLanding(t *testing.T) *hostedLanding {
-	db, _, org := openOrgDB(t)
+	db, store, org := openOrgDB(t)
 	h := &hostedLanding{db: db, org: org, creator: uuid.New(), member: uuid.New()}
 	for name, id := range map[string]uuid.UUID{"ada": h.creator, "grace": h.member} {
 		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
@@ -86,7 +86,7 @@ func newHostedLanding(t *testing.T) *hostedLanding {
 	t.Setenv("GITHUB_API_URL", api.URL)
 
 	h.dataDir = t.TempDir()
-	srv := &Server{ghOpts: github.Options{TokenSource: func() (string, error) { return "ghs_app", nil }}}
+	srv := &Server{ghOpts: github.Options{TokenSource: func() (string, error) { return "ghs_app", nil }}, githubCache: store}
 	srv.SetOrg(org, db)
 	srv.SetHostedMode(true)
 	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{
@@ -209,6 +209,22 @@ func TestHostedLandingTakesItsTitleAndLeavesFilesOut(t *testing.T) {
 	assert.Equal(t, branch, h.opened["head"], "from the run's own branch")
 	assert.Equal(t, "Limit login attempts", h.opened["title"], "titled as the user asked")
 	assert.Equal(t, "Lands todo "+todo.String()[:8]+": Rate limit /login\n\n## Commits\n\n- add ratelimit.go\n- add notes.md\n- Leave out notes.md\n\n## Left out\n\n- notes.md\n", h.opened["body"])
+}
+
+func TestHostedPRTodosFindTheWorkspaceFromThePullRequest(t *testing.T) {
+	h := newHostedLanding(t)
+	const prURL = "https://github.com/acme/app/pull/7"
+	_, created := hostedCall(t, h.base, http.MethodPost, "/api/todos", h.creator, "org:member", map[string]any{"dir": h.workspace, "title": "Fix the build", "visibility": "public"})
+	status, linked := hostedCall(t, h.base, http.MethodPost, "/api/todos/pr-links", h.creator, "org:member", map[string]any{"dir": h.workspace, "id": created["id"], "url": prURL})
+	require.Equal(t, http.StatusCreated, status, linked)
+
+	status, body := hostedRaw(t, h.base, http.MethodGet, "/api/prs/todos?url="+prURL, h.member)
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Contains(t, body, "Fix the build", "the todos of acme/app, the pull request's repository")
+
+	status, body = hostedRaw(t, h.base, http.MethodGet, "/api/prs/todos?url=https://github.com/other/lib/pull/3", h.member)
+	require.Equal(t, http.StatusOK, status, body)
+	assert.JSONEq(t, "[]", body, "no todo of this organization's links a repository it doesn't have")
 }
 
 func TestHostedPRLinksReadThroughTheOrgsApp(t *testing.T) {
