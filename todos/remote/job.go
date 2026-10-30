@@ -122,7 +122,7 @@ type Message struct {
 	Iteration int               `json:"iteration,omitempty"`
 	Spec      *api.Spec         `json:"spec,omitempty"`
 	Workspace *api.Workspace    `json:"workspace,omitempty"`
-	Event    *api.Event        `json:"event,omitempty"`
+	Event     *api.Event        `json:"event,omitempty"`
 	Progress  *api.VerifyReport `json:"progress,omitempty"`
 	Result    *Result           `json:"result,omitempty"`
 	// Error is the run's error, with its result; empty when the run completed.

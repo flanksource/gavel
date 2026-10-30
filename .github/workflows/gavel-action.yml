@@ -45,10 +45,6 @@ jobs:
         run: pnpm install --no-frozen-lockfile
         working-directory: pr/ui
 
-      - name: Install site dependencies
-        run: npm ci
-        working-directory: docs
-
       - name: Install golangci-lint
         shell: bash
         run: |

@@ -40,7 +40,7 @@ func TestHistoryTabIsPageOnly(t *testing.T) {
 func TestFilesTabIsPageOnly(t *testing.T) {
 	handler := NewServer().Handler()
 	for path, want := range map[string]int{
-		"/files":                                    200,
+		"/files": 200,
 		"/files/rules/br/CopyBook-Fees/XMLData.xml": 200,
 		"/files/docs/README.md":                     200,
 		"/files/testdata/report.json":               200,
