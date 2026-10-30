@@ -1,0 +1,41 @@
+package jira
+
+import (
+	"encoding/json"
+
+	"github.com/flanksource/gavel/externalissues"
+)
+
+type ADFNode struct {
+	media   *externalissues.Attachment
+	Type    string          `json:"type"`
+	Version int             `json:"version,omitempty"`
+	Text    string          `json:"text,omitempty"`
+	Attrs   json.RawMessage `json:"attrs,omitempty"`
+	Marks   []ADFMark       `json:"marks,omitempty"`
+	Content []ADFNode       `json:"content,omitempty"`
+}
+
+type ADFMark struct {
+	Type  string          `json:"type"`
+	Attrs json.RawMessage `json:"attrs,omitempty"`
+}
+
+type adfAttrs struct {
+	ID         string          `json:"id"`
+	Type       string          `json:"type"`
+	Text       string          `json:"text"`
+	Alt        string          `json:"alt"`
+	URL        string          `json:"url"`
+	Href       string          `json:"href"`
+	Collection string          `json:"collection"`
+	Language   string          `json:"language"`
+	ShortName  string          `json:"shortName"`
+	Timestamp  string          `json:"timestamp"`
+	PanelType  string          `json:"panelType"`
+	State      string          `json:"state"`
+	Data       json.RawMessage `json:"data"`
+	Level      int             `json:"level"`
+	Colspan    int             `json:"colspan"`
+	Rowspan    int             `json:"rowspan"`
+}

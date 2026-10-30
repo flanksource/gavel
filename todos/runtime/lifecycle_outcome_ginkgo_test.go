@@ -9,8 +9,9 @@ import (
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
@@ -28,7 +29,7 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 	var (
 		ctx      context.Context
 		provider *Provider
-		host     *lifecycle.Host
+		host     *lifecycle1.Host
 	)
 
 	issueOf := func(todo *types.TODO) *native.Issue {
@@ -55,7 +56,7 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		admission, err := runtimetest.Admit(ctx, provider, todo, todos.RunPreparation{Mode: mode, Prompt: step, ExecutorName: "headless-claude"},
 			promptrun.Completed{
 				Runtime: runtimetest.ClaudeCLI, Model: "claude-sonnet", ProviderSessionID: session,
-				Outcome: lifecycle.RunOutcome(execution, mode == types.ModeVerify),
+				Outcome: lifecycle1.RunOutcome(execution, mode == types.ModeVerify),
 			})
 		Expect(err).NotTo(HaveOccurred())
 		return admission
@@ -63,19 +64,19 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 	// succeeded is a run that returned a successful envelope with one event.
 	succeeded := func(event, comment string, verify *api.VerifyReport) lifecycle.StepResult {
 		return lifecycle.StepResult{
-			Run: lifecycle.RunFacts{State: lifecycle.RunSucceeded}, Verify: verify,
+			Run: lifecycle.RunFacts{State: lifecycle1.RunSucceeded}, Verify: verify,
 			Envelope: lifecycle.Envelope{Success: true, Event: event, Comment: comment},
 		}
 	}
 
 	// outcomeOf classifies a synthetic result the way RunStep does.
-	outcomeOf := func(todo *types.TODO, step lifecycle.Step, execution *todos.ExecutionResult, facts lifecycle.StepResult) (*lifecycle.StepOutcome, string) {
+	outcomeOf := func(todo *types.TODO, step lifecycle.Step, execution *todos.ExecutionResult, facts lifecycle.StepResult) (*lifecycle1.StepOutcome, string) {
 		GinkgoHelper()
 		lc, err := host.Context(ctx, todo)
 		Expect(err).NotTo(HaveOccurred())
 		status, err := host.Def.Outcome(step, lc, facts)
 		Expect(err).NotTo(HaveOccurred())
-		return &lifecycle.StepOutcome{Step: step, Status: status, Result: facts, Execution: execution}, status
+		return &lifecycle1.StepOutcome{Step: step, Status: status, Result: facts, Execution: execution}, status
 	}
 
 	lifecycleEvents := func(todo *types.TODO) []native.Event {
@@ -84,7 +85,7 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		var matched []native.Event
 		for _, event := range events {
-			if event.Kind == lifecycle.EventLifecycleOutcome {
+			if event.Kind == lifecycle1.EventLifecycleOutcome {
 				matched = append(matched, event)
 			}
 		}
@@ -118,11 +119,11 @@ var _ = Describe("lifecycle outcomes on the native runtime", Ordered, func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		def, err := lifecycle.Default()
+		def, err := lifecycle1.Default()
 		Expect(err).NotTo(HaveOccurred())
 		engine, err := lifecycle.New(def)
 		Expect(err).NotTo(HaveOccurred())
-		host = &lifecycle.Host{Provider: provider, Def: engine, Config: verify.DefaultGavelConfig(), WorkDir: workDir, Kind: lifecycle.HostCLI}
+		host = &lifecycle1.Host{Provider: provider, Def: engine, Config: verify.DefaultGavelConfig(), WorkDir: workDir, Kind: lifecycle1.HostCLI}
 	})
 
 	var planned *types.TODO

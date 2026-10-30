@@ -5,8 +5,9 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -15,7 +16,7 @@ import (
 var _ = Describe("Host Resolve", func() {
 	var (
 		provider *fakeProvider
-		host     *lifecycle.Host
+		host     *lifecycle1.Host
 		ctx      context.Context
 	)
 	BeforeEach(func() {
@@ -29,7 +30,7 @@ var _ = Describe("Host Resolve", func() {
 		todo := hostTodo()
 		step := stepNamed(host.Def, "run")
 
-		resolution, err := host.Resolve(ctx, todo, step, lifecycle.RunOptions{})
+		resolution, err := host.Resolve(ctx, todo, step, lifecycle1.RunOptions{})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resolution.Step.Name).To(Equal("run"))
@@ -49,7 +50,7 @@ var _ = Describe("Host Resolve", func() {
 	})
 
 	It("reports the layer trace so a caller can say which layer supplied what", func() {
-		resolution, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle.RunOptions{})
+		resolution, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle1.RunOptions{})
 
 		Expect(err).NotTo(HaveOccurred())
 		var names []string
@@ -61,7 +62,7 @@ var _ = Describe("Host Resolve", func() {
 	})
 
 	It("folds the caller's request as the top layer", func() {
-		resolution, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle.RunOptions{
+		resolution, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, "run"), lifecycle1.RunOptions{
 			Request: api.Spec{Budget: api.Budget{MaxTurns: 7, Timeout: "12m"}},
 		})
 
@@ -71,7 +72,7 @@ var _ = Describe("Host Resolve", func() {
 	})
 
 	It("resolves a verify step to the definition of done without an agent prompt", func() {
-		resolution, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, lifecycle.StepVerify), lifecycle.RunOptions{})
+		resolution, err := host.Resolve(ctx, hostTodo(), stepNamed(host.Def, lifecycle1.StepVerify), lifecycle1.RunOptions{})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resolution.Class).To(Equal(types.ModeVerify))
@@ -84,7 +85,7 @@ var _ = Describe("Host Resolve", func() {
 	})
 
 	It("rejects a step the lifecycle does not declare rather than resolving it", func() {
-		_, err := host.Resolve(ctx, hostTodo(), lifecycle.Step{Name: "nonesuch"}, lifecycle.RunOptions{})
+		_, err := host.Resolve(ctx, hostTodo(), lifecycle.Step{Name: "nonesuch"}, lifecycle1.RunOptions{})
 
 		Expect(err).To(MatchError(ContainSubstring(`step "nonesuch" is not part of lifecycle todos`)))
 	})

@@ -9,6 +9,85 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// The tree is root/.gavel.yaml → root/org/.gavel.yaml → root/org/repo (git
+// root), with $HOME elsewhere: org is the git root's parent and root sits two
+// levels up, outside the chain.
+var _ = Describe("git-root-parent config layer", func() {
+	const parentRule, twoUpRule = "acme-parent-rule", "acme-two-up-rule"
+	var root, org, repo string
+
+	writeConfig := func(dir, content string) {
+		Expect(os.WriteFile(filepath.Join(dir, GavelConfigFileName), []byte(content), 0o600)).To(Succeed())
+	}
+
+	BeforeEach(func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		root = GinkgoT().TempDir()
+		org = filepath.Join(root, "org")
+		repo = filepath.Join(org, "repo")
+		Expect(os.MkdirAll(filepath.Join(repo, ".git"), 0o755)).To(Succeed())
+		writeConfig(root, "lint: {ignore: [{rule: "+twoUpRule+"}]}\n")
+		writeConfig(repo, "procfile: {profile: repo}\n")
+	})
+
+	It("merges the parent beneath the git root and keeps its lint.ignore, ignoring two levels up", func() {
+		writeConfig(org, "procfile: {profile: parent, mem: 1g}\nlint: {ignore: [{rule: "+parentRule+", source: betterleaks}]}\n")
+
+		cfg, err := LoadGavelConfig(repo)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Procfile).To(Equal(ProcfileConfig{Profile: "repo", Mem: "1g"}))
+		Expect(cfg.Lint.Ignore).To(Equal([]LintIgnoreRule{{Rule: parentRule, Source: "betterleaks"}}))
+	})
+
+	It("lists the parent as a git-root-parent source in the trace", func() {
+		writeConfig(org, "procfile: {mem: 1g}\n")
+
+		trace, err := LoadGavelConfigTrace(repo)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(trace.Sources).To(HaveLen(2))
+		Expect([]string{trace.Sources[0].Origin, trace.Sources[0].Path}).To(Equal([]string{"git-root-parent", filepath.Join(org, GavelConfigFileName)}))
+		Expect([]string{trace.Sources[1].Origin, trace.Sources[1].Path}).To(Equal([]string{"git-root", filepath.Join(repo, GavelConfigFileName)}))
+	})
+
+	It("does not read $HOME twice when the repo sits directly under it", func() {
+		GinkgoT().Setenv("HOME", org)
+		writeConfig(org, "lint: {ignore: [{rule: "+parentRule+"}]}\n")
+
+		Expect(GavelConfigDirs(repo)).To(Equal([]GavelConfigDir{
+			{Origin: "user-home", Dir: org},
+			{Origin: "git-root", Dir: repo},
+		}))
+		cfg, err := LoadGavelConfig(repo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Lint.Ignore).To(Equal([]LintIgnoreRule{{Rule: parentRule}}))
+	})
+
+	It("has no parent layer outside a git repository", func() {
+		Expect(os.Remove(filepath.Join(repo, ".git"))).To(Succeed())
+		home, err := os.UserHomeDir()
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(GavelConfigDirs(repo)).To(Equal([]GavelConfigDir{
+			{Origin: "user-home", Dir: home},
+			{Origin: "target-directory", Dir: repo},
+		}))
+	})
+
+	It("invalidates the cached config when the parent file is created", func() {
+		first, err := LoadGavelConfig(repo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(first.Procfile.Mem).To(BeEmpty())
+
+		writeConfig(org, "procfile: {mem: 2g}\n")
+
+		second, err := LoadGavelConfig(repo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(second.Procfile).To(Equal(ProcfileConfig{Profile: "repo", Mem: "2g"}))
+	})
+})
+
 var _ = Describe("raw configuration spec layers", func() {
 	DescribeTable("rejects invalid home configuration before repository overrides",
 		func(homeConfig, repositoryConfig, field string) {

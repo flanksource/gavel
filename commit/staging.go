@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -26,7 +27,7 @@ import (
 // id is set. Any other mode value is treated as an explicit session id (Claude
 // or Codex): stageSessionFiles stages exactly the files that session touched
 // (see --stage=session|<session-id>).
-func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
+func stageFiles(ctx context.Context, workDir, mode string, cfg verify.CommitConfig) error {
 	switch mode {
 	case StageStaged:
 		return nil
@@ -35,24 +36,24 @@ func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 		if err != nil {
 			return fmt.Errorf("list pre-staged files: %w", err)
 		}
-		if err := gitAddUpdate(workDir); err != nil {
+		if err := gitAddUpdate(ctx, workDir); err != nil {
 			return err
 		}
 		if mode == StageAll {
-			if err := addUntracked(workDir, cfg); err != nil {
+			if err := addUntracked(ctx, workDir, cfg); err != nil {
 				return err
 			}
 		}
-		return unstageGitIgnored(workDir, preStaged)
+		return unstageGitIgnored(ctx, workDir, preStaged)
 	case StageSession:
 		sessionID := resolveEnvSessionID()
 		if sessionID == "" {
 			logger.V(1).Infof("commit: --stage=session but no agent session id in env; committing the staged set")
 			return nil
 		}
-		return stageSessionFiles(workDir, sessionID, cfg)
+		return stageSessionFiles(ctx, workDir, sessionID, cfg)
 	default:
-		return stageSessionFiles(workDir, mode, cfg)
+		return stageSessionFiles(ctx, workDir, mode, cfg)
 	}
 }
 
@@ -62,7 +63,7 @@ func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 // untouched — the modification simply won't be in the commit. Matching is done
 // by `git check-ignore` (see gitCheckIgnore), so !-negations, .git/info/exclude,
 // the global excludesFile, and worktrees are all honored.
-func unstageGitIgnored(workDir string, preStaged []string) error {
+func unstageGitIgnored(ctx context.Context, workDir string, preStaged []string) error {
 	staged, err := stagedFiles(workDir)
 	if err != nil {
 		return fmt.Errorf("list staged files: %w", err)
@@ -91,14 +92,14 @@ func unstageGitIgnored(workDir string, preStaged []string) error {
 		logger.Infof("commit: skipping %s (matches .gitignore)", f)
 		toReset = append(toReset, f)
 	}
-	return resetFiles(workDir, toReset)
+	return resetFiles(ctx, workDir, toReset)
 }
 
 // addUntracked stages untracked files that git does not ignore, minus the
 // repo's .gavel.yaml commit.gitignore rules (commit.allow re-includes) and minus
 // embedded git repositories, which `git add` refuses. Every skip is logged so a
 // dropped file is never silent.
-func addUntracked(workDir string, cfg verify.CommitConfig) error {
+func addUntracked(ctx context.Context, workDir string, cfg verify.CommitConfig) error {
 	untracked, err := untrackedFiles(workDir)
 	if err != nil {
 		return fmt.Errorf("list untracked files: %w", err)
@@ -132,10 +133,10 @@ func addUntracked(workDir string, cfg verify.CommitConfig) error {
 			keep = append(keep, f)
 		}
 	}
-	return addFiles(workDir, keep)
+	return addFiles(ctx, workDir, keep)
 }
 
-func stageCommitAllSource(workDir string, cfg verify.CommitConfig) error {
+func stageCommitAllSource(ctx context.Context, workDir string, cfg verify.CommitConfig) error {
 	files, err := stagedFiles(workDir)
 	if err != nil {
 		return fmt.Errorf("list staged files: %w", err)
@@ -143,7 +144,7 @@ func stageCommitAllSource(workDir string, cfg verify.CommitConfig) error {
 	if len(files) > 0 {
 		return nil
 	}
-	if err := stageFiles(workDir, StageAll, cfg); err != nil {
+	if err := stageFiles(ctx, workDir, StageAll, cfg); err != nil {
 		return fmt.Errorf("stage files (%s): %w", StageAll, err)
 	}
 	return nil

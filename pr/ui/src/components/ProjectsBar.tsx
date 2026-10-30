@@ -16,7 +16,6 @@ import {
 } from '@flanksource/clicky-ui/icons';
 import type { ProjectGitSummaryView } from '../projectGitQueries';
 import type { Project, ProcStatus } from '../types';
-import { GitChangesBadge } from './GitChangesBadge';
 import { ProcControl } from './ProcControl';
 import { RelativeTime } from './RelativeTime';
 import { ProjectGitBadges, projectGitBadgesState } from './ProjectGitBadges';
@@ -124,26 +123,33 @@ function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, pr
 
   return (
     <div>
-      <div className={`flex items-center gap-1 pr-3 transition-colors ${projectActive ? 'bg-primary/10' : 'hover:bg-muted'}`}>
-        {historyEnabled ? (
-          <Button variant="ghost" size="icon" type="button" onClick={onToggle} aria-label={`${open ? 'Collapse' : 'Expand'} ${project.name} runs`} className="h-7 w-7 shrink-0 rounded-none text-muted-foreground">
-            <Chevron />
+      <div className={`transition-colors ${projectActive ? 'bg-primary/10' : 'hover:bg-muted'}`}>
+        {/* Mobile-only layout uses max-md: rather than an md: override: clicky-ui's
+            prebuilt styles.css re-emits base utilities such as basis-full and pb-2
+            after this app's md: variants, so those overrides never applied. */}
+        <div className="flex items-center gap-1 pr-3 max-md:flex-wrap">
+          {historyEnabled ? (
+            <Button variant="ghost" size="icon" type="button" onClick={onToggle} aria-label={`${open ? 'Collapse' : 'Expand'} ${project.name} runs`} className="h-7 w-7 shrink-0 rounded-none text-muted-foreground">
+              <Chevron />
+            </Button>
+          ) : <span className="h-7 w-7 shrink-0" />}
+          <Button variant="ghost" type="button" onClick={onOpen} aria-label={`Open ${project.name} project`} className="h-auto min-w-[6rem] flex-auto justify-start gap-2 rounded-none py-1.5 pr-2 text-left max-md:min-h-11">
+            <UiFolder className="shrink-0 text-muted-foreground" />
+            <span className="truncate text-sm font-medium text-foreground" title={project.dir}>{project.name}</span>
+            {historyEnabled && <span className="text-[10px] tabular-nums text-muted-foreground" title={`${projectRuns.length} test and lint runs`}>{projectRuns.length}</span>}
           </Button>
-        ) : <span className="h-7 w-7 shrink-0" />}
-        <Button variant="ghost" type="button" onClick={onOpen} aria-label={`Open ${project.name} project`} className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-none py-1.5 pr-2 text-left">
-          <UiFolder className="shrink-0 text-muted-foreground" />
-          <span className="truncate text-sm font-medium text-foreground" title={project.dir}>{project.name}</span>
-          {historyEnabled && <span className="text-[10px] tabular-nums text-muted-foreground" title={`${projectRuns.length} test and lint runs`}>{projectRuns.length}</span>}
-        </Button>
-        <ProjectGitBadges state={projectGitBadgesState(gitSummary, project.name)} />
-        <GitChangesBadge count={procStatus[project.name]?.gitChanges} />
-        <Button variant="ghost" size="icon" type="button" onClick={() => onSettings(project)} title={`Edit ${project.name} .gavel.yaml`} aria-label={`Edit ${project.name} settings`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
-          <UiCog />
-        </Button>
-        <Button variant="ghost" size="icon" type="button" onClick={() => onHide(project)} title={`Hide ${project.name} from project lists`} aria-label={`Hide ${project.name} project`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
-          <UiEyeClosed />
-        </Button>
-        <ProcControl repo={key} project={project} status={procStatus[project.name]} onChanged={onChanged} />
+          {/* The badges absorb nearly all of the shrink, so they clip before the name truncates. */}
+          <div className="flex min-w-0 shrink-[1000] items-center gap-1 overflow-hidden max-md:order-last max-md:basis-full max-md:pb-2 max-md:pl-9">
+            <ProjectGitBadges state={projectGitBadgesState(gitSummary, project.name)} />
+            <ProcControl repo={key} project={project} status={procStatus[project.name]} onChanged={onChanged} />
+          </div>
+          <Button variant="ghost" size="icon" type="button" onClick={() => onSettings(project)} title={`Edit ${project.name} .gavel.yaml`} aria-label={`Edit ${project.name} settings`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
+            <UiCog />
+          </Button>
+          <Button variant="ghost" size="icon" type="button" onClick={() => onHide(project)} title={`Hide ${project.name} from project lists`} aria-label={`Hide ${project.name} project`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
+            <UiEyeClosed />
+          </Button>
+        </div>
       </div>
       {historyEnabled && open && (
         <div role="group" aria-label={`${project.name} test and lint runs`}>

@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query';
-import type { PromptSpecDetail } from '@flanksource/clicky-ui/ai';
+import { familiesFromRuntimeCatalog, type PromptSpecDetail, type RuntimeCatalogFamily } from '@flanksource/clicky-ui/ai';
+import type { ChatModel } from '@flanksource/clicky-ui/chat';
 import type { GitDiffPayload } from '@flanksource/clicky-ui/data';
 import type { JsonSchemaObject } from '@flanksource/clicky-ui/components';
 import type { Org } from '../types';
@@ -91,11 +92,39 @@ export function orgsQuery() {
 
 export function projectActionSchemaQuery(projectName: string, action: ProjectActionName | null) {
   return queryOptions({
-    queryKey: ['projects', projectName, 'actions', 'schema', action] as const,
-    queryFn: ({ signal }) => {
+    queryKey: ['projects', projectName, 'actions', 'schema', action, 2] as const,
+    queryFn: async ({ signal }) => {
       if (!action) throw new Error(`Cannot load action options for ${projectName} without an action`);
       const url = `/api/projects/${encodeURIComponent(projectName)}/actions/schema?action=${action}`;
-      return fetchJSON<ProjectActionSchemaResponse>(url, signal, `Failed to load ${action} options for ${projectName}`);
+      const definition = await fetchJSON<ProjectActionSchemaResponse>(url, signal, `Failed to load ${action} options for ${projectName}`);
+      if (definition.schemaVersion !== 2) throw new Error(`Unsupported ${action} options schema version ${definition.schemaVersion}; reload the updated Gavel UI and server`);
+      return definition;
+    },
+    staleTime: oneShotStaleTime,
+  });
+}
+
+export function chatModelsQuery() {
+  return queryOptions({
+    queryKey: ['chat', 'models'] as const,
+    queryFn: async ({ signal }) => {
+      const models = await fetchJSON<ChatModel[]>('/api/chat/models', signal, 'Failed to load AI models');
+      if (!Array.isArray(models) || !models.length) throw new Error('AI model catalog is empty or invalid');
+      return models;
+    },
+    staleTime: oneShotStaleTime,
+  });
+}
+
+export function chatRuntimesQuery() {
+  return queryOptions({
+    queryKey: ['chat', 'runtimes'] as const,
+    queryFn: async ({ signal }) => {
+      const catalog = await fetchJSON<RuntimeCatalogFamily[]>('/api/chat/runtimes', signal, 'Failed to load AI runtimes');
+      if (!Array.isArray(catalog) || !catalog.length || catalog.some(family => !family?.modes?.length)) {
+        throw new Error('AI runtime catalog is empty or invalid');
+      }
+      return familiesFromRuntimeCatalog(catalog);
     },
     staleTime: oneShotStaleTime,
   });

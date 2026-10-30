@@ -9,9 +9,9 @@ export type ExportFormat = 'json' | 'md';
 // Tab is the top-level view, encoded as the first path segment. PRs, projects,
 // todos, sessions, tasks, prompts and sandbox runs carry their selection in the path;
 // filters only apply to PRs.
-export type Tab = 'prs' | 'projects' | 'todos' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs';
+export type Tab = 'prs' | 'projects' | 'processes' | 'todos' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs';
 
-const SPA_TABS: readonly Tab[] = ['projects', 'todos', 'sessions', 'activity', 'tasks', 'prompts', 'runs'];
+const SPA_TABS: readonly Tab[] = ['projects', 'processes', 'todos', 'sessions', 'activity', 'tasks', 'prompts', 'runs'];
 
 export interface RouteState {
   tab: Tab;

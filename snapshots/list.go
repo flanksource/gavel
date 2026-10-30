@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +44,8 @@ type RunInfo struct {
 
 	LintViolations int `json:"lintViolations"`
 	LintLinters    int `json:"lintLinters"`
+	LintIgnored    int `json:"lintIgnored,omitempty"`
+	LintDismissed  int `json:"lintDismissed,omitempty"`
 }
 
 // LastRun returns the summary of the snapshot last.json points at. A missing pointer is the
@@ -77,35 +81,23 @@ func LastRun(workDir string) (*RunInfo, error) {
 	return &info, nil
 }
 
+// ListRunsOptions narrows ListRuns.
+type ListRunsOptions struct {
+	// Since skips runs whose start time is at or before it — run-*.json
+	// snapshots are immutable once written, so the start time is a sound
+	// incremental watermark.
+	Since time.Time
+	// Before skips runs whose RunID sorts at or after it: the cursor for the
+	// next page is the oldest RunID of the previous one.
+	Before string
+	// Limit stops after this many runs, taken newest-first by RunID (the start
+	// timestamp), so only the snapshots of one page are read. 0 means no limit.
+	Limit int
+}
+
 // ListRuns enumerates workDir's per-run snapshots (run-*.json), returning one RunInfo per run
-// sorted newest-first. When since is non-zero, runs whose start time is at or before since are
-// skipped — run-*.json snapshots are immutable once written, so the start time is a sound
-// incremental watermark. A workspace that never ran yields no runs.
-func ListRuns(workDir string, since time.Time) ([]RunInfo, error) {
-	runs, err := scanRuns(workDir, since)
-	if err != nil {
-		return nil, err
-	}
-	var infos []RunInfo
-	for _, run := range runs {
-		infos = append(infos, run.Info)
-	}
-	return infos, nil
-}
-
-// Run is one per-run snapshot and its summary.
-type Run struct {
-	Info     RunInfo
-	Snapshot testui.Snapshot
-}
-
-// LoadRuns returns every per-run snapshot of workDir with its summary, newest first, in
-// ListRuns' order.
-func LoadRuns(workDir string) ([]Run, error) {
-	return scanRuns(workDir, time.Time{})
-}
-
-func scanRuns(workDir string, since time.Time) ([]Run, error) {
+// sorted newest-first. A workspace that never ran yields no runs.
+func ListRuns(workDir string, opts ListRunsOptions) ([]RunInfo, error) {
 	if workDir == "" {
 		return nil, errors.New("snapshots.ListRuns: workDir is required")
 	}
@@ -113,15 +105,21 @@ func scanRuns(workDir string, since time.Time) ([]Run, error) {
 	if err != nil {
 		return nil, err
 	}
-	objects, err := store.List(context.Background(), PerRunPrefix)
+	objects, err := runObjects(store)
+	if err != nil {
+		return nil, err
+	}
+	index, err := loadIndex(store)
 	if err != nil {
 		return nil, err
 	}
 
-	var runs []Run
+	var runs []RunInfo
 	for _, object := range objects {
-		name := object.Key
-		if strings.Contains(name, "/") || !strings.HasSuffix(name, ".json") {
+		if opts.Limit > 0 && len(runs) >= opts.Limit {
+			break
+		}
+		if opts.Before != "" && strings.TrimSuffix(object.Key, ".json") >= opts.Before {
 			continue
 		}
 		// Decide the cutoff from the listing before reading the snapshot. A run
@@ -135,28 +133,211 @@ func scanRuns(workDir string, since time.Time) ([]Run, error) {
 		// their recorded start time checked below. Older ones can be skipped safely.
 		// The name's timestamp is NOT usable here even though runStartTime
 		// prefers it: PerRunTimestampLayout has the same second precision.
-		if !since.IsZero() && !object.ModTime.IsZero() && !object.ModTime.UTC().Add(time.Second).After(since) {
+		if !opts.Since.IsZero() && !object.ModTime.IsZero() && !object.ModTime.UTC().Add(time.Second).After(opts.Since) {
 			continue
 		}
-		snap, err := loadRun(store, workDir, name)
+		info, err := summarizeRun(store, index, workDir, object)
 		if err != nil {
 			return nil, err
 		}
-		started := runStartTime(*snap, name, object.ModTime)
-		if !since.IsZero() && !started.After(since) {
+		if !opts.Since.IsZero() && !info.Started.After(opts.Since) {
 			continue
 		}
-		runs = append(runs, Run{Info: runInfo(*snap, name, Location(workDir, name), started), Snapshot: *snap})
+		runs = append(runs, info)
+	}
+	if err := index.save(store); err != nil {
+		return nil, err
 	}
 
-	sort.Slice(runs, func(i, j int) bool {
-		a, b := runs[i].Info, runs[j].Info
-		if a.Started.Equal(b.Started) {
-			return a.Path > b.Path
+	sort.Slice(runs, func(i, j int) bool { return newerRun(runs[i], runs[j]) })
+	return runs, nil
+}
+
+// Run is one per-run snapshot and its summary.
+type Run struct {
+	Info     RunInfo
+	Snapshot testui.Snapshot
+}
+
+// LoadRuns returns every per-run snapshot of workDir with its summary, newest first, in
+// ListRuns' order.
+func LoadRuns(workDir string) ([]Run, error) {
+	if workDir == "" {
+		return nil, errors.New("snapshots.LoadRuns: workDir is required")
+	}
+	store, err := OpenStore(workDir)
+	if err != nil {
+		return nil, err
+	}
+	objects, err := runObjects(store)
+	if err != nil {
+		return nil, err
+	}
+	var runs []Run
+	for _, object := range objects {
+		snap, err := loadRun(store, workDir, object.Key)
+		if err != nil {
+			return nil, err
 		}
-		return a.Started.After(b.Started)
+		info := runInfo(*snap, object.Key, Location(workDir, object.Key), runStartTime(*snap, object.Key, object.ModTime))
+		runs = append(runs, Run{Info: info, Snapshot: *snap})
+	}
+	sort.Slice(runs, func(i, j int) bool { return newerRun(runs[i].Info, runs[j].Info) })
+	return runs, nil
+}
+
+// runObjects lists the store's run-*.json snapshots newest-first by key (the
+// start timestamp), and by collision suffix within one timestamp.
+func runObjects(store blob.Store) ([]blob.Object, error) {
+	objects, err := store.List(context.Background(), PerRunPrefix)
+	if err != nil {
+		return nil, err
+	}
+	var runs []blob.Object
+	for _, object := range objects {
+		if strings.Contains(object.Key, "/") || !strings.HasSuffix(object.Key, ".json") {
+			continue
+		}
+		runs = append(runs, object)
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		left, leftSequence := runFilenameOrder(runs[i].Key)
+		right, rightSequence := runFilenameOrder(runs[j].Key)
+		if left == right {
+			return leftSequence > rightSequence
+		}
+		return left > right
 	})
 	return runs, nil
+}
+
+func newerRun(a, b RunInfo) bool {
+	if a.Started.Equal(b.Started) {
+		return a.Path > b.Path
+	}
+	return a.Started.After(b.Started)
+}
+
+// summarizeRun returns a run's RunInfo from the index, decoding the snapshot
+// only when the index has no entry for it at its current size and mtime.
+func summarizeRun(store blob.Store, index *runIndex, workDir string, object blob.Object) (RunInfo, error) {
+	location := Location(workDir, object.Key)
+	if info, ok := index.lookup(object, location); ok {
+		return info, nil
+	}
+	snap, err := loadRun(store, workDir, object.Key)
+	if err != nil {
+		return RunInfo{}, err
+	}
+	info := runInfo(*snap, object.Key, location, runStartTime(*snap, object.Key, object.ModTime))
+	index.store(object, info)
+	return info, nil
+}
+
+// LatestRuns returns the locations of the newest run-*.json that ran tests
+// and the newest that ran linters, newest first — a single location when one
+// run did both. Runs are visited newest-first by key (the start timestamp) and
+// the scan stops once both are found, so the long tail of older multi-MB runs
+// is never read. A workspace that never ran yields no runs.
+func LatestRuns(workDir string) ([]string, error) {
+	if workDir == "" {
+		return nil, errors.New("snapshots.LatestRuns: workDir is required")
+	}
+	store, err := OpenStore(workDir)
+	if err != nil {
+		return nil, err
+	}
+	objects, err := runObjects(store)
+	if err != nil {
+		return nil, err
+	}
+
+	var testKey, lintKey string
+	var paths []string
+	for _, object := range objects {
+		hasTests, hasLint, err := runContents(store, workDir, object.Key)
+		if err != nil {
+			return nil, err
+		}
+		if (hasTests && testKey == "") || (hasLint && lintKey == "") {
+			paths = append(paths, Location(workDir, object.Key))
+		}
+		if hasTests && testKey == "" {
+			testKey = object.Key
+		}
+		if hasLint && lintKey == "" {
+			lintKey = object.Key
+		}
+		if testKey != "" && lintKey != "" {
+			break
+		}
+	}
+	return paths, nil
+}
+
+func runFilenameOrder(path string) (string, int) {
+	stem := strings.TrimSuffix(path, ".json")
+	separator := strings.LastIndexByte(stem, '-')
+	sequence, err := strconv.Atoi(stem[separator+1:])
+	if err != nil {
+		return stem, 1
+	}
+	return stem[:separator], sequence
+}
+
+// runContents reports whether a run snapshot holds tests and lint results,
+// decoding into empty element types so the test tree and violations are
+// skipped rather than materialised.
+func runContents(store blob.Store, workDir, key string) (hasTests, hasLint bool, err error) {
+	data, err := readKey(store, key)
+	if err != nil {
+		return false, false, fmt.Errorf("read run snapshot %s: %w", Location(workDir, key), err)
+	}
+	var shape struct {
+		Status struct {
+			LintRun bool `json:"lint_run"`
+		} `json:"status"`
+		Tests []struct{} `json:"tests"`
+		Lint  []struct {
+			Skipped bool `json:"skipped"`
+		} `json:"lint"`
+	}
+	if err := json.Unmarshal(data, &shape); err != nil {
+		return false, false, fmt.Errorf("decode run snapshot %s: %w", Location(workDir, key), err)
+	}
+	hasLint = shape.Status.LintRun
+	for _, l := range shape.Lint {
+		hasLint = hasLint || !l.Skipped
+	}
+	return len(shape.Tests) > 0, hasLint, nil
+}
+
+// LoadRun reads and decodes the snapshot runID names (see ReadRun).
+func LoadRun(workDir, runID string) (*testui.Snapshot, error) {
+	data, err := ReadRun(workDir, runID)
+	if err != nil {
+		return nil, fmt.Errorf("read run snapshot %s: %w", runID, err)
+	}
+	var snap testui.Snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, fmt.Errorf("decode run snapshot %s: %w", runID, err)
+	}
+	return &snap, nil
+}
+
+// LoadRunFile decodes the run snapshot at path, a local file such as the
+// Location SavePerRun returns for a workspace without blob storage; a
+// blob-backed run is read with LoadRun.
+func LoadRunFile(path string) (*testui.Snapshot, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read run snapshot %s: %w", path, err)
+	}
+	var snap testui.Snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, fmt.Errorf("decode run snapshot %s: %w", path, err)
+	}
+	return &snap, nil
 }
 
 func loadRun(store blob.Store, workDir, key string) (*testui.Snapshot, error) {
@@ -172,9 +353,9 @@ func loadRun(store blob.Store, workDir, key string) (*testui.Snapshot, error) {
 }
 
 // runInfo builds a RunInfo from a decoded snapshot. Counts come from the leaf
-// roll-up (Tests.Sum); lint counts skip linters that did not run.
+// tests; lint counts skip linters that did not run.
 func runInfo(snap testui.Snapshot, name, path string, started time.Time) RunInfo {
-	sum := parsers.Tests(snap.Tests).Sum()
+	sum := leafSum(snap.Tests)
 
 	info := RunInfo{
 		RunID:   strings.TrimSuffix(name, ".json"),
@@ -192,6 +373,8 @@ func runInfo(snap testui.Snapshot, name, path string, started time.Time) RunInfo
 		}
 		info.LintLinters++
 		info.LintViolations += len(lr.Violations)
+		info.LintIgnored += len(lr.Ignored)
+		info.LintDismissed += len(lr.Dismissed)
 	}
 	if snap.Metadata != nil {
 		info.Ended = snap.Metadata.Ended.UTC()
@@ -203,6 +386,20 @@ func runInfo(snap testui.Snapshot, name, path string, started time.Time) RunInfo
 	}
 	info.Kind = runKind(sum.Total, info.LintLinters, snap.Status.LintRun)
 	return info
+}
+
+// leafSum totals the leaf tests only. Tests.Sum also counts a package or suite
+// whose status rolled up from its children, so one failing test read as five.
+func leafSum(tests []parsers.Test) parsers.TestSummary {
+	var sum parsers.TestSummary
+	for _, test := range tests {
+		if len(test.Children) == 0 {
+			sum = sum.Add(test.Sum())
+			continue
+		}
+		sum = sum.Add(leafSum(test.Children))
+	}
+	return sum
 }
 
 // runKind classifies a run from its leaf-test count, the number of linters that

@@ -60,11 +60,6 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 		}
 		prepared = &resolved
 	}
-	// No prompting.Prepare() here. It waits for the global clicky task manager to
-	// drain, which is correct when a caller owns the terminal (gavel commit) but a
-	// deadlock on the git analyze path: AnalyzeCommitHistory calls this from inside
-	// a clicky batch item, so the item would be waiting for a task set that
-	// includes itself. Callers that own the terminal Prepare before calling in.
 	resp, err := executePreparedPrompt(ctx, preparedPromptOptions{
 		Name: promptName(commit, "commit message"), Runtime: *prepared, Agent: agent, AgentFactory: opts.AgentFactory,
 	})

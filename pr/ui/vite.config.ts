@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { localClicky } from '../../testrunner/ui/vite.clicky';
+import { localClicky } from '../../testrunner/ui/vite.clicky.ts';
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -28,8 +28,8 @@ const uiDate = new Date().toISOString();
 const gavelTestRunnerHooks = resolve(here, '../../testrunner/ui/src/hooks.ts');
 
 export default defineConfig(({ command }) => {
-  // `pr list --ui --dev` resolves clicky-ui from the sibling checkout's source.
-  const clicky = localClicky(resolve(here, '../..'), command, 'pr/ui');
+  // Resolves clicky-ui from the sibling checkout's source when it is present.
+  const clicky = localClicky(resolve(here, '../..'), 'pr/ui');
 
   return {
     plugins: [react(), tailwindcss()],
@@ -80,7 +80,7 @@ export default defineConfig(({ command }) => {
       // Keep all CSS in one prui.css so the Go server can inline it as today
       // (only the JS is split).
       cssCodeSplit: false,
-      rollupOptions: {
+      rolldownOptions: {
         output: {
           chunkFileNames: 'chunks/[name]-[hash].js',
           // Stable CSS filename so the Go server can go:embed it.

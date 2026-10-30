@@ -3,10 +3,10 @@ import { resolve } from 'node:path';
 import type { Alias } from 'vite';
 
 // localClicky links @flanksource/clicky-ui to the sibling checkout
-// (../clicky-ui/packages/ui next to gavel) for `vite serve`, so `--dev` runs
-// of gavel's UIs pick up clicky-ui edits on a refresh. It is gated on `serve`
-// and the sibling being present, so `vite build` and CI keep the published
-// package and nothing local-path enters the dependency graph.
+// (../clicky-ui/packages/ui next to gavel) for both `vite serve` and
+// `vite build`, so local bundles and `--dev` runs use clicky-ui's source,
+// including subpaths not yet published. It is gated on the sibling being
+// present, so CI keeps the published package.
 //
 // The aliases come from the sibling's own package.json exports: each
 // `./dist/<x>.js` entry resolves to `src/<x>.ts(x)`; stylesheets stay on the
@@ -18,13 +18,13 @@ export interface LocalClicky {
   server: { fs?: { allow: string[] }; watch?: { ignored: string[] } };
 }
 
-export function localClicky(gavelRoot: string, command: string, label: string): LocalClicky {
+export function localClicky(gavelRoot: string, label: string): LocalClicky {
   const pkgDir = resolve(gavelRoot, '../clicky-ui/packages/ui');
   const src = resolve(pkgDir, 'src');
-  if (command !== 'serve' || !existsSync(src)) {
+  if (!existsSync(src)) {
     return { enabled: false, aliases: [], server: {} };
   }
-  console.log(`[${label}] dev: resolving @flanksource/clicky-ui from local source (${src})`);
+  console.log(`[${label}] resolving @flanksource/clicky-ui from local source (${src})`);
 
   const exports: Record<string, string | { import?: string }> = JSON.parse(
     readFileSync(resolve(pkgDir, 'package.json'), 'utf8'),

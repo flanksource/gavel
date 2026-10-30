@@ -3,6 +3,7 @@ package utils
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -53,4 +54,26 @@ func ResolveWithin(base, name string) (string, error) {
 		return "", fmt.Errorf("%w: %q resolves outside %s", ErrPathEscapesBase, name, root)
 	}
 	return filepath.Join(root, rel), nil
+}
+
+// ReadWithin reads a configured file without allowing symlinks to escape base.
+func ReadWithin(base, name string) ([]byte, error) {
+	path, err := ResolveWithin(base, name)
+	if err != nil {
+		return nil, err
+	}
+	abs, err := filepath.Abs(base)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(abs, path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(abs)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.ReadFile(rel)
 }

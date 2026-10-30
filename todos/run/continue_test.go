@@ -160,3 +160,34 @@ var _ = Describe("Continue", func() {
 			run.Continuation{Override: run.Options{Host: lifecycle.HostCLI}, Step: "ship-it"}, "not part of lifecycle"),
 	)
 })
+
+var _ = Describe("ContinuesPrior", func() {
+	const (
+		otherCodexModel = "gpt-6.1-sol"
+		claudeModel     = "claude-sonnet-5"
+	)
+
+	DescribeTable("compares the requested runtime's provider family with the prior run's",
+		func(prior *captaindb.PromptRun, model api.Model, want bool) {
+			got, err := run.ContinuesPrior(prior, model)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(Equal(want))
+		},
+		Entry("another model of the same family continues it", codexPlanRun(), api.Model{Name: otherCodexModel}, true),
+		Entry("a resolved descriptor of the same family continues it", codexPlanRun(), api.Model{Name: claudeModel, Provider: api.OpenAI}, true),
+		Entry("another family cannot continue it", codexPlanRun(), api.Model{Name: claudeModel}, false),
+		Entry("there is no prior conversation to continue", nil, api.Model{Name: claudeModel}, false),
+	)
+
+	DescribeTable("fails loud on a provider it cannot resolve",
+		func(prior *captaindb.PromptRun, model api.Model) {
+			_, err := run.ContinuesPrior(prior, model)
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("an unknown recorded provider", &captaindb.PromptRun{Runtime: captaindb.PromptRunRuntime{
+			Resolved: captaindb.PromptRunRuntimeSelection{Provider: "acme", Model: "acme-1"},
+		}}, api.Model{Name: claudeModel}),
+		Entry("a prior run that recorded no provider", &captaindb.PromptRun{}, api.Model{Name: claudeModel}),
+		Entry("an unknown requested model", codexPlanRun(), api.Model{Name: "acme-1"}),
+	)
+})

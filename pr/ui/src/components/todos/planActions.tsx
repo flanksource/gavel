@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiCancel, UiCheck, UiEdit, UiEye, UiQuestion } from '@flanksource/clicky-ui/icons';
@@ -7,6 +7,7 @@ import { Spinner } from '../../icons/Spinner';
 import { inputClass, todoQuery } from './format';
 import { defaultRunOptions, loadLastTodoRunOptions, normalizeRunOptions, requestStepFor, type TodoRunAction } from './run';
 import { PromptRunAdvancedDialog, PromptRunButton } from './PromptRunButton';
+import { ReviseRuntimePicker } from './ReviseRuntimePicker';
 import { invalidateTodoCaches, invalidateTodoWorkflowCaches, todoMutationJSON } from './todoMutations';
 import { setTodoLaunchProgress, todoMutationStream, updateTodoLaunchProgress } from './todoLaunch';
 
@@ -146,15 +147,20 @@ export function usePlanActions(dir: string) {
     'reject',
     ref => ({ path: '/api/todos/plan/reject', body: { ref }, context: `Failed to reject plan for todo ${ref}` }),
   );
-  const reviseMutation = usePlanActionMutation<PlanAnswerResult, { ref: string; feedback: string }>(
+  // No options means "the plan's own agent": the server resumes the plan run's
+  // runtime and session. Options travel only when the reviewer picked a runtime.
+  const reviseMutation = usePlanActionMutation<PlanAnswerResult, { ref: string; feedback: string; options?: TodoRunOptions }>(
     dir,
     'revise',
-    ({ ref, feedback }) => ({
-      path: '/api/todos/plan/revise',
-      body: { ref, feedback, options: runRequestOptions(loadLastTodoRunOptions('plan'), 'plan') },
-      context: `Failed to request plan changes for todo ${ref}`,
-      launch: { ref, step: 'plan', spec: loadLastTodoRunOptions('plan').spec },
-    }),
+    ({ ref, feedback, options }) => {
+      const requested = options ? runRequestOptions(options, 'plan') : undefined;
+      return {
+        path: '/api/todos/plan/revise',
+        body: requested ? { ref, feedback, options: requested } : { ref, feedback },
+        context: `Failed to request plan changes for todo ${ref}`,
+        launch: { ref, step: 'plan', spec: requested?.spec },
+      };
+    },
   );
   const mutations = [approveMutation, answerMutation, rejectMutation, reviseMutation];
   const busy = mutations.some(mutation => mutation.isPending);
@@ -202,12 +208,12 @@ export function usePlanActions(dir: string) {
     try { return await rejectMutation.mutateAsync(cleaned); } catch { return null; }
   }, [rejectMutation.mutateAsync, busy]);
 
-  const revise = useCallback(async (ref: string, feedback: string) => {
+  const revise = useCallback(async (ref: string, feedback: string, options?: TodoRunOptions) => {
     const cleanedRef = ref.trim();
     const cleanedFeedback = feedback.trim();
     if (busy || !cleanedRef || !cleanedFeedback) return null;
     setValidationError('');
-    try { return await reviseMutation.mutateAsync({ ref: cleanedRef, feedback: cleanedFeedback }); } catch { return null; }
+    try { return await reviseMutation.mutateAsync({ ref: cleanedRef, feedback: cleanedFeedback, options }); } catch { return null; }
   }, [reviseMutation.mutateAsync, busy]);
 
   return { busy, error, reset, approve, answer, reject, revise };
@@ -358,12 +364,14 @@ export function TodoReviewBanner({
   const [questionSelections, setQuestionSelections] = useState<TodoQuestionSelections>({});
   const [changesText, setChangesText] = useState('');
   const [showChanges, setShowChanges] = useState(false);
+  const [reviseOptions, setReviseOptions] = useState<TodoRunOptions | undefined>(undefined);
 
   useEffect(() => {
     setAnswerText('');
     setQuestionSelections({});
     setChangesText('');
     setShowChanges(false);
+    setReviseOptions(undefined);
     reset();
   }, [todo.ref, reset]);
 
@@ -383,13 +391,14 @@ export function TodoReviewBanner({
 
   const onRevise = useCallback(async () => {
     if (changesText.trim()) onLaunch?.();
-    const result = await revise(todo.ref, changesText);
+    const result = await revise(todo.ref, changesText, reviseOptions);
     if (result) {
       setChangesText('');
       setShowChanges(false);
+      setReviseOptions(undefined);
       onChanged(result.todo);
     }
-  }, [revise, todo.ref, changesText, onChanged, onLaunch]);
+  }, [revise, todo.ref, changesText, reviseOptions, onChanged, onLaunch]);
 
   const onAnswer = useCallback(async () => {
     if (todo.sessionId?.trim() && (answerText.trim() || Object.values(questionSelections).some(Boolean))) onLaunch?.();
@@ -429,6 +438,7 @@ export function TodoReviewBanner({
             label="Send changes & re-plan"
             placeholder="Describe what to change in the plan… (Cmd/Ctrl+Enter to send)"
             autoFocus
+            accessory={<ReviseRuntimePicker key={todo.ref} dir={dir} value={reviseOptions} onChange={setReviseOptions} disabled={busy} />}
           />
         )}
         {error && <div className="text-xs text-red-600">{error}</div>}
@@ -478,6 +488,7 @@ export function AnswerBox({
   canSubmit = value.trim().length > 0,
   label = 'Send & resume',
   placeholder = "Answer the agent's questions… (Cmd/Ctrl+Enter to send)",
+  accessory,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -488,6 +499,8 @@ export function AnswerBox({
   canSubmit?: boolean;
   label?: string;
   placeholder?: string;
+  // Rendered to the left of the submit button (the revise box's agent picker).
+  accessory?: ReactNode;
 }) {
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -506,7 +519,8 @@ export function AnswerBox({
         onChange={e => onChange(e.currentTarget.value)}
         onKeyDown={onKeyDown}
       />
-      <div className="flex items-center justify-end">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">{accessory}</div>
         <Button
           type="button"
           size="sm"

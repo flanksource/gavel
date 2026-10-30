@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -26,7 +27,7 @@ import (
 type Resolution struct {
 	RuntimePresets *runtimeprofiles.PresetResolution
 	RuntimeProfile *runtimeprofiles.Resolution
-	Step           Step
+	Step           lifecycle.Step
 	// Class is the behaviour class the step runs as: what the commit and verify
 	// invariants key on.
 	Class types.RunMode
@@ -51,7 +52,7 @@ type Resolution struct {
 	// Resolve reported. Re-folding at dispatch time would let the run and the
 	// preview of it differ whenever the todo changed in between — which is
 	// precisely the window a person is looking at the preview.
-	lc       Context
+	lc       lifecycle.Context
 	prepared *preparedStep
 }
 
@@ -74,7 +75,7 @@ func (r *Resolution) UseSession(sessionID string) {
 
 // Resolve prepares a step without running it: the prompt rendered, every spec
 // layer folded, nothing dispatched and nothing persisted.
-func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step Step, opts RunOptions) (*Resolution, error) {
+func (h *Host) Resolve(ctx context.Context, todo *types.TODO, step lifecycle.Step, opts RunOptions) (*Resolution, error) {
 	lc, prepared, err := h.resolveStep(ctx, todo, step, opts)
 	if err != nil {
 		return nil, err

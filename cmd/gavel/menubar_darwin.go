@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/ui"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
@@ -49,7 +50,7 @@ func runMenuBar(srv *ui.Server, dashboardURL string) error {
 			switch msg.Type {
 			case menubarOpenExternalMessage:
 				if target, ok := parseMenubarExternalTarget(msg.URL); ok {
-					openBrowser(target)
+					testui.OpenBrowser(target)
 				}
 			case menubarPointerEnterMessage:
 				hideController.cancel()
@@ -117,7 +118,7 @@ func runMenuBar(srv *ui.Server, dashboardURL string) error {
 
 	menu := app.NewMenu()
 	menu.Add("Open Dashboard").OnClick(func(ctx *application.Context) {
-		openBrowser(dashboardURL)
+		testui.OpenBrowser(dashboardURL)
 	})
 	menu.Add("Refresh").OnClick(func(ctx *application.Context) {
 		select {

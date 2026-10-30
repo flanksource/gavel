@@ -12,14 +12,17 @@ import {
 import type { ProjectGit, ProjectGitSummary } from './types';
 
 const summaries: ProjectGitSummary[] = [
-  { name: 'gavel', base: 'main', adds: 12, dels: 3, worktrees: 2, branches: 1 },
-  { name: 'broken', base: '', adds: 0, dels: 0, worktrees: 0, branches: 0, error: 'not a git repository' },
+  { name: 'gavel', base: 'main', adds: 12, dels: 3, worktrees: 2, branches: 1, uncommittedBranches: 2 },
+  { name: 'broken', base: '', adds: 0, dels: 0, worktrees: 0, branches: 0, uncommittedBranches: 0, error: 'not a git repository' },
 ];
 
 const git: ProjectGit = {
   base: 'main',
   currentBranch: 'main',
   baseCheckedOut: true,
+  upstream: 'origin/main',
+  upstreamAhead: 1,
+  upstreamBehind: 0,
   worktrees: [{
     path: '/work/gavel', branch: 'main', head: 'a1b2c3d', primary: true, detached: false, prunable: false,
     changes: { staged: 0, unstaged: 1, both: 0, untracked: 0, conflict: 0, adds: 2, dels: 1 }, ahead: 0,
@@ -58,6 +61,11 @@ describe('parseProjectGitSummaries', () => {
     ['a non-array payload', { projects: [] }],
     ['an entry without a name', [{ ...summaries[0], name: undefined }]],
     ['a non-numeric count', [{ ...summaries[0], adds: '12' }]],
+    ['a missing uncommitted branch count', [{ ...summaries[0], uncommittedBranches: undefined }]],
+    ['a non-numeric uncommitted branch count', [{ ...summaries[0], uncommittedBranches: '2' }]],
+    ['a negative uncommitted branch count', [{ ...summaries[0], uncommittedBranches: -1 }]],
+    ['a fractional uncommitted branch count', [{ ...summaries[0], uncommittedBranches: 1.5 }]],
+    ['an infinite uncommitted branch count', [{ ...summaries[0], uncommittedBranches: Infinity }]],
     ['a non-string error', [{ ...summaries[0], error: 7 }]],
   ])('rejects %s', (_label, payload) => {
     expect(() => parseProjectGitSummaries(payload)).toThrow(/git summary/i);
@@ -83,6 +91,8 @@ describe('parseProjectGit', () => {
     ['a worktree without change counts', { ...git, worktrees: [{ ...git.worktrees[0], changes: undefined }] }],
     ['a branch without a diff', { ...git, branches: [{ ...git.branches[0], diff: undefined }] }],
     ['a non-boolean baseCheckedOut', { ...git, baseCheckedOut: 'yes' }],
+    ['a non-string upstream', { ...git, upstream: 1 }],
+    ['a missing upstreamBehind', { ...git, upstreamBehind: undefined }],
     ['a worktree without a last commit time', { ...git, worktrees: [{ ...git.worktrees[0], lastCommitAt: undefined }] }],
     ['a worktree with a non-string touched time', { ...git, worktrees: [{ ...git.worktrees[0], touchedAt: 7 }] }],
     ['a branch without a last commit time', { ...git, branches: [{ ...git.branches[0], lastCommitAt: undefined }] }],

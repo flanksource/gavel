@@ -71,7 +71,7 @@ var _ = Describe("joinHistory", func() {
 	})
 
 	It("joins gotest leaves on the package containing the file", func() {
-		runs, err := joinHistory(report, Options{WorkDir: workDir})
+		runs, err := joinHistory(report, Options{WorkDir: workDir, StateRoot: workDir})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(runs).To(Equal(1))
 		Expect(report.Entries[0].History).NotTo(BeNil())
@@ -79,7 +79,7 @@ var _ = Describe("joinHistory", func() {
 	})
 
 	It("joins ginkgo specs on package, suite chain, and text", func() {
-		_, err := joinHistory(report, Options{WorkDir: workDir})
+		_, err := joinHistory(report, Options{WorkDir: workDir, StateRoot: workDir})
 		Expect(err).NotTo(HaveOccurred())
 		spec := report.Entries[1].Children[0]
 		Expect(spec.History).NotTo(BeNil())
@@ -87,13 +87,13 @@ var _ = Describe("joinHistory", func() {
 	})
 
 	It("joins vitest leaves by walking up to the npm package root", func() {
-		_, err := joinHistory(report, Options{WorkDir: workDir})
+		_, err := joinHistory(report, Options{WorkDir: workDir, StateRoot: workDir})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(report.Entries[2].History).NotTo(BeNil())
 	})
 
 	It("leaves dynamic and never-executed specs without history", func() {
-		_, err := joinHistory(report, Options{WorkDir: workDir})
+		_, err := joinHistory(report, Options{WorkDir: workDir, StateRoot: workDir})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(report.Entries[1].Children[1].History).To(BeNil())
 		Expect(report.Entries[1].Children[2].History).To(BeNil())
@@ -115,7 +115,7 @@ var _ = Describe("joinHistory", func() {
 			{Framework: parsers.Fixture, File: "a/check.fixture.md", Name: "health"},
 			{Framework: parsers.Fixture, File: "b/check.fixture.md", Name: "health"},
 		}}
-		_, err = joinHistory(fixtureReport, Options{WorkDir: fixtureDir})
+		_, err = joinHistory(fixtureReport, Options{WorkDir: fixtureDir, StateRoot: fixtureDir})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fixtureReport.Entries[0].History.PassCount).To(Equal(1))
 		Expect(fixtureReport.Entries[1].History.FailCount).To(Equal(1))
@@ -123,7 +123,7 @@ var _ = Describe("joinHistory", func() {
 
 	It("returns zero runs without error when no history exists", func() {
 		empty := ginkgo.GinkgoT().TempDir()
-		runs, err := joinHistory(report, Options{WorkDir: empty})
+		runs, err := joinHistory(report, Options{WorkDir: empty, StateRoot: empty})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(runs).To(BeZero())
 	})

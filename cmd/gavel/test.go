@@ -2,15 +2,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,6 +26,7 @@ import (
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/ui/queryapp"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
@@ -43,7 +43,7 @@ var (
 	hookTests   []parsers.Test
 )
 
-func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
+func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error) {
 	if opts.Dev && !opts.UI {
 		return nil, fmt.Errorf("--dev serves the --ui dashboard from Vite; it needs --ui")
 	}
@@ -69,22 +69,18 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 
 	clicky.ClearGlobalTasks()
 
-	if opts.WorkDir == "" {
-		wd, err := getWorkingDir()
-		if err != nil {
-			return nil, err
-		}
-		opts.WorkDir = wd
+	if opts.Dirs.StateRoot == "" {
+		return nil, errors.New("runTests: the run's workspace directories were not resolved")
 	}
 	if opts.Failed == failedAutoSentinel {
-		resolved, err := snapshots.ResolveLast(opts.WorkDir)
+		resolved, err := snapshots.ResolveLast(opts.Dirs.StateRoot)
 		if err != nil {
 			return nil, fmt.Errorf("--failed: %w", err)
 		}
 		opts.Failed = resolved
 	}
 	if opts.PR != "" {
-		resolved, err := resolvePRFailed(opts.PR, opts.WorkDir, opts.Failed, opts.Baseline, prNarrowTests)
+		resolved, err := resolvePRFailed(opts.PR, opts.Dirs, opts.Failed, opts.Baseline, prNarrowTests)
 		if err != nil {
 			return nil, err
 		}
@@ -92,7 +88,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		opts.PR = ""
 	}
 	runStarted := time.Now().UTC()
-	gitInfo := snapshotGitInfo(opts.WorkDir)
+	gitInfo := snapshots.GitInfo(opts.WorkDir)
 
 	var trace *runTrace
 	if wantsRunTrace(opts) && !opts.DryRun {
@@ -106,7 +102,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			diagnostics.recordOn(trace.process)
 		}
 		defer func() {
-			if err := trace.close(opts.WorkDir); err != nil {
+			if err := trace.close(opts.Dirs.StateRoot); err != nil {
 				logger.Warnf("close run traces: %v", err)
 			}
 		}()
@@ -117,11 +113,11 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	// interrupt / timeout / non-zero exit so callers can inspect what was
 	// in-flight when the run died. Per-run timestamped snapshots are written
 	// at end-of-run alongside the existing sha-keyed snapshot.
-	recorder := snapshots.NewRecorder(opts.WorkDir)
+	recorder := snapshots.NewRecorder(opts.Dirs.StateRoot)
 	recorder.Start()
 	runSucceeded := false
 	defer func() {
-		recorder.Stop(runSucceeded)
+		runErr = errors.Join(runErr, recorder.Stop(runSucceeded))
 	}()
 
 	// Load .gavel.yaml once at the top — previously the lint path loaded it
@@ -135,6 +131,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	// Dry-run: print hooks and delegate to testrunner (which has its own
 	// dry-run early-return), then exit without starting the UI, lint, or
 	// push-hook execution.
+	opts.Selection = opts.ChangeSelection()
 	if opts.DryRun {
 		if !opts.SkipHooks {
 			printDryRunHooks(opts.WorkDir, gavelCfg.Pre, "pre-hook")
@@ -144,7 +141,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		}
 		if opts.Lint {
 			for _, workDir := range lintWorkDirs(opts.WorkDir, opts.StartingPaths) {
-				if err := lint.DryRun(LintOptions{WorkDir: workDir, Runtime: opts.Runtime, ConfigDir: opts.WorkDir, Timeout: configuredLintTimeout(opts)}); err != nil {
+				if err := lint.DryRun(LintOptions{WorkDir: workDir, Selection: opts.Selection, Tags: opts.Tags, Runtime: opts.Runtime, ConfigDir: opts.WorkDir, Timeout: configuredLintTimeout(opts)}); err != nil {
 					return nil, err
 				}
 			}
@@ -225,7 +222,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			}
 			if req.Lint {
 				results, err := executeLintRerun(LintOptions{
-					WorkDir: opts.WorkDir,
+					WorkDir: opts.WorkDir, Selection: opts.Selection, Tags: opts.Tags,
 					Timeout: configuredLintTimeout(opts),
 					Runtime: opts.Runtime, ConfigDir: opts.WorkDir,
 					Context:   rerunCtx,
@@ -293,7 +290,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			}
 			for _, dir := range lintWorkDirs(workDir, opts.StartingPaths) {
 				results, err := lint.Execute(LintOptions{
-					WorkDir: dir,
+					WorkDir: dir, Selection: opts.Selection, Tags: opts.Tags,
 					Timeout: lintTimeoutValue, Runtime: opts.Runtime, ConfigDir: opts.WorkDir,
 					Context: opts.Context,
 				})
@@ -329,7 +326,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	wg.Wait()
 
 	if lintErr != nil {
-		logger.Warnf("Linting failed: %v", lintErr)
+		err = errors.Join(err, fmt.Errorf("lint: %w", lintErr))
 	}
 
 	// Apply baseline filtering to lint results when --baseline is set.
@@ -341,15 +338,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		baseline.FilterNewViolations(lintResults, baseline.ExtractViolationKeys(baselineSnap.Lint))
 	}
 
-	// Count lint violations
-	var lintViolations int
-	for _, lr := range lintResults {
-		if lr.Skipped {
-			continue
-		}
-		lintViolations += len(lr.Violations)
-	}
-	if lintViolations > 0 {
+	if linters.HasFailures(lintResults) {
 		exitCode = 1
 	}
 
@@ -371,19 +360,14 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		}
 		// Serialized formats get the partial tree plus the failure reason as
 		// a crash envelope, so `--format json=FILE` always produces a file.
+		// Persisted on every runner failure so `gavel ui serve` still lists
+		// the tests that completed and why the run failed.
+		failedSnapshot := saveFailedRun(failedRun{
+			Opts: opts, Tests: tests, Lint: lintResults, Started: runStarted, Trace: trace, Performance: fixturePerformance, Err: err,
+		})
 		if uiServer != nil && fixtureBenchmarkMode(opts) != "" {
 			uiServer.SetRunError(err)
 			uiServer.MarkDone()
-			failedSnapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
-			failedSnapshot.Performance = fixturePerformance
-			failedSnapshot.Error = err.Error()
-			failed := 1
-			failedSnapshot.Metadata.ExitCode = &failed
-			if path, saveErr := snapshots.SavePerRun(opts.WorkDir, &failedSnapshot, runStarted, ""); saveErr != nil {
-				logger.Warnf("persist per-run snapshot: %v", saveErr)
-			} else {
-				logger.V(1).Infof("wrote per-run snapshot to %s", path)
-			}
 			if detach {
 				if handoffErr := handoffDetachedUI(uiListener, failedSnapshot, detachedUIOptions{AutoStop: opts.AutoStop, IdleTimeout: opts.IdleTimeout, Dev: opts.Dev}); handoffErr != nil {
 					logger.Warnf("Detached UI handoff failed: %v", handoffErr)
@@ -417,12 +401,12 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			if detach {
 				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 				snapshot.Performance = fixturePerformance
-				if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
+				if path, err := snapshots.Save(opts.Dirs.StateRoot, &snapshot); err != nil {
 					logger.Warnf("persist snapshot: %v", err)
 				} else {
 					logger.V(1).Infof("wrote snapshot to %s", path)
 				}
-				if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
+				if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, &snapshot, runStarted, ""); err != nil {
 					logger.Warnf("persist per-run snapshot: %v", err)
 				} else {
 					logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -454,7 +438,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 			printTestRunResults(tests, opts, fullSummary, lintResults)
 			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 			snapshot.Performance = fixturePerformance
-			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
+			if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, &snapshot, runStarted, ""); err != nil {
 				logger.Warnf("persist per-run snapshot: %v", err)
 			} else {
 				logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -467,12 +451,12 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		}
 		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 		snapshot.Performance = fixturePerformance
-		if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
+		if path, err := snapshots.Save(opts.Dirs.StateRoot, &snapshot); err != nil {
 			logger.Warnf("persist snapshot: %v", err)
 		} else {
 			logger.V(1).Infof("wrote snapshot to %s", path)
 		}
-		if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
+		if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, &snapshot, runStarted, ""); err != nil {
 			logger.Warnf("persist per-run snapshot: %v", err)
 		} else {
 			logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -869,57 +853,30 @@ type detachedUIOptions struct {
 // testUIOptions configures startTestUI: Addr is the interface to bind, and
 // Dev serves the page from the testrunner/ui Vite dev server.
 type testUIOptions struct {
-	Addr string
-	Dev  bool
+	Addr   string
+	Dev    bool
+	Writer io.Writer
 }
 
-// startTestUI binds an ephemeral TCP listener and starts serving the testui
-// on it. Returns the server and the listener so the caller can later
-// hand the listener off to a detached child process (fork path in
-// handoffDetachedUI) instead of tearing the connection down and rebinding.
-// --addr names an interface only; the port is always picked.
+// startTestUI serves the test UI (testui.Listen) and opens it, returning the
+// listener so handoffDetachedUI can pass it to a detached child process.
 func startTestUI(opts testUIOptions) (*testui.Server, net.Listener, error) {
-	srv := testui.NewServer()
+	listen := testui.ListenOptions{Addr: opts.Addr, Title: "Test UI", Writer: opts.Writer, Open: true}
 	if opts.Dev {
 		proxy, err := devProxy(testRunnerDev, "")
 		if err != nil {
 			return nil, nil, err
 		}
-		srv.SetDevProxy(proxy)
+		listen.DevProxy = proxy
 	}
-	addr := opts.Addr
-	if addr == "" {
-		addr = "0.0.0.0"
-	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
+	srv, listener, _, err := testui.Listen(listen)
 	if err != nil {
-		return nil, nil, fmt.Errorf("start test UI on --addr %q (an interface, without a port): %w", addr, err)
+		return nil, nil, err
 	}
-	bound := listener.Addr().(*net.TCPAddr)
-	url, networkURL := uiURLs(addr, bound.Port)
-
-	go http.Serve(listener, srv.Handler()) //nolint:errcheck
-
-	time.Sleep(100 * time.Millisecond)
-	fmt.Println(uiBanner("Test UI", url, networkURL))
-	openBrowser(url)
+	if err := queryapp.Serve(srv); err != nil {
+		return nil, nil, errors.Join(err, listener.Close())
+	}
 	return srv, listener, nil
-}
-
-func openBrowser(url string) {
-	var cmd string
-	var args []string
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start"}
-	case "darwin":
-		cmd = "open"
-	default:
-		cmd = "xdg-open"
-	}
-	args = append(args, url)
-	_ = exec.Command(cmd, args...).Start()
 }
 
 // buildRerunArgs translates a UI rerun request into framework-specific flags.
@@ -943,6 +900,7 @@ func buildRerunArgs(req testui.RerunRequest) []string {
 
 func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, updates chan []parsers.Test) testrunner.RunOptions {
 	rerunOpts := base
+	rerunOpts.Selection = base.Selection.Fresh()
 	rerunOpts.Lint = false
 	rerunOpts.Updates = updates
 	rerunOpts.RunKind = "rerun"
@@ -972,6 +930,12 @@ type testCommandFlags struct {
 }
 
 func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, flags testCommandFlags) (testrunner.RunOptions, bool, error) {
+	opts.OptionFields = configuredFlagFields(cmd)
+	dirs, err := commandDirs(cmd.Context(), opts.WorkDir)
+	if err != nil {
+		return opts, false, err
+	}
+	opts.WorkDir = dirs.Invocation
 	if err := splitTestPassThroughArgs(cmd, &opts); err != nil {
 		return opts, false, err
 	}
@@ -995,6 +959,14 @@ func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, 
 	if !cmd.Flags().Changed("skip-hooks") {
 		opts.SkipHooks = os.Getenv("CI") == ""
 	}
+	if err := opts.Configure(); err != nil {
+		return opts, false, err
+	}
+	dirs, err = commandDirs(cmd.Context(), opts.WorkDir)
+	if err != nil {
+		return opts, false, err
+	}
+	opts.Dirs, opts.WorkDir = dirs, dirs.Invocation
 	return opts, flags.Detach, nil
 }
 
@@ -1004,9 +976,13 @@ func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, 
 // actually typed still wins — cmd.Flags().Changed separates that from the
 // default cobra always supplies.
 func applyConfiguredTimeouts(cmd *cobra.Command, opts *testrunner.RunOptions) error {
-	dir, err := getWorkingDir()
-	if err != nil {
-		return err
+	dir := opts.WorkDir
+	if dir == "" {
+		var err error
+		dir, err = getWorkingDir()
+		if err != nil {
+			return err
+		}
 	}
 	cfg, err := verify.LoadGavelConfig(dir)
 	if err != nil {
@@ -1056,18 +1032,14 @@ func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
 }
 
 // splitTestPassThroughArgs separates positional package paths from the raw
-// runner arguments supplied after --. Clicky binds every positional token to
-// StartingPaths, while pflag preserves the separator index for us here.
+// runner arguments supplied after --.
 func splitTestPassThroughArgs(cmd *cobra.Command, opts *testrunner.RunOptions) error {
-	dash := cmd.Flags().ArgsLenAtDash()
-	if dash < 0 {
-		return nil
+	paths, through, err := splitAtDash(cmd, opts.StartingPaths)
+	if err != nil {
+		return err
 	}
-	if dash > len(opts.StartingPaths) {
-		return fmt.Errorf("invalid -- separator index %d for %d test arguments", dash, len(opts.StartingPaths))
-	}
-	opts.PassThroughArgs = append(opts.PassThroughArgs, opts.StartingPaths[dash:]...)
-	opts.StartingPaths = append([]string(nil), opts.StartingPaths[:dash]...)
+	opts.StartingPaths = paths
+	opts.PassThroughArgs = append(opts.PassThroughArgs, through...)
 	return nil
 }
 

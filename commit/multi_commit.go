@@ -13,7 +13,7 @@ import (
 // commit per group. It backs `-A` / `--commit-all` (also implied by
 // --max-commits).
 func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
-	if err := stageCommitAllSource(opts.WorkDir, opts.Config); err != nil {
+	if err := stageCommitAllSource(ctx, opts.WorkDir, opts.Config); err != nil {
 		return nil, err
 	}
 
@@ -142,7 +142,7 @@ func commitGroups(ctx context.Context, opts Options, source stagedSource, result
 
 	// Live: unstage everything once, then stage+commit each group the moment its
 	// message is ready. commitSerializeMu keeps a single commit in flight.
-	if err := resetFiles(opts.WorkDir, source.GitPaths()); err != nil {
+	if err := resetFiles(ctx, opts.WorkDir, source.GitPaths()); err != nil {
 		return result, fmt.Errorf("reset staged files: %w", err)
 	}
 	for _, group := range groups {
@@ -150,7 +150,7 @@ func commitGroups(ctx context.Context, opts Options, source stagedSource, result
 		if err != nil {
 			return result, err
 		}
-		hash, err := stageAndCommitGroup(opts.WorkDir, group, cr.Message)
+		hash, err := stageAndCommitGroup(ctx, opts.WorkDir, group, cr.Message)
 		if err != nil {
 			return result, err
 		}
@@ -188,13 +188,13 @@ func analyzeGroup(ctx context.Context, opts Options, group commitGroup) (CommitR
 
 // stageAndCommitGroup stages exactly the group's paths and creates one commit,
 // holding commitSerializeMu so only one commit is ever in flight.
-func stageAndCommitGroup(workDir string, group commitGroup, message string) (string, error) {
+func stageAndCommitGroup(ctx context.Context, workDir string, group commitGroup, message string) (string, error) {
 	commitSerializeMu.Lock()
 	defer commitSerializeMu.Unlock()
-	if err := addFiles(workDir, group.GitPaths()); err != nil {
+	if err := addFiles(ctx, workDir, group.GitPaths()); err != nil {
 		return "", fmt.Errorf("stage commit group %s: %w", group.labelOrDefault(), err)
 	}
-	hash, err := commitWithMessage(workDir, message)
+	hash, err := commitWithMessage(ctx, workDir, message)
 	if err != nil {
 		return "", fmt.Errorf("create commit for %s: %w", group.labelOrDefault(), err)
 	}

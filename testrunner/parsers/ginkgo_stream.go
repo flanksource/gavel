@@ -7,12 +7,12 @@ import (
 	"time"
 )
 
-// GinkgoProgressSink receives incremental updates while a ginkgo suite is
-// running. Implementations fan these events out to the UI streamer.
+// ProgressSink receives incremental updates while a package's test process
+// is running. Implementations fan these events out to the UI streamer.
 // Progress is a summary Test with Children containing the running/finished
-// specs observed so far.
-type GinkgoProgressSink interface {
-	UpdateGinkgoProgress(progress Test)
+// tests observed so far.
+type ProgressSink interface {
+	UpdatePackageProgress(pkgPath string, framework Framework, progress Test)
 }
 
 // ginkgo -v output markers. The format is remarkably stable: each spec
@@ -33,7 +33,7 @@ var (
 // and pushes incremental progress into a sink. Safe for concurrent Write
 // calls (the Process may flush in multiple goroutines).
 type GinkgoStreamWriter struct {
-	sink        GinkgoProgressSink
+	sink        ProgressSink
 	packageName string
 
 	mu        sync.Mutex
@@ -52,7 +52,7 @@ type ginkgoSpecState struct {
 }
 
 // NewGinkgoStreamWriter builds a progress parser for a single package run.
-func NewGinkgoStreamWriter(packageName string, sink GinkgoProgressSink) *GinkgoStreamWriter {
+func NewGinkgoStreamWriter(packageName string, sink ProgressSink) *GinkgoStreamWriter {
 	return &GinkgoStreamWriter{
 		sink:        sink,
 		packageName: packageName,
@@ -194,7 +194,7 @@ func (w *GinkgoStreamWriter) emit() {
 			Pending:   true,
 		})
 	}
-	w.sink.UpdateGinkgoProgress(progress)
+	w.sink.UpdatePackageProgress(w.packageName, Ginkgo, progress)
 }
 
 // isGinkgoTerminalLine is true when the line looks like a ginkgo spec-end

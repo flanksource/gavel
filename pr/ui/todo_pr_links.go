@@ -155,6 +155,24 @@ func (s *Server) todoPRLinkProvider(ctx context.Context, dir string) (todos.Prov
 	return provider, linker, nil
 }
 
+// prTodosLinker scopes a PR's reverse lookup to dir when one is given. Without
+// one it spans the server's workspaces; its own directory need not be a project.
+func (s *Server) prTodosLinker(ctx context.Context, dir string) (todos.GlobalPRLinkProvider, error) {
+	if strings.TrimSpace(dir) != "" {
+		_, linker, err := s.todoPRLinkProvider(ctx, dir)
+		return linker, err
+	}
+	global, err := s.globalTodoProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	linker, ok := global.(todos.GlobalPRLinkProvider)
+	if !ok {
+		return nil, fmt.Errorf("global TODO provider %T does not support PR links; native PostgreSQL storage is required", global)
+	}
+	return linker, nil
+}
+
 // withIndexedPRs joins each link to the PR index for its title and state.
 func (s *Server) withIndexedPRs(links []todos.PRLink) ([]todoPRLinkItem, error) {
 	items := make([]todoPRLinkItem, len(links))
@@ -178,8 +196,8 @@ func (s *Server) withIndexedPRs(links []todos.PRLink) ([]todoPRLinkItem, error) 
 	return items, nil
 }
 
-// handlePRTodos lists the TODOs in dir's workspace that link the PR at url. With no dir, the
-// workspace is the server's own, or in hosted mode the organization's repository the PR is in.
+// handlePRTodos lists linked TODOs in dir, across local workspaces when dir is
+// omitted, or in the organization's PR repository when hosted.
 func (s *Server) handlePRTodos(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	query := r.URL.Query()
@@ -201,7 +219,7 @@ func (s *Server) handlePRTodos(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_, linker, err := s.todoPRLinkProvider(r.Context(), dir)
+	linker, err := s.prTodosLinker(r.Context(), dir)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return

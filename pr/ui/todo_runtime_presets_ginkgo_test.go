@@ -112,7 +112,7 @@ var _ = Describe("todo runtime presets", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RuntimePresets).To(HaveExactElements(
 			HaveField("Name", "reviewer"),
-			HaveField("Name", "Edit"), HaveField("Name", "Plan"), HaveField("Name", "Read-only"),
+			HaveField("Name", "Edit"), HaveField("Name", "Lint"), HaveField("Name", "Plan"), HaveField("Name", "Read-only"),
 		))
 		Expect(result.RuntimeProfiles).To(BeEmpty())
 		Expect(result.PromptDefaults["run"].Presets).To(Equal([]string{result.RuntimePresets[0].ID}))

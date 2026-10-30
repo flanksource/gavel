@@ -24,6 +24,11 @@ var (
 	// ErrRunResumeModeMismatch means a caller tried to resume one nonterminal
 	// Captain operation using a different Gavel step kind.
 	ErrRunResumeModeMismatch = errors.New("native TODO run resume mode mismatch")
+
+	// ErrRunResumeProviderMismatch means a caller tried to resume a conversation
+	// on a provider family other than the one that holds it: a provider session
+	// id is meaningless to any other family's agent.
+	ErrRunResumeProviderMismatch = errors.New("native TODO run resume provider mismatch")
 )
 
 // ErrRunOwnedElsewhere reports that a TODO already has a live run, driven by a
@@ -310,6 +315,12 @@ type PRLinkProvider interface {
 	LinkPR(ctx context.Context, todo *types.TODO, request PRLinkRequest) (*PRLink, error)
 	UnlinkPR(ctx context.Context, todo *types.TODO, url string) error
 	PRLinks(ctx context.Context, todo *types.TODO) ([]PRLink, error)
+	TodosForPR(ctx context.Context, url string) ([]PRLinkedTODO, error)
+}
+
+// GlobalPRLinkProvider lists the TODOs that link a PR across every workspace,
+// for callers that know the PR but not which workspace tracks it.
+type GlobalPRLinkProvider interface {
 	TodosForPR(ctx context.Context, url string) ([]PRLinkedTODO, error)
 }
 

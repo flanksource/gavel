@@ -1,6 +1,6 @@
 ---
 prompt:
-  schemaStrictness: retry
+  schemaStrictness: repair
 output:
   schema:
     type: object

@@ -20,6 +20,42 @@ func TestParseRouteRequestDefaultsLintGroupingToLinterRuleFile(t *testing.T) {
 	}
 }
 
+// The history tab is a page route (reloading it must serve the page) with no
+// export rendering.
+func TestHistoryTabIsPageOnly(t *testing.T) {
+	handler := NewServer().Handler()
+	for path, want := range map[string]int{"/history": 200, "/history.json": 404} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("Accept", "text/html")
+		handler.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+}
+
+// The files tab is a page route for any file path, including one whose
+// extension reads as an export format, and has no export rendering.
+func TestFilesTabIsPageOnly(t *testing.T) {
+	handler := NewServer().Handler()
+	for path, want := range map[string]int{
+		"/files": 200,
+		"/files/rules/br/CopyBook-Fees/XMLData.xml": 200,
+		"/files/docs/README.md":                     200,
+		"/files/testdata/report.json":               200,
+		"/files.json":                               404,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path+"?dir=/work", nil)
+		req.Header.Set("Accept", "text/html")
+		handler.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
+		}
+	}
+}
+
 // TestParseTestFiltersMatchesTheUIStatusParam mirrors src/routes.ts: no
 // status param is the failing-only default, `all` is no status filter.
 func TestParseTestFiltersMatchesTheUIStatusParam(t *testing.T) {
@@ -74,6 +110,33 @@ func TestBuildLintByLinterRuleFileGroupsRulesBeforeFolders(t *testing.T) {
 	foo := mustChildByName(t, pkg.Children, "foo.go (2)")
 	if foo.Kind != "lint-file" || foo.File != "pkg/foo.go" {
 		t.Fatalf("foo node = %#v", foo)
+	}
+}
+
+// One fix at three places across two files is one violation: counted once
+// under its rule, listing each place (relative to the work dir) beneath it.
+func TestBuildLintByLinterRuleFileListsEveryLocationUnderOneViolation(t *testing.T) {
+	v := testViolation("rules/a/XMLData.xml", 4, "plan-warning")
+	v.Locations = []models.ViolationLocation{
+		{File: "/tmp/work/rules/a/XMLData.xml", Line: 4, Message: "statement a1"},
+		{File: "rules/a/XMLData.xml", Line: 12, Message: "statement a2"},
+		{File: "rules/b/XMLData.xml", Line: 9, Message: "statement b1"},
+	}
+	results := []*linters.LinterResult{{Linter: "oipa-transaction", WorkDir: "/tmp/work", Violations: []models.Violation{v}}}
+
+	linter := buildLintByLinterRuleFile(results, lintRouteFilters{Grouping: "linter-rule-file"})[0]
+	rule := mustChildByName(t, linter.Children, "plan-warning (1)")
+	node := rule
+	for _, name := range []string{"rules (1)", "a (1)", "XMLData.xml (1)", "rules/a/XMLData.xml:4 violation (3 locations)"} {
+		node = mustChildByName(t, node.Children, name)
+	}
+	file := node
+	want := []string{"rules/a/XMLData.xml:4 statement a1", "rules/a/XMLData.xml:12 statement a2", "rules/b/XMLData.xml:9 statement b1"}
+	if got := names(file.Children); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("location children = %v, want %v", got, want)
+	}
+	if file.Children[2].Kind != "lint-location" || file.Children[2].File != "rules/b/XMLData.xml" || file.Children[2].Line != 9 {
+		t.Fatalf("location node = %#v, want a lint-location on rules/b/XMLData.xml:9", file.Children[2])
 	}
 }
 

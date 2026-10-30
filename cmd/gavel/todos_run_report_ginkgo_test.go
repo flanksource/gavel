@@ -2,8 +2,9 @@ package main
 
 import (
 	captainapi "github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -17,7 +18,7 @@ var _ = Describe("todo run report workspace", func() {
 	)
 	report := func(workspace *captainapi.WorkspaceRecord) string {
 		execution := &todos.ExecutionResult{ExecutorName: "cli-claude", Workspace: workspace}
-		outcome := &lifecycle.StepOutcome{Step: lifecycle.Step{Name: "run"}, Execution: execution}
+		outcome := &lifecycle1.StepOutcome{Step: lifecycle.Step{Name: "run"}, Execution: execution}
 		return stripANSI(renderRunResult(todoRef, "run", outcome, string(types.StatusCompleted), nil))
 	}
 

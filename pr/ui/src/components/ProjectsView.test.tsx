@@ -105,11 +105,17 @@ function renderWithClient(ui: ReactElement, client = createClient()) {
 
 function stubRunHistory(payload: unknown) {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => payload }) as Response));
-  vi.stubGlobal('EventSource', vi.fn(() => ({
-    addEventListener: (type: string, listener: EventListener) => streamListeners.set(type, listener),
-    close: vi.fn(),
-    onerror: null,
-  })));
+  // A `function` implementation: vitest mocks of arrow functions cannot be called with `new`.
+  vi.stubGlobal('EventSource', vi.fn(function () {
+    return {
+      addEventListener: (type: string, listener: EventListener) => streamListeners.set(type, listener),
+      removeEventListener: (type: string, listener: EventListener) => {
+        if (streamListeners.get(type) === listener) streamListeners.delete(type);
+      },
+      close: vi.fn(),
+      onerror: null,
+    };
+  }));
 }
 
 afterEach(() => {
@@ -223,7 +229,7 @@ describe('projects tab', () => {
       signal = init?.signal ?? undefined;
       return new Promise<Response>(() => {});
     }));
-    vi.stubGlobal('EventSource', vi.fn(() => ({ addEventListener: vi.fn(), close: vi.fn(), onerror: null })));
+    vi.stubGlobal('EventSource', vi.fn(function () { return { addEventListener: vi.fn(), removeEventListener: vi.fn(), close: vi.fn(), onerror: null }; }));
     const client = createClient();
     const view = renderWithClient(<CatalogProbe name="probe" />, client);
     await waitFor(() => expect(signal).toBeDefined());

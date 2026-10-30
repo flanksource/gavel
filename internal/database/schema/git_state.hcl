@@ -55,8 +55,20 @@ table "git_repos" {
     type    = boolean
     default = false
   }
+  // The primary checkout's upstream (e.g. origin/main) and the commit it
+  // pointed at; NULL when the checkout tracks none. Its ahead/behind is the
+  // git_range_stats row (upstream_sha, primary head).
+  column "upstream_branch" {
+    null = true
+    type = text
+  }
+  column "upstream_sha" {
+    null = true
+    type = text
+  }
   // Hash of `git worktree list --porcelain` + `git for-each-ref refs/heads`
-  // + the base; a ref scan with an unchanged fingerprint writes nothing else.
+  // + the base and upstream; a ref scan with an unchanged fingerprint writes
+  // nothing else.
   column "refs_fingerprint" {
     null = true
     type = text

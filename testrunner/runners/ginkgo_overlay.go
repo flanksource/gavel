@@ -34,7 +34,7 @@ func BuildGinkgoOverlay(workDir string, packages []string, tags []string) (strin
 	}
 	sorted := append([]string(nil), packages...)
 	sort.Strings(sorted)
-	digest := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	digest := sha256.Sum256([]byte(root + "\n" + strings.Join(sorted, "\n")))
 	overlayDir := filepath.Join(root, ".tmp", "gavel-ginkgo-overlay")
 	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
 		return "", fmt.Errorf("create Ginkgo overlay directory: %w", err)

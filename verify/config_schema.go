@@ -14,7 +14,7 @@ const ConfigSchemaID = "https://raw.githubusercontent.com/flanksource/gavel/main
 
 // ConfigJSONSchema renders the documented JSON Schema for the .gavel.yaml
 // (a.k.a. .gavel.yml) configuration file. It is the single source of truth for
-// the committed gavel.schema.json artifact and SCHEMA.md; regenerate the JSON
+// the committed gavel.schema.json artifact and the documentation configuration reference; regenerate the JSON
 // with `go generate .` after changing GavelConfig.
 func ConfigJSONSchema() (string, error) {
 	b, err := json.MarshalIndent(gavelConfigSchema(), "", "  ")
@@ -27,26 +27,27 @@ func ConfigJSONSchema() (string, error) {
 func gavelConfigSchema() map[string]any {
 	specSchema := captainSpecSchema()
 	schema := object(
-		"Root configuration for Gavel. Place .gavel.yaml (or .gavel.yml) in ~/, the git root, "+
-			"or the target directory; layers merge in that order with later layers overriding earlier ones. "+
+		"Root configuration for Gavel. Place .gavel.yaml in ~/, the git root's parent, the git root, "+
+			"or any directory through the target; layers merge in that order with nearer layers overriding earlier ones. "+
 			"Run `gavel config [path]` to inspect the merged result.",
 		map[string]any{
-			"runtime":  runtimeSchema(),
-			"ai":       aiSchema(specSchema),
-			"lint":     lintSchema(),
-			"commit":   commitSchema(),
-			"fixtures": fixturesSchema(),
-			"ssh":      sshSchema(),
-			"pre":      hookStepsSchema("Top-level hooks run before the main test/lint pipeline, in declaration order. Appended across layers."),
-			"post":     hookStepsSchema("Top-level hooks run after the main pipeline as non-blocking cleanup/reporting. Appended across layers."),
-			"secrets":  secretsSchema(),
-			"procfile": procfileSchema(),
-			"checks":   checksSchema(),
-			"todos":    todosSchema(specSchema),
-			"status":   statusSchema(),
-			"test":     testSchema(),
-			"pr":       prSchema(),
-			"storage":  storageSchema(),
+			"externalIssues": externalIssuesSchema(),
+			"runtime":        runtimeSchema(),
+			"ai":             aiSchema(specSchema),
+			"lint":           lintSchema(),
+			"commit":         commitSchema(),
+			"fixtures":       fixturesSchema(),
+			"ssh":            sshSchema(),
+			"pre":            hookStepsSchema("Top-level hooks run before the main test/lint pipeline, in declaration order. Appended across layers."),
+			"post":           hookStepsSchema("Top-level hooks run after the main pipeline as non-blocking cleanup/reporting. Appended across layers."),
+			"secrets":        secretsSchema(),
+			"procfile":       procfileSchema(),
+			"checks":         checksSchema(),
+			"todos":          todosSchema(specSchema),
+			"status":         statusSchema(),
+			"test":           testSchema(),
+			"pr":             prSchema(),
+			"storage":        storageSchema(),
 		},
 	)
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"

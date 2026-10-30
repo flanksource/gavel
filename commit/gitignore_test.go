@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,7 +84,7 @@ func TestUnstageGitIgnored_InWorktree(t *testing.T) {
 
 	writeFileInDir(t, wt, "dist/bundle.js", "new\n")
 
-	require.NoError(t, stageFiles(wt, StageUnstaged, verify.CommitConfig{}))
+	require.NoError(t, stageFiles(context.Background(), wt, StageUnstaged, verify.CommitConfig{}))
 
 	assert.NotContains(t, mustStagedFiles(t, wt), "dist/bundle.js",
 		"tracked-but-gitignored file must be stripped from the commit inside a worktree")

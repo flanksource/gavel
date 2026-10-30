@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/runconfig"
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/repomap"
@@ -45,12 +46,22 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	}
 	var disp stepDisplay
 	_ = yaml.Unmarshal([]byte(fixture.RunnerStep.Config), &disp)
+	fields, err := runconfig.YAMLFields([]byte(fixture.RunnerStep.Config))
+	if err != nil {
+		return result.Errorf(err, "read test option presence")
+	}
+	ro.OptionFields = fields
+	ro.OptionFields["ui"], ro.OptionFields["fixtures"] = true, true
 
 	// A fixture test step is headless: never launch the dashboard or recurse
 	// back into fixture discovery (fixture → test → fixture).
 	ro.UI = false
 	ro.Context = opts.Context
-	ro.Runtime = opts.ProcessRuntime.Merge(ro.Runtime)
+	runtime, err := fixtureStepRuntime(opts)
+	if err != nil {
+		return result.Errorf(err, "fixture environment")
+	}
+	ro.Runtime = runtime.Merge(ro.Runtime)
 	ro.Fixtures = false
 	ro.OutputTee = nil
 	if ro.WorkDir == "" {
@@ -59,6 +70,9 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	// A verification scoped to the change under review narrows the run to the
 	// packages those files affect, on top of whatever selector the step declares.
 	ro.ChangedFiles = append(ro.ChangedFiles, opts.Changed...)
+	if len(opts.Changed) > 0 {
+		ro.OptionFields["changed-files"] = true
+	}
 	var summary parsers.TestSummary
 	ro.SummaryOut = &summary
 	var progressDone chan struct{}
@@ -127,6 +141,12 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	}
 	var disp stepDisplay
 	_ = yaml.Unmarshal([]byte(fixture.RunnerStep.Config), &disp)
+	fields, err := runconfig.YAMLFields([]byte(fixture.RunnerStep.Config))
+	if err != nil {
+		return result.Errorf(err, "read lint option presence")
+	}
+	lo.OptionFields = fields
+	lo.OptionFields["ui"] = true
 
 	lo.UI = false
 	lo.OutputTee = nil
@@ -138,12 +158,19 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	if len(lo.Files) == 0 {
 		lo.Files = opts.Changed
 	}
+	if len(lo.Files) > 0 {
+		lo.OptionFields["files"] = true
+	}
 	ctx := opts.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	lo.Context = ctx
-	lo.Runtime = opts.ProcessRuntime.Merge(lo.Runtime)
+	runtime, err := fixtureStepRuntime(opts)
+	if err != nil {
+		return result.Errorf(err, "fixture environment")
+	}
+	lo.Runtime = runtime.Merge(lo.Runtime)
 
 	results, runErr := lint.Run(ctx, lo)
 

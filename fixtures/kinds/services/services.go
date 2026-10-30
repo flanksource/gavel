@@ -109,6 +109,11 @@ func startEntry(ctx context.Context, step *fixtures.StepContext, raw rawEntry, s
 		svc.exec, svc.outputs, err = startExec(ctx, step, entry, port)
 	case "deps":
 		svc.deps, svc.outputs, err = startDeps(ctx, step, entry)
+	case "dbtest":
+		svc.database, svc.outputs, err = startDBTest(ctx, step, entry)
+		if svc.outputs != nil {
+			svc.outputs["default"] = entry.DBTest.Default != nil && *entry.DBTest.Default
+		}
 	default:
 		svc.outputs, err = seedGit(ctx, step, entry)
 	}
@@ -126,10 +131,11 @@ type running struct {
 }
 
 type startedEntry struct {
-	name    string
-	exec    *execService
-	deps    *depsService
-	outputs map[string]any
+	name     string
+	exec     *execService
+	deps     *depsService
+	database *databaseService
+	outputs  map[string]any
 }
 
 // outputs is `{services: {<name>: outputs}, <name>: outputs, ready}`, with
@@ -173,6 +179,8 @@ func (s *startedEntry) stop(ctx context.Context) error {
 		return s.exec.stop()
 	case s.deps != nil:
 		return s.deps.stop(ctx)
+	case s.database != nil:
+		return s.database.stop()
 	default:
 		return nil
 	}
@@ -184,6 +192,8 @@ func (s *startedEntry) observe(ctx context.Context) map[string]any {
 		return s.exec.observe(ctx)
 	case s.deps != nil:
 		return s.deps.observe(ctx)
+	case s.database != nil:
+		return s.database.observe(ctx)
 	default:
 		return map[string]any{"ready": true}
 	}

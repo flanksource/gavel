@@ -74,7 +74,7 @@ export function ProjectFileTree({
           onIgnore={onIgnore}
         />
       )}
-      rowClass={(_node, isSelected) => `group min-h-8 border-l-2 py-1 pr-3 ${
+      rowClass={(_node, isSelected) => `group min-h-11 border-l-2 py-1 pr-3 md:min-h-8 ${
         isSelected
           ? 'border-primary bg-primary/10'
           : 'border-transparent hover:border-primary/40 hover:bg-muted/40'

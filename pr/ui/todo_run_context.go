@@ -12,7 +12,9 @@ import (
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -158,7 +160,7 @@ func todoRunContext(ctx context.Context, workDir string) (todoRunContextResponse
 	if err != nil {
 		return todoRunContextResponse{}, fmt.Errorf("open runtime profile provider: %w", err)
 	}
-	host, err := lifecycle.NewHost(provider, workDir, lifecycle.HostDashboard)
+	host, err := lifecycle1.NewHost(provider, workDir, lifecycle1.HostDashboard)
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
@@ -183,7 +185,7 @@ func todoRunContext(ctx context.Context, workDir string) (todoRunContextResponse
 		Models:          models,
 		Efforts:         todoRunEfforts(),
 		DefaultMode:     promptDefaults["run"].Mode,
-		DefaultProvider: providerKey(promptDefaults["run"].Spec.Model),
+		DefaultProvider: run.ProviderKey(promptDefaults["run"].Spec.Model),
 		Tools:           todoRunToolCatalog(),
 		Lifecycle:       todoRunLifecycleFor(definition),
 		InputSchemas:    inputSchemas,
@@ -199,7 +201,7 @@ func (s *Server) hostedRunContext(ctx context.Context, dir string) (todoRunConte
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
-	host, err := lifecycle.NewRepositoryHost(provider, source.Dir, lifecycle.HostDashboard)
+	host, err := lifecycle1.NewRepositoryHost(provider, source.Dir, lifecycle1.HostDashboard)
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
@@ -233,7 +235,7 @@ func (s *Server) hostedRunContext(ctx context.Context, dir string) (todoRunConte
 		Models:          models,
 		Efforts:         todoRunEfforts(),
 		DefaultMode:     promptDefaults["run"].Mode,
-		DefaultProvider: providerKey(promptDefaults["run"].Spec.Model),
+		DefaultProvider: run.ProviderKey(promptDefaults["run"].Spec.Model),
 		Tools:           todoRunToolCatalog(),
 		Lifecycle:       todoRunLifecycleFor(definition),
 		InputSchemas:    inputSchemas,
@@ -252,7 +254,7 @@ func stepDefaultRuntimes(defaults map[string]todoRunPromptDefault) ([]todoRunMod
 	modes, models := []todoRunModeOption{}, []todoRunModelOption{}
 	for _, step := range steps {
 		resolved := defaults[step]
-		provider, ok := api.ProviderByName(providerKey(api.Model{Name: resolved.Model}))
+		provider, ok := api.ProviderByName(run.ProviderKey(api.Model{Name: resolved.Model}))
 		if !ok || resolved.Mode == "" || resolved.Model == "" {
 			continue
 		}
@@ -311,7 +313,7 @@ func todoRunLifecycleFor(definition lifecycle.Lifecycle) todoRunLifecycle {
 			Name:      step.Name,
 			Label:     stepLabel(step.Name),
 			Prompt:    step.Prompt,
-			ReadOnly:  lifecycle.Class(step) != types.ModeRun,
+			ReadOnly:  lifecycle1.Class(step) != types.ModeRun,
 			Auxiliary: step.Auxiliary,
 		})
 	}
@@ -335,7 +337,7 @@ func stepLabel(name string) string {
 // A step that fails to resolve is reported rather than skipped: it would fail
 // the same way when run, and a silently absent default sends the operator back
 // to the account default — the exact substitution this exists to prevent.
-func todoRunPromptDefaults(ctx context.Context, host *lifecycle.Host) (map[string]todoRunPromptDefault, error) {
+func todoRunPromptDefaults(ctx context.Context, host *lifecycle1.Host) (map[string]todoRunPromptDefault, error) {
 	steps := host.Def.Definition().Steps
 	defaults := make(map[string]todoRunPromptDefault, len(steps))
 	for _, step := range steps {
@@ -504,21 +506,6 @@ func todoRunEfforts() []string {
 
 func validTodoRunEffort(effort string) bool {
 	return api.Effort(effort).Valid() && effort != ""
-}
-
-// providerKey names the family a spec's model belongs to. It reads the resolved
-// descriptor when there is one and derives it from the name otherwise — the
-// provider is a resolution result, never something the spec authored, so there
-// is no field to read it from directly.
-func providerKey(model api.Model) string {
-	if model.Provider != nil {
-		return model.Provider.Name
-	}
-	provider, err := api.ProviderFor(model.Name)
-	if err != nil {
-		return ""
-	}
-	return provider.Name
 }
 
 func mechanismLabel(mechanism string) string {

@@ -76,7 +76,7 @@ func TestSnapshotsGoThroughTheStore(t *testing.T) {
 	last, err := LastRun(repo)
 	require.NoError(t, err)
 	require.NotNil(t, last)
-	runs, err := ListRuns(repo, time.Time{})
+	runs, err := ListRuns(repo, ListRunsOptions{})
 	require.NoError(t, err)
 	require.Len(t, runs, 2)
 

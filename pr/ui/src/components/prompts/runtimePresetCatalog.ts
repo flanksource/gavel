@@ -43,6 +43,7 @@ export type RuntimePresetWrite = {
   scope: RuntimeProfileScope;
   spec: RuntimePresetSpec;
   presets: string[];
+  order?: number;
 };
 
 type RuntimePresetResolveRequestCompat = {
@@ -78,6 +79,7 @@ export function presetWrite(preset: RuntimePresetRecord): RuntimePresetWrite {
     name: preset.name,
     ...(preset.description !== undefined ? { description: preset.description } : {}),
     scope: preset.scope,
+    ...(preset.order !== undefined ? { order: preset.order } : {}),
     spec: preset.spec,
     presets: preset.presets ?? [],
   };

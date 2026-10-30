@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, FilterBar, SplitButton, SplitPane, type FilterBarFilter } from '@flanksource/clicky-ui/components';
+import { Button, FilterBar, SplitButton, type FilterBarFilter } from '@flanksource/clicky-ui/components';
 import {
   UiBeaker,
   UiCheck,
@@ -16,11 +16,13 @@ import { Spinner } from '../icons/Spinner';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import { useDocumentVisible } from '../useDocumentVisible';
 import { useGitFocus } from '../useGitFocus';
+import { useIsMobile } from '../useIsMobile';
 import { ProjectActionDialog, type ProjectAction } from './ProjectActionDialog';
 import { type ProjectActionStatus } from './ProjectActionFeedback';
 import { ProjectActionRunDialog, type ProjectRunnerAction } from './ProjectActionRunDialog';
 import { ProjectCommitTasks } from './ProjectCommitTasks';
 import { ProjectDiffView } from './ProjectDiffView';
+import { ProjectChangesView } from './ProjectChangesView';
 import { ProjectFileTree } from './ProjectFileTree';
 import {
   emptyProjectFileFilters,
@@ -89,6 +91,7 @@ const RUNNER_MAIN_CHECKOUT_ONLY = 'Lint and test run in the main checkout only';
 
 export function ProjectStatusView({ project, diffPath = '', showResults = false, worktree, onDiffPathChange = ignoreDiffPathChange, onChanged = ignoreChanged }: Props) {
   const queryClient = useQueryClient();
+  const mobile = useIsMobile();
   const visible = useDocumentVisible();
   const focus = useGitFocus({ project: project.name, worktree });
   const statusQuery = useQuery({
@@ -301,23 +304,43 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   }, [ignoreMutation.mutateAsync]);
 
   const statusError = statusQuery.error instanceof Error ? statusQuery.error.message : '';
-  if (statusQuery.isPending && !status) return <Centered><Spinner /> Loading project status…</Centered>;
-  if (!status) return <Centered>{error || statusError || 'Project status is unavailable.'}</Centered>;
+  if (!status) return (
+    <div className="flex h-full min-h-0 flex-col">
+      {mobile && diffPath && <Button type="button" variant="ghost" className="min-h-11 self-start" onClick={() => onDiffPathChange('')}>Back to files</Button>}
+      <Centered>{statusQuery.isPending ? <><Spinner /> Loading project status…</> : error || statusError || 'Project status is unavailable.'}</Centered>
+    </div>
+  );
 
   const busy = status.action.running || actionMutation.isPending;
+  const reviewing = mobile && diffPath !== '';
+  const notices = <>
+    {(error || statusError) && <div role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{error || statusError}</div>}
+    {focus.error && <div role="alert" className="mt-2 text-xs text-amber-600 dark:text-amber-400">Git tracker focus failed: {focus.error}</div>}
+    {showResults && status.resultsStale && <div className="mt-2 text-xs text-amber-600">Test or lint results are from an earlier commit.</div>}
+  </>;
+  const commitButton = <SplitButton
+    variant="default"
+    size={mobile ? 'default' : 'sm'}
+    className={mobile ? '[&_button]:min-h-11 [&_button]:min-w-11' : undefined}
+    disabled={selected.size === 0 || queueCommitMutation.isPending}
+    label={<span className="flex items-center gap-1"><UiGitCommit />Commit selected ({selected.size})</span>}
+    title="Commit options"
+    onClick={() => void run('commit')}
+    items={[{ label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>, onSelect: () => setAdvancedAction('commit') }]}
+  />;
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border px-4 py-3">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
+      {!reviewing && <div className="shrink-0 border-b border-border px-3 py-2 md:px-4 md:py-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold text-foreground">{project.name}</h2>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span className="flex items-center gap-1"><UiGitBranch />{status.branch || '(detached)'}</span>
-              <span className="truncate" title={status.workDir}>{status.workDir}</span>
+              <span className="hidden truncate md:inline" title={status.workDir}>{status.workDir}</span>
               <span>{status.files.length} change{status.files.length === 1 ? '' : 's'}</span>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          {!mobile && <div className="flex flex-wrap items-center gap-1.5">
             <SplitButton
               variant="outline"
               size="sm"
@@ -342,18 +365,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
                 onSelect: () => setAdvancedAction('test'),
               }]}
             />
-            <SplitButton
-              variant="default"
-              size="sm"
-              disabled={selected.size === 0 || queueCommitMutation.isPending}
-              label={<span className="flex items-center gap-1"><UiGitCommit />Commit selected ({selected.size})</span>}
-              title="Commit options"
-              onClick={() => void run('commit')}
-              items={[{
-                label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>,
-                onSelect: () => setAdvancedAction('commit'),
-              }]}
-            />
+            {commitButton}
             <Button
               type="button"
               variant="outline"
@@ -367,13 +379,13 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
             <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status">
               <UiRefresh />
             </Button>
-          </div>
+          </div>}
         </div>
-        {(error || statusError) && <div role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{error || statusError}</div>}
-        {focus.error && <div role="alert" className="mt-2 text-xs text-amber-600 dark:text-amber-400">Git tracker focus failed: {focus.error}</div>}
-        {showResults && status.resultsStale && <div className="mt-2 text-xs text-amber-600">Test or lint results are from an earlier commit.</div>}
-      </div>
+        {notices}
+      </div>}
+      {reviewing && <div className="shrink-0 px-3">{notices}{commitTaskError && <div role="alert" className="text-xs text-destructive">{commitTaskError}</div>}</div>}
 
+      <div hidden={reviewing} className={reviewing ? 'hidden' : 'contents'}>
       <ProjectCommitTasks
         key={`${project.name}\0${worktree ?? ''}`}
         projectName={project.name}
@@ -384,14 +396,17 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
         onComplete={refreshAfterCommit}
         onRunChange={setCommitRunId}
       />
+      </div>
 
-      <SplitPane
-        className="min-h-0 flex-1"
-        defaultSplit={55}
-        minLeft={35}
-        minRight={30}
-        leftClass="overflow-hidden"
-        left={
+      <ProjectChangesView
+        files={visibleFiles}
+        selected={selected}
+        locked={lockedFiles}
+        disabled={busy || ignoreMutation.isPending || commitTaskError !== ''}
+        diffPath={diffPath}
+        onDiffPathChange={onDiffPathChange}
+        onToggleFile={path => setSelected(current => togglePath(current, path))}
+        fileList={
           <div className="flex h-full min-h-0 flex-col">
             <div className="min-h-0 flex-1 overflow-auto">
               {status.files.length === 0 ? (
@@ -428,8 +443,12 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
             </div>
           </div>
         }
-        right={<ProjectDiffView projectName={project.name} path={diffPath} worktree={worktree} />}
+        diff={<ProjectDiffView projectName={project.name} path={diffPath} worktree={worktree} />}
       />
+      {mobile && <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-background px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status" className="min-h-11 min-w-11"><UiRefresh /></Button>
+        {commitButton}
+      </div>}
 
       <ProjectActionDialog
         projectName={project.name}

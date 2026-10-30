@@ -28,16 +28,25 @@ var lintSubcommands = []struct {
 	{"markdownlint", "markdownlint", "Run only markdownlint"},
 	{"vale", "vale", "Run only vale (prose)"},
 	{"jscpd", "jscpd", "Run only jscpd (duplicate-code detector)"},
+	{"uir", "uir", "Run SQL architecture rules from .uir.yaml"},
+	{"json", "json", "Validate JSON, YAML and NDJSON syntax and schemas"},
 	{"betterleaks", "betterleaks", "Run only betterleaks (secret scanner)"},
 	{"secrets", "betterleaks", "Alias for betterleaks"},
 }
 
 func registerLintLinterSubcommands(parent *cobra.Command) {
 	for _, entry := range lintSubcommands {
-		sub := clicky.AddNamedCommand(entry.subcmd, parent, LintOptions{}, func(opts LintOptions) (any, error) {
+		var sub *cobra.Command
+		sub = clicky.AddNamedCommand(entry.subcmd, parent, LintOptions{}, func(opts LintOptions) (any, error) {
+			opts, err := splitLintPassThroughArgs(sub, opts)
+			if err != nil {
+				return nil, err
+			}
 			opts.Linters = []string{entry.linterName}
-			return runLint(opts)
+			return runLint(sub.Context(), opts)
 		})
+		sub.Use = entry.subcmd + " [path...] [-- native args]"
+		bindLintSourceFlags(sub)
 		sub.Short = entry.short
 		if err := sub.Flags().MarkHidden("linters"); err != nil {
 			panic(fmt.Sprintf("hide --linters on %s: %v", entry.subcmd, err))

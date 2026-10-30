@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -60,7 +61,7 @@ var _ = g.Describe("lifecycle admission", func() {
 	g.It("asks the runtime for the step, its prompt and the requested runtime, and hands Captain its recording", func() {
 		input := mustRunInput(host.runInput(exec, &types.TODO{ID: "example"}, prepared, RunOptions{Provider: suppliedProvider{}}))
 
-		admission, err := host.admit(exec, &types.TODO{ID: "example"}, Step{Name: "plan"}, prepared, input, RunOptions{})
+		admission, err := host.admit(exec, &types.TODO{ID: "example"}, lifecycle.Step{Name: "plan"}, prepared, input, RunOptions{})
 
 		o.Expect(err).NotTo(o.HaveOccurred())
 		o.Expect(admission).To(o.Equal(identity))
@@ -80,7 +81,7 @@ var _ = g.Describe("lifecycle admission", func() {
 		var notified []todos.RunPreparationResult
 		exec.SetRunPreparedHook(func(result todos.RunPreparationResult) { notified = append(notified, result) })
 		input := mustRunInput(host.runInput(exec, &types.TODO{ID: "example"}, prepared, RunOptions{}))
-		_, err := host.admit(exec, &types.TODO{ID: "example"}, Step{Name: "plan"}, prepared, input, RunOptions{})
+		_, err := host.admit(exec, &types.TODO{ID: "example"}, lifecycle.Step{Name: "plan"}, prepared, input, RunOptions{})
 		o.Expect(err).NotTo(o.HaveOccurred())
 		o.Expect([]int{len(provider.admitted), len(notified)}).To(o.Equal([]int{0, 0}))
 
@@ -96,7 +97,7 @@ var _ = g.Describe("lifecycle admission", func() {
 		prepared.timeout = time.Minute
 
 		outcome, err := host.Dispatch(context.Background(), &types.TODO{ID: "example"},
-			&Resolution{Step: Step{Name: "plan"}, prepared: prepared}, RunOptions{Exec: exec, Provider: suppliedProvider{}})
+			&Resolution{Step: lifecycle.Step{Name: "plan"}, prepared: prepared}, RunOptions{Exec: exec, Provider: suppliedProvider{}})
 
 		o.Expect(err).To(o.MatchError(o.ContainSubstring("recording has no database")))
 		o.Expect(outcome).To(o.BeNil())
@@ -107,7 +108,7 @@ var _ = g.Describe("lifecycle admission", func() {
 		provider.admission.Record = nil
 		input := mustRunInput(host.runInput(exec, &types.TODO{ID: "example"}, prepared, RunOptions{}))
 
-		_, err := host.admit(exec, &types.TODO{ID: "example"}, Step{Name: "plan"}, prepared, input, RunOptions{})
+		_, err := host.admit(exec, &types.TODO{ID: "example"}, lifecycle.Step{Name: "plan"}, prepared, input, RunOptions{})
 
 		o.Expect(err).To(o.MatchError(o.ContainSubstring("returned no recording")))
 		o.Expect(input.input.Record).To(o.BeNil())
