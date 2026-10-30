@@ -27,6 +27,7 @@ import (
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/launch"
 	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/pr/model"
 	promptlibrary "github.com/flanksource/gavel/prompts/library"
@@ -153,7 +154,8 @@ type Server struct {
 
 	// gitChanges wakes /api/git/stream on every git_* row change any process
 	// sharing the database NOTIFYs (see GitChangeListener).
-	gitChanges sse.Notifier
+	gitChanges    sse.Notifier
+	launchService *launch.Service
 
 	// hosted restricts Handler to the hosted route allowlist (see hosted.go).
 	hosted bool
@@ -548,6 +550,11 @@ func (s *Server) RefreshCh() chan struct{} {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if s.launchService != nil {
+		for _, path := range []string{"/api/launch", "/api/launch/", "/api/runs", "/api/runs/"} {
+			mux.Handle(path, s.launchService.Handler())
+		}
+	}
 	router := route.NewRouter(mux)
 	if s.devProxy != nil {
 		mux.HandleFunc("/", s.handleDevRoute)
@@ -658,6 +665,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
 	mux.HandleFunc("DELETE /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
 	mux.HandleFunc("POST /api/settings/runtime-presets/resolve", s.handleSettingsRuntimePresetResolve)
+	mux.HandleFunc("/api/settings/lifecycles", s.handleSettingsLifecycles)
+	mux.HandleFunc("/api/pr/lifecycle", s.handlePRLifecycle)
 	mux.HandleFunc("/api/settings/gavel", s.handleSettingsGavel)
 	mux.HandleFunc("/api/settings/gavel/trace", s.handleSettingsGavelTrace)
 	mux.HandleFunc("/api/projects", s.handleProjects)
@@ -680,6 +689,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}/branch/diff", s.handleProjectBranchDiff)
 	mux.HandleFunc("POST /api/projects/{name}/branch/merge", s.handleProjectBranchMerge)
 	mux.HandleFunc("POST /api/projects/{name}/branch/pr", s.handleProjectBranchPR)
+	mux.HandleFunc("GET /api/projects/{name}/branch/rebase", s.handleProjectRebaseContext)
+	mux.HandleFunc("POST /api/projects/{name}/branch/rebase", s.handleProjectRebase)
+	mux.HandleFunc("POST /api/projects/{name}/branch/rebase/abort", s.handleProjectRebaseAbort)
 	mux.HandleFunc("GET /api/git/stream", s.handleGitStream)
 	mux.HandleFunc("POST /api/git/focus", s.handleGitFocus)
 	mux.HandleFunc("GET /api/git/metrics", s.handleGitMetrics)

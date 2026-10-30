@@ -3,6 +3,7 @@ package linters
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -68,12 +69,21 @@ type ExecutableCandidateProvider interface {
 	ExecutableCandidates(workDir string) []string
 }
 
+type ExecutableRequired interface {
+	RequiresExecutable() bool
+}
+
 // ProjectRooted is implemented by linters that must run from their own project
 // root (go.mod, package.json, tsconfig.json, pyproject.toml, ...) rather than
 // the enclosing git root. The lint driver resolves the root per input file via
 // utils.FindNearestProjectRoot; first marker found walking up wins.
 type ProjectRooted interface {
 	ProjectRootMarkers() []string
+}
+
+// ProjectFactory gives each scheduled project its own mutable linter options and counters.
+type ProjectFactory interface {
+	NewProject(workDir string) Linter
 }
 
 // DirectConfigDetector is implemented by linters whose "has config" test needs
@@ -112,21 +122,27 @@ type LinterWithLanguageSupport interface {
 
 // RunOptions provides configuration for linter execution
 type RunOptions struct {
-	ConfigDir       string
-	Runtime         processruntime.Options
-	runtimeResolved bool
-	WorkDir         string
-	Executable      string
-	Files           []string
-	Config          *models.LinterConfig
-	ArchConfig      *models.Config // Full arch-unit config for all_language_excludes macro
-	ForceJSON       bool
-	Fix             bool // Enable auto-fixing mode
-	NoCache         bool // Disable caching
-	Timeout         time.Duration
-	Ignores         []string
-	ExtraArgs       []string
-	OutputTee       io.Writer
+	ConfigDir            string
+	Runtime              processruntime.Options
+	runtimeResolved      bool
+	WorkDir              string
+	Executable           string
+	Files                []string
+	Config               *models.LinterConfig
+	ArchConfig           *models.Config // Full arch-unit config for all_language_excludes macro
+	ForceJSON            bool
+	Fix                  bool // Enable auto-fixing mode
+	NoCache              bool // Disable caching
+	Timeout              time.Duration
+	Ignores              []string
+	Generated            *bool
+	Tags                 []string
+	RuleExclusions       RuleExclusions
+	NativeRuleExclusions []string
+	ExtraArgs            []string
+	OutputTee            io.Writer
+	Scopes               []string
+	Schema               string
 }
 
 // WrapWriter returns w wrapped with OutputTee via io.MultiWriter when OutputTee
@@ -202,7 +218,27 @@ type LinterResult struct {
 	DebounceUsed time.Duration      `json:"debounce_used,omitempty"`
 	FileCount    int                `json:"file_count,omitempty"`
 	RuleCount    int                `json:"rule_count,omitempty"`
+	// Status is pending or running while the result is still in flight, and
+	// empty once it is final.
+	Status LinterStatus `json:"status,omitempty"`
+	// RunID is the Captain prompt run producing this result, followable at
+	// /api/captain/prompt/runs/{run_id}.
+	RunID string `json:"run_id,omitempty"`
+	// SessionID is the Captain session of that run; it outlives the run, so a
+	// persisted or replayed result still names its transcript.
+	SessionID       string `json:"session_id,omitempty"`
+	ConfigurationID string `json:"configuration_id,omitempty"`
 }
+
+type LinterStatus string
+
+const (
+	LinterStatusPending LinterStatus = "pending"
+	LinterStatusRunning LinterStatus = "running"
+)
+
+// InFlight reports whether the result is still pending or running.
+func (r *LinterResult) InFlight() bool { return r.Status != "" }
 
 // CommandLine returns the shell-style command (including args) that the
 // linter would execute, or "" when the argv isn't captured.
@@ -226,6 +262,16 @@ func (lr *LinterResult) HasViolations() bool {
 	return len(lr.Violations) > 0
 }
 
+// hasActionableViolations reports whether any violation is above info severity.
+func (lr *LinterResult) hasActionableViolations() bool {
+	for _, v := range lr.Violations {
+		if v.Severity != models.SeverityInfo {
+			return true
+		}
+	}
+	return false
+}
+
 // IsSuccessWithViolations returns true if the linter ran successfully but found violations
 func (lr *LinterResult) IsSuccessWithViolations() bool {
 	return lr.Success && lr.HasViolations()
@@ -243,7 +289,7 @@ func (lr *LinterResult) Pretty() api.Text {
 	case lr.TimedOut:
 		status = "⏳"
 		style = "text-amber-600"
-	case lr.Success && lr.HasViolations():
+	case lr.Success && lr.hasActionableViolations():
 		status = "⚠"
 		style = "text-yellow-600"
 	case lr.Success:
@@ -316,6 +362,9 @@ type fileViolationNode struct {
 }
 
 func (f *fileViolationNode) Pretty() api.Text {
+	if f.file == "" {
+		return api.Text{}.Append("Run diagnostics", "text-blue-500")
+	}
 	rel := f.file
 	if f.workDir != "" {
 		if r, err := filepath.Rel(f.workDir, f.file); err == nil {
@@ -346,6 +395,8 @@ func (vn *violationNode) Pretty() api.Text {
 	switch vn.v.Severity {
 	case models.SeverityError:
 		t = t.Append("✗ ", "text-red-500")
+	case models.SeverityInfo:
+		t = t.Append("ℹ ", "text-blue-500")
 	default:
 		t = t.Append("⚠ ", "text-yellow-500")
 	}
@@ -423,7 +474,17 @@ func PrepareCommand(linter Linter, opts RunOptions) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	if excluder, ok := linter.(RuleExcluder); ok && len(opts.NativeRuleExclusions) > 0 {
+		excluded, err := excluder.RuleExclusionArgs(opts.NativeRuleExclusions)
+		if err != nil {
+			return "", nil, fmt.Errorf("%s rule exclusions: %w", linter.Name(), err)
+		}
+		opts.ExtraArgs = append(append([]string(nil), opts.ExtraArgs...), excluded...)
+	}
 	if mixin, ok := linter.(OptionsMixin); ok {
+		if mapper, ok := linter.(TagsMapper); ok && len(opts.Tags) > 0 {
+			opts.ExtraArgs = append(append([]string(nil), opts.ExtraArgs...), mapper.TagsArgs(opts.Tags)...)
+		}
 		mixin.SetOptions(opts)
 	}
 
@@ -495,6 +556,12 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 
 	start := time.Now()
 	violations, err := linter.Run(commonsContext.NewContext(ctx), task)
+	violations = opts.RuleExclusions.Filter(linter.Name(), violations)
+	scoped := &LinterResult{WorkDir: opts.WorkDir, Violations: violations}
+	FilterViolationsByUserScope([]*LinterResult{scoped}, opts.WorkDir, opts.Scopes)
+	violations = scoped.Violations
+	violations, filterErr := filterGeneratedViolations(opts, violations)
+	err = errors.Join(err, filterErr)
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	statusErr := err
 	if timedOut && statusErr == nil {

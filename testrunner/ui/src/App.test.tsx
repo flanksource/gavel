@@ -1,7 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './App';
 import type { Snapshot, Test } from './types';
+
+// The Files tab pulls in Monaco, which needs a real browser; the specs here only
+// exercise the tab's data flow, so the editor, its loader and its inline worker are stubs.
+vi.mock('monaco-editor', () => ({}));
+vi.mock('@monaco-editor/react', () => ({ loader: { config: () => undefined }, default: () => null }));
+vi.mock('monaco-editor/esm/vs/editor/editor.worker?worker&inline', () => ({ default: class FakeWorker {} }));
 
 class FakeEventSource {
   static CLOSED = 2;
@@ -9,6 +15,7 @@ class FakeEventSource {
   onerror: (() => void) | null = null;
   constructor(readonly url: string) {}
   addEventListener() {}
+  removeEventListener() {}
   close() {}
 }
 
@@ -182,6 +189,25 @@ describe('App', () => {
     expect(within(pills.closest('[data-timeout-pills]') as HTMLElement).getByText(/per-test 5m/)).toBeTruthy();
   });
 
+  it('shows the live prompt tasks above the lint tree and counts the linters in the header', async () => {
+    serve(snapshot({
+      status: { running: true, lint_run: true },
+      tests: [{
+        name: 'lint prompt', framework: 'task', context: { status: 'running', type: 'group' },
+        children: [{ name: 'messaging-review:report.mdx', framework: 'task', context: { status: 'running', type: 'task' }, message: 'tool: read_file' }],
+      }],
+      lint: [
+        { linter: 'messaging-review:report.mdx', work_dir: '/repo', success: false, duration: 0, violations: [], status: 'running', run_id: 'run-1' },
+        { linter: 'markdownlint', work_dir: '/repo', success: false, duration: 0, violations: [], status: 'pending' },
+      ],
+    }));
+    open('/lint');
+
+    const strip = await screen.findByRole('region', { name: 'Tasks' });
+    expect(within(strip).getByText('tool: read_file')).toBeTruthy();
+    expect((await screen.findAllByText('Running linters... (2 running · 0 done · 0 failed)')).length).toBeGreaterThan(0);
+  });
+
   it('ignores a lint finding through the server and says it was saved', async () => {
     const calls = serve(snapshot({
       status: { running: false, lint_run: true },
@@ -193,5 +219,124 @@ describe('App', () => {
 
     await waitFor(() => expect(screen.getByText('Ignore rule saved to .gavel.yaml')).toBeTruthy());
     expect(JSON.parse(calls.find(call => call.url === '/api/lint/ignore')!.init!.body as string)).toEqual({ source: 'eslint', work_dir: '/repo' });
+  });
+
+  describe('files tab', () => {
+    // App loads the tab with React.lazy; transforming it (and clicky-ui's file-findings
+    // view) the first time takes longer than testing-library's 1s find timeout.
+    beforeAll(() => import('./FilesTab'), 30_000);
+
+    const lintSnapshot = () => snapshot({
+      git: { root: '/repo' },
+      status: { running: false, lint_run: true },
+      lint: [{ linter: 'eslint', work_dir: '/repo', success: false, duration: 1, violations: [{ file: '/repo/src/a.ts', line: 4, message: 'no-var', rule: { method: 'no-var' } }] }],
+    });
+
+    it('offers a Files tab only when a finding names a file', async () => {
+      serve(snapshot({ tests: [{ name: 'pkg/', framework: 'go test', children: [{ name: 'TestNoFile', framework: 'go test', failed: true, work_dir: '/repo' }] }] }));
+      open('/');
+      expect(await screen.findByText(/> TestNoFile/)).toBeTruthy();
+      expect(screen.queryByRole('tab', { name: /Files/ })).toBeNull();
+      cleanup();
+
+      serve(snapshot());
+      open('/');
+      expect(await screen.findByRole('tab', { name: /Files/ })).toBeTruthy();
+    });
+
+    it('requests a deep-linked file by its work dir and relative path and shows the server error in full', async () => {
+      const calls = serve(snapshot(), {
+        'GET /api/file?work_dir=%2Frepo&path=parse_test.go': () => new Response('file not found: parse_test.go', { status: 404 }),
+      });
+      open('/files/parse_test.go?dir=%2Frepo&line=12');
+
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent).toContain('file not found: parse_test.go');
+      expect(calls.some(call => call.url === '/api/file?work_dir=%2Frepo&path=parse_test.go')).toBe(true);
+    });
+
+    it('lists a failed test that has no work dir under the snapshot git root and opens it with that root', async () => {
+      const failingNoDir: Test = { name: 'TestParse', framework: 'go test', failed: true, file: '/repo/pkg/parse_test.go', line: 12, message: 'boom' };
+      const calls = serve(snapshot({ git: { root: '/repo' }, tests: [{ name: 'pkg/', framework: 'go test', children: [failingNoDir] }] }), {
+        'GET /api/file?work_dir=%2Frepo&path=pkg%2Fparse_test.go': () => new Response('missing', { status: 404 }),
+      });
+      open('/files');
+
+      fireEvent.click(await screen.findByText(/parse_test\.go/));
+
+      await waitFor(() => expect(calls.some(call => call.url === '/api/file?work_dir=%2Frepo&path=pkg%2Fparse_test.go')).toBe(true));
+      expect(window.location.pathname).toBe('/files/pkg/parse_test.go');
+      expect(window.location.search).toBe('?dir=%2Frepo');
+    });
+
+    it('opens a lint violation in the Files tab at its line from the Lint tab', async () => {
+      serve(lintSnapshot(), { 'GET /api/file?work_dir=%2Frepo&path=src%2Fa.ts': () => new Response('missing', { status: 404 }) });
+      open('/lint?grouping=linter-file');
+
+      fireEvent.click(await screen.findByRole('button', { name: /Expand all/ }));
+      fireEvent.click(await screen.findByText(/a\.ts/));
+      fireEvent.click(await screen.findByRole('button', { name: /Open in Files/ }));
+
+      await waitFor(() => expect(window.location.pathname).toBe('/files/src/a.ts'));
+      expect(window.location.search).toBe('?dir=%2Frepo&line=4');
+    });
+  });
+
+  describe('run history', () => {
+    const lintRun = {
+      runId: 'run-2026-01-02T00-00-00Z', path: '/repo/.gavel/run-2026-01-02T00-00-00Z.json', kind: 'lint' as const,
+      started: '2026-01-02T00:00:00Z', ended: '2026-01-02T00:00:10Z',
+      passed: 0, failed: 0, skipped: 0, warned: 0, total: 0, lintViolations: 4, lintLinters: 1,
+      href: '/runs/run-2026-01-02T00-00-00Z/',
+    };
+    const testRun = {
+      ...lintRun, runId: 'run-2026-01-01T00-00-00Z', path: '/repo/.gavel/run-2026-01-01T00-00-00Z.json', kind: 'test' as const,
+      started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:03Z',
+      passed: 1, failed: 1, total: 2, lintViolations: 0, lintLinters: 0, href: '/runs/run-2026-01-01T00-00-00Z/',
+    };
+    const page = { latest: [lintRun.runId], latestHref: '/', runs: [lintRun, testRun] };
+    const withHistory = { 'GET /api/runs': () => new Response(JSON.stringify(page)) };
+
+    function openWithNavigate(url: string) {
+      const navigate = vi.fn();
+      window.history.replaceState({}, '', url);
+      render(<App navigate={navigate} />);
+      return navigate;
+    }
+
+    it('offers no History tab or switcher when the host serves no history', async () => {
+      serve(snapshot(), { 'GET /api/runs': () => new Response('404 page not found', { status: 404 }) });
+      open('/');
+
+      expect(await screen.findByText(/> TestParse/)).toBeTruthy();
+      expect(screen.queryByRole('tab', { name: /History/ })).toBeNull();
+      expect(document.querySelector('[data-run-switcher]')).toBeNull();
+    });
+
+    it('switches to a recorded run on the tab holding its results', async () => {
+      serve(snapshot(), withHistory);
+      const navigate = openWithNavigate('/');
+
+      const switcher = await waitFor(() => {
+        const select = document.querySelector<HTMLSelectElement>('[data-run-switcher] select');
+        if (!select || select.options.length < 3) throw new Error('history not loaded');
+        return select;
+      });
+      expect(switcher.value).toBe('');
+      fireEvent.change(switcher, { target: { value: lintRun.runId } });
+
+      expect(navigate).toHaveBeenCalledWith('/runs/run-2026-01-02T00-00-00Z/lint');
+    });
+
+    it('lists recorded runs on the History tab and opens the one picked', async () => {
+      serve(snapshot(), withHistory);
+      const navigate = openWithNavigate('/history');
+
+      const link = await screen.findByRole('link', { name: new Date(testRun.started).toLocaleString() });
+      expect(link.getAttribute('href')).toBe(testRun.href);
+      fireEvent.click(link.closest('tr')!);
+
+      expect(navigate).toHaveBeenCalledWith(testRun.href);
+    });
   });
 });

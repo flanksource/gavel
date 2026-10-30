@@ -7,7 +7,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/flanksource/commons-db/cmd/query/traceserve"
 	"github.com/flanksource/commons-db/tracing/stacks"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/testrunner"
@@ -53,7 +52,7 @@ func startRunTrace(opts testrunner.RunOptions, started time.Time) (*runTrace, er
 	if err != nil {
 		return nil, err
 	}
-	host, err := traces.Open(opts.WorkDir, traces.RunID(started))
+	host, err := traces.Open(opts.Dirs.StateRoot, traces.RunID(started))
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +74,7 @@ func startRunTrace(opts testrunner.RunOptions, started time.Time) (*runTrace, er
 // serveOn mounts the run's store on the test UI at testui.QueryMount, with the
 // process capture the Processes tab reads and checkpoints.
 func (t *runTrace) serveOn(srv *testui.Server) error {
-	handler, err := traceserve.Handler(traceserve.Options{Runtime: t.host.Runtime(), Authorize: traceserve.ReadOnly})
+	handler, err := t.host.Handler()
 	if err != nil {
 		return fmt.Errorf("serve run traces: %w", err)
 	}
@@ -94,7 +93,7 @@ func (t *runTrace) serveOn(srv *testui.Server) error {
 // and closes its store, which stays on disk for the saved snapshot and is
 // copied to the configured storage; the oldest runs' stores beyond
 // traces.KeepRuns go.
-func (t *runTrace) close(workDir string) error {
+func (t *runTrace) close(stateRoot string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var processErr error
@@ -105,7 +104,7 @@ func (t *runTrace) close(workDir string) error {
 			t.process.Stop(ctx),
 		)
 	}
-	return errors.Join(processErr, t.host.Close(ctx), t.host.Persist(ctx, t.archive), traces.Prune(workDir, traces.KeepRuns))
+	return errors.Join(processErr, t.host.Close(ctx), t.host.Persist(ctx, t.archive), traces.Prune(stateRoot, traces.KeepRuns))
 }
 
 // runID names the run's store, empty for a run that opened none.

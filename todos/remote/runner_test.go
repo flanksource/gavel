@@ -188,7 +188,7 @@ func (c *callingJobs) Start(ctx context.Context, id uuid.UUID, _ Job) (Started, 
 	started := &inProcessJob{done: make(chan struct{}), cancel: cancel}
 	go func() {
 		defer close(started.done)
-		_ = c.relay.Deliver(runCtx, id, StartedMessage(api.Spec{}))
+		_ = c.relay.Deliver(runCtx, id, StartedMessage(api.Spec{}, nil))
 		var err error
 		if c.toolCall, err = c.relay.Call(runCtx, id, ToolCallMessage("todo_search", map[string]any{"query": "bug"})); err != nil {
 			c.toolCall.Error = err.Error()

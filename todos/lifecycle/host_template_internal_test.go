@@ -2,12 +2,13 @@ package lifecycle
 
 import (
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 )
 
 var _ = ginkgo.Describe("step spec placeholders", func() {
-	vars := map[string]any{VarSubject: map[string]any{
+	vars := map[string]any{lifecycle.VarSubject: map[string]any{
 		"verification": map[string]any{"exists": true, "document": "# Definition of done\n\n```bash\ntrue\n```"},
 		"plan":         map[string]any{"revision": 3},
 	}}

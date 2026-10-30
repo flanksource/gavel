@@ -67,9 +67,16 @@ export function ActivityView() {
     mutationFn: () => mutationJSON({
       url: '/api/activity/reset',
       method: 'POST',
-      context: 'Reset HTTP activity',
+      context: 'Reset activity',
     }),
-    onSuccess: () => queryClient.setQueryData(queryKeys.activity(), emptyActivity),
+    onSuccess: async () => {
+      await queryClient.cancelQueries({ queryKey: ['activity'] });
+      queryClient.setQueryData(queryKeys.activity(), emptyActivity);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.activityCache(), exact: true }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.gitMetrics(), exact: true }),
+      ]);
+    },
   });
 
   useEffect(() => {
@@ -85,17 +92,21 @@ export function ActivityView() {
   useEffect(() => {
     if (!visible) return;
     const es = openEventStream('/api/activity/stream');
-    es.addEventListener('message', (event) => {
+    const onMessage = (event: Event) => {
       try {
         queryClient.setQueryData<ActivitySnapshot>(queryKeys.activity(), parseActivitySnapshot(JSON.parse((event as MessageEvent).data)));
         setStreamError('');
       } catch {
         setStreamError('HTTP activity stream received an invalid update.');
       }
-    });
+    };
+    es.addEventListener('message', onMessage);
     es.onerror = () => setStreamError(current => current || 'HTTP activity stream disconnected; reconnecting…');
 
-    return () => es.close();
+    return () => {
+      es.removeEventListener('message', onMessage);
+      es.close();
+    };
   }, [queryClient, visible]);
 
   const filtered = useMemo(

@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 )
 
 func TestTodosStepsCommandReplacesPrompts(t *testing.T) {
@@ -47,12 +48,12 @@ func TestRenderLifecycleStepsListsEveryStepAndItsPrompt(t *testing.T) {
 // With a todo the command answers "what can I do with this one now": whether
 // each step applies, which one comes next, why, and how its last run ended.
 func TestRenderTodoStepsReportsApplicabilityNextAndLastRun(t *testing.T) {
-	states := []lifecycle.StepState{
+	states := []lifecycle1.StepState{
 		{
 			Step:       lifecycle.Step{Name: "plan", Prompt: "todos.plan"},
 			Applicable: false,
 			Reason:     "does not apply: !subject.plan.exists",
-			LastRun:    &lifecycle.StepRun{Step: "plan", State: lifecycle.RunSucceeded},
+			LastRun:    &lifecycle.StepRun{Step: "plan", State: lifecycle1.RunSucceeded},
 			Done:       true,
 		},
 		{

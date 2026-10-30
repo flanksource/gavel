@@ -17,7 +17,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/flanksource/commons-db/cmd/query/traceserve"
 	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/commons-db/tracing/process"
 	"github.com/flanksource/commons-db/tracing/stacks"
@@ -29,7 +28,7 @@ import (
 type served struct{ server *httptest.Server }
 
 func serveHost(host *traces.Host) served {
-	handler, err := traceserve.Handler(traceserve.Options{Runtime: host.Runtime(), Authorize: traceserve.ReadOnly})
+	handler, err := host.Handler()
 	Expect(err).ToNot(HaveOccurred())
 	server := httptest.NewServer(handler)
 	DeferCleanup(server.Close)

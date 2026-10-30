@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,14 +9,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/ui/queryapp"
+	"github.com/flanksource/gavel/testrunner/ui/runs"
+	"github.com/flanksource/gavel/workspace"
 )
 
 // UIServeOptions configures the `gavel ui serve` subcommand.
@@ -59,6 +64,11 @@ Standalone replay of a JSON snapshot:
   gavel ui serve run.json --auto-stop=10m
   gavel ui serve run-1.json run-2.json --auto-stop=10m
 
+Without snapshot files it serves the most recent test run and lint run
+recorded under .gavel/run-*.json, in the nearest .gavel directory at or above
+the working directory within its git repository (else the git root). The History tab
+lists every recorded run, and each one opens at /runs/<run-id>/.
+
 The server prints its URL on the first line of stdout so a wrapping script can
 ` + "`head -n1`" + ` it, and exits when either --auto-stop (hard wall clock from
 start) or --idle-timeout (reset on every HTTP request) fires — whichever comes
@@ -66,7 +76,7 @@ first. A zero duration disables the corresponding timer.`)
 }
 
 func init() {
-	serveCmd := clicky.AddNamedCommand("serve", uiCmd, UIServeOptions{}, runUIServe)
+	serveCmd := clicky.AddNamedCommandWithContext("serve", uiCmd, UIServeOptions{}, runUIServe)
 	// clicky cannot bind time.Duration fields directly; register them
 	// imperatively so the flags show up in `gavel ui serve --help`.
 	serveCmd.Flags().DurationVar(&uiServeDurations.AutoStop, "auto-stop", 30*time.Minute,
@@ -75,7 +85,8 @@ func init() {
 		"Exit after this long with no HTTP requests. 0 disables.")
 }
 
-func runUIServe(opts UIServeOptions) (any, error) {
+func runUIServe(ctx context.Context, opts UIServeOptions) (any, error) {
+	defer keepTasksOffTerminal()()
 	// Pull duration values from the imperative flag shim when opts don't
 	// already supply them. In-process tests can set opts.AutoStop/IdleTimeout
 	// directly to avoid touching the global flag state.
@@ -91,14 +102,25 @@ func runUIServe(opts UIServeOptions) (any, error) {
 		return nil, err
 	}
 
-	srv := testui.NewServer()
-	if len(opts.ResultsFiles) > 0 {
-		if err := loadResults(srv, opts.ResultsFiles...); err != nil {
+	dirs, err := workspace.From(ctx)
+	if err != nil {
+		listener.Close() //nolint:errcheck
+		return nil, err
+	}
+	if len(opts.ResultsFiles) == 0 {
+		if opts.ResultsFiles, err = latestRunFiles(dirs.StateRoot); err != nil {
 			listener.Close() //nolint:errcheck
-			return nil, fmt.Errorf("load results %v: %w", opts.ResultsFiles, err)
+			return nil, err
 		}
-	} else {
-		srv.MarkDone()
+	}
+	srv := testui.NewServer()
+	if err := queryapp.Serve(srv); err != nil {
+		listener.Close() //nolint:errcheck
+		return nil, err
+	}
+	if err := loadResults(srv, opts.ResultsFiles...); err != nil {
+		listener.Close() //nolint:errcheck
+		return nil, fmt.Errorf("load results %v: %w", opts.ResultsFiles, err)
 	}
 	if opts.Dev {
 		proxy, err := devProxy(testRunnerDev, "")
@@ -110,7 +132,7 @@ func runUIServe(opts UIServeOptions) (any, error) {
 	}
 
 	addr := listener.Addr().(*net.TCPAddr)
-	url, networkURL := uiURLs(boundHost(addr, opts.Addr), addr.Port)
+	url, networkURL := testui.URLs(boundHost(addr, opts.Addr), addr.Port)
 
 	if opts.URLFile != "" {
 		if err := writeURLFile(opts.URLFile, url); err != nil {
@@ -120,7 +142,7 @@ func runUIServe(opts UIServeOptions) (any, error) {
 
 	// Print the URL on the first line of stdout so a wrapping script can
 	// `head -n1` it regardless of how many log lines come after.
-	fmt.Println(uiBanner("UI", url, networkURL))
+	fmt.Println(testui.Banner("UI", url, networkURL))
 
 	// Notify the fork parent that we're ready. On Unix with a lockfile set in
 	// the environment, this writes our PID into the JSON lockfile and releases
@@ -130,11 +152,23 @@ func runUIServe(opts UIServeOptions) (any, error) {
 		logger.Warnf("Handoff notify failed (parent may time out): %v", err)
 	}
 
+	history := runs.Handler(runs.Options{WorkDir: dirs.StateRoot, Latest: srv.Handler(), LatestRunIDs: runIDsOf(opts.ResultsFiles)})
 	idleCh := make(chan struct{}, 1)
-	handler := withIdleTimer(srv.Handler(), idleCh)
-	go http.Serve(listener, handler) //nolint:errcheck
+	go http.Serve(listener, withIdleTimer(history, idleCh)) //nolint:errcheck
 
-	return nil, errors.Join(serveUntilTimeout(opts.AutoStop, opts.IdleTimeout, idleCh), srv.CloseTraces())
+	return nil, errors.Join(serveUntilTimeout(opts.AutoStop, opts.IdleTimeout, idleCh), srv.CloseTraces(), runs.Close(history))
+}
+
+// runIDsOf returns the RunIDs of the per-run snapshots among paths, so the
+// history view can mark which runs the default view shows.
+func runIDsOf(paths []string) []string {
+	var ids []string
+	for _, path := range paths {
+		if name := strings.TrimSuffix(filepath.Base(path), ".json"); strings.HasPrefix(name, snapshots.PerRunPrefix) {
+			ids = append(ids, name)
+		}
+	}
+	return ids
 }
 
 // serveUntilTimeout blocks until either hardTimeout fires or idleTimeout has
@@ -188,6 +222,22 @@ func withIdleTimer(next http.Handler, idleCh chan<- struct{}) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// latestRunFiles resolves the newest test and lint runs recorded under
+// <cwd>/.gavel, used when `gavel ui serve` is given no snapshot files.
+func latestRunFiles(stateRoot string) ([]string, error) {
+	paths, err := snapshots.LatestRuns(stateRoot)
+	if err != nil {
+		return nil, fmt.Errorf("find previous runs in %s: %w", filepath.Join(stateRoot, snapshots.Dir), err)
+	}
+	if len(paths) == 0 {
+		logger.Infof("No previous test or lint runs in %s", filepath.Join(stateRoot, snapshots.Dir))
+	}
+	for _, path := range paths {
+		logger.Infof("Loading previous run %s", path)
+	}
+	return paths, nil
 }
 
 func loadResults(srv *testui.Server, paths ...string) error {
@@ -344,67 +394,6 @@ func boundHost(addr *net.TCPAddr, requested string) string {
 		return requested
 	}
 	return addr.IP.String()
-}
-
-// uiURLs returns the URL to open on this machine and, when host is a wildcard
-// bind, the private-IP URL other hosts can reach (empty when there is none).
-func uiURLs(host string, port int) (local, network string) {
-	p := strconv.Itoa(port)
-	local = "http://" + net.JoinHostPort(localHost(host), p)
-	if host != "0.0.0.0" && host != "::" {
-		return local, ""
-	}
-	ip := firstNonLoopbackIPv4()
-	if ip == "" {
-		logger.Warnf("--addr=%s but no non-loopback IPv4 interface found; announcing localhost only", host)
-		return local, ""
-	}
-	return local, "http://" + net.JoinHostPort(ip, p)
-}
-
-// uiBanner formats the "<label> at <url>" line, appending the network URL when
-// the server is reachable from other hosts.
-func uiBanner(label, local, network string) string {
-	if network == "" {
-		return label + " at " + local
-	}
-	return fmt.Sprintf("%s at %s (network: %s)", label, local, network)
-}
-
-// localHost picks the hostname a browser or the native macOS menu-bar webview
-// on this machine should load from. It must reach gavel over loopback:
-// WKWebView blocks cleartext HTTP to non-loopback hosts under App Transport
-// Security (which would render a blank popover), and a private IP is fragile
-// across VPN/offline state. So every loopback/wildcard bind resolves to
-// "localhost". An explicit interface (the user pinned --addr to one NIC) is
-// kept as-is since that is the only address the server listens on.
-func localHost(requested string) string {
-	switch requested {
-	case "", "0.0.0.0", "::", "localhost", "127.0.0.1", "::1":
-		return "localhost"
-	default:
-		return requested
-	}
-}
-
-func firstNonLoopbackIPv4() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		logger.Warnf("net.InterfaceAddrs failed: %v", err)
-		return ""
-	}
-	for _, a := range addrs {
-		ipnet, ok := a.(*net.IPNet)
-		if !ok || ipnet.IP.IsLoopback() || ipnet.IP.IsLinkLocalUnicast() {
-			continue
-		}
-		v4 := ipnet.IP.To4()
-		if v4 == nil {
-			continue
-		}
-		return v4.String()
-	}
-	return ""
 }
 
 // writeURLFile writes url to path atomically (write to tempfile in same dir,

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -30,7 +31,7 @@ func FilterIgnoredViolations(results []*LinterResult, rules []verify.LintIgnoreR
 			}
 			match := false
 			for _, rule := range rules {
-				if rule.MatchesViolation(v) {
+				if rule.MatchesViolation(v, result.WorkDir) {
 					match = true
 					break
 				}
@@ -48,7 +49,7 @@ func FilterIgnoredViolations(results []*LinterResult, rules []verify.LintIgnoreR
 
 // FilterViolationsByUserScope drops violations whose file is not equal to, or
 // a descendant of, any path in scopes. scopes may contain absolute or
-// workDir-relative paths and may name files or directories. workDir is used
+// workDir-relative paths and may name files, directories, or globs. workDir is used
 // to resolve relative entries in scopes; each result's own WorkDir is used to
 // resolve relative violation file paths. Returns the total number of dropped
 // violations. A nil/empty scopes list is a no-op.
@@ -110,7 +111,7 @@ func FilterViolationsByUserScope(results []*LinterResult, workDir string, scopes
 // plausible base.
 func violationMatchesAnyScope(file, resultWorkDir, callerWorkDir string, scopes []string) bool {
 	if file == "" {
-		return false
+		return true
 	}
 	if filepath.IsAbs(file) {
 		return pathMatchesAnyScope(filepath.Clean(file), scopes)
@@ -147,6 +148,10 @@ func pathMatchesAnyScope(absPath string, scopes []string) bool {
 			return true
 		}
 		info, err := os.Stat(scope)
+		pattern := filepath.ToSlash(scope)
+		if os.IsNotExist(err) && doublestar.ValidatePattern(pattern) && doublestar.MatchUnvalidated(pattern, filepath.ToSlash(absPath)) {
+			return true
+		}
 		isDir := err != nil || info.IsDir()
 		if !isDir {
 			continue

@@ -136,7 +136,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
         <p>{pending ? 'Loading' : 'No workspaces match the filter'}</p>
       </div>
     ) : (
-      <ListMenu>
+      <ListMenu virtualize={{ estimateRowHeight: density === 'compact' ? 32 : 64 }}>
         {shown.map(ws => (
           <WorkspaceTodoGroup
             key={ws.dir}
@@ -162,7 +162,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
         <p>{loadingList ? 'Loading' : 'No todos'}</p>
       </div>
     ) : (
-      <ListMenu>
+      <ListMenu virtualize={{ estimateRowHeight: density === 'compact' ? 32 : 64 }}>
         {buckets.map(bucket => (
           <TodoBucketGroup
             key={bucket.key}

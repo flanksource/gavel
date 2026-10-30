@@ -67,6 +67,9 @@ const git: ProjectGit = {
   base: 'main',
   currentBranch: 'main',
   baseCheckedOut: true,
+  upstream: 'origin/main',
+  upstreamAhead: 2,
+  upstreamBehind: 3,
   worktrees: [primary, feat, aheadClean],
   branches: [branch('feat/x', feat.path, 2), branch('feat/y', aheadClean.path, 1), branch('spike', '', 3)],
   computedAt: '2026-10-04T11:59:52Z',
@@ -145,7 +148,27 @@ describe('ProjectRefPane', () => {
 
     expect(summaryParts(feature)).toEqual(['2 commits', '2 uncommitted', '+3−1', '3h', '5m']);
     expect(summaryParts(screen.getByRole('option', { name: 'br:spike' }))).toEqual(['3 commits', '+5−2', '1h']);
-    expect(summaryParts(screen.getByRole('option', { name: '@main' }))).toEqual(['2d']);
+    expect(summaryParts(screen.getByRole('option', { name: '@main' }))).toEqual(['23', '2d']);
+  });
+
+  it('shows how far the main checkout is ahead of and behind its upstream', async () => {
+    stubGit();
+    renderPane();
+
+    const main = await screen.findByRole('option', { name: '@main' });
+
+    const upstream = within(main).getByLabelText('2 commits ahead of origin/main, 3 behind');
+    expect(upstream.getAttribute('title')).toBe('2 commits ahead of origin/main, 3 behind');
+    expect(Array.from(upstream.children).map(part => part.textContent)).toEqual(['2', '3']);
+  });
+
+  it('shows no upstream counts for a main checkout level with its upstream', async () => {
+    stubGit(() => Response.json({ ...git, upstreamAhead: 0, upstreamBehind: 0 }));
+    renderPane();
+
+    const main = await screen.findByRole('option', { name: '@main' });
+
+    expect(summaryParts(main)).toEqual(['2d']);
   });
 
   it('colours added lines green and removed lines red', async () => {

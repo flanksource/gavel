@@ -1,60 +1,101 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/runconfig"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
+	"github.com/spf13/cobra"
 )
 
 // LintOptions is the CLI-facing alias for the reusable lint.Options struct.
 type LintOptions = lint.Options
 
 func init() {
-	lintCmd := clicky.AddNamedCommand("lint", rootCmd, LintOptions{}, runLint)
+	var lintCmd *cobra.Command
+	lintCmd = clicky.AddNamedCommand("lint", rootCmd, LintOptions{}, func(opts LintOptions) (any, error) {
+		opts, err := splitLintPassThroughArgs(lintCmd, opts)
+		if err != nil {
+			return nil, err
+		}
+		return runLint(lintCmd.Context(), opts)
+	})
+	bindLintSourceFlags(lintCmd)
 	registerLintLinterSubcommands(lintCmd)
 	registerLintShimCommands(lintCmd)
+	registerLintPromptCommand(lintCmd)
 	if f := lintCmd.Flags().Lookup("failed"); f != nil {
 		f.NoOptDefVal = failedAutoSentinel
 		f.Usage = "Path to previous results JSON; re-run only linters/files that had violations. Pass without a value to use .gavel/last.json."
 	}
 }
 
+// splitLintPassThroughArgs moves the arguments after -- from Files to the
+// selected linter's native command line.
+func splitLintPassThroughArgs(cmd *cobra.Command, opts LintOptions) (LintOptions, error) {
+	opts.OptionFields = configuredFlagFields(cmd)
+	if cmd.Flags().Changed("generated") {
+		generated, err := cmd.Flags().GetBool("generated")
+		if err != nil {
+			return opts, err
+		}
+		opts.Generated = &generated
+	}
+	files, through, err := splitAtDash(cmd, opts.Files)
+	if err != nil {
+		return opts, err
+	}
+	opts.Files, opts.PassThroughArgs = files, through
+	return opts, nil
+}
+
 // resolveAIFix reports whether the AI fix loop should run: either --ai-fix was
 // passed explicitly, or -y/--yes opted into auto-fixing lint violations.
 func resolveAIFix(o LintOptions) bool { return o.AIFix || o.Yes }
 
-func runLint(opts LintOptions) (any, error) {
-	var err error
+func runLint(ctx context.Context, opts LintOptions) (any, error) {
+	if opts.OptionFields == nil {
+		opts.OptionFields = runconfig.Present(opts)
+	}
+	dirs, err := commandDirs(ctx, opts.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	opts.WorkDir = dirs.Invocation
+	if err := opts.Configure(); err != nil {
+		return nil, err
+	}
 	opts, err = lint.NormalizeRootArg(opts)
 	if err != nil {
 		return nil, fmt.Errorf("normalize lint root: %w", err)
 	}
-	if opts.WorkDir == "" {
-		opts.WorkDir, _ = os.Getwd()
+	if opts.Dirs, err = commandDirs(ctx, opts.WorkDir); err != nil {
+		return nil, err
 	}
+	opts.WorkDir = opts.Dirs.Invocation
 	runStarted := time.Now().UTC()
 	if opts.Failed == failedAutoSentinel {
-		resolved, err := snapshots.ResolveLast(opts.WorkDir)
+		resolved, err := snapshots.ResolveLast(opts.Dirs.StateRoot)
 		if err != nil {
 			return nil, fmt.Errorf("--failed: %w", err)
 		}
 		opts.Failed = resolved
 	}
 	if opts.PR != "" {
-		resolved, err := resolvePRFailed(opts.PR, opts.WorkDir, opts.Failed, opts.Baseline, prNarrowLint)
+		resolved, err := resolvePRFailed(opts.PR, opts.Dirs, opts.Failed, opts.Baseline, prNarrowLint)
 		if err != nil {
 			return nil, err
 		}
@@ -65,6 +106,7 @@ func runLint(opts LintOptions) (any, error) {
 	runCtx, cancelRun := newStopContext(opts.Context, 0)
 	defer cancelRun()
 	opts.Context = runCtx
+	opts.Selection = opts.ChangeSelection()
 
 	if opts.DryRun {
 		if err := lint.DryRun(opts); err != nil {
@@ -75,29 +117,19 @@ func runLint(opts LintOptions) (any, error) {
 
 	if opts.UI {
 		var err error
-		if uiServer, uiListener, err = startTestUI(testUIOptions{Addr: opts.Addr}); err != nil {
-			return nil, err
-		}
-		if uiServer != nil {
-			uiServer.SetStopFunc(standaloneUIStop(cancelRun))
-			uiServer.BeginRun("initial")
-			uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
-				clicky.ClearGlobalTasks()
-				rerunCtx, cancelRerun := newStopContext(opts.Context, 0)
-				defer cancelRerun()
-				uiServer.SetStopFunc(standaloneUIStop(cancelRerun))
-				uiServer.BeginRun("rerun")
+		uiServer, err = startLintUI(lintUIOptions{Addr: opts.Addr, Context: opts.Context, Cancel: cancelRun,
+			PersistRerun: func(snapshot *testui.Snapshot) error {
+				_, err := lint.SaveSnapshot(opts.Dirs.StateRoot, snapshot)
+				return err
+			},
+			Rerun: func(rctx context.Context, req testui.RerunRequest, output *testui.RerunOutputBuffer) ([]*linters.LinterResult, error) {
 				rerunOpts := opts
-				rerunOpts.Context = rerunCtx
+				rerunOpts.Context = rctx
 				rerunOpts.OutputTee = output.StdoutWriter()
-				results, err := executeLintRerun(rerunOpts, req)
-				if err != nil {
-					return err
-				}
-				uiServer.SetLintResults(results)
-				uiServer.MarkDone()
-				return nil
-			})
+				return executeLintRerun(rerunOpts, req)
+			}})
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -133,7 +165,20 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if resolveAIFix(opts) {
-		fixed, fixErr := runAIFix(opts, allResults)
+		fixed, fixErr := runAIFix(aiFixOptions{
+			Context:       opts.Context,
+			WorkDir:       opts.WorkDir,
+			Linters:       opts.Linters,
+			Runtime:       opts.AIRuntimeOptions,
+			MaxIterations: opts.AIFixMaxIters,
+			ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
+				rerunOpts := opts
+				rerunOpts.Selection = opts.Selection.Fresh()
+				rerunOpts.Context = rctx
+				rerunOpts.AIFix = false
+				return lint.Execute(rerunOpts)
+			},
+		}, allResults)
 		if fixErr != nil {
 			return nil, fmt.Errorf("ai-fix: %w", fixErr)
 		}
@@ -141,22 +186,7 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if uiServer != nil {
-		uiServer.SetLintResults(allResults)
-		uiServer.MarkDone()
-		var violations int
-		for _, lr := range allResults {
-			if lr.Skipped {
-				continue
-			}
-			violations += len(lr.Violations)
-		}
-		if violations > 0 {
-			exitCode = 1
-		}
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-		<-sig
-		return nil, nil
+		return serveLintResults(lintUIResultOptions{Server: uiServer, Options: opts, Results: allResults, Started: runStarted})
 	}
 
 	if opts.Triage {
@@ -182,33 +212,97 @@ func runLint(opts LintOptions) (any, error) {
 		}
 	}
 
-	snap := &testui.Snapshot{
-		Metadata: &testui.SnapshotMetadata{
-			Version: version,
-			Started: runStarted,
-			Ended:   time.Now().UTC(),
-			Kind:    "lint",
-		},
-		Git: snapshotGitInfo(opts.WorkDir),
-		Status: testui.SnapshotStatus{
-			LintRun: true,
-		},
-		Lint: allResults,
-	}
-	if path, err := snapshots.Save(opts.WorkDir, snap); err != nil {
-		logger.Warnf("persist snapshot: %v", err)
-	} else {
-		logger.V(1).Infof("wrote snapshot to %s", path)
-	}
-	// Per-run snapshot so lint-only runs appear in the .gavel run history
-	// (the Tests dashboard scans run-*.json); Save() above only writes the
-	// sha-keyed latest.
-	if path, err := snapshots.SavePerRun(opts.WorkDir, snap, runStarted, ""); err != nil {
-		logger.Warnf("persist per-run snapshot: %v", err)
-	} else {
-		logger.V(1).Infof("wrote per-run snapshot to %s", path)
-	}
+	return finishLint(opts, allResults, runStarted)
+}
 
+type lintUIOptions struct {
+	Addr         string
+	Context      context.Context
+	Cancel       context.CancelFunc
+	Writer       io.Writer
+	PersistRerun func(*testui.Snapshot) error
+	// Rerun re-runs the lint for a rerun request from the UI.
+	Rerun func(context.Context, testui.RerunRequest, *testui.RerunOutputBuffer) ([]*linters.LinterResult, error)
+}
+
+// startLintUI starts the browser UI for a lint run, marking the initial run in
+// progress and wiring the UI's stop and rerun controls.
+func startLintUI(opts lintUIOptions) (*testui.Server, error) {
+	srv, _, err := startTestUI(testUIOptions{Addr: opts.Addr, Writer: opts.Writer})
+	if err != nil {
+		return nil, err
+	}
+	srv.SetStopFunc(standaloneUIStop(opts.Cancel))
+	srv.BeginRun("lint")
+	srv.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
+		clicky.ClearGlobalTasks()
+		rerunCtx, cancelRerun := newStopContext(opts.Context, 0)
+		defer cancelRerun()
+		srv.SetStopFunc(standaloneUIStop(cancelRerun))
+		srv.BeginRun("lint")
+		srv.SetLintResults(nil)
+		results, err := opts.Rerun(rerunCtx, req, output)
+		if err != nil {
+			srv.SetRunError(err)
+			srv.MarkDone()
+			return err
+		}
+		srv.SetLintResults(results)
+		snapshot := srv.Snapshot()
+		snapshot.Tests = nil
+		snapshot.Status.Running = false
+		snapshot.Metadata.Kind = "lint"
+		snapshot.Metadata.Ended = time.Now().UTC()
+		snapshot.Git = snapshots.GitInfo(srv.GitRoot())
+		if opts.PersistRerun != nil {
+			if err := opts.PersistRerun(&snapshot); err != nil {
+				srv.SetRunError(err)
+				srv.MarkDone()
+				return err
+			}
+		}
+		srv.MarkDone()
+		return nil
+	})
+	return srv, nil
+}
+
+type lintUIResultOptions struct {
+	Server  *testui.Server
+	Options LintOptions
+	Results []*linters.LinterResult
+	Started time.Time
+}
+
+// serveLintResults saves the completed run before waiting for shutdown, then
+// returns the latest UI results for terminal rendering.
+func serveLintResults(opts lintUIResultOptions) (any, error) {
+	if _, err := finishLint(opts.Options, opts.Results, opts.Started); err != nil {
+		return nil, err
+	}
+	// The run's context ends on the UI's Stop button; only a signal ends the UI.
+	snapshot, err := lint.Serve(context.Background(), lint.ServeOptions{Server: opts.Server, Results: opts.Results})
+	if err != nil {
+		return nil, err
+	}
+	exitCode = 0
+	if linters.HasFailures(snapshot.Lint) || snapshot.Error != "" {
+		exitCode = 1
+	}
+	return lintRunReturnValue(&snapshot, opts.Options), nil
+}
+
+func finishLint(opts LintOptions, allResults []*linters.LinterResult, runStarted time.Time) (any, error) {
+	snap := lint.Snapshot(lint.SnapshotOptions{
+		WorkDir: opts.WorkDir, Version: version, Started: runStarted,
+		Changes: opts.Selection.Snapshot(), Results: allResults,
+	})
+	if _, err := lint.SaveSnapshot(opts.Dirs.StateRoot, snap); err != nil {
+		return nil, err
+	}
+	if linters.HasFailures(allResults) {
+		exitCode = 1
+	}
 	return lintRunReturnValue(snap, opts), nil
 }
 
@@ -229,10 +323,17 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 	}
 
 	rerunOpts := LintOptions{
-		WorkDir:   workDir,
-		Timeout:   base.Timeout,
-		Files:     append([]string(nil), req.LintFiles...),
-		OutputTee: base.OutputTee,
+		Changed:      base.Changed,
+		Since:        base.Since,
+		ChangedFiles: append([]string(nil), base.ChangedFiles...),
+		Selection:    base.Selection.Fresh(),
+		WorkDir:      workDir,
+		Timeout:      base.Timeout,
+		Exclude:      append([]string(nil), base.Exclude...),
+		Generated:    base.Generated,
+		Tags:         append([]string(nil), base.Tags...),
+		Files:        append([]string(nil), req.LintFiles...),
+		OutputTee:    base.OutputTee,
 	}
 	if len(req.LintLinters) > 0 {
 		rerunOpts.Linters = append([]string(nil), req.LintLinters...)

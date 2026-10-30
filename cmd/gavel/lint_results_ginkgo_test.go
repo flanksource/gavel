@@ -2,15 +2,43 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/report"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/workspace"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("Standalone lint output", func() {
+	It("returns a persistence error when the history directory cannot be created", func() {
+		dir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(dir, ".gavel"), []byte("blocked"), 0o600)).To(Succeed())
+		_, err := finishLint(LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, nil, time.Now())
+		Expect(err).To(MatchError(ContainSubstring("persist per-run lint snapshot")))
+	})
+
+	DescribeTable("reports lint failures through the exit status without a redundant command error", func(result *linters.LinterResult, wantExit int) {
+		previousExit := exitCode
+		DeferCleanup(func() { exitCode = previousExit })
+		exitCode = 0
+		withFormat("json", func() {
+			dir := GinkgoT().TempDir()
+			value, err := finishLint(LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, []*linters.LinterResult{result}, time.Now())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value).To(BeAssignableToTypeOf(&testui.Snapshot{}))
+			Expect(exitCode).To(Equal(wantExit))
+		})
+	},
+		Entry("error finding", &linters.LinterResult{Linter: "uir", Success: true, Violations: []models.Violation{{Severity: models.SeverityError}}}, 1),
+		Entry("execution failure", &linters.LinterResult{Linter: "uir", Error: "analysis failed"}, 1),
+		Entry("clean", &linters.LinterResult{Linter: "uir", Success: true}, 0),
+	)
 	DescribeTable("serializes complete lint snapshots for artifact consumers",
 		func(format string, summary bool) {
 			snap := &testui.Snapshot{

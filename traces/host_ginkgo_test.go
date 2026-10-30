@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -96,12 +97,19 @@ var _ = Describe("trace host", func() {
 		ref := capture.Ref(0, end)
 		Expect(host.Close(context.Background())).To(Succeed())
 
-		runtime, closeStore, err := traces.Reopen(traces.StoreDir(workDir, host.RunID()))
+		handler, closeStore, err := traces.Reopen(traces.StoreDir(workDir, host.RunID()))
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(closeStore)
-		summary, err := runtime.Summarize(context.Background(), ref)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(summary).To(HaveKeyWithValue("count", BeEquivalentTo(1)))
+		window := url.Values{"format": {"ndjson"}, "stream": {ref.Stream}, "toSeq": {fmt.Sprint(ref.ToSeq)}}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/traces/http_proxy/export?"+window.Encode(), nil))
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		exported := strings.TrimSpace(response.Body.String())
+		Expect(exported).ToNot(BeEmpty())
+		Expect(strings.Split(exported, "\n")).To(HaveLen(1), "the one request the run traced")
+		start := httptest.NewRecorder()
+		handler.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/api/v1/traces/http_proxy/sessions", nil))
+		Expect(start.Code).To(Equal(http.StatusForbidden), "a reopened store is served read-only")
 
 		_, _, err = traces.Reopen(traces.StoreDir(workDir, "run-pruned"))
 		Expect(err).To(MatchError(os.ErrNotExist))

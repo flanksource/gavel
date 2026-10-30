@@ -21,6 +21,7 @@ export interface Test {
   message?: string;
   file?: string;
   line?: number;
+  end_line?: number;
   framework?: string;
   duration?: number; // nanoseconds
   fixture_profile?: FixtureProfile;
@@ -76,6 +77,8 @@ export interface Violation {
   raw_file?: string;
   line?: number;
   column?: number;
+  end_line?: number;
+  end_column?: number;
   message?: string;
   source?: string;
   rule?: { method?: string; description?: string };
@@ -97,6 +100,12 @@ export interface LinterResult {
   error?: string;
   file_count?: number;
   rule_count?: number;
+  // status is set only while the linter is in flight; a final result omits it.
+  status?: 'pending' | 'running';
+  // run_id is the Captain prompt run producing the result; session_id is the
+  // agent session behind it, kept so a replayed snapshot still names it.
+  run_id?: string;
+  session_id?: string;
 }
 
 export interface TestAttempt {

@@ -30,9 +30,10 @@ type gavelConfigLayer struct {
 // may come from a request, so each file is read through an os.Root opened on
 // its directory: the name read is always exactly GavelConfigFileName, and a
 // symlink that resolves outside the directory is refused rather than followed.
-func readGavelConfigLayers(dirs []string) ([]gavelConfigLayer, error) {
+func readGavelConfigLayers(dirs []GavelConfigDir) ([]gavelConfigLayer, error) {
 	layers := make([]gavelConfigLayer, 0, len(dirs))
-	for _, dir := range dirs {
+	for _, layerDir := range dirs {
+		dir := layerDir.Dir
 		path := filepath.Join(dir, GavelConfigFileName)
 		data, err := readFileInDir(dir, GavelConfigFileName)
 		if os.IsNotExist(err) {

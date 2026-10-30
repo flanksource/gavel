@@ -1,0 +1,39 @@
+name: pr
+subject:
+  url: string
+  number: int
+  state: string
+  title: string
+  body: string
+  author: string
+  head: string
+  base: string
+  head_sha: string
+  base_sha: string
+  draft: bool
+  mergeability: string
+steps:
+  - name: conflicts
+    prompt: pr.fix
+    events: [completed, blocked]
+    when: event.type == 'git.conflict'
+    outcomes: &outcomes
+      - {status: cancelled, when: "run.state == 'cancelled'"}
+      - {status: failed, when: "run.state == 'failed' || !envelope.success"}
+      - {status: failed, when: "verify.ran && !verify.passed"}
+      - {status: succeeded, when: "true"}
+  - name: failures
+    prompt: pr.fix
+    events: [completed, blocked]
+    when: event.type in ['test.failure', 'lint.failure']
+    outcomes: *outcomes
+  - name: comment
+    prompt: pr.fix
+    events: [completed, blocked]
+    when: event.type == 'pr.comment'
+    outcomes: *outcomes
+  - name: review
+    prompt: pr.review
+    events: [completed, blocked]
+    when: event.type in ['pr.create', 'pr.update']
+    outcomes: *outcomes

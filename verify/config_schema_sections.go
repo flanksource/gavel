@@ -4,12 +4,14 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/prompts"
+	"github.com/flanksource/gavel/runconfig"
 )
 
 func lintSchema() map[string]any {
 	return object(
 		"Settings for `gavel lint`.",
 		map[string]any{
+			"options": runconfig.Schema(runconfig.Lint{}, false),
 			"runtime": runtimeSchema(),
 			"fix": promptSpecSchema(prompts.LintFix,
 				"AI spec for repairing lint violations from `gavel lint --ai-fix` and the `gavel commit` lint gate. "+
@@ -37,11 +39,17 @@ func lintSchema() map[string]any {
 				object(
 					"Override for one linter.",
 					map[string]any{
+						"options": runconfig.Schema(runconfig.Lint{}, true),
 						"runtime": runtimeSchema(),
+						"config":  map[string]any{"type": "object", "description": "Native UIR configuration document, passed to the executable through a temporary project .uir.d fragment. UIR validates its contents.", "additionalProperties": true},
 						"args":    stringArray("Native linter arguments. Nonempty lists replace inherited arguments."),
 						"enabled": boolProp(
 							"Force the linter on (true) or off (false). Omit to keep the linter's built-in " +
 								"default."),
+						"command": stringArray("Declares an external linter under this name, which must not be a built-in's: " +
+							"the argv of a command printing one gavel LinterResult as a JSON array, run with --format json " +
+							"and the files to lint appended, exiting 0 without failures and 1 with them."),
+						"includes": stringArray("Globs of the files a command linter lints. Empty lints every file."),
 					},
 				),
 			),
@@ -67,6 +75,7 @@ func commitSchema() map[string]any {
 			"message": promptSpecSchema(prompts.CommitMessage,
 				"AI spec for commit-message generation. Model/prompt/budget/effort override the base "+
 					"ai: spec field-wise."),
+			"fix": promptSpecSchema(prompts.CommitFix, "AI repair settings for commit lint findings. Inherits ai and lint.fix, independently of commit.message."),
 			"grouping": promptSpecSchema(prompts.CommitGrouping,
 				"AI spec for AI commit grouping (`gavel commit -G`) that sorts uncommitted changes into "+
 					"logical commits. The output schema (groups[]+ignore[]) is fixed; the prompt changes "+
@@ -106,6 +115,8 @@ func commitSchema() map[string]any {
 				"Gates that run linters over the staged file set before the commit is created. CLI flags "+
 					"--lint and --lint-secrets override these per invocation.",
 				map[string]any{
+					"aiFix":              boolProp("Automatically repair lint findings when true; false disables repair, including the implicit -y trigger. Omit to retain interactive/-y behavior."),
+					"aiFixMaxIterations": intWithDefault("Positive maximum number of commit AI repair iterations.", 3),
 					"enabled": boolWithDefault(
 						"Toggle every non-secrets linter. Omit to keep off.", false),
 					"secrets": boolWithDefault(
@@ -129,6 +140,9 @@ func prSchema() map[string]any {
 	return object(
 		"Settings for `gavel pr`.",
 		map[string]any{
+			"lifecycle": lifecycleSchema(),
+			"steps":     mapObject("Captain spec overrides for named PR lifecycle steps.", promptSpecSchema("", "Spec overrides for this PR lifecycle step.")),
+			"review":    promptSpecSchema("pr.review", "Read-only review of a PR creation or update."),
 			"content": promptSpecSchema(prompts.PRContent,
 				"AI spec for generating the PR title, body, and branch name."),
 			"fix": promptSpecSchema(prompts.PRFix,
@@ -201,15 +215,16 @@ func todosSchema(specSchema map[string]any) map[string]any {
 
 func lifecycleSchema() map[string]any {
 	return object(
-		"Overrides the built-in todo lifecycle: the ordered steps (a captain prompt reference, a CEL "+
-			"`when` over subject/runs/last, and ordered `outcomes` mapping the finished run onto a status). "+
+		"Overrides the built-in lifecycle: ordered steps with a Captain prompt reference, a CEL "+
+			"`when` over subject/event/runs/last, and ordered `outcomes` mapping the finished run onto a status. "+
 			"Either `file` (a lifecycle YAML relative to the project) or an inline `name`/`subject`/`steps`. "+
-			"A step named like a built-in step replaces it wholesale; a new name is appended. A `verify` "+
-			"step must remain.",
+			"A step named like an inherited step replaces it wholesale; a new name is appended. TODO verification must remain enabled.",
 		map[string]any{
+			"order":    stringArray("Step names in priority order. Unlisted steps retain their inherited relative order."),
+			"disabled": stringArray("Inherited step names to disable. An explicit empty list re-enables inherited steps. TODO verification cannot be disabled."),
 			"file": stringProp(
 				"Path to a lifecycle YAML document, relative to the project root. Mutually exclusive with the inline form."),
-			"name": stringProp("Name of the lifecycle; defaults to the built-in `todos`."),
+			"name": stringProp("Name of the lifecycle; inherits the built-in name."),
 			"subject": map[string]any{
 				"type": "object",
 				"description": "Extra subject declarations a custom step's predicates may read, field → CEL type " +
@@ -218,12 +233,31 @@ func lifecycleSchema() map[string]any {
 			},
 			"steps": map[string]any{
 				"type": "array",
-				"description": "Steps to replace or add: {name, prompt, envelope, when, inputs, spec, outcomes, auxiliary}. " +
+				"description": "Steps to replace or add: {name, prompt, events, when, inputs, spec, outcomes, auxiliary}. " +
 					"Outcomes are `{status, when}` pairs evaluated in order; the first true wins and none true is an error.",
-				"items": map[string]any{"type": "object"},
+				"items": lifecycleStepSchema(),
 			},
 		},
 	)
+}
+
+func lifecycleStepSchema() map[string]any {
+	step := object("One lifecycle step.", map[string]any{
+		"name":      stringProp("Unique lower-case step name."),
+		"prompt":    stringProp("Built-in prompt ID or file:<project prompt path>."),
+		"when":      stringProp("CEL applicability over subject, event, runs and last."),
+		"events":    stringArray("Allowed events in the prompt's result envelope."),
+		"tools":     stringArray("Tool sets available to this step."),
+		"auxiliary": boolProp("Offer for explicit selection without making it the default next step."),
+		"inputs":    mapObject("Prompt inputs, mapped to CEL expressions.", stringProp("CEL expression.")),
+		"spec":      specNodeSchema(captainSpecSchema(), "Captain execution settings for this step.", "", ""),
+		"outcomes": map[string]any{"type": "array", "items": object("First matching outcome wins.", map[string]any{
+			"status": stringProp("Outcome name; TODO workflows require a supported TODO status."),
+			"when":   stringProp("CEL predicate over the completed run."),
+		})},
+	})
+	step["required"] = []string{"name", "prompt", "events", "outcomes"}
+	return step
 }
 
 func statusSchema() map[string]any {
@@ -241,8 +275,11 @@ func testSchema() map[string]any {
 	return object(
 		"Settings for `gavel test`.",
 		map[string]any{
+			"options": runconfig.Schema(runconfig.Test{}, false),
 			"runtime": runtimeSchema(),
 			"frameworks": mapObject("Per-framework settings: go, ginkgo, jest, vitest, playwright, or fixture.", object("Runtime and native arguments for one test type.", map[string]any{
+				"enabled": boolProp("Enable or disable this framework within the configured directory."),
+				"options": runconfig.Schema(runconfig.Test{}, true),
 				"runtime": runtimeSchema(),
 				"args":    stringArray("Native runner arguments. Nonempty lists replace inherited arguments. Fixture arguments are passed to exec steps."),
 			})),

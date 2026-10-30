@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/commons-db/cmd/query/traceserve"
 	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/traces"
@@ -29,7 +28,7 @@ const hangPackage = "./testrunner/testdata/hang"
 type traceStore struct{ server *httptest.Server }
 
 func serveStore(host *traces.Host) traceStore {
-	handler, err := traceserve.Handler(traceserve.Options{Runtime: host.Runtime(), Authorize: traceserve.ReadOnly})
+	handler, err := host.Handler()
 	Expect(err).NotTo(HaveOccurred())
 	server := httptest.NewServer(handler)
 	DeferCleanup(server.Close)

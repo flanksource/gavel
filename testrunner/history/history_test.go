@@ -48,7 +48,7 @@ func TestLoadAggregatesLeafExecutions(t *testing.T) {
 		fooTest(workDir, "TestBar", true, false, 5*time.Millisecond),
 	})
 
-	report, err := Load(Options{WorkDir: workDir})
+	report, err := Load(Options{WorkDir: workDir, StateRoot: workDir})
 	require.NoError(t, err)
 	require.Equal(t, 3, report.RunCount)
 	require.Len(t, report.Tests, 3)
@@ -95,12 +95,12 @@ func TestLoadFiltersByPackageAndFile(t *testing.T) {
 		},
 	})
 
-	report, err := Load(Options{WorkDir: workDir, Paths: []string{"pkg/foo"}})
+	report, err := Load(Options{WorkDir: workDir, StateRoot: workDir, Paths: []string{"pkg/foo"}})
 	require.NoError(t, err)
 	require.Len(t, report.Tests, 1)
 	assert.Equal(t, "TestFoo", report.Tests[0].Name)
 
-	report, err = Load(Options{WorkDir: workDir, Paths: []string{"pkg/bar/bar_test.go"}})
+	report, err = Load(Options{WorkDir: workDir, StateRoot: workDir, Paths: []string{"pkg/bar/bar_test.go"}})
 	require.NoError(t, err)
 	require.Len(t, report.Tests, 1)
 	assert.Equal(t, "TestBar", report.Tests[0].Name)
@@ -115,14 +115,15 @@ func TestLoadUsesFilenameTimestampWhenMetadataMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, filepath.Base(path), "2026-04-27T10-43-42Z")
 
-	report, err := Load(Options{WorkDir: workDir})
+	report, err := Load(Options{WorkDir: workDir, StateRoot: workDir})
 	require.NoError(t, err)
 	assert.Equal(t, started, report.FirstRunAt)
 	assert.Equal(t, started, report.Tests[0].AddedAt)
 }
 
 func TestLoadNoHistory(t *testing.T) {
-	_, err := Load(Options{WorkDir: t.TempDir()})
+	empty := t.TempDir()
+	_, err := Load(Options{WorkDir: empty, StateRoot: empty})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNoHistory))
 }
@@ -134,7 +135,7 @@ func TestLoadCorruptSnapshotReportsPath(t *testing.T) {
 	path := filepath.Join(dir, "run-2026-01-01T00-00-00Z.json")
 	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o644))
 
-	_, err := Load(Options{WorkDir: workDir})
+	_, err := Load(Options{WorkDir: workDir, StateRoot: workDir})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), path)
 }
@@ -153,7 +154,7 @@ func TestReportPrettyRendersHistoryRows(t *testing.T) {
 	writeRun(t, workDir, ts1, []parsers.Test{fooTest(workDir, "TestFoo", true, false, 10*time.Millisecond)})
 	writeRun(t, workDir, ts2, []parsers.Test{fooTest(workDir, "TestFoo", false, true, 20*time.Millisecond)})
 
-	report, err := Load(Options{WorkDir: workDir})
+	report, err := Load(Options{WorkDir: workDir, StateRoot: workDir})
 	require.NoError(t, err)
 	out := clicky.MustFormat(report, clicky.FormatOptions{Pretty: true})
 
@@ -220,7 +221,7 @@ func TestLoadReadsRunsFromTheSnapshotStore(t *testing.T) {
 	require.NoError(t, err)
 	require.NoDirExists(t, filepath.Join(workDir, snapshots.Dir), "the run lives only in the store")
 
-	report, err := Load(Options{WorkDir: workDir})
+	report, err := Load(Options{WorkDir: workDir, StateRoot: workDir})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.RunCount)
 	require.Len(t, report.Tests, 1)

@@ -3,18 +3,25 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import { localClicky } from '../../testrunner/ui/vite.clicky';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
+const clicky = localClicky(resolve(here, '../..'), 'pr/ui:test');
 
 // Component tests run against real React in jsdom so the settings prompt row and
 // its nested spec-editor dialog are exercised as the app renders them.
 export default defineConfig({
   plugins: [react()],
+  server: clicky.server,
   resolve: {
     dedupe: ['react', 'react-dom', '@tanstack/react-query', '@flanksource/clicky-ui'],
     alias: [
+      ...clicky.aliases,
       { find: '@flanksource/gavel/testrunner/hooks', replacement: resolve(here, '../../testrunner/ui/src/hooks.ts') },
+      // monaco-editor ships no `main`, only `module`, which vitest's node-side
+      // resolver does not follow; setup mocks the package and needs the id to resolve.
+      { find: /^monaco-editor$/, replacement: 'monaco-editor/esm/vs/editor/editor.api' },
       { find: /^react$/, replacement: require.resolve('react') },
       { find: /^react-dom$/, replacement: require.resolve('react-dom') },
       { find: /^react-dom\/client$/, replacement: require.resolve('react-dom/client') },
@@ -28,7 +35,18 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     server: {
       deps: {
-        inline: [/@flanksource\/clicky-ui/, /@floating-ui\/react/],
+        // Inlined so the react aliases above apply: a dependency vitest
+        // externalizes loads whichever React sits beside its own realpath, and a
+        // linked clicky-ui checkout's deps (radix, streamdown, ...) resolve its
+        // React 18 next to this package's 19.
+        inline: [
+          /@flanksource\/clicky-ui/,
+          /@floating-ui\/react/,
+          /@tanstack\/react-virtual/,
+          /@radix-ui\//,
+          /country-flag-icons/,
+          /streamdown/,
+        ],
       },
     },
   },

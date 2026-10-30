@@ -12,62 +12,69 @@ import (
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/clicky/task"
 	commonsCtx "github.com/flanksource/commons/context"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 )
 
 type goBatchPlan struct {
-	packages  []string
-	ginkgo    []string
-	args      []string
-	targets   []string
-	skipEmpty []string
-	framework Framework
+	runtime     processruntime.Options
+	runtimeArgs []string
+	packages    []string
+	ginkgo      []string
+	args        []string
+	targets     []string
+	skipEmpty   []string
+	framework   Framework
 }
 
 func (o *TestOrchestrator) unfocusedGoRun(startingPaths []string) bool {
-	return len(startingPaths) == 0 && len(o.Frameworks) == 0 && len(o.Ignore) == 0 &&
+	return !o.configurationScoped && len(startingPaths) == 0 && len(o.Frameworks) == 0 && len(o.Ignore) == 0 &&
 		!o.hasChangeSelector() && o.Failed == "" && len(o.PassThroughArgs) == 0
 }
 
 func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string, unfocused bool) ([]goBatchPlan, error) {
-	all, ginkgo := sortedGoPackages(packagesByFramework)
+	all, _ := sortedGoPackages(packagesByFramework)
 	if len(all) == 0 {
 		return nil, nil
 	}
-	goArgs := argsByFramework[parsers.GoTest]
-	ginkgoArgs := append([]string(nil), argsByFramework[parsers.Ginkgo]...)
-	if len(ginkgo) > 0 {
-		var err error
-		ginkgoArgs, err = runners.GinkgoGoTestArgs(ginkgoArgs)
-		if err != nil {
-			return nil, err
-		}
-	}
-	runtimeEqual := true
-	if len(packagesByFramework[parsers.GoTest]) > 0 && len(ginkgo) > 0 {
-		goRuntime, goRuntimeArgs, err := o.runtimeFor(parsers.GoTest)
-		if err != nil {
-			return nil, err
-		}
-		ginkgoRuntime, ginkgoRuntimeArgs, err := o.runtimeFor(parsers.Ginkgo)
-		if err != nil {
-			return nil, err
-		}
-		ginkgoRuntimeArgs, err = runners.GinkgoGoTestArgs(ginkgoRuntimeArgs)
-		if err != nil {
-			return nil, err
-		}
-		runtimeEqual = reflect.DeepEqual(goRuntime, ginkgoRuntime) && slices.Equal(goRuntimeArgs, ginkgoRuntimeArgs)
-	}
 	var bases []goBatchPlan
-	if len(packagesByFramework[parsers.GoTest]) == 0 {
-		bases = append(bases, goBatchPlan{packages: all, ginkgo: ginkgo, args: ginkgoArgs, framework: parsers.Ginkgo})
-	} else if len(ginkgo) == 0 || slices.Equal(goArgs, ginkgoArgs) && runtimeEqual {
-		bases = append(bases, goBatchPlan{packages: all, ginkgo: ginkgo, args: goArgs, framework: parsers.GoTest})
-	} else {
-		bases = append(bases, goBatchPlan{packages: packagesByFramework[parsers.GoTest], args: goArgs, framework: parsers.GoTest})
-		bases = append(bases, goBatchPlan{packages: ginkgo, ginkgo: ginkgo, args: ginkgoArgs, framework: parsers.Ginkgo})
+	for _, framework := range []Framework{parsers.GoTest, parsers.Ginkgo} {
+		for _, pkg := range packagesByFramework[framework] {
+			runtime, runtimeArgs, err := o.runtimeFor(framework, pkg)
+			if err != nil {
+				return nil, err
+			}
+			args := slices.Clone(argsByFramework[framework])
+			if framework == parsers.Ginkgo {
+				args, err = runners.GinkgoGoTestArgs(args)
+				if err != nil {
+					return nil, err
+				}
+				runtimeArgs, err = runners.GinkgoGoTestArgs(runtimeArgs)
+				if err != nil {
+					return nil, err
+				}
+			}
+			index := -1
+			for i := range bases {
+				if reflect.DeepEqual(bases[i].runtime, runtime) && slices.Equal(bases[i].runtimeArgs, runtimeArgs) && slices.Equal(bases[i].args, args) {
+					index = i
+					break
+				}
+			}
+			if index < 0 {
+				bases = append(bases, goBatchPlan{runtime: runtime, runtimeArgs: runtimeArgs, args: args, framework: framework})
+				index = len(bases) - 1
+			}
+			if !slices.Contains(bases[index].packages, pkg) {
+				bases[index].packages = append(bases[index].packages, pkg)
+				bases[index].targets = append(bases[index].targets, pkg)
+			}
+			if framework == parsers.Ginkgo {
+				bases[index].ginkgo = append(bases[index].ginkgo, pkg)
+			}
+		}
 	}
 	if unfocused && len(bases) == 1 {
 		return o.planUnfocusedGoBatch(bases[0]), nil
@@ -79,13 +86,13 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 			args := o.augmentBenchArgs(runner, pkg, base.args)
 			index := -1
 			for i := range plans {
-				if plans[i].framework == base.framework && slices.Equal(plans[i].args, args) {
+				if plans[i].framework == base.framework && reflect.DeepEqual(plans[i].runtime, base.runtime) && slices.Equal(plans[i].runtimeArgs, base.runtimeArgs) && slices.Equal(plans[i].args, args) {
 					index = i
 					break
 				}
 			}
 			if index < 0 {
-				plans = append(plans, goBatchPlan{args: args, framework: base.framework})
+				plans = append(plans, goBatchPlan{args: args, framework: base.framework, runtime: base.runtime, runtimeArgs: base.runtimeArgs})
 				index = len(plans) - 1
 			}
 			plans[index].packages = append(plans[index].packages, pkg)
@@ -120,7 +127,7 @@ func (o *TestOrchestrator) planUnfocusedGoBatch(base goBatchPlan) []goBatchPlan 
 			}
 		}
 		if index < 0 {
-			plans = append(plans, goBatchPlan{args: args, framework: base.framework})
+			plans = append(plans, goBatchPlan{args: args, framework: base.framework, runtime: base.runtime, runtimeArgs: base.runtimeArgs})
 			index = len(plans) - 1
 		}
 		plans[index].packages = append(plans[index].packages, pkg)
@@ -184,7 +191,11 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 				hasReport = hasReport || suite.Framework == parsers.Ginkgo
 			}
 			if !hasReport && packageSuites.All().Sum().Failed == 0 {
-				return packageResult{}, fmt.Errorf("package %s passed without Ginkgo metadata", pkgPath)
+				packageSuites = append(packageSuites, parsers.TestResults{
+					Framework: parsers.Ginkgo, ExitCode: 1,
+					Tests: parsers.Tests{{Name: "Ginkgo metadata", Package: importPath, Framework: parsers.Ginkgo, Failed: true,
+						Message: fmt.Sprintf("package %s passed without Ginkgo metadata", pkgPath)}},
+				})
 			}
 		}
 		if (len(plan.targets) == 1 && plan.targets[0] == "./..." && !slices.Contains(plan.packages, pkgPath) || slices.Contains(plan.skipEmpty, pkgPath)) && emptyGoPackage(packageSuites) {
@@ -352,10 +363,7 @@ func (o *TestOrchestrator) buildGoBatchCommand(plan goBatchPlan) (*exec.Process,
 	if err != nil {
 		return nil, err
 	}
-	runtime, runtimeArgs, err := o.runtimeFor(plan.framework)
-	if err != nil {
-		return nil, err
-	}
+	runtime, runtimeArgs := plan.runtime, slices.Clone(plan.runtimeArgs)
 	timeout := 10 * time.Minute
 	if runtime.Timeout != nil {
 		if *runtime.Timeout == "" {

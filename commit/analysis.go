@@ -8,7 +8,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
-	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -50,11 +49,6 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (ana
 func generateCommitAnalysisWithAgent(ctx context.Context, diff string, agent clickyai.Agent, opts git.AnalyzeOptions) (commitAIAnalysis, error) {
 	analysis := models.CommitAnalysis{Commit: models.Commit{Patch: diff}}
 	opts.MaxBodyLines = maxBodyLinesForDiff(countDiffLines(diff))
-	// Stop the task renderer before the AI prompt takes over the terminal. This
-	// lives here rather than inside git.AnalyzeWithAI because the git analyze path
-	// calls that from inside a clicky batch, where waiting for global completion
-	// deadlocks.
-	prompting.Prepare()
 	analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, opts)
 	if err != nil {
 		return commitAIAnalysis{}, err

@@ -105,7 +105,23 @@ func TestVitestBuildCommand(t *testing.T) {
 		t.Errorf("framework = %q", tr.Framework)
 	}
 	joined := strings.Join(tr.Process.Args, " ")
-	if !strings.Contains(joined, "vitest run --reporter=json --outputFile=") {
+	if !strings.Contains(joined, "vitest run --reporter=json --outputFile.json="+tr.ReportPath) {
 		t.Errorf("args missing vitest run invocation: %v", tr.Process.Args)
+	}
+	var reporterPath string
+	for _, arg := range tr.Process.Args {
+		if p, ok := strings.CutPrefix(arg, "--reporter="); ok && p != "json" {
+			reporterPath = p
+		}
+	}
+	if !filepath.IsAbs(reporterPath) {
+		t.Fatalf("want an absolute --reporter path for the progress reporter, got args %v", tr.Process.Args)
+	}
+	content, err := os.ReadFile(reporterPath)
+	if err != nil {
+		t.Fatalf("progress reporter not written: %v", err)
+	}
+	if string(content) != string(vitestReporterSource) {
+		t.Errorf("progress reporter %s does not match the embedded source", reporterPath)
 	}
 }

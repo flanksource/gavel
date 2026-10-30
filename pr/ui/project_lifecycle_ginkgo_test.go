@@ -152,6 +152,8 @@ var _ = Describe("project status lifecycle", func() {
 		schemaPath, ok := paths["/api/projects/{name}/actions/schema"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(schemaPath).To(HaveKey("get"))
+		properties := projectActionSchemaResponseSchema()["properties"].(map[string]any)
+		Expect(properties["schemaVersion"]).To(HaveKeyWithValue("enum", []int{2}))
 
 		diffPath, ok := paths["/api/projects/{name}/diff"].(map[string]any)
 		Expect(ok).To(BeTrue())
@@ -178,7 +180,7 @@ var _ = Describe("project status lifecycle", func() {
 		server := &Server{}
 		server.SetProjectActionOptionsProvider(fakeProjectActionOptionsProvider{
 			schema: ProjectActionSchema{
-				SchemaVersion: 1,
+				SchemaVersion: 2,
 				Action:        "lint",
 				Schema:        map[string]any{"type": "object"},
 				Defaults:      map[string]any{"changed": false},
@@ -194,7 +196,7 @@ var _ = Describe("project status lifecycle", func() {
 		var response ProjectActionSchema
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
 		Expect(response).To(Equal(ProjectActionSchema{
-			SchemaVersion: 1,
+			SchemaVersion: 2,
 			Action:        "lint",
 			Schema:        map[string]any{"type": "object"},
 			Defaults:      map[string]any{"changed": false},

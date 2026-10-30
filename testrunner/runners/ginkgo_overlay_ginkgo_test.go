@@ -13,6 +13,29 @@ import (
 )
 
 var _ = Describe("Ginkgo overlay", func() {
+	It("keeps manifests independent when worktrees share a temporary directory", func() {
+		shared := GinkgoT().TempDir()
+		roots := []string{GinkgoT().TempDir(), GinkgoT().TempDir()}
+		var manifests []string
+		for _, root := range roots {
+			Expect(os.Symlink(shared, filepath.Join(root, ".tmp"))).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(root, "suite_test.go"), []byte("package sample_test\nimport \"github.com/onsi/ginkgo/v2\"\n"), 0o600)).To(Succeed())
+			manifest, err := BuildGinkgoOverlay(root, []string{"."}, nil)
+			Expect(err).NotTo(HaveOccurred())
+			manifests = append(manifests, manifest)
+		}
+
+		for i, manifest := range manifests {
+			data, err := os.ReadFile(manifest)
+			Expect(err).NotTo(HaveOccurred())
+			var overlay struct {
+				Replace map[string]string
+			}
+			Expect(json.Unmarshal(data, &overlay)).To(Succeed())
+			Expect(overlay.Replace).To(HaveKey(filepath.Join(roots[i], "gavel_metadata_test.go")))
+		}
+	})
+
 	It("replays structured suite metadata through the Go test cache", func() {
 		workDir, err := filepath.Abs("../..")
 		Expect(err).NotTo(HaveOccurred())
@@ -79,7 +102,7 @@ var _ = Describe("Ginkgo overlay", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer os.Remove(overlay)
 
-		cmd := exec.Command("go", "test", "-v", "-overlay="+overlay, pkg)
+		cmd := exec.Command("go", "test", "-count=1", "-v", "-overlay="+overlay, pkg)
 		cmd.Dir = workDir
 		output, err := cmd.CombinedOutput()
 		Expect(err).NotTo(HaveOccurred(), string(output))

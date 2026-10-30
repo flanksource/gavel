@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"github.com/flanksource/gavel/lifecycle"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -17,7 +18,7 @@ var _ = ginkgo.Describe("an external turn's outcome", func() {
 		comment = "Migrated the staging database."
 	)
 	runDefinition := todoprompt.Definition{Name: "run", Class: types.ModeRun}
-	runStep := Step{Name: "run", Events: []string{"completed", "blocked"}}
+	runStep := lifecycle.Step{Name: "run", Events: []string{"completed", "blocked"}}
 	runID := uuid.MustParse("0199f0aa-0000-7000-8000-00000000c0de")
 
 	ginkgo.It("decodes the returned envelope like a dispatched run's", func() {
@@ -30,7 +31,7 @@ var _ = ginkgo.Describe("an external turn's outcome", func() {
 		gomega.Expect(out.Source).To(gomega.Equal(source))
 		gomega.Expect(out.Admission.PromptRunID).To(gomega.Equal(runID))
 		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunSucceeded))
-		gomega.Expect(out.Result.Envelope).To(gomega.Equal(Envelope{
+		gomega.Expect(out.Result.Envelope).To(gomega.Equal(lifecycle.Envelope{
 			Success: true, Event: "completed", Comment: comment,
 			Extra: map[string]any{"success": true, "event": "completed", "comment": comment},
 		}))
