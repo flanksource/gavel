@@ -122,28 +122,31 @@ func (p *GinkgoJSON) Parse(output io.Reader) ([]Test, error) {
 	var tests []Test
 	for _, suite := range suiteReports {
 		suiteHasFailedSpec := false
+		suiteHasTimedOutSpec := false
 		for _, spec := range suite.SpecReports {
 			test := p.specReportToTest(spec, suite)
 			suiteHasFailedSpec = suiteHasFailedSpec || test.Failed
+			suiteHasTimedOutSpec = suiteHasTimedOutSpec || test.TimedOut
 			tests = append(tests, test)
 		}
 
-		// Ginkgo records failures such as a suite timeout on the suite report,
-		// even when every spec report is passed or skipped. Keep one explicit
-		// failure for that verdict without double-counting ordinary spec failures.
-		suiteFailed := len(suite.SpecialSuiteFailureReasons) > 0 ||
-			suite.SuiteSucceeded != nil && !*suite.SuiteSucceeded
-		if suiteFailed && !suiteHasFailedSpec {
+		timedOut := false
+		for _, reason := range suite.SpecialSuiteFailureReasons {
+			if reason == "Suite Timeout Elapsed" {
+				timedOut = true
+				break
+			}
+		}
+
+		// SuiteSucceeded is authoritative: successful suites may still carry a
+		// reason when they were intentionally skipped in BeforeSuite. A timeout
+		// needs its own result unless a timed-out spec already represents it;
+		// ordinary suite failures need one only when no failed spec does.
+		suiteFailed := suite.SuiteSucceeded != nil && !*suite.SuiteSucceeded
+		if suiteFailed && (!suiteHasFailedSpec || timedOut && !suiteHasTimedOutSpec) {
 			message := strings.Join(suite.SpecialSuiteFailureReasons, "\n")
 			if message == "" {
 				message = "Ginkgo suite failed"
-			}
-			timedOut := false
-			for _, reason := range suite.SpecialSuiteFailureReasons {
-				if reason == "Suite Timeout Elapsed" {
-					timedOut = true
-					break
-				}
 			}
 			test := Test{
 				Name:      "[suite failure]",
