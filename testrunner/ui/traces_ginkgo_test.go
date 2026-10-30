@@ -95,6 +95,18 @@ var _ = Describe("replayed runs' trace stores", func() {
 		Expect(get(srv.Handler(), testui.QueryMount+"/run-other/api/v1/traces/kinds").Code).To(Equal(http.StatusNotFound))
 	})
 
+	It("serves a run's store API only, and the query app a host sets over it for every other path", func() {
+		run, ref := keptRun(GinkgoT().TempDir(), "run-app", "/app")
+		srv, err := replay(run)
+		Expect(err).ToNot(HaveOccurred())
+		mount := testui.QueryMount + "/run-app"
+		Expect(get(srv.Handler(), mount+"/traces/http_proxy?stream="+ref.Stream).Code).To(Equal(http.StatusNotFound), "no app without a host's")
+
+		srv.SetQueryApp(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "app at "+r.URL.Path) }))
+		Expect(get(srv.Handler(), mount+"/traces/http_proxy").Body.String()).To(Equal("app at /traces/http_proxy"))
+		Expect(exportedURLs(srv.Handler(), mount, ref)).To(Equal([]string{"/app"}), "the store still answers /api/")
+	})
+
 	It("reports a pruned store gone, not failed, and serves the run without it", func() {
 		workDir := GinkgoT().TempDir()
 		srv, err := replay(testui.TraceRun{RunID: "run-pruned", WorkDir: workDir})

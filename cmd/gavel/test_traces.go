@@ -49,7 +49,7 @@ func startRunTrace(opts testrunner.RunOptions, started time.Time) (*runTrace, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	archive, err := verify.OpenWorkspaceStorage(ctx, opts.WorkDir)
+	archive, err := verify.OpenWorkspaceStorage(ctx, opts.Dirs.StateRoot)
 	if err != nil {
 		return nil, err
 	}

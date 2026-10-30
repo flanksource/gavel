@@ -55,6 +55,7 @@ type Server struct {
 	// basePath is the URL prefix the page resolves its API and routes under
 	// (SetBasePath).
 	basePath string
+	queryApp http.Handler
 
 	rerunMu       sync.Mutex
 	lintFixFn     LintFixFunc
@@ -64,6 +65,9 @@ type Server struct {
 	stopFn        func()
 	stopMessage   string
 	stopRequested bool
+	taskSource    func() []clickytask.TaskSnapshot
+	frozenTasks   []clickytask.TaskSnapshot
+	tasksFrozen   bool
 }
 
 func NewServer() *Server {
@@ -86,15 +90,21 @@ func (s *Server) BeginRun(kind string) {
 	meta.Ended = time.Time{}
 	s.done = false
 	s.fixtureBenchmark = nil
+	s.replayed = false
 	s.performance = nil
 	s.runError = ""
 	s.logTail = ""
 	s.stopRequested = false
 	s.stopMessage = ""
+	s.frozenTasks, s.tasksFrozen = nil, false
 	s.notify()
 }
 
 func (s *Server) finishRunLocked() {
+	if s.taskSource != nil && !s.tasksFrozen {
+		s.frozenTasks = append([]clickytask.TaskSnapshot(nil), s.taskSource()...)
+		s.tasksFrozen = true
+	}
 	if s.metadata == nil || !s.metadata.Ended.IsZero() {
 		return
 	}
@@ -330,8 +340,8 @@ func (s *Server) Done() bool {
 	return s.done
 }
 
-func (s *Server) StreamFrom(ch <-chan []parsers.Test) {
-	s.streamFrom(ch, false)
+func (s *Server) StreamFrom(ch <-chan []parsers.Test) <-chan struct{} {
+	return s.streamFrom(ch, false)
 }
 
 // StreamRerunFrom consumes a rerun's update channel and merges each snapshot
@@ -342,8 +352,10 @@ func (s *Server) StreamRerunFrom(ch <-chan []parsers.Test) {
 	s.streamFrom(ch, true)
 }
 
-func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) {
+func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for tests := range ch {
 			s.mu.Lock()
 			if mergeAttempts {
@@ -361,6 +373,7 @@ func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) {
 		s.mu.Unlock()
 		s.notify()
 	}()
+	return done
 }
 
 func (s *Server) notify() {
@@ -523,14 +536,24 @@ func writeSSESnapshot(w http.ResponseWriter, flusher http.Flusher, payload strin
 }
 
 func (s *Server) snapshot() Snapshot {
-	var taskTests []parsers.Test
-	if !s.replayed {
-		taskTests = virtualTaskTests()
-	}
-	return s.snapshotWithTasks(taskTests)
+	return s.snapshotWithTasks(s.liveTaskTestsLocked())
 }
 
-func (s *Server) snapshotWithTasks(taskTests []parsers.Test) Snapshot {
+func (s *Server) liveTaskTestsLocked() ([]parsers.Test, bool) {
+	if s.replayed {
+		return nil, false
+	}
+	if s.taskSource == nil {
+		return virtualTaskTests(), !tasksDone()
+	}
+	snapshots := s.frozenTasks
+	if !s.tasksFrozen {
+		snapshots = s.taskSource()
+	}
+	return scopedTaskTests(snapshots), !s.tasksFrozen && taskSnapshotsRunning(snapshots)
+}
+
+func (s *Server) snapshotWithTasks(taskTests []parsers.Test, taskRunning bool) Snapshot {
 	tests := s.tests
 	// Virtual task tests surface live (running/pending) clicky tasks while a
 	// run is in progress. A server replayed from a JSON snapshot has its
@@ -545,7 +568,7 @@ func (s *Server) snapshotWithTasks(taskTests []parsers.Test) Snapshot {
 			merged = append(merged, s.tests...)
 			tests = merged
 		}
-		running = running || !tasksDone()
+		running = running || taskRunning
 	}
 	stopped := s.stopRequested && !running
 	stopMessage := ""

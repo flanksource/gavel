@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/ui/queryapp"
 	"github.com/flanksource/gavel/testrunner/ui/runs"
 	"github.com/flanksource/gavel/workspace"
 )
@@ -113,6 +114,9 @@ func runUIServe(ctx context.Context, opts UIServeOptions) (any, error) {
 		}
 	}
 	srv := testui.NewServer()
+	if err := queryapp.Serve(srv); err != nil {
+		return nil, errors.Join(err, listener.Close())
+	}
 	if err := loadResults(srv, opts.ResultsFiles...); err != nil {
 		listener.Close() //nolint:errcheck
 		return nil, fmt.Errorf("load results %v: %w", opts.ResultsFiles, err)

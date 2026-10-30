@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/prwatch"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/ui/queryapp"
 )
 
 type GavelResultsSummary = prwatch.GavelResultsSummary
@@ -97,6 +98,9 @@ func (s *Server) getOrCreateArtifact(artifactID int64, repo string) (*artifactEn
 	if run, err := testui.TraceRunOf(snap.Metadata); err != nil {
 		return nil, fmt.Errorf("artifact %d: %w", artifactID, err)
 	} else if run != nil {
+		if err := queryapp.Serve(srv); err != nil {
+			return nil, fmt.Errorf("artifact %d: %w", artifactID, err)
+		}
 		if err := srv.ReopenTraces(*run); err != nil {
 			return nil, fmt.Errorf("artifact %d: %w", artifactID, err)
 		}

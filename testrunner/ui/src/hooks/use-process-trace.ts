@@ -89,7 +89,9 @@ function usePolled<T>(enabled: boolean, poll: boolean, load: () => Promise<T>, k
   const [value, setValue] = useState<T | null>(null);
   const [error, setError] = useState<string | undefined>(undefined);
   const loadRef = useRef(load);
-  loadRef.current = load;
+  useEffect(() => {
+    loadRef.current = load;
+  });
 
   const reload = useCallback(async () => {
     try {

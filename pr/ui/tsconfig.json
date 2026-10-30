@@ -12,7 +12,8 @@
     "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": {
-      "@flanksource/gavel/testrunner/hooks": ["../../testrunner/ui/src/hooks.ts"]
+      "@flanksource/gavel/testrunner/hooks": ["../../testrunner/ui/src/hooks.ts"],
+      "@flanksource/gavel/testrunner": ["../../testrunner/ui/src/testrunner.ts"]
     }
   },
   "include": ["src"]

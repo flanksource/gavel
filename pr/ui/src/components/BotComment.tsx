@@ -111,6 +111,8 @@ function CopilotComment({ comment }: Props) {
 // --- CodeRabbit ---
 
 function CodeRabbitComment({ comment }: Props) {
+  const [showFull, setShowFull] = useState(false);
+
   if (comment.severity === 'nitpick' || comment.path) {
     return <Markdown text={comment.body} className="text-xs text-gray-700" />;
   }
@@ -118,7 +120,6 @@ function CodeRabbitComment({ comment }: Props) {
   const actionableMatch = comment.body.match(/\*\*Actionable comments posted:\s*(\d+)\*\*/);
   const actionableCount = actionableMatch ? parseInt(actionableMatch[1], 10) : null;
 
-  const [showFull, setShowFull] = useState(false);
   const ChevronIcon = showFull ? UiChevronDown : UiChevronRight;
 
   return (

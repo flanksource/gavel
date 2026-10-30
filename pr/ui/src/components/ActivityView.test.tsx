@@ -64,6 +64,10 @@ class FakeEventSource {
     if (type === 'message') this.listener.mockImplementation(listener);
   }
 
+  removeEventListener(type: string) {
+    if (type === 'message') this.listener.mockReset();
+  }
+
   emit(payload: unknown) {
     this.listener(new MessageEvent('message', { data: JSON.stringify(payload) }));
   }

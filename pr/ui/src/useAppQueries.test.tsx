@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen, waitFor } from '@testing-library/react';
-import type { PropsWithChildren } from 'react';
+import { useEffect, type PropsWithChildren } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PRItem, ProcStatus, Snapshot } from './types';
 import { queryKeys } from './query';
@@ -55,6 +55,10 @@ class FakeEventSource {
     this.listeners.set(type, listener);
   }
 
+  removeEventListener(type: string, listener: EventListener) {
+    if (this.listeners.get(type) === listener) this.listeners.delete(type);
+  }
+
   emit(type: string, data: unknown) {
     this.listeners.get(type)?.(new MessageEvent(type, { data: JSON.stringify(data) }));
   }
@@ -62,7 +66,9 @@ class FakeEventSource {
 
 function Probe({ name, enabled, hostData = true, onRender }: { name: string; enabled: boolean; hostData?: boolean; onRender?: () => void }) {
   const state = useAppQueries({ enabled, hostData, initialConfig: { repos: [] } });
-  onRender?.();
+  useEffect(() => {
+    onRender?.();
+  });
   return (
     <div data-testid={name} data-error={state.processError} data-project-error={state.projectError} data-pr-error={state.snapshot.error ?? ''}>
       {state.snapshot.prs.length}/{state.projects.length}

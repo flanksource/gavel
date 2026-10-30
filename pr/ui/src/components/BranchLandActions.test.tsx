@@ -47,6 +47,9 @@ vi.mock('../eventHub', () => ({
     streams.push(stream);
     return {
       addEventListener: (name: string, listener: (event: Event) => void) => stream.listeners.set(name, listener),
+      removeEventListener: (name: string, listener: (event: Event) => void) => {
+        if (stream.listeners.get(name) === listener) stream.listeners.delete(name);
+      },
       close: () => { stream.closed = true; },
     };
   },
