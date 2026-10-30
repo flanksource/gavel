@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -68,11 +69,11 @@ func validateFilesOptions(opts Options) error {
 // reset-then-stage (runInteractiveStaging). Explicit selection intentionally
 // overrides .gitignore — the user named the files — while the precommit
 // gitignore gate (applyPrecommitChecks) still runs downstream.
-func stageExplicitFiles(workDir string, files []string) error {
-	if err := resetAllStaged(workDir); err != nil {
+func stageExplicitFiles(ctx context.Context, workDir string, files []string) error {
+	if err := resetAllStaged(ctx, workDir); err != nil {
 		return fmt.Errorf("reset index before staging file arguments: %w", err)
 	}
-	if err := addFiles(workDir, files); err != nil {
+	if err := addFiles(ctx, workDir, files); err != nil {
 		return fmt.Errorf("stage file arguments: %w", err)
 	}
 	return nil

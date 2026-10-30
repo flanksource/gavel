@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func TestStageAllSkipsEmbeddedRepoWithoutError(t *testing.T) {
 	writeFileInDir(t, dir, "pr/ui/index.js", "console.log(1)\n")
 	writeFile(t, dir, "main.go", "package main\n")
 
-	err := stageFiles(dir, StageAll, verify.CommitConfig{})
+	err := stageFiles(context.Background(), dir, StageAll, verify.CommitConfig{})
 	require.NoError(t, err)
 
 	staged := mustStagedFiles(t, dir)
@@ -59,7 +60,7 @@ func TestStageAllStripsTrackedButIgnoredModifications(t *testing.T) {
 	writeFileInDir(t, dir, "dist/keep.js", "v2\n")
 	writeFileInDir(t, dir, "src/app.go", "package app\n")
 
-	err := stageFiles(dir, StageAll, verify.CommitConfig{})
+	err := stageFiles(context.Background(), dir, StageAll, verify.CommitConfig{})
 	require.NoError(t, err)
 
 	staged := mustStagedFiles(t, dir)
@@ -84,7 +85,7 @@ func TestStageAllPreservesManuallyStagedGitIgnored(t *testing.T) {
 	writeFileInDir(t, dir, "dist/bundle.js", "v2\n")
 	gitRun(t, dir, "add", "-f", "dist/bundle.js") // manual stage before gavel runs
 
-	err := stageFiles(dir, StageAll, verify.CommitConfig{})
+	err := stageFiles(context.Background(), dir, StageAll, verify.CommitConfig{})
 	require.NoError(t, err)
 
 	assert.Contains(t, mustStagedFiles(t, dir), "dist/bundle.js", "manually staged file must be preserved")
@@ -98,7 +99,7 @@ func TestStageAllFiltersGavelGitignore(t *testing.T) {
 		writeFile(t, dir, "secret.env", "TOKEN=1\n")
 		writeFile(t, dir, "keep.txt", "ok\n")
 
-		err := stageFiles(dir, StageAll, verify.CommitConfig{GitIgnore: []string{"*.env"}})
+		err := stageFiles(context.Background(), dir, StageAll, verify.CommitConfig{GitIgnore: []string{"*.env"}})
 		require.NoError(t, err)
 
 		staged := mustStagedFiles(t, dir)
@@ -110,7 +111,7 @@ func TestStageAllFiltersGavelGitignore(t *testing.T) {
 		dir := initCommitRepo(t)
 		writeFile(t, dir, "secret.env", "TOKEN=1\n")
 
-		err := stageFiles(dir, StageAll, verify.CommitConfig{
+		err := stageFiles(context.Background(), dir, StageAll, verify.CommitConfig{
 			GitIgnore: []string{"*.env"},
 			Allow:     []string{"secret.env"},
 		})
@@ -127,7 +128,7 @@ func TestStageUnstagedExcludesUntracked(t *testing.T) {
 	writeFile(t, dir, "README.md", "# changed\n")
 	writeFile(t, dir, "new.txt", "new\n")
 
-	err := stageFiles(dir, StageUnstaged, verify.CommitConfig{})
+	err := stageFiles(context.Background(), dir, StageUnstaged, verify.CommitConfig{})
 	require.NoError(t, err)
 
 	staged := mustStagedFiles(t, dir)
@@ -160,7 +161,7 @@ func TestStageSessionStagesOnlyEditedFiles(t *testing.T) {
 		filepath.Join(dir, "secret.env"),
 	})
 
-	err := stageFiles(dir, sessionID, verify.CommitConfig{GitIgnore: []string{"*.env"}})
+	err := stageFiles(context.Background(), dir, sessionID, verify.CommitConfig{GitIgnore: []string{"*.env"}})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"app.go"}, mustStagedFiles(t, dir))
@@ -172,7 +173,7 @@ func TestStageSessionMissingLog(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := initCommitRepo(t)
 
-	err := stageFiles(dir, "no-such-session", verify.CommitConfig{})
+	err := stageFiles(context.Background(), dir, "no-such-session", verify.CommitConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no-such-session")
 }
@@ -187,7 +188,7 @@ func TestStageSessionNoEdits(t *testing.T) {
 	sessionID := "sess-empty"
 	writeSessionLog(t, home, sessionID, nil)
 
-	err := stageFiles(dir, sessionID, verify.CommitConfig{})
+	err := stageFiles(context.Background(), dir, sessionID, verify.CommitConfig{})
 	require.ErrorIs(t, err, ErrSessionNoFiles)
 }
 
@@ -206,7 +207,7 @@ func TestStageSessionAllSkipped(t *testing.T) {
 		filepath.Join(dir, "secret.env"),
 	})
 
-	err := stageFiles(dir, sessionID, verify.CommitConfig{GitIgnore: []string{"*.env"}})
+	err := stageFiles(context.Background(), dir, sessionID, verify.CommitConfig{GitIgnore: []string{"*.env"}})
 	require.ErrorIs(t, err, ErrSessionNoFiles)
 }
 
