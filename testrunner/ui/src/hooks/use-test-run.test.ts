@@ -19,6 +19,9 @@ class FakeEventSource {
   addEventListener(type: string, fn: (ev: MessageEvent) => void) {
     (this.listeners[type] ??= []).push(fn);
   }
+  removeEventListener(type: string, fn: (ev: MessageEvent) => void) {
+    this.listeners[type] = (this.listeners[type] ?? []).filter((listener) => listener !== fn);
+  }
   emit(type: string, data?: unknown) {
     const ev = { data: data === undefined ? undefined : JSON.stringify(data) } as MessageEvent;
     for (const fn of this.listeners[type] ?? []) fn(ev);
@@ -169,6 +172,7 @@ describe('useTestRun (SSE transport)', () => {
     const closeSpy = vi.fn();
     const injected = {
       addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       close: closeSpy,
       onerror: null,
     };
@@ -239,6 +243,34 @@ describe('useTestRun (polling fallback)', () => {
     const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls.length;
     await vi.advanceTimersByTimeAsync(2000);
     expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls);
+  });
+
+  it('aborts the active request and clears the polling wait on unmount', async () => {
+    const fetchMock = vi.mocked(fetch);
+    const { unmount } = renderHook(() => useTestRun({ forcePoll: true, pollMs: 500 }));
+    await vi.advanceTimersByTimeAsync(0);
+    const signal = fetchMock.mock.calls[0]?.[1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    expect(signal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a previous run response whose JSON finishes after the run changes', async () => {
+    let resolvePrevious!: (value: Snapshot) => void;
+    const previous = new Promise<Snapshot>((resolve) => { resolvePrevious = resolve; });
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, json: () => previous } as Response);
+    const { result, rerender } = renderHook(({ runId }) => useTestRun({ forcePoll: true, runId }), {
+      initialProps: { runId: 'previous' },
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    rerender({ runId: 'current' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(result.current.snapshot).toEqual(runningSnap);
+    await act(async () => { resolvePrevious(doneSnap); });
+    expect(result.current.snapshot).toEqual(runningSnap);
+    expect(result.current.done).toBe(false);
   });
 });
 

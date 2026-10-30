@@ -156,6 +156,13 @@ func (s *Server) CloseTraces() error {
 	return errors.Join(errs...)
 }
 
+// SetQueryApp attaches query pages while the trace store keeps serving its API.
+func (s *Server) SetQueryApp(app http.Handler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queryApp = app
+}
+
 // tracesStatusLocked is nil when no run the server shows kept a store.
 func (s *Server) tracesStatusLocked() *TracesStatus {
 	primary := ""
@@ -186,7 +193,7 @@ func (s *Server) tracesStatusLocked() *TracesStatus {
 func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 	runID, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, QueryMount+"/"), "/")
 	s.mu.RLock()
-	served := s.traceRuns[runID]
+	served, app := s.traceRuns[runID], s.queryApp
 	s.mu.RUnlock()
 	if runID == "" || served == nil || served.handler == nil {
 		http.Error(w, tracesNotServed(runID, served), http.StatusNotFound)
@@ -198,7 +205,11 @@ func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMovedPermanently)
 		return
 	}
-	http.StripPrefix(QueryMount+"/"+runID, served.handler).ServeHTTP(w, r)
+	handler := served.handler
+	if app != nil && rest != "api" && !strings.HasPrefix(rest, "api/") {
+		handler = app
+	}
+	http.StripPrefix(QueryMount+"/"+runID, handler).ServeHTTP(w, r)
 }
 
 func tracesNotServed(runID string, served *servedTraces) string {

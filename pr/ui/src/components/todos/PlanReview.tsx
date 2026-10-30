@@ -124,6 +124,12 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   const [reviseOptions, setReviseOptions] = useState<TodoRunOptions | undefined>(undefined);
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
   const changesRef = useRef<HTMLTextAreaElement | null>(null);
+  const [focusChangesRequest, setFocusChangesRequest] = useState(0);
+
+  // The `c` shortcut focuses the changes box once it has mounted.
+  useEffect(() => {
+    if (focusChangesRequest > 0) changesRef.current?.focus();
+  }, [focusChangesRequest]);
 
   // Reset the drafts and any stale error whenever the focused todo changes.
   useEffect(() => {
@@ -246,8 +252,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
           if (status === 'review') {
             e.preventDefault();
             setShowChanges(true);
-            // Focus after the box mounts.
-            setTimeout(() => changesRef.current?.focus(), 0);
+            setFocusChangesRequest(n => n + 1);
           }
           break;
       }

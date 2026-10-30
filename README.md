@@ -29,6 +29,7 @@ Browse [gavel.flanksource.com/docs](https://gavel.flanksource.com/docs) or read 
 - [TODO workflows](docs/content/docs/todo-engine.mdx), [PR-linked TODOs](docs/content/docs/pr-todos.mdx), and [pull requests](docs/content/docs/pull-requests.mdx)
 - [Configuration](docs/content/docs/configuration-reference.mdx), [JSON Schema](gavel.schema.json), and [annotated example](gavel.yaml.example)
 - [Agent skills](docs/content/docs/agent-skills.mdx)
+- [Hosted authentication](api/README.md): `gavel login` (`--no-browser` for headless terminals), `gavel whoami`, and `gavel logout`. Local tests and linting do not require login. The GitHub Action's `gavel-server` input uploads results through `gavel ci upload`, using `id-token: write` and a repository linked through the Gavel GitHub App.
 
 ## Contributing
 

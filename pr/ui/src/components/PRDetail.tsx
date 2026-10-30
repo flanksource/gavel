@@ -840,11 +840,11 @@ function MetricCard({ href, icon: Icon, label, value, sub, tone }: MetricCardPro
 }
 
 function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr: PRItem }) {
-  if (shards.length === 0) return null;
-
-  const agg = useMemo(() => aggregateGavelShards(shards)!, [shards]);
-  const multi = shards.length > 1;
+  const agg = useMemo(() => aggregateGavelShards(shards), [shards]);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
+  if (!agg) return null;
+
+  const multi = shards.length > 1;
 
   // The aggregate has no single artifact, so the metric cards in the
   // header don't deep-link when there are multiple shards — clicks on

@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/ui/queryapp"
 )
 
 func streamProjectActionSnapshots(workDir string, started time.Time, run *testui.Server, stop <-chan struct{}) {
@@ -56,6 +57,9 @@ func loadCompletedProjectActionSnapshot(workDir string, started time.Time, run *
 // the run's error.
 func serveProjectActionTraces(run *testui.Server) {
 	trace, err := testui.TraceRunOf(run.Snapshot().Metadata)
+	if err == nil && trace != nil {
+		err = queryapp.Serve(run)
+	}
 	if err == nil && trace != nil {
 		err = run.ReopenTraces(*trace)
 	}

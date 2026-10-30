@@ -240,6 +240,7 @@ var _ = BeforeSuite(func() {
 			chromedp.Flag("disable-dev-shm-usage", true),
 			chromedp.WindowSize(1440, 900),
 			chromedp.UserDataDir(tmpDir),
+			chromedp.WSURLReadTimeout(time.Minute),
 		)...,
 	)
 	// Warm up the browser so the first tab is ready.

@@ -78,17 +78,21 @@ export function useProjectCatalog({ configured, hiddenDirs, selectedName, enable
     };
 
     const stream = openEventStream('/api/tests/stream');
-    stream.addEventListener('message', event => {
+    const onMessage = (event: Event) => {
       try {
         apply(JSON.parse((event as MessageEvent<string>).data));
       } catch {
         setStreamError('Latest test and lint runs received an invalid update.');
       }
-    });
+    };
+    stream.addEventListener('message', onMessage);
     stream.onerror = () => {
       setStreamError(current => current || 'Latest test and lint runs disconnected; reconnecting…');
     };
-    return () => stream.close();
+    return () => {
+      stream.removeEventListener('message', onMessage);
+      stream.close();
+    };
   }, [queryClient, queryEnabled]);
 
   const queryError = runsQuery.failureReason ?? runsQuery.error;

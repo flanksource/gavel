@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/ui/queryapp"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
@@ -869,7 +870,13 @@ func startTestUI(opts testUIOptions) (*testui.Server, net.Listener, error) {
 		listen.DevProxy = proxy
 	}
 	srv, listener, _, err := testui.Listen(listen)
-	return srv, listener, err
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := queryapp.Serve(srv); err != nil {
+		return nil, nil, errors.Join(err, listener.Close())
+	}
+	return srv, listener, nil
 }
 
 // buildRerunArgs translates a UI rerun request into framework-specific flags.
