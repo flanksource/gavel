@@ -156,14 +156,13 @@ func (s *Server) todoPRLinkProvider(ctx context.Context, dir string) (todos.Prov
 }
 
 // prTodosLinker scopes a PR's reverse lookup to dir when one is given. Without
-// one it spans every workspace: a PR belongs to no workspace, and the server's
-// own directory need not be a configured project.
+// one it spans the server's workspaces; its own directory need not be a project.
 func (s *Server) prTodosLinker(ctx context.Context, dir string) (todos.GlobalPRLinkProvider, error) {
 	if strings.TrimSpace(dir) != "" {
 		_, linker, err := s.todoPRLinkProvider(ctx, dir)
 		return linker, err
 	}
-	global, err := openGlobalTodoProvider(ctx)
+	global, err := s.globalTodoProvider(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -197,16 +196,30 @@ func (s *Server) withIndexedPRs(links []todos.PRLink) ([]todoPRLinkItem, error) 
 	return items, nil
 }
 
-// handlePRTodos lists the TODOs in dir's workspace (the server's own when dir is
-// empty) that link the PR at url.
+// handlePRTodos lists linked TODOs in dir, across local workspaces when dir is
+// omitted, or in the organization's PR repository when hosted.
 func (s *Server) handlePRTodos(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	query := r.URL.Query()
-	if _, err := types.PRRefFromURL(query.Get("url")); err != nil {
+	ref, err := types.PRRefFromURL(query.Get("url"))
+	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	linker, err := s.prTodosLinker(r.Context(), query.Get("dir"))
+	dir := strings.TrimSpace(query.Get("dir"))
+	if dir == "" && s.workspaces != nil {
+		if ref.Provider == types.PRProviderGitHub {
+			if dir, err = s.workspaces.GitHubWorkspace(r.Context(), s.orgID(), ref.Repo); err != nil {
+				writeTodoError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		if dir == "" {
+			writeTodoJSON(w, http.StatusOK, []todos.PRLinkedTODO{})
+			return
+		}
+	}
+	linker, err := s.prTodosLinker(r.Context(), dir)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return

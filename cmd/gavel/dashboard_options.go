@@ -50,12 +50,14 @@ type DashboardOptions struct {
 	SubstrateAtespace    string   `flag:"substrate-atespace" help:"Atespace sandbox environments are created in (substrate)" default:"ate-env"`
 	SubstrateTemplate    string   `flag:"substrate-template" help:"ActorTemplate sandbox environments derive from; empty is env's default-template (substrate)"`
 	SubstrateEgress      []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides gavel serve, the Go, npm and Python registries and GitHub; repeat for each (substrate)"`
-	SubstrateCredential  []string `flag:"substrate-credential" help:"A model key substrate's egress gateway injects, as host=,header=,env=,uri=[,prefix=]; repeat for each (substrate)"`
+	SubstrateGavelName   string   `flag:"substrate-gavel-name" help:"The name substrate's credential provider knows this gavel by, in each run's model key URI, e.g. beta (substrate)"`
 	SubstrateTrustBundle string   `flag:"substrate-trust-bundle" help:"Path in the environment of the egress gateway's CA, which jobs trust for hosts with an injected credential (substrate)"`
 	PropertiesFile       string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
 
 	clerkSecretKey string
 	secretKey      string
+	// credentialProviderToken authenticates the credential provider in substrate's cluster.
+	credentialProviderToken string
 }
 
 // withEnv fills settings left empty by flags from getenv, and reads the secrets.
@@ -75,6 +77,7 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 	}
 	o.clerkSecretKey = getenv("CLERK_SECRET_KEY")
 	o.secretKey = getenv("GAVEL_SECRET_KEY")
+	o.credentialProviderToken = getenv("GAVEL_CREDENTIAL_PROVIDER_TOKEN")
 	return o
 }
 
@@ -157,6 +160,17 @@ func (o DashboardOptions) Validate() error {
 		default:
 			add("--sandbox must be docker, podman, kubernetes or substrate, got %q", o.Sandbox)
 		}
+		if o.Sandbox == "substrate" {
+			switch {
+			case o.SubstrateGavelName == "":
+				add("--sandbox substrate requires --substrate-gavel-name, the name substrate's credential provider knows this gavel by")
+			case !dnsLabel.MatchString(o.SubstrateGavelName):
+				add("--substrate-gavel-name must be a DNS label like beta, got %q", o.SubstrateGavelName)
+			}
+			if o.credentialProviderToken == "" {
+				add("--sandbox substrate requires the GAVEL_CREDENTIAL_PROVIDER_TOKEN environment variable, the token substrate's credential provider fetches model keys with")
+			}
+		}
 		if len(o.SandboxSecretEnv) > 0 && o.Sandbox == "" {
 			add("--sandbox-secret-env copies secrets into sandbox jobs and needs --sandbox")
 		}
@@ -193,6 +207,9 @@ func (o DashboardOptions) Validate() error {
 	}
 	return errors.Join(problems...)
 }
+
+// dnsLabel is what a substrate gavel name may be: one segment of a credential URI.
+var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // envName is what an environment variable may be named.
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

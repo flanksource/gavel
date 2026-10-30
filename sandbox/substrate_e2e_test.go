@@ -38,7 +38,6 @@ func TestSubstrateExecutorAgainstACluster(t *testing.T) {
 	executor, err := NewSubstrate(SubstrateOptions{
 		EnvAPI: cluster.EnvAPI, Control: cluster.Control, ControlTokenFile: cluster.TokenFile,
 		Template: cluster.Template, TrustBundle: substratetest.TrustBundle,
-		Credentials: []InjectedCredential{{Host: "httpbin.org", Header: "x-gavel-key", Env: "E2E_MODEL_KEY", URI: cluster.CredentialURI}},
 	})
 	require.NoError(t, err)
 
@@ -55,9 +54,10 @@ echo "golang=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' https://proxy.golan
 curl -sS -m 10 -o /dev/null https://example.com 2>/dev/null; echo "example=$?"
 curl -sS -m 20 --cacert "$NODE_EXTRA_CA_CERTS" -H "x-gavel-key: $E2E_MODEL_KEY" https://httpbin.org/headers
 exit 3`},
-		Env:       map[string]string{"GAVEL_SERVER": cluster.ServeURL},
-		SecretEnv: map[string]string{"GAVEL_RUN_TOKEN": "secret-token"},
-		Limits:    Limits{Timeout: 5 * time.Minute},
+		Env:         map[string]string{"GAVEL_SERVER": cluster.ServeURL},
+		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": "secret-token"},
+		Credentials: []InjectedCredential{{Host: "httpbin.org", Header: "x-gavel-key", Env: "E2E_MODEL_KEY", URI: cluster.CredentialURI}},
+		Limits:      Limits{Timeout: 5 * time.Minute},
 	})
 	require.NoError(t, err)
 

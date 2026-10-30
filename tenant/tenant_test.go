@@ -30,3 +30,11 @@ func TestScopeRoundTrip(t *testing.T) {
 		t.Fatal("a non-local org reported IsLocal")
 	}
 }
+
+func TestIsAdminOnlyForTheOrgAdminRole(t *testing.T) {
+	for role, want := range map[string]bool{"org:admin": true, "org:member": false, "admin": false, "": false} {
+		if got := (Scope{OrgID: uuid.New(), Role: role}).IsAdmin(); got != want {
+			t.Errorf("role %q: IsAdmin() = %v, want %v", role, got, want)
+		}
+	}
+}
