@@ -105,9 +105,11 @@ type ginkgoReportEntry struct {
 
 // ginkoSuiteReport represents a complete test suite in Ginkgo JSON format.
 type ginkgoSuiteReport struct {
-	SuitePath        string             `json:"SuitePath"`
-	SuiteDescription string             `json:"SuiteDescription"`
-	SpecReports      []ginkgoSpecReport `json:"SpecReports"`
+	SuitePath                  string             `json:"SuitePath"`
+	SuiteDescription           string             `json:"SuiteDescription"`
+	SuiteSucceeded             *bool              `json:"SuiteSucceeded"`
+	SpecialSuiteFailureReasons []string           `json:"SpecialSuiteFailureReasons"`
+	SpecReports                []ginkgoSpecReport `json:"SpecReports"`
 }
 
 // Parse reads Ginkgo JSON report and returns all test results (pass, fail, skip).
@@ -119,8 +121,45 @@ func (p *GinkgoJSON) Parse(output io.Reader) ([]Test, error) {
 
 	var tests []Test
 	for _, suite := range suiteReports {
+		suiteHasFailedSpec := false
 		for _, spec := range suite.SpecReports {
 			test := p.specReportToTest(spec, suite)
+			suiteHasFailedSpec = suiteHasFailedSpec || test.Failed
+			tests = append(tests, test)
+		}
+
+		// Ginkgo records failures such as a suite timeout on the suite report,
+		// even when every spec report is passed or skipped. Keep one explicit
+		// failure for that verdict without double-counting ordinary spec failures.
+		suiteFailed := len(suite.SpecialSuiteFailureReasons) > 0 ||
+			suite.SuiteSucceeded != nil && !*suite.SuiteSucceeded
+		if suiteFailed && !suiteHasFailedSpec {
+			message := strings.Join(suite.SpecialSuiteFailureReasons, "\n")
+			if message == "" {
+				message = "Ginkgo suite failed"
+			}
+			timedOut := false
+			for _, reason := range suite.SpecialSuiteFailureReasons {
+				if reason == "Suite Timeout Elapsed" {
+					timedOut = true
+					break
+				}
+			}
+			test := Test{
+				Name:      "[suite failure]",
+				Framework: Ginkgo,
+				Package:   filepath.Base(suite.SuitePath),
+				Failed:    true,
+				TimedOut:  timedOut,
+				Message:   message,
+				Context: GinkgoContext{
+					SuiteDescription: suite.SuiteDescription,
+					SuitePath:        suite.SuitePath,
+				},
+			}
+			if suite.SuiteDescription != "" {
+				test.Suite = []string{suite.SuiteDescription}
+			}
 			tests = append(tests, test)
 		}
 	}
