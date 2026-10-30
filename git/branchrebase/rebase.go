@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"regexp"
 
 	"github.com/google/uuid"
 )
@@ -119,6 +119,8 @@ func Run(ctx context.Context, opts Options) (*Operation, error) {
 	return op, err
 }
 
+var targetRefPattern = regexp.MustCompile(`^refs/(heads/[^\x00-\x20\x7f]+|remotes/origin/main)$`)
+
 func prepare(ctx context.Context, opts Options) (*Operation, error) {
 	if opts.Branch == "" || opts.ExpectedHead == "" {
 		return nil, errors.New("branch and expectedHead are required")
@@ -140,7 +142,7 @@ func prepare(ctx context.Context, opts Options) (*Operation, error) {
 	if head != opts.ExpectedHead {
 		return nil, errors.New("HEAD changed; refresh before rebasing")
 	}
-	if opts.Target != "refs/remotes/origin/main" && !strings.HasPrefix(opts.Target, "refs/heads/") {
+	if !targetRefPattern.MatchString(opts.Target) {
 		return nil, errors.New("target must be origin/main or a local branch ref")
 	}
 	if opts.Target == "refs/heads/"+branch {

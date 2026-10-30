@@ -14,6 +14,23 @@ import (
 func TestEditor(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Lifecycle editor") }
 
 var _ = Describe("scoped lifecycle editing", func() {
+	DescribeTable("rejects lifecycle files that escape through symlinks", func(linkDirectory bool) {
+		dir, outside := GinkgoT().TempDir(), GinkgoT().TempDir()
+		original := []byte("order: [run, plan]\n")
+		Expect(os.WriteFile(filepath.Join(outside, "workflow.yaml"), original, 0600)).To(Succeed())
+		file := "workflow.yaml"
+		if linkDirectory {
+			Expect(os.Symlink(outside, filepath.Join(dir, "linked"))).To(Succeed())
+			file = "linked/workflow.yaml"
+		} else {
+			Expect(os.Symlink(filepath.Join(outside, file), filepath.Join(dir, file))).To(Succeed())
+		}
+		Expect(os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("todos:\n  lifecycle:\n    file: "+file+"\n"), 0600)).To(Succeed())
+		_, err := workflows.Inspect("todos", dir)
+		Expect(err).To(MatchError(ContainSubstring("path escapes")))
+		Expect(os.ReadFile(filepath.Join(outside, "workflow.yaml"))).To(Equal(original))
+	}, Entry("a file symlink", false), Entry("a directory symlink", true))
+
 	It("previews and saves a confined file without changing its reference", func() {
 		dir := GinkgoT().TempDir()
 		path := filepath.Join(dir, ".gavel.yaml")

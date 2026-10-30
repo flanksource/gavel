@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,11 +62,7 @@ func Preview(kind, dir string, edit *Edit) (View, error) {
 			return view, err
 		}
 		if config.File != "" {
-			path, err := utils.ResolveWithin(filepath.Dir(layer.Path), config.File)
-			if err != nil {
-				return view, err
-			}
-			data, err := os.ReadFile(path)
+			data, err := utils.ReadWithin(filepath.Dir(layer.Path), config.File)
 			if err != nil {
 				return view, err
 			}
@@ -128,7 +126,7 @@ func Save(kind, dir string, edit Edit) (View, error) {
 	if err != nil {
 		return view, err
 	}
-	data, err := os.ReadFile(view.Path)
+	data, err := utils.ReadWithin(filepath.Dir(view.Path), verify.GavelConfigFileName)
 	if err != nil && !os.IsNotExist(err) {
 		return view, err
 	}
@@ -180,8 +178,17 @@ func writeDocument(kind, dir string, view View, document yaml.Node) (View, error
 	if err != nil {
 		return View{}, err
 	}
+	root, err := os.OpenRoot(filepath.Dir(view.Path))
+	if err != nil {
+		return view, err
+	}
+	defer root.Close()
 	if view.FileSource != nil {
-		path, err := utils.ResolveWithin(dir, view.Source.File)
+		path, err := utils.ResolveWithin(root.Name(), view.Source.File)
+		if err != nil {
+			return view, err
+		}
+		path, err = filepath.Rel(root.Name(), path)
 		if err != nil {
 			return view, err
 		}
@@ -189,28 +196,33 @@ func writeDocument(kind, dir string, view View, document yaml.Node) (View, error
 		if err != nil {
 			return view, err
 		}
-		if err := writeAtomic(path, fileData); err != nil {
+		if err := writeAtomic(root, path, fileData); err != nil {
 			return view, err
 		}
 	}
-	if err := writeAtomic(view.Path, data); err != nil {
+	if err := writeAtomic(root, verify.GavelConfigFileName, data); err != nil {
 		return View{}, err
 	}
 	return Inspect(kind, dir)
 }
 
-func writeAtomic(path string, data []byte) error {
+func writeAtomic(root *os.Root, path string, data []byte) (returnErr error) {
 	mode := os.FileMode(0600)
-	if info, err := os.Stat(path); err == nil {
+	if info, err := root.Stat(path); err == nil {
 		mode = info.Mode().Perm()
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".lifecycle-*")
+	temp := filepath.Join(filepath.Dir(path), ".lifecycle-"+uuid.NewString())
+	file, err := root.OpenFile(temp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	defer func() {
+		if err := root.Remove(temp); err != nil && !os.IsNotExist(err) {
+			returnErr = errors.Join(returnErr, fmt.Errorf("remove temporary lifecycle file: %w", err))
+		}
+	}()
 	if err := file.Chmod(mode); err != nil {
 		_ = file.Close()
 		return err
@@ -222,5 +234,5 @@ func writeAtomic(path string, data []byte) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), path)
+	return root.Rename(temp, path)
 }

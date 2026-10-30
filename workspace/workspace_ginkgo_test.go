@@ -63,6 +63,21 @@ var _ = Describe("Resolve", func() {
 		_, err := workspace.Resolve(filepath.Join(tree(), "missing"))
 		Expect(err).To(MatchError(ContainSubstring("missing")))
 	})
+
+	It("rejects repository state that escapes through a symlink", func() {
+		root := tree("repo/.git", "repo/pkg", "outside")
+		Expect(os.Symlink(filepath.Join(root, "outside"), filepath.Join(root, "repo", ".gavel"))).To(Succeed())
+		_, err := workspace.Resolve(filepath.Join(root, "repo", "pkg"))
+		Expect(err).To(MatchError(ContainSubstring("path escapes")))
+	})
+
+	It("accepts a state directory linked within the repository", func() {
+		root := tree("repo/.git", "repo/pkg", "repo/state")
+		Expect(os.Symlink("state", filepath.Join(root, "repo", ".gavel"))).To(Succeed())
+		dirs, err := workspace.Resolve(filepath.Join(root, "repo", "pkg"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dirs.StateRoot).To(Equal(filepath.Join(root, "repo")))
+	})
 })
 
 var _ = Describe("From", func() {

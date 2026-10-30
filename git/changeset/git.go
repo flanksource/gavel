@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -25,8 +26,10 @@ func gitText(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSuffix(string(out), "\n"), err
 }
 
+var commitRefPattern = regexp.MustCompile(`^[^-\x00-\x1f\x7f][^\x00-\x1f\x7f]*$`)
+
 func commit(ctx context.Context, dir, ref string) (string, error) {
-	if ref == "" || strings.HasPrefix(ref, "-") {
+	if !commitRefPattern.MatchString(ref) {
 		return "", fmt.Errorf("invalid commit reference %q", ref)
 	}
 	return gitText(ctx, dir, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
