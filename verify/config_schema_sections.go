@@ -30,6 +30,9 @@ func lintSchema() map[string]any {
 								"literals, `*` globs, and `!`-prefixed negations."),
 						"file": stringProp(
 							"Match the violation's file path using doublestar globs (e.g. \"pkg/**/*.go\")."),
+						"line": intProp(
+							"Match only the violation reported on this 1-based line, ignoring one occurrence. " +
+								"Requires file; the rule stops matching once the code moves."),
 					},
 				),
 			),

@@ -346,6 +346,58 @@ func TestLintIgnoreAllowsFileOnlyFolderRule(t *testing.T) {
 	}
 }
 
+func TestLintIgnoreOccurrenceFiltersOnlyThatLine(t *testing.T) {
+	srv, handler := newTestServer(t)
+
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create repo .git: %v", err)
+	}
+
+	msg := "error return value is not checked"
+	violation := func(line int) models.Violation {
+		return models.Violation{File: "foo.go", Line: line, Severity: models.SeverityError, Source: "golangci-lint", Rule: &models.Rule{Method: "errcheck"}, Message: &msg}
+	}
+	srv.SetLintResults([]*linters.LinterResult{{
+		Linter:     "golangci-lint",
+		WorkDir:    repo,
+		Violations: []models.Violation{violation(12), violation(30)},
+	}})
+
+	body, _ := json.Marshal(testui.IgnoreRequest{Source: "golangci-lint", Rule: "errcheck", File: "foo.go", Line: 12, WorkDir: repo})
+	resp := doRequest(t, handler, http.MethodPost, "/api/lint/ignore", bytes.NewReader(body))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+
+	var got testui.IgnoreResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, ".gavel.yaml"))
+	if err != nil {
+		t.Fatalf("read .gavel.yaml: %v", err)
+	}
+	if got.Filtered != 1 || !strings.Contains(string(data), "line: 12") {
+		t.Fatalf("want one filtered violation and a line-scoped rule, got filtered=%d:\n%s", got.Filtered, string(data))
+	}
+}
+
+func TestLintIgnoreRejectsLineWithoutFile(t *testing.T) {
+	srv, handler := newTestServer(t)
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create repo .git: %v", err)
+	}
+	srv.SetLintResults([]*linters.LinterResult{{Linter: "golangci-lint", WorkDir: repo}})
+
+	body, _ := json.Marshal(testui.IgnoreRequest{Rule: "errcheck", Line: 12, WorkDir: repo})
+	resp := doRequest(t, handler, http.MethodPost, "/api/lint/ignore", bytes.NewReader(body))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 	clicky.ClearGlobalTasks()
 	t.Cleanup(clicky.ClearGlobalTasks)

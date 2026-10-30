@@ -121,15 +121,20 @@ func (p *RestartPolicy) UnmarshalYAML(node *yamlv3.Node) error {
 // Rule and Source accept collections.MatchItem patterns: literal strings,
 // `*` globs ("acme-*"), and `!`-prefixed negations. File uses doublestar
 // globs so directory traversal patterns ("pkg/**/*.go") behave as expected.
+// Line narrows a File rule to one occurrence; it never matches without File.
 // At least one of Rule/Source/File must be set; an empty rule never matches.
 type LintIgnoreRule struct {
 	baseDir string
 	Rule    string `yaml:"rule,omitempty" json:"rule,omitempty"`
 	Source  string `yaml:"source,omitempty" json:"source,omitempty"`
 	File    string `yaml:"file,omitempty" json:"file,omitempty"`
+	Line    int    `yaml:"line,omitempty" json:"line,omitempty"`
 }
 
 func (r LintIgnoreRule) MatchesViolation(v models.Violation, workDir string) bool {
+	if r.Line != 0 && (r.File == "" || v.Line != r.Line) {
+		return false
+	}
 	if r.Source != "" {
 		matched, negated := collections.MatchItem(v.Source, r.Source)
 		if negated || !matched {

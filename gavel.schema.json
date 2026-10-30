@@ -2516,6 +2516,10 @@
                 "description": "Match the violation's file path using doublestar globs (e.g. \"pkg/**/*.go\").",
                 "type": "string"
               },
+              "line": {
+                "description": "Match only the violation reported on this 1-based line, ignoring one occurrence. Requires file; the rule stops matching once the code moves.",
+                "type": "integer"
+              },
               "rule": {
                 "description": "Match the violation's rule ID. Accepts literals, `*` globs (\"acme-*\"), and `!`-prefixed negations.",
                 "type": "string"
