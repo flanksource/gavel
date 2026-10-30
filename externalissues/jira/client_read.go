@@ -29,7 +29,7 @@ type SearchOptions struct {
 func (c *Client) Get(ctx context.Context, options GetOptions) (Issue, error) {
 	return runJiraTask(ctx, "Get Jira issue "+options.Key, func(ctx context.Context, progress *task.Task) (Issue, error) {
 		if strings.TrimSpace(options.Key) == "" {
-			return Issue{}, fmt.Errorf("Jira issue key is required")
+			return Issue{}, fmt.Errorf("jira issue key is required")
 		}
 		progress.SetProgress(0, 4)
 		progress.SetDescription("Fetching issue")
@@ -82,7 +82,7 @@ func (c *Client) loadRemoteLinks(ctx context.Context, issue *Issue) error {
 		return err
 	}
 	if links == nil {
-		return fmt.Errorf("Jira remote links response requires an array")
+		return fmt.Errorf("jira remote links response requires an array")
 	}
 	value, err := json.Marshal(links)
 	if err != nil {
@@ -100,7 +100,7 @@ func (c *Client) List(ctx context.Context, options SearchOptions) ([]Issue, erro
 	return runJiraTask(ctx, "Search Jira issues", func(ctx context.Context, progress *task.Task) ([]Issue, error) {
 		progress.SetDescription("Searching Jira")
 		if strings.TrimSpace(options.JQL) == "" || options.Limit < 0 {
-			return nil, fmt.Errorf("Jira search requires JQL and a nonnegative limit")
+			return nil, fmt.Errorf("jira search requires JQL and a nonnegative limit")
 		}
 		fields := options.Fields
 		if len(fields) == 0 {
@@ -121,7 +121,7 @@ func (c *Client) List(ctx context.Context, options SearchOptions) ([]Issue, erro
 			return nil, err
 		}
 		if response.Issues == nil {
-			return nil, fmt.Errorf("Jira search response has no issues array")
+			return nil, fmt.Errorf("jira search response has no issues array")
 		}
 		issues := make([]Issue, 0, len(*response.Issues))
 		progress.SetProgress(0, len(*response.Issues))
@@ -157,7 +157,7 @@ func (c *Client) parseIssue(raw json.RawMessage, catalog map[string]FieldDefinit
 		return Issue{}, fmt.Errorf("decode Jira issue: %w", err)
 	}
 	if payload.Fields == nil || payload.Key == "" {
-		return Issue{}, fmt.Errorf("Jira issue response requires a key and fields object")
+		return Issue{}, fmt.Errorf("jira issue response requires a key and fields object")
 	}
 	for key, value := range map[string]string{"id": payload.ID, "key": payload.Key, "url": c.Site + "/browse/" + url.PathEscape(payload.Key)} {
 		encoded, err := json.Marshal(value)

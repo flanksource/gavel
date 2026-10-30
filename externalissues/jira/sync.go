@@ -65,11 +65,11 @@ func (options SyncOptions) Validate() error {
 		return fmt.Errorf("in-place sync requires exactly one issue")
 	}
 	if len(options.Keys) == 0 {
-		return fmt.Errorf("Jira sync requires at least one issue key or ID")
+		return fmt.Errorf("jira sync requires at least one issue key or ID")
 	}
 	for _, key := range options.Keys {
 		if strings.TrimSpace(key) == "" {
-			return fmt.Errorf("Jira sync issue keys must not be empty")
+			return fmt.Errorf("jira sync issue keys must not be empty")
 		}
 	}
 	return nil
@@ -220,7 +220,7 @@ func (c *Client) syncIssue(ctx context.Context, options syncIssueOptions) (resul
 
 func validateSyncIssue(issue Issue) error {
 	if issue.Project == nil || !syncComponent(issue.Project.ID) || !syncComponent(issue.Key) {
-		return fmt.Errorf("Jira sync requires a safe issue key and project ID for %q", issue.Key)
+		return fmt.Errorf("jira sync requires a safe issue key and project ID for %q", issue.Key)
 	}
 	ids := make(map[string]bool)
 	for _, attachment := range issue.Attachments {

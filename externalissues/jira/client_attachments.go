@@ -18,7 +18,7 @@ import (
 
 func (c *Client) Attachments(ctx context.Context, key string) ([]Attachment, error) {
 	if key == "" {
-		return nil, fmt.Errorf("Jira issue key is required")
+		return nil, fmt.Errorf("jira issue key is required")
 	}
 	var issue struct {
 		Fields struct {
@@ -29,7 +29,7 @@ func (c *Client) Attachments(ctx context.Context, key string) ([]Attachment, err
 		return nil, err
 	}
 	if len(issue.Fields.Attachments) == 0 || string(issue.Fields.Attachments) == "null" {
-		return nil, fmt.Errorf("Jira issue response has no attachment array")
+		return nil, fmt.Errorf("jira issue response has no attachment array")
 	}
 	return ParseAttachments(issue.Fields.Attachments)
 }
@@ -126,7 +126,7 @@ func (w *attachmentProgressWriter) Write(data []byte) (int, error) {
 
 func (c *Client) DeleteAttachment(ctx context.Context, id string) error {
 	if id == "" {
-		return fmt.Errorf("Jira attachment ID is required")
+		return fmt.Errorf("jira attachment ID is required")
 	}
 	return c.json(ctx, requestOptions{Method: "DELETE", Path: "/attachment/" + url.PathEscape(id)}, nil)
 }

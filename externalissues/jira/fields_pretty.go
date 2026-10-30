@@ -73,7 +73,7 @@ func fieldList(values []any) (fieldView, error) {
 	if len(short) == 0 {
 		return fieldView{}, nil
 	}
-	var summary api.Textable = clicky.CompactList(short)
+	summary := clicky.CompactList(short)
 	if structured {
 		summary = clicky.List(short...)
 	}
@@ -142,11 +142,11 @@ func optionLabel(values map[string]any, label string) (string, error) {
 	}
 	child, ok := values["child"].(map[string]any)
 	if !ok {
-		return "", fmt.Errorf("Jira option child must be an object, received %T", values["child"])
+		return "", fmt.Errorf("jira option child must be an object, received %T", values["child"])
 	}
 	childLabel, ok := child["value"].(string)
 	if !ok {
-		return "", fmt.Errorf("Jira option child value must be a string, received %T", child["value"])
+		return "", fmt.Errorf("jira option child value must be a string, received %T", child["value"])
 	}
 	descendant, err := optionLabel(child, childLabel)
 	return label + " / " + descendant, err

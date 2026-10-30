@@ -101,7 +101,7 @@ func (s CatalogStore) Resolve(ctx context.Context, scope CatalogScope, refresh b
 
 func (s CatalogStore) lock(ctx context.Context, scope CatalogScope) (string, *flock.Flock, error) {
 	if strings.TrimSpace(scope.Site) == "" || strings.TrimSpace(scope.Account) == "" {
-		return "", nil, errors.New("Jira field catalog requires site and account")
+		return "", nil, errors.New("jira field catalog requires site and account")
 	}
 	dir := s.Dir
 	if dir == "" {

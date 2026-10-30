@@ -37,7 +37,7 @@ func ParseList(raw json.RawMessage, options ListOptions) ([]Issue, error) {
 		return nil, fmt.Errorf("decode Jira issue list: %w", err)
 	}
 	if response.Issues == nil {
-		return nil, fmt.Errorf("Jira issue list has no issues array")
+		return nil, fmt.Errorf("jira issue list has no issues array")
 	}
 	issues := make([]Issue, 0, len(*response.Issues))
 	for _, rawIssue := range *response.Issues {
