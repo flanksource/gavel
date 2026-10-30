@@ -27,12 +27,20 @@ func gitText(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 var commitRefPattern = regexp.MustCompile(`^[^-\x00-\x1f\x7f][^\x00-\x1f\x7f]*$`)
+var commitIDPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 
 func commit(ctx context.Context, dir, ref string) (string, error) {
 	if !commitRefPattern.MatchString(ref) {
 		return "", fmt.Errorf("invalid commit reference %q", ref)
 	}
-	return gitText(ctx, dir, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+	id, err := gitText(ctx, dir, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	if !commitIDPattern.MatchString(id) {
+		return "", fmt.Errorf("invalid Git commit ID %q", id)
+	}
+	return id, nil
 }
 
 func (s *ChangeSet) collect(ctx context.Context, args ...string) error {
