@@ -43,7 +43,10 @@ var _ = Describe("Hierarchical configuration", func() {
 		write(parent, "runtime: {env: {PARENT: parent}}\n")
 		first, err := LoadGavelConfig(target)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(filepath.Join(repo, ".gavel", "config-cache.json")).To(BeAnExistingFile())
+		Expect(filepath.Join(repo, ".gavel")).NotTo(BeAnExistingFile(), "reading configuration leaves the checkout clean")
+		userCache, err := os.UserCacheDir()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(filepath.Glob(filepath.Join(userCache, "gavel", "config", "*.json"))).To(HaveLen(1))
 		gavelConfigCache.Lock()
 		gavelConfigCache.entries = map[string]gavelConfigCacheEntry{}
 		gavelConfigCache.Unlock()
@@ -55,6 +58,7 @@ var _ = Describe("Hierarchical configuration", func() {
 	})
 	It("reuses the cross process configuration cache", func() {
 		if directory := os.Getenv("GAVEL_CONFIG_CACHE_PROBE"); directory != "" {
+			GinkgoT().Setenv("HOME", os.Getenv("GAVEL_CONFIG_CACHE_PROBE_HOME"))
 			before := gavelConfigParses.Load()
 			cfg, err := LoadGavelConfig(directory)
 			Expect(err).NotTo(HaveOccurred())
@@ -68,7 +72,7 @@ var _ = Describe("Hierarchical configuration", func() {
 		executable, err := os.Executable()
 		Expect(err).NotTo(HaveOccurred())
 		command := exec.Command(executable, "-test.run=^TestGavelConfigDecoding$", "-ginkgo.focus=reuses the cross process configuration cache", "-ginkgo.no-color")
-		command.Env = append(os.Environ(), "GAVEL_CONFIG_CACHE_PROBE="+target)
+		command.Env = append(os.Environ(), "GAVEL_CONFIG_CACHE_PROBE="+target, "GAVEL_CONFIG_CACHE_PROBE_HOME="+os.Getenv("HOME"))
 		output, err := command.CombinedOutput()
 		Expect(err).NotTo(HaveOccurred(), string(output))
 	})
