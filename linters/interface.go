@@ -18,6 +18,7 @@ import (
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -72,6 +73,31 @@ type ExecutableCandidateProvider interface {
 
 type ExecutableRequired interface {
 	RequiresExecutable() bool
+}
+
+// InProcess is implemented by linters an embedder runs inside its own process
+// (no executable). Such a linter runs only when named in lint.Options.Linters
+// — it is never auto-detected — and then whether or not any file matches its
+// DefaultIncludes; its Files are passed through unscoped, so they may be
+// virtual keys (an entity id) rather than paths on disk.
+type InProcess interface {
+	InProcess() bool
+}
+
+// ResultLinter is implemented by linters that produce a whole LinterResult
+// rather than bare violations, so fields only they know survive the run —
+// Sources for findings on virtual files, RawOutput, counts. RunLinterWithTask
+// calls RunResult in place of Run and still owns the name, work dir, command,
+// verdict, timing and timeout, and applies rule exclusions, scopes and the
+// generated-source filter to its Violations.
+type ResultLinter interface {
+	RunResult(ctx commonsContext.Context, task *clicky.Task) (*LinterResult, error)
+}
+
+// IsInProcess reports whether linter runs in-process (see InProcess).
+func IsInProcess(linter Linter) bool {
+	inProcess, ok := linter.(InProcess)
+	return ok && inProcess.InProcess()
 }
 
 // ProjectRooted is implemented by linters that must run from their own project
@@ -231,6 +257,9 @@ type LinterResult struct {
 	// a file under WorkDir: a linter over database rows or other virtual
 	// sources names each with its content and a URL to browse it.
 	Sources map[string]SourceFile `json:"sources,omitempty"`
+	// Cache says where a result came from when its linter answered from its
+	// own cache; nil for a linter that does not cache.
+	Cache *ResultProvenance `json:"cache,omitempty"`
 	// Status is pending or running while the result is still in flight, and
 	// empty once it is final.
 	Status LinterStatus `json:"status,omitempty"`
@@ -248,6 +277,21 @@ type LinterResult struct {
 	// Dismissed holds the violations a reviewer set aside for this run only;
 	// see DismissViolations.
 	Dismissed []models.Violation `json:"dismissed,omitempty"`
+}
+
+// ResultProvenance is what a caching linter reports about its result. Gavel
+// keeps no lint cache of its own: a linter keys its cache on its inputs,
+// honours RunOptions.NoCache, and says here what it reused.
+type ResultProvenance struct {
+	// Source names what Fingerprint is computed from: "build" for a linter's
+	// own input digest, "uir" for a UIR symbol closure.
+	Source      string `json:"source"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	// StoredAt is when the oldest reused entry was linted: the worst-case age
+	// of the result.
+	StoredAt time.Time `json:"stored_at"`
+	// Hit is true only when the whole result came from the cache.
+	Hit bool `json:"hit"`
 }
 
 type IgnoredViolation struct {
@@ -332,6 +376,8 @@ func (lr *LinterResult) Pretty() api.Text {
 		text += fmt.Sprintf(" (timed out after %v)", lr.Duration)
 	} else if lr.Debounced {
 		text += fmt.Sprintf(" (cached, %v)", lr.DebounceUsed)
+	} else if lr.Cache != nil && lr.Cache.Hit {
+		text += fmt.Sprintf(" (cached, linted %s ago)", utils.HumanAge(time.Since(lr.Cache.StoredAt)))
 	} else {
 		if lr.FileCount > 0 {
 			text += fmt.Sprintf(" (%d violations, %d files, %v)", len(lr.Violations), lr.FileCount, lr.Duration)
@@ -580,12 +626,12 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 	}
 
 	start := time.Now()
-	violations, err := linter.Run(commonsContext.NewContext(ctx), task)
-	violations = opts.RuleExclusions.Filter(linter.Name(), violations)
+	result, err := runForResult(commonsContext.NewContext(ctx), task, linter)
+	violations := opts.RuleExclusions.Filter(linter.Name(), result.Violations)
 	scoped := &LinterResult{WorkDir: opts.WorkDir, Violations: violations}
 	FilterViolationsByUserScope([]*LinterResult{scoped}, opts.WorkDir, opts.Scopes)
 	violations = scoped.Violations
-	violations, filterErr := filterGeneratedViolations(opts, violations)
+	violations, filterErr := filterGeneratedViolations(opts, violations, result.Sources)
 	err = errors.Join(err, filterErr)
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	statusErr := err
@@ -597,17 +643,10 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 		ApplyLinterTaskStatus(task, linter.Name(), err == nil && !timedOut, violations, statusErr)
 	}
 
-	result := &LinterResult{
-		Linter:     linter.Name(),
-		WorkDir:    opts.WorkDir,
-		Success:    err == nil && !timedOut,
-		TimedOut:   timedOut,
-		Duration:   time.Since(start),
-		Violations: violations,
-		Error:      formatErr(statusErr),
-		Command:    cmd,
-		Args:       args,
-	}
+	result.Linter, result.WorkDir = linter.Name(), opts.WorkDir
+	result.Success, result.TimedOut = err == nil && !timedOut, timedOut
+	result.Duration, result.Violations = time.Since(start), violations
+	result.Error, result.Command, result.Args = formatErr(statusErr), cmd, args
 
 	if metadata, ok := linter.(MetadataProvider); ok {
 		result.FileCount = metadata.GetFileCount()
@@ -615,6 +654,29 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 	}
 
 	return result
+}
+
+// runForResult runs linter, through RunResult when it is a ResultLinter so
+// the fields only it knows survive. A ResultLinter's own Error fails the run
+// even when it returns no error, and a nil result with no error is a bug in
+// the linter.
+func runForResult(ctx commonsContext.Context, task *clicky.Task, linter Linter) (*LinterResult, error) {
+	producer, ok := linter.(ResultLinter)
+	if !ok {
+		violations, err := linter.Run(ctx, task)
+		return &LinterResult{Violations: violations}, err
+	}
+	result, err := producer.RunResult(ctx, task)
+	if result == nil {
+		if err == nil {
+			err = fmt.Errorf("%s returned no lint result", linter.Name())
+		}
+		return &LinterResult{}, err
+	}
+	if result.Error != "" && err == nil {
+		err = errors.New(result.Error)
+	}
+	return result, err
 }
 
 // RunLinter executes a single linter and returns the result.

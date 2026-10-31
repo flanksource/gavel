@@ -19,7 +19,7 @@ var _ = Describe("Generated source findings", func() {
 		Expect(os.WriteFile(filepath.Join(root, name), []byte(source), 0o600)).To(Succeed())
 		findings := []models.Violation{{File: name, Severity: models.SeverityError}, {Severity: models.SeverityError}}
 		exclude := false
-		kept, err := filterGeneratedViolations(RunOptions{WorkDir: root, Generated: &exclude}, findings)
+		kept, err := filterGeneratedViolations(RunOptions{WorkDir: root, Generated: &exclude}, findings, nil)
 		Expect(err).NotTo(HaveOccurred())
 		if generated {
 			Expect(kept).To(Equal(findings[1:]))
@@ -41,14 +41,14 @@ var _ = Describe("Generated source findings", func() {
 	It("preserves native defaults and explicit inclusion without reading files", func() {
 		findings := []models.Violation{{File: "missing.go"}}
 		for _, policy := range []*bool{nil, new(true)} {
-			kept, err := filterGeneratedViolations(RunOptions{Generated: policy}, findings)
+			kept, err := filterGeneratedViolations(RunOptions{Generated: policy}, findings, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(kept).To(Equal(findings))
 		}
 	})
 
 	It("fails with the source path when a reported source cannot be read", func() {
-		_, err := filterGeneratedViolations(RunOptions{WorkDir: GinkgoT().TempDir(), Generated: new(false)}, []models.Violation{{File: "missing.go"}})
+		_, err := filterGeneratedViolations(RunOptions{WorkDir: GinkgoT().TempDir(), Generated: new(false)}, []models.Violation{{File: "missing.go"}}, nil)
 		Expect(err).To(MatchError(ContainSubstring("missing.go")))
 	})
 
