@@ -13,7 +13,10 @@ type TagsMapper interface {
 	TagsArgs(tags []string) []string
 }
 
-func filterGeneratedViolations(opts RunOptions, violations []models.Violation) ([]models.Violation, error) {
+// filterGeneratedViolations drops findings in generated sources when
+// opts.Generated is false. A finding whose File is a key of sources is judged
+// by that source's Content: it is virtual, so there is nothing on disk to read.
+func filterGeneratedViolations(opts RunOptions, violations []models.Violation, sources map[string]SourceFile) ([]models.Violation, error) {
 	if opts.Generated == nil || *opts.Generated {
 		return violations, nil
 	}
@@ -22,6 +25,12 @@ func filterGeneratedViolations(opts RunOptions, violations []models.Violation) (
 	for _, violation := range violations {
 		if violation.File == "" {
 			kept = append(kept, violation)
+			continue
+		}
+		if source, virtual := sources[violation.File]; virtual {
+			if !generatedSource(filepath.Base(violation.File), source.Content) {
+				kept = append(kept, violation)
+			}
 			continue
 		}
 		path := violation.File

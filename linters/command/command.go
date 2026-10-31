@@ -67,12 +67,21 @@ func (l *Linter) DryRunCommand() (string, []string) {
 	return l.command[0], append(args, l.Files...)
 }
 
-func (l *Linter) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violation, error) {
-	binary, args := l.DryRunCommand()
-	result, err := l.RunReport(ctx, l.name, binary, args...)
+func (l *Linter) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+	result, err := l.RunResult(ctx, task)
 	if result == nil {
 		return nil, err
 	}
-	l.fileCount, l.ruleCount = result.FileCount, result.RuleCount
 	return result.Violations, err
+}
+
+// RunResult runs the command and returns its whole report, so the Sources it
+// names for findings on virtual files survive (linters.ResultLinter).
+func (l *Linter) RunResult(ctx commonsContext.Context, _ *clicky.Task) (*linters.LinterResult, error) {
+	binary, args := l.DryRunCommand()
+	result, err := l.RunReport(ctx, l.name, binary, args...)
+	if result != nil {
+		l.fileCount, l.ruleCount = result.FileCount, result.RuleCount
+	}
+	return result, err
 }
