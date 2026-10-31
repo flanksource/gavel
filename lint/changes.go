@@ -54,6 +54,9 @@ func (o Options) WithChanges() (Options, bool, error) {
 }
 
 func scopeInvocation(inv linterInvocation, opts Options) (linterInvocation, []string, error) {
+	if linters.IsInProcess(inv.linter) {
+		return inv, slices.Clone(opts.Files), nil
+	}
 	if opts.Selection.Active() {
 		if trigger := projectWideChange(inv, opts); trigger != "" {
 			logger.Infof("%s: %s changed; analysing %s, reporting changed files only", inv.linter.Name(), trigger, inv.projectRoot)

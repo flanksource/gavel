@@ -16,6 +16,23 @@ import (
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
+// ReportOptions is how ReportView renders a run: Summary collapses it to
+// linter -> rule with the first SummaryLimit locations per rule (5 when unset).
+type ReportOptions struct {
+	Summary      bool
+	SummaryLimit int
+}
+
+// ReportView is the value `gavel lint` hands its pretty formatter for results,
+// so an embedder renders a lint run exactly as the CLI does. (It is not named
+// Report: ginkgo's dot-import exports that name into this package's specs.)
+func ReportView(results []*linters.LinterResult, opts ReportOptions) any {
+	if opts.Summary {
+		return linters.NewSummaryView(results, opts.SummaryLimit)
+	}
+	return results
+}
+
 // SnapshotOptions is one finished lint run: the directory it linted, the
 // version of the tool that ran it, when it started, the change selection it
 // was narrowed to and its results.

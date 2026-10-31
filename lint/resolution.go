@@ -107,6 +107,9 @@ func golangciInstalledPath(gitRoot string) string {
 var installGolangciLint = deps.InstallWithContext
 
 func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot, projectRoot string, hasDirectConfig bool, dryRun bool) (string, string, error) {
+	if linters.IsInProcess(linter) {
+		return "", "", nil
+	}
 	if required, ok := linter.(linters.ExecutableRequired); ok && !required.RequiresExecutable() {
 		return "", "", nil
 	}

@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
+
+	"github.com/flanksource/gavel/linters"
 )
 
 // RerunRequest is the payload accepted by POST /api/rerun.
@@ -31,19 +34,73 @@ func (s *Server) SetRerunFunc(fn RerunFunc) {
 	s.rerunFn = fn
 }
 
+// LintRerunFunc reruns the named linters over files (both as a UI rerun
+// request carries them) and returns their results.
+type LintRerunFunc func(ctx context.Context, linters []string, files []string) ([]*linters.LinterResult, error)
+
+type embeddedLintRerun struct {
+	claimed []string
+	run     LintRerunFunc
+}
+
+// SetLintRerun lets an embedder rerun its own linters from the UI: a lint
+// rerun request naming only linters in claimed calls fn, and each result it
+// returns replaces the one with the same linter and work dir, keeping every
+// other linter's result. A request naming no linter, or none of claimed, goes
+// to the SetRerunFunc callback; one mixing claimed and other linters is
+// refused. Call this before serving traffic.
+func (s *Server) SetLintRerun(claimed []string, fn LintRerunFunc) {
+	s.lintRerun = &embeddedLintRerun{claimed: slices.Clone(claimed), run: fn}
+}
+
+// claims reports whether req is a lint rerun of linters the embedder claimed,
+// failing when it names claimed and unclaimed linters together.
+func (e *embeddedLintRerun) claims(req RerunRequest) (bool, error) {
+	if e == nil || !req.Lint || len(req.LintLinters) == 0 {
+		return false, nil
+	}
+	var claimed, other []string
+	for _, name := range req.LintLinters {
+		if slices.Contains(e.claimed, name) {
+			claimed = append(claimed, name)
+		} else {
+			other = append(other, name)
+		}
+	}
+	if len(claimed) > 0 && len(other) > 0 {
+		return false, fmt.Errorf("lint rerun mixes %s with %s; rerun them separately", strings.Join(claimed, ","), strings.Join(other, ","))
+	}
+	return len(claimed) > 0, nil
+}
+
+func (s *Server) rerunLintEmbedded(ctx context.Context, req RerunRequest) error {
+	results, err := s.lintRerun.run(ctx, req.LintLinters, req.LintFiles)
+	if err != nil {
+		return err
+	}
+	for _, result := range results {
+		s.UpsertLintResult(result)
+	}
+	return nil
+}
+
 func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.rerunFn == nil {
-		http.Error(w, "rerun not supported", http.StatusNotImplemented)
-		return
-	}
-
 	var req RerunRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	embedded, err := s.lintRerun.claims(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !embedded && s.rerunFn == nil {
+		http.Error(w, "rerun not supported", http.StatusNotImplemented)
 		return
 	}
 
@@ -59,7 +116,11 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 	s.rerunOutput = buf
 	s.mu.Unlock()
 
-	err := s.rerunFn(req, buf)
+	if embedded {
+		err = s.rerunLintEmbedded(r.Context(), req)
+	} else {
+		err = s.rerunFn(req, buf)
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			buf.Cancel()
