@@ -61,6 +61,7 @@ type Server struct {
 	lintFixFn     LintFixFunc
 	lintFix       *LintFixRecord
 	rerunFn       RerunFunc
+	lintRerun     *embeddedLintRerun
 	rerunOutput   *RerunOutputBuffer
 	stopFn        func()
 	stopMessage   string

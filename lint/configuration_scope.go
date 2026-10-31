@@ -15,6 +15,10 @@ import (
 func partitionInvocations(invocations []linterInvocation, opts Options) ([]linterInvocation, error) {
 	var result []linterInvocation
 	for _, inv := range invocations {
+		if linters.IsInProcess(inv.linter) {
+			result = append(result, inv)
+			continue
+		}
 		configs, err := utils.GlobFilesBounded(inv.projectRoot, []string{"**/.gavel.yaml"})
 		if err != nil {
 			return nil, err

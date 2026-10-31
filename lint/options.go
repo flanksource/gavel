@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/git/changeset"
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/workspace"
 )
@@ -32,7 +33,7 @@ type Options struct {
 	Exclude      []string               `flag:"exclude" yaml:"exclude,omitempty" help:"Exclude rule IDs or * patterns, optionally source:rule (repeat or comma-separate); disable native rules where supported"`
 	Triage       bool                   `flag:"triage" yaml:"triage,omitempty" help:"Interactive mode to select violation types to ignore"`
 	Fix          bool                   `flag:"fix" yaml:"fix,omitempty" help:"Enable auto-fixing"`
-	NoCache      bool                   `flag:"no-lint-cache" yaml:"no-lint-cache,omitempty" help:"Disable linter result caching/debounce"`
+	NoCache      bool                   `flag:"no-lint-cache" yaml:"no-lint-cache,omitempty" help:"Make every caching linter re-check its inputs and overwrite its cached results"`
 	Timeout      string                 `flag:"timeout" yaml:"timeout,omitempty" help:"Timeout per linter; overrides runtime.timeout (default 5m)"`
 	WorkDir      string                 `flag:"work-dir" yaml:"work-dir,omitempty" help:"Working directory"`
 	Changed      bool                   `flag:"changed" yaml:"changed,omitempty" help:"Lint local staged/unstaged/untracked files, or the runner changeset in CI"`
@@ -52,6 +53,10 @@ type Options struct {
 	PassThroughArgs []string        `flag:"-" json:"-" yaml:"-"`
 	OutputTee       io.Writer       `json:"-" yaml:"-"`
 	Context         context.Context `json:"-" yaml:"-"`
+	// Registry, when set, is the full set of linters a run may select from in
+	// place of DefaultRegistry; an embedder registers its in-process linters
+	// on DefaultRegistry's result and passes it here.
+	Registry *linters.Registry `flag:"-" json:"-" yaml:"-"`
 
 	AIFix         bool `flag:"ai-fix" yaml:"ai-fix,omitempty" help:"Use lint.fix from Gavel config to repair violations and re-lint until clean; --model/--budget override it"`
 	AIFixMaxIters int  `flag:"ai-fix-max-iterations" yaml:"ai-fix-max-iterations,omitempty" help:"Max AI→re-lint cycles" default:"3"`
