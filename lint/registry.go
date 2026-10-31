@@ -27,12 +27,12 @@ import (
 	"github.com/flanksource/gavel/verify"
 )
 
-// loadLinterRegistry registers every available linter rooted at workDir: the
+// DefaultRegistry registers every available linter rooted at workDir: the
 // built-ins and each command the .gavel.yaml in force there (for an
 // invocation from configDir) declares — which its validation keeps off the
-// built-ins' names. Shared between the execute path and the dry-run path so
-// both stay in sync.
-func loadLinterRegistry(workDir, configDir string) (*linters.Registry, error) {
+// built-ins' names. An embedder adds its own linters to it and passes it as
+// Options.Registry.
+func DefaultRegistry(workDir, configDir string) (*linters.Registry, error) {
 	cfg, err := verify.LoadGavelConfig(verify.RuntimeConfigDirectory(workDir, configDir))
 	if err != nil {
 		return nil, err
@@ -42,6 +42,15 @@ func loadLinterRegistry(workDir, configDir string) (*linters.Registry, error) {
 		registry.Register(declared)
 	}
 	return registry, nil
+}
+
+// registry is Options.Registry when an embedder set one, else DefaultRegistry.
+// Execute, DryRun and Validate all resolve linters through it.
+func (o Options) registry() (*linters.Registry, error) {
+	if o.Registry != nil {
+		return o.Registry, nil
+	}
+	return DefaultRegistry(o.WorkDir, o.ConfigDir)
 }
 
 func builtinLinterRegistry(workDir string) *linters.Registry {
