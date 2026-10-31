@@ -1,0 +1,30 @@
+// ../../../../../../../../../../Volumes/ugreen/cache/pnpm/store/v11/links/@codemirror/legacy-modes/6.5.3/6ddc4bb142089e0be26db8a3e2cc436edc8eddd035daf11477b72a920064aef3/node_modules/@codemirror/legacy-modes/mode/asciiarmor.js
+function e(e) {
+	var t = e.match(/^\s*\S/);
+	return e.skipToEnd(), t ? "error" : null;
+}
+var t = {
+	name: "asciiarmor",
+	token: function(t, n) {
+		var r;
+		if (n.state == "top") return t.sol() && (r = t.match(/^-----BEGIN (.*)?-----\s*$/)) ? (n.state = "headers", n.type = r[1], "tag") : e(t);
+		if (n.state == "headers") {
+			if (t.sol() && t.match(/^\w+:/)) return n.state = "header", "atom";
+			var i = e(t);
+			return i && (n.state = "body"), i;
+		}
+		if (n.state == "header") return t.skipToEnd(), n.state = "headers", "string";
+		if (n.state == "body") return t.sol() && (r = t.match(/^-----END (.*)?-----\s*$/)) ? r[1] == n.type ? (n.state = "end", "tag") : "error" : t.eatWhile(/[A-Za-z0-9+\/=]/) ? null : (t.next(), "error");
+		if (n.state == "end") return e(t);
+	},
+	blankLine: function(e) {
+		e.state == "headers" && (e.state = "body");
+	},
+	startState: function() {
+		return {
+			state: "top",
+			type: null
+		};
+	}
+};
+export { t as asciiArmor };

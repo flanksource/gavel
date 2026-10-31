@@ -105,9 +105,11 @@ type ginkgoReportEntry struct {
 
 // ginkoSuiteReport represents a complete test suite in Ginkgo JSON format.
 type ginkgoSuiteReport struct {
-	SuitePath        string             `json:"SuitePath"`
-	SuiteDescription string             `json:"SuiteDescription"`
-	SpecReports      []ginkgoSpecReport `json:"SpecReports"`
+	SuitePath                  string             `json:"SuitePath"`
+	SuiteDescription           string             `json:"SuiteDescription"`
+	SuiteSucceeded             *bool              `json:"SuiteSucceeded"`
+	SpecialSuiteFailureReasons []string           `json:"SpecialSuiteFailureReasons"`
+	SpecReports                []ginkgoSpecReport `json:"SpecReports"`
 }
 
 // Parse reads Ginkgo JSON report and returns all test results (pass, fail, skip).
@@ -119,8 +121,48 @@ func (p *GinkgoJSON) Parse(output io.Reader) ([]Test, error) {
 
 	var tests []Test
 	for _, suite := range suiteReports {
+		suiteHasFailedSpec := false
+		suiteHasTimedOutSpec := false
 		for _, spec := range suite.SpecReports {
 			test := p.specReportToTest(spec, suite)
+			suiteHasFailedSpec = suiteHasFailedSpec || test.Failed
+			suiteHasTimedOutSpec = suiteHasTimedOutSpec || test.TimedOut
+			tests = append(tests, test)
+		}
+
+		timedOut := false
+		for _, reason := range suite.SpecialSuiteFailureReasons {
+			if reason == "Suite Timeout Elapsed" {
+				timedOut = true
+				break
+			}
+		}
+
+		// SuiteSucceeded is authoritative: successful suites may still carry a
+		// reason when they were intentionally skipped in BeforeSuite. A timeout
+		// needs its own result unless a timed-out spec already represents it;
+		// ordinary suite failures need one only when no failed spec does.
+		suiteFailed := suite.SuiteSucceeded != nil && !*suite.SuiteSucceeded
+		if suiteFailed && (!suiteHasFailedSpec || timedOut && !suiteHasTimedOutSpec) {
+			message := strings.Join(suite.SpecialSuiteFailureReasons, "\n")
+			if message == "" {
+				message = "Ginkgo suite failed"
+			}
+			test := Test{
+				Name:      "[suite failure]",
+				Framework: Ginkgo,
+				Package:   filepath.Base(suite.SuitePath),
+				Failed:    true,
+				TimedOut:  timedOut,
+				Message:   message,
+				Context: GinkgoContext{
+					SuiteDescription: suite.SuiteDescription,
+					SuitePath:        suite.SuitePath,
+				},
+			}
+			if suite.SuiteDescription != "" {
+				test.Suite = []string{suite.SuiteDescription}
+			}
 			tests = append(tests, test)
 		}
 	}

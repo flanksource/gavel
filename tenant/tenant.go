@@ -39,3 +39,6 @@ func FromContext(ctx context.Context) Scope {
 
 // IsLocal reports whether s acts for the local organization.
 func (s Scope) IsLocal() bool { return s.OrgID == LocalOrgID }
+
+// IsAdmin reports whether s acts as an admin of its organization.
+func (s Scope) IsAdmin() bool { return s.Role == "org:admin" }

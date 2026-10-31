@@ -1,0 +1,36 @@
+// ../../../../../../../../../../Volumes/ugreen/cache/pnpm/store/v11/links/@codemirror/legacy-modes/6.5.3/6ddc4bb142089e0be26db8a3e2cc436edc8eddd035daf11477b72a920064aef3/node_modules/@codemirror/legacy-modes/mode/solr.js
+var e = /[^\s\|\!\+\-\*\?\~\^\&\:\(\)\[\]\{\}\"\\]/, t = /[\|\!\+\-\*\?\~\^\&]/, n = /^(OR|AND|NOT|TO)$/;
+function r(e) {
+	return parseFloat(e).toString() === e;
+}
+function i(e) {
+	return function(t, n) {
+		for (var r = !1, i; (i = t.next()) != null && (i != e || r);) r = !r && i == "\\";
+		return r || (n.tokenize = s), "string";
+	};
+}
+function a(e) {
+	return function(t, n) {
+		return e == "|" ? t.eat(/\|/) : e == "&" && t.eat(/\&/), n.tokenize = s, "operator";
+	};
+}
+function o(t) {
+	return function(i, a) {
+		for (var o = t; (t = i.peek()) && t.match(e) != null;) o += i.next();
+		return a.tokenize = s, n.test(o) ? "operator" : r(o) ? "number" : i.peek() == ":" ? "propertyName" : "string";
+	};
+}
+function s(n, r) {
+	var c = n.next();
+	return c == "\"" ? r.tokenize = i(c) : t.test(c) ? r.tokenize = a(c) : e.test(c) && (r.tokenize = o(c)), r.tokenize == s ? null : r.tokenize(n, r);
+}
+var c = {
+	name: "solr",
+	startState: function() {
+		return { tokenize: s };
+	},
+	token: function(e, t) {
+		return e.eatSpace() ? null : t.tokenize(e, t);
+	}
+};
+export { c as solr };
