@@ -401,16 +401,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			if detach {
 				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 				snapshot.Performance = fixturePerformance
-				if path, err := snapshots.Save(opts.Dirs.StateRoot, &snapshot); err != nil {
-					logger.Warnf("persist snapshot: %v", err)
-				} else {
-					logger.V(1).Infof("wrote snapshot to %s", path)
-				}
-				if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, &snapshot, runStarted, ""); err != nil {
-					logger.Warnf("persist per-run snapshot: %v", err)
-				} else {
-					logger.V(1).Infof("wrote per-run snapshot to %s", path)
-				}
+				persistRunSnapshot(opts.Dirs.StateRoot, &snapshot, runStarted)
 				runSucceeded = true
 				clicky.CancelAllGlobalTasks()
 				// WaitForGlobalCompletion (not -Silent) so the final task
@@ -438,11 +429,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			printTestRunResults(tests, opts, fullSummary, lintResults)
 			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 			snapshot.Performance = fixturePerformance
-			if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, &snapshot, runStarted, ""); err != nil {
-				logger.Warnf("persist per-run snapshot: %v", err)
-			} else {
-				logger.V(1).Infof("wrote per-run snapshot to %s", path)
-			}
+			persistRunSnapshot(opts.Dirs.StateRoot, &snapshot, runStarted)
 			runSucceeded = true
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -451,16 +438,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		}
 		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 		snapshot.Performance = fixturePerformance
-		if path, err := snapshots.Save(opts.Dirs.StateRoot, &snapshot); err != nil {
-			logger.Warnf("persist snapshot: %v", err)
-		} else {
-			logger.V(1).Infof("wrote snapshot to %s", path)
-		}
-		if path, err := snapshots.SavePerRun(opts.Dirs.StateRoot, &snapshot, runStarted, ""); err != nil {
-			logger.Warnf("persist per-run snapshot: %v", err)
-		} else {
-			logger.V(1).Infof("wrote per-run snapshot to %s", path)
-		}
+		persistRunSnapshot(opts.Dirs.StateRoot, &snapshot, runStarted)
 		runSucceeded = true
 		// Release the stdout/stderr capture started at the top of runTests
 		// before printing so the details + summary show up on the terminal
