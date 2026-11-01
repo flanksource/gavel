@@ -342,10 +342,7 @@ func lintRunReturnValue(snap *testui.Snapshot, opts LintOptions) any {
 	if !isPrettyFormat() {
 		return snap
 	}
-	if opts.Summary {
-		return linters.NewSummaryView(snap.Lint, opts.SummaryLimit)
-	}
-	return snap.Lint
+	return lint.ReportView(snap.Lint, lint.ReportOptions{Summary: opts.Summary, SummaryLimit: opts.SummaryLimit})
 }
 
 func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.LinterResult, error) {

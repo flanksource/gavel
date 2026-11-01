@@ -112,7 +112,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		return nil, err
 	}
 
-	registry, err := loadLinterRegistry(opts.WorkDir, opts.ConfigDir)
+	registry, err := opts.registry()
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +413,7 @@ func dryRunGroup(opts Options) error {
 		return err
 	}
 
-	registry, err := loadLinterRegistry(opts.WorkDir, opts.ConfigDir)
+	registry, err := opts.registry()
 	if err != nil {
 		return err
 	}
@@ -446,7 +446,7 @@ func dryRunGroup(opts Options) error {
 		}
 
 		_, ok = linter.(linters.DryRunner)
-		if !ok {
+		if !ok && !linters.IsInProcess(linter) {
 			testrunner.PrintDryRunSkipped("lint", linter.Name(), "no DryRunCommand support")
 			continue
 		}

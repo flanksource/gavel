@@ -39,6 +39,22 @@ func saveFailedRun(run failedRun) testui.Snapshot {
 	return snapshot
 }
 
+// persistRunSnapshot writes a completed run as both the sha-keyed snapshot
+// (refreshing last.json, which a bare --failed resolves) and the per-run
+// timestamped snapshot.
+func persistRunSnapshot(stateRoot string, snapshot *testui.Snapshot, started time.Time) {
+	if path, err := snapshots.Save(stateRoot, snapshot); err != nil {
+		logger.Warnf("persist snapshot: %v", err)
+	} else {
+		logger.V(1).Infof("wrote snapshot to %s", path)
+	}
+	if path, err := snapshots.SavePerRun(stateRoot, snapshot, started, ""); err != nil {
+		logger.Warnf("persist per-run snapshot: %v", err)
+	} else {
+		logger.V(1).Infof("wrote per-run snapshot to %s", path)
+	}
+}
+
 func buildTestSnapshot(
 	opts testrunner.RunOptions,
 	tests []parsers.Test,

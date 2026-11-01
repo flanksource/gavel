@@ -46,6 +46,17 @@ var _ = Describe("Command linter", func() {
 		Expect(linter.DefaultIncludes()).To(Equal([]string{"**/XMLData.xml"}))
 	})
 
+	It("keeps the report's sources for findings on virtual files", func() {
+		GinkgoT().Setenv("COMMAND_TEST_REPORT", `[{"linter":"rules","success":true,"violations":[{"file":"tr/Fee","severity":"warning"}],"sources":{"tr/Fee":{"url":"https://rules.example/Fee","content":"<Transaction/>"}}}]`)
+		GinkgoT().Setenv("COMMAND_TEST_EXIT", "0")
+		linter := New(root, "rules", verify.LintLinterConfig{Command: []string{binary}})
+
+		result := linters.RunLinterWithTask(context.Background(), nil, linter, linters.RunOptions{WorkDir: root})
+
+		Expect(result.Error).To(BeEmpty())
+		Expect(result.Sources).To(Equal(map[string]linters.SourceFile{"tr/Fee": {URL: "https://rules.example/Fee", Content: "<Transaction/>"}}))
+	})
+
 	It("fails on a report that disagrees with the exit status, keeping its findings", func() {
 		_, found, err := run(`[{"linter":"x","success":true,"violations":[{"file":"a.xml","severity":"error"}]}]`, "0")
 		Expect(err).To(MatchError(ContainSubstring("lint report disagrees with exit status")))
