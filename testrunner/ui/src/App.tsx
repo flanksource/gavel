@@ -22,13 +22,12 @@ import {
   type TestFilters,
   type Violation,
 } from '@flanksource/clicky-ui/data';
-import { lintFindings, testFindings, type FileFinding, type FileRef, type FileReviewView } from '@flanksource/clicky-ui/file-findings';
-import { Button, DropdownMenu, Tabs } from '@flanksource/clicky-ui/components';
+import { lintFindings, testFindings, type FileFinding, type FileRef, type FileReviewView, type ProblemFilters } from '@flanksource/clicky-ui/file-findings';
+import { Button, Tabs } from '@flanksource/clicky-ui/components';
 import {
   UiArrowLeft,
   UiBeaker,
   UiChartLineUp,
-  UiEyeClosed,
   UiFileCode,
   UiHistory,
   UiListChecks,
@@ -368,6 +367,7 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     commitRoute({ ...rest, ...(line ? { line } : {}) }, 'replace');
   }, [route, commitRoute]);
   const onViewChange = useCallback((view: FileReviewView) => commitRoute({ ...route, view }, 'replace'), [route, commitRoute]);
+  const onProblemFiltersChange = useCallback((problemFilters: ProblemFilters) => commitRoute({ ...route, problemFilters }, 'replace'), [route, commitRoute]);
   const loadFile = useCallback((ref: FileRef) => fetchFile(ref, scope), [scope]);
   const onSampleChange = useCallback((sampleIndex: number) => commitRoute({ ...route, sampleIndex }), [route, commitRoute]);
   const onOpenStep = useCallback((link: ProcessStepLink) => {
@@ -442,8 +442,8 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     }
   }, [ignoreBusy, scope, route, commitRoute, say]);
 
-  const renderFindingActions = useCallback((finding: FileFinding) => {
-    if (finding.kind !== 'lint') return null;
+  const getFindingActions = useCallback((finding: FileFinding) => {
+    if (finding.kind !== 'lint') return [];
     const linter = linterByFinding.get(findingKey(finding));
     if (!linter) throw new Error(`no linter recorded for the finding at ${finding.file}:${finding.line}`);
     const violation: Violation = {
@@ -452,28 +452,10 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     };
     const ignores = violationIgnoreActions({ violation, linter, file: finding.file, workDir: finding.workDir ?? '' });
     const source = sourceUrlByFinding.get(findingKey(finding));
-    if (ignores.length === 0 && !source) return null;
-    return (
-      <>
-        {source && (
-          <Button asChild size="sm" variant="outline" className="h-6 gap-1 px-2 text-xs text-muted-foreground">
-            <a href={source} target="_blank" rel="noreferrer" title={`Open ${finding.file}:${finding.line ?? ''} at its source`}>Open source</a>
-          </Button>
-        )}
-        {ignores.length > 0 && (
-          <DropdownMenu
-            label="Ignore"
-            icon={UiEyeClosed}
-            variant="outline"
-            size="sm"
-            align="right"
-            title="Add an ignore rule to .gavel.yaml"
-            menuLabel="Ignore scope"
-            items={ignores.map(action => ({ label: action.label, title: action.title, disabled: ignoreBusy, onSelect: () => void onIgnore(action) }))}
-          />
-        )}
-      </>
-    );
+    return [
+      ...(source ? [{ label: 'Open original source', onSelect: () => { window.open(source, '_blank', 'noopener,noreferrer'); } }] : []),
+      ...ignores.map(action => ({ label: action.label, title: action.title, disabled: ignoreBusy || (Boolean(action.disabledWithoutWorkDir) && !action.req.work_dir), onSelect: () => void onIgnore(action) })),
+    ];
   }, [linterByFinding, sourceUrlByFinding, ignoreBusy, onIgnore]);
 
   const onTestEdit = useCallback(async (node: Test, action: TestEditAction, editScope: TestEditScope) => {
@@ -625,6 +607,7 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
                 onIgnore={onIgnore}
                 ignoreBusy={ignoreBusy}
                 onOpenFile={onOpenFile}
+                loadSource={loadFile}
                 renderRun={renderPromptRun}
                 headerSlot={(
                   <>
@@ -654,8 +637,10 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
                   onLineChange={onLineChange}
                   view={route.view ?? 'preview'}
                   onViewChange={onViewChange}
+                  problemFilters={route.problemFilters}
+                  onProblemFiltersChange={onProblemFiltersChange}
                   loadFile={loadFile}
-                  renderFindingActions={renderFindingActions}
+                  getFindingActions={getFindingActions}
                 />
               </Suspense>
             </div>

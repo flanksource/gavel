@@ -24,6 +24,7 @@ describe('lint route grouping', () => {
       selectedPath: '',
       filters: { status: defaultStatusFilter(), framework: new Map() },
       lintFilters: { severity: new Map(), linter: new Map() },
+      problemFilters: { severity: new Map(), type: new Map() },
     };
 
     expect(buildRoute({ ...baseState, lintGrouping: 'linter-rule-file' })).toBe('/lint');
@@ -104,8 +105,18 @@ describe('files route', () => {
     expect(at('/files/a.go?view=problems').view).toBe('problems');
   });
 
+  it('round trips the Problems severity and issue-type filters with their include/exclude marks', () => {
+    const url = '/files/XMLData.xml?view=problems&problemSeverity=%21info&problemType=transaction.copybook.missing%2C%21transaction.eval.no-activity';
+    const route = at(url);
+    expect({ severity: Object.fromEntries(route.problemFilters.severity), type: Object.fromEntries(route.problemFilters.type) }).toEqual({
+      severity: { info: 'exclude' },
+      type: { 'transaction.copybook.missing': 'include', 'transaction.eval.no-activity': 'exclude' },
+    });
+    expect(buildRoute(route)).toBe(url);
+  });
+
   it('does not carry the file query onto other tabs', () => {
-    const route = { ...at(`/files/a.go?dir=${DIR_PARAM}&line=3`), tab: 'lint' as const, selectedPath: '' };
+    const route = { ...at(`/files/a.go?dir=${DIR_PARAM}&line=3&problemSeverity=error`), tab: 'lint' as const, selectedPath: '' };
     expect(buildRoute(route)).toBe('/lint');
   });
 });

@@ -9,7 +9,7 @@ import {
   type LintSeverity,
   type TestFilters,
 } from '@flanksource/clicky-ui/data';
-import type { FileReviewView } from '@flanksource/clicky-ui/file-findings';
+import type { FileReviewView, ProblemFilters } from '@flanksource/clicky-ui/file-findings';
 import { basePath } from './config';
 
 const DEFAULT_STATUS_FILTER_TOKENS = ['!passed', '!skipped'];
@@ -41,6 +41,8 @@ export interface RouteState {
   view?: FileReviewView;
   // Files tab: 1-based line to reveal (`?line=`).
   line?: number;
+  // Files tab: tri-state Problems filters (`?problemSeverity=`, `?problemType=`).
+  problemFilters: ProblemFilters;
   filters: TestFilters;
   lintGrouping: LintGrouping;
   lintFilters: LintFilters;
@@ -100,6 +102,10 @@ export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): Rou
       severity: decodeFilterState<LintSeverity>(splitCSV(params.get('severity'))),
       linter: decodeFilterState(splitCSV(params.get('linter'))),
     },
+    problemFilters: {
+      severity: decodeFilterState<LintSeverity>(splitCSV(params.get('problemSeverity'))),
+      type: decodeFilterState(splitCSV(params.get('problemType'))),
+    },
     sampleIndex: sample !== null && /^\d+$/.test(sample) ? Number(sample) : undefined,
     hideExited: params.get('hideExited') === '1',
     ...(dir ? { workDir: dir } : {}),
@@ -133,6 +139,8 @@ export function buildRoute(state: RouteState): string {
     if (state.workDir) params.set('dir', state.workDir);
     if (state.view && state.view !== 'preview') params.set('view', state.view);
     if (state.line !== undefined) params.set('line', String(state.line));
+    if (state.problemFilters.severity.size > 0) params.set('problemSeverity', encodeFilterState(state.problemFilters.severity).join(','));
+    if (state.problemFilters.type.size > 0) params.set('problemType', encodeFilterState(state.problemFilters.type).join(','));
   }
   if (state.tab === 'bench' && state.sampleIndex !== undefined) params.set('sample', String(state.sampleIndex));
   if (state.tab === 'processes' && state.hideExited) params.set('hideExited', '1');
