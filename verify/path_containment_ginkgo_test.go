@@ -40,6 +40,13 @@ var _ = Describe("LoadSingleGavelConfig", func() {
 
 		Expect(err).To(MatchError(ContainSubstring(GavelConfigFileName)))
 	})
+	It("rejects a config symlink outside the selected directory", func() {
+		outside := filepath.Join(GinkgoT().TempDir(), GavelConfigFileName)
+		Expect(os.WriteFile(outside, []byte("ai:\n  model: example\n"), 0600)).To(Succeed())
+		Expect(os.Symlink(outside, filepath.Join(dir, GavelConfigFileName))).To(Succeed())
+		_, err := LoadSingleGavelConfig(filepath.Join(dir, GavelConfigFileName))
+		Expect(err).To(HaveOccurred())
+	})
 })
 
 var _ = Describe("PromptSpec.TemplateSource", func() {
@@ -75,5 +82,12 @@ var _ = Describe("PromptSpec.TemplateSource", func() {
 
 	It("falls back to the builtin body when no file and no prompt are set", func() {
 		Expect(PromptSpec{}.TemplateSource(dir, fallback)).To(Equal(fallback))
+	})
+	It("rejects a relative prompt symlink outside the declaring directory", func() {
+		outside := filepath.Join(GinkgoT().TempDir(), "external.prompt")
+		Expect(os.WriteFile(outside, []byte(body), 0600)).To(Succeed())
+		Expect(os.Symlink(outside, filepath.Join(dir, "alias.prompt"))).To(Succeed())
+		_, err := (PromptSpec{File: "alias.prompt"}).TemplateSource(dir, fallback)
+		Expect(err).To(HaveOccurred())
 	})
 })

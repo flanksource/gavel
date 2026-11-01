@@ -2,7 +2,6 @@ package verify
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
@@ -80,7 +79,7 @@ func (s PromptSpec) Layers(opts PromptResolveOptions) ([]api.SpecLayer, error) {
 		if opts.FileSource != nil {
 			source = *opts.FileSource
 		} else {
-			raw, err := os.ReadFile(s.resolvedFilePath(opts.Dir))
+			raw, err := s.readFile(opts.Dir)
 			if err != nil {
 				return nil, fmt.Errorf("read prompt override file: %w", err)
 			}

@@ -3,10 +3,10 @@ package prompt
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/utils"
 )
 
 const (
@@ -15,11 +15,7 @@ const (
 )
 
 func ReadSourceLines(workDir string, ref types.PathRef) (string, error) {
-	path := ref.File
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workDir, path)
-	}
-	data, err := os.ReadFile(path)
+	data, err := utils.ReadWithin(workDir, ref.File)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil

@@ -256,7 +256,8 @@ func TestDiscoverConfigsFindsRepoFile(t *testing.T) {
 	cfg := filepath.Join(repo, ".betterleaks.toml")
 	require.NoError(t, os.WriteFile(cfg, []byte(`title = "repo"`+"\n"), 0o644))
 
-	found := DiscoverConfigs(repo)
+	found, err := DiscoverConfigs(repo)
+	require.NoError(t, err)
 	require.NotEmpty(t, found)
 	// Repo config must be present; absolute paths are returned so compare abs.
 	absCfg, _ := filepath.Abs(cfg)
@@ -270,7 +271,8 @@ func TestDiscoverConfigsEmptyWhenAbsent(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
 
-	found := DiscoverConfigs(repo)
+	found, err := DiscoverConfigs(repo)
+	require.NoError(t, err)
 	require.Empty(t, found, "no config files anywhere should yield empty slice")
 }
 
@@ -293,7 +295,8 @@ secrets:
 `
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte(gavelYaml), 0o644))
 
-	found := DiscoverConfigs(repo)
+	found, err := DiscoverConfigs(repo)
+	require.NoError(t, err)
 	absExtra, _ := filepath.Abs(extraPath)
 	require.Contains(t, found, absExtra)
 }
@@ -343,7 +346,8 @@ secrets:
     - nested/cwd-extra.toml
 `), 0o644))
 
-	found := DiscoverConfigs(workDir)
+	found, err := DiscoverConfigs(workDir)
+	require.NoError(t, err)
 	require.Equal(t, []string{
 		homeNative,
 		homeExtra,

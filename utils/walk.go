@@ -43,7 +43,7 @@ func FindGitRoot(dir string) string {
 		// (linked worktree / submodule — the file holds a `gitdir:` pointer).
 		// Requiring a directory silently disabled gitignore filtering in
 		// worktrees, so accept either.
-		if _, err := os.Stat(filepath.Join(dir, gitDirName)); err == nil {
+		if _, err := StatWithin(dir, gitDirName); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)

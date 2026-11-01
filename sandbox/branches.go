@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -35,9 +36,14 @@ func (s *Sources) Branches(ctx context.Context, repo Repo) (Branches, error) {
 	return branches, nil
 }
 
+var branchNamePattern = regexp.MustCompile(`^[^-\x00-\x20\x7f][^\x00-\x20\x7f]*$`)
+
 // BranchCommit is the commit repo's branch is at.
 func (s *Sources) BranchCommit(ctx context.Context, repo Repo, branch string) (string, error) {
-	if _, err := runGit(ctx, nil, "check-ref-format", "--branch", branch); err != nil || strings.HasPrefix(branch, "-") {
+	if !branchNamePattern.MatchString(branch) {
+		return "", fmt.Errorf("%w %q: not a valid branch name", ErrUnknownBranch, branch)
+	}
+	if _, err := runGit(ctx, nil, "check-ref-format", "--branch", branch); err != nil {
 		return "", fmt.Errorf("%w %q: not a valid branch name", ErrUnknownBranch, branch)
 	}
 	dir, err := s.sourceDir(ctx, repo)
