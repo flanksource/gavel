@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,8 +25,8 @@ var ErrGitLockHeld = errors.New("git lock file held")
 const (
 	gitLockRetries   = 3
 	gitLockRetryBase = 500 * time.Millisecond
-	// gitStaleLockAge is how old a lock nobody has open must be before it is
-	// offered for removal.
+	// gitStaleLockAge is how old a lock with no potential writer must be before
+	// it is offered for removal.
 	gitStaleLockAge = 5 * time.Second
 )
 
@@ -75,7 +77,7 @@ func heldGitLock(output string) (string, bool) {
 // runGitRetryingLocks runs `git args...` in workDir and returns its combined
 // output. When git fails because a lock file is held, it retries up to
 // gitLockRetries times with jittered backoff. If the lock is still there and is
-// stale — older than gitStaleLockAge with no process holding it open — it is
+// stale — older than gitStaleLockAge with no writer holding it open — it is
 // removed (after asking, per the gitLockPolicy on ctx) and the command runs once
 // more. At most one lock is removed per call.
 func runGitRetryingLocks(ctx context.Context, workDir string, args ...string) ([]byte, error) {
@@ -134,9 +136,9 @@ func (d gitLockDiagnosis) stale() bool {
 }
 
 func (d gitLockDiagnosis) String() string {
-	holder := "no process has it open"
+	holder := "no process has it open for writing"
 	if len(d.holders) > 0 {
-		holder = "open by pid " + strings.Join(d.holders, ", ")
+		holder = "open by pid " + strings.Join(d.holders, ", ") + " (write or unknown access)"
 	}
 	return fmt.Sprintf("age %s, %d bytes, %s", d.age.Round(time.Second), d.info.Size(), holder)
 }
@@ -153,10 +155,11 @@ func diagnoseGitLock(lock string) (gitLockDiagnosis, error) {
 	return gitLockDiagnosis{info: info, age: time.Since(info.ModTime()), holders: holders}, nil
 }
 
-// lockHolders lists the PIDs that have path open. lsof exits 1 with no output
-// when nothing has it open; any other failure means holders cannot be verified.
+// lockHolders lists potential writers. Read-only handles include macOS kqueue
+// directory watchers and do not own Git's lock. Unknown access blocks removal.
+// lsof exits 1 with no output when nothing has the path open.
 func lockHolders(path string) ([]string, error) {
-	cmd := exec.Command("lsof", "-t", "--", path)
+	cmd := exec.Command("lsof", "-F", "pfa", "--", path)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -167,7 +170,56 @@ func lockHolders(path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot verify who holds %s: lsof: %w: %s", path, err, strings.TrimSpace(stderr.String()))
 	}
-	return splitLines(string(out)), nil
+	if stderr.Len() > 0 {
+		return nil, fmt.Errorf("cannot verify who holds %s: lsof: %s", path, strings.TrimSpace(stderr.String()))
+	}
+	holders, err := parseLockHolders(string(out))
+	if err != nil {
+		return nil, fmt.Errorf("cannot verify who holds %s: %w", path, err)
+	}
+	return holders, nil
+}
+
+func parseLockHolders(output string) ([]string, error) {
+	var holders []string
+	var pid, access string
+	var fileSeen, accessSeen bool
+	addHolder := func() {
+		if fileSeen && access != "r" && !slices.Contains(holders, pid) {
+			holders = append(holders, pid)
+		}
+	}
+	for _, field := range splitLines(output) {
+		switch value := field[1:]; field[0] {
+		case 'p':
+			if pid != "" && !fileSeen {
+				return nil, fmt.Errorf("lsof process %s has no file descriptor", pid)
+			}
+			addHolder()
+			if number, err := strconv.Atoi(value); err != nil || number <= 0 {
+				return nil, fmt.Errorf("invalid lsof process field %q", field)
+			}
+			pid, fileSeen = value, false
+		case 'f':
+			if pid == "" || value == "" {
+				return nil, fmt.Errorf("invalid lsof descriptor field %q", field)
+			}
+			addHolder()
+			fileSeen, accessSeen, access = true, false, ""
+		case 'a':
+			if !fileSeen || accessSeen {
+				return nil, fmt.Errorf("unexpected lsof access field %q", field)
+			}
+			access, accessSeen = value, true
+		default:
+			return nil, fmt.Errorf("unexpected lsof field %q", field)
+		}
+	}
+	if pid != "" && !fileSeen {
+		return nil, fmt.Errorf("lsof process %s has no file descriptor", pid)
+	}
+	addHolder()
+	return holders, nil
 }
 
 // removeStaleGitLock removes lock when it is stale and the policy allows it,
@@ -183,12 +235,15 @@ func removeStaleGitLock(ctx context.Context, lock string) error {
 	if err := confirmStaleLockRemoval(ctx, lock, diag); err != nil {
 		return err
 	}
-	current, err := os.Lstat(lock)
+	current, err := diagnoseGitLock(lock)
 	if err != nil {
-		return fmt.Errorf("re-stat %s: %w", lock, err)
+		return err
 	}
-	if !os.SameFile(diag.info, current) || !current.ModTime().Equal(diag.info.ModTime()) || current.Size() != diag.info.Size() {
+	if !os.SameFile(diag.info, current.info) || !current.info.ModTime().Equal(diag.info.ModTime()) || current.info.Size() != diag.info.Size() {
 		return fmt.Errorf("changed while deciding, so it is in use")
+	}
+	if !current.stale() {
+		return fmt.Errorf("not stale after confirmation: %s", current)
 	}
 	if err := os.Remove(lock); err != nil {
 		return fmt.Errorf("remove stale lock: %w", err)

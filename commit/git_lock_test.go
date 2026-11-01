@@ -160,10 +160,10 @@ var _ = Describe("git lock retry", func() {
 			Expect(gitOutput(GinkgoT(), repo, "rev-parse", "HEAD")).To(Equal(head))
 		})
 
-		It("never offers to remove a lock a process holds open, and names the holder", func() {
+		DescribeTable("never offers to remove a lock open for writing, and names the holder", func(flags int) {
 			repo := stagedRepo()
 			lock := staleLock(repo, "index.lock")
-			handle, err := os.Open(lock)
+			handle, err := os.OpenFile(lock, flags, 0o644)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(handle.Close)
 			prompts := stubStaleLockPrompt(true, 0)
@@ -173,6 +173,36 @@ var _ = Describe("git lock retry", func() {
 			Expect(err.Error()).To(ContainSubstring(fmt.Sprintf("open by pid %d", os.Getpid())))
 			Expect(lock).To(BeAnExistingFile())
 			Expect(*prompts).To(BeEmpty())
+		}, Entry("write-only", os.O_WRONLY), Entry("read/write", os.O_RDWR))
+
+		It("offers to remove a stale lock held open only for reading", func() {
+			repo := stagedRepo()
+			lock := staleLock(repo, "index.lock")
+			handle, err := os.Open(lock)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(handle.Close)
+			prompts := stubStaleLockPrompt(true, 0)
+
+			_, err = commitWithMessage(context.Background(), repo, "feat: add a")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(lock).NotTo(BeAnExistingFile())
+			Expect(*prompts).To(HaveLen(1))
+		})
+
+		It("keeps the lock if a writer opens it while removal is being confirmed", func() {
+			repo := stagedRepo()
+			lock := staleLock(repo, "index.lock")
+			stubStaleLockPrompt(true, 0)
+			promptSelectFunc = func(_ context.Context, options []promptSelectOption, _ string) (promptSelectOption, bool) {
+				handle, err := os.OpenFile(lock, os.O_WRONLY, 0o644)
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(handle.Close)
+				return options[0], true
+			}
+
+			_, err := commitWithMessage(context.Background(), repo, "feat: add a")
+			Expect(errors.Is(err, ErrGitLockHeld)).To(BeTrue())
+			Expect(lock).To(BeAnExistingFile())
 		})
 
 		It("fails with the diagnosis and does not ask under --precommit=fail", func() {
