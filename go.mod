@@ -3,10 +3,10 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.71
-	github.com/flanksource/clicky v1.21.89
+	github.com/flanksource/captain v0.0.72-0.20261030125921-4bdbd4d93c97
+	github.com/flanksource/clicky v1.21.90-0.20261031154652-cc9e0c5ff517
 	github.com/flanksource/commons v1.63.0
-	github.com/flanksource/commons-db v0.1.67
+	github.com/flanksource/commons-db v0.1.68-0.20261031154012-c0200a0749c6
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
@@ -29,10 +29,10 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
-	github.com/flanksource/clicky/aichat v1.21.89
-	github.com/flanksource/commons-db/cmd/query v0.1.67
-	github.com/flanksource/commons-db/recordstore v0.1.67
-	github.com/flanksource/commons-db/tracing v0.1.67
+	github.com/flanksource/clicky/aichat v1.21.90-0.20261031154652-cc9e0c5ff517
+	github.com/flanksource/commons-db/cmd/query v0.1.68-0.20261031154012-c0200a0749c6
+	github.com/flanksource/commons-db/recordstore v0.1.68-0.20261031154012-c0200a0749c6
+	github.com/flanksource/commons-db/tracing v0.1.68-0.20261031154012-c0200a0749c6
 	github.com/flanksource/deps v1.0.49
 	github.com/flanksource/deps/start v0.0.0-20261020081806-49e7d4bacc50
 	github.com/fsnotify/fsnotify v1.10.1
@@ -144,6 +144,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.30 // indirect
+	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.56.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.75.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/eks v1.84.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.12 // indirect
