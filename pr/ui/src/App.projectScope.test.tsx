@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -112,8 +112,31 @@ vi.mock('./useIsMobile', () => ({ useIsMobile: () => isMobileMock() }));
 vi.mock('./components/StatusIndicator', () => ({ StatusIndicator: () => null }));
 vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
   ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
-  AppShell: () => null,
+  // The desktop shell renders nothing; the phone shell renders its drawer links
+  // and header slots, which is all the mobile tests drive.
+  AppShell: ({ navSections, mobileActions, toolbar, bodyPane, onBodyBack, bodyBackLabel }: {
+    navSections?: { items: { key: string; label: string; to: string; active?: boolean }[] }[];
+    mobileActions?: ReactNode;
+    toolbar?: ReactNode;
+    bodyPane?: 'sidebar' | 'main';
+    onBodyBack?: () => void;
+    bodyBackLabel?: string;
+  }) => navSections ? (
+    <div data-testid="shell" data-body-pane={bodyPane}>
+      {bodyPane === 'main' && <button type="button" onClick={onBodyBack}>{bodyBackLabel}</button>}
+      <nav>
+        {navSections.flatMap(section => section.items).map(item => (
+          <a key={item.key} href={item.to} aria-current={item.active ? 'page' : undefined}>{item.label}</a>
+        ))}
+      </nav>
+      {mobileActions}
+      {toolbar}
+    </div>
+  ) : null,
 }));
+vi.mock('./components/UserMenu', () => ({ UserMenu: () => null }));
+vi.mock('./components/ThemeToggle', () => ({ ThemeToggle: () => null }));
+vi.mock('./components/ProcessManager', () => ({ ProcessManager: () => null }));
 vi.mock('./storage', () => ({
   loadUIState: () => ({}),
   saveUIState: vi.fn(),
@@ -202,8 +225,7 @@ describe('todo creation project choices', () => {
 
 describe('hidden projects', () => {
   it('offers a hidden project only under Manage hidden and unhides it through the mutation', () => {
-    isMobileMock.mockReturnValue(true);
-    window.history.replaceState({}, '', '/todos?project=gavel');
+    window.history.replaceState({}, '', '/menubar');
     renderApp();
 
     fireEvent.click(screen.getByTitle('Switch project / GitHub scope'));
@@ -215,7 +237,6 @@ describe('hidden projects', () => {
   });
 
   it('falls back to all visible projects when the scoped project is hidden', () => {
-    isMobileMock.mockReturnValue(true);
     window.history.replaceState({}, '', '/todos?project=archive');
     renderApp();
 
@@ -230,33 +251,28 @@ describe('hidden projects', () => {
 });
 
 describe('compact project scope', () => {
-  it('keeps the lifecycle editor route visible on a compact screen', () => {
+  it('keeps the project picker under More actions in the mobile layout', () => {
     isMobileMock.mockReturnValue(true);
-    window.history.replaceState({}, '', '/prompts/lifecycles/todos?project=gavel');
-    renderApp();
-    expect(screen.getByRole('link', { name: 'Back to dashboard' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Lifecycles' })).toBeTruthy();
-    expect(window.location.pathname).toBe('/prompts/lifecycles/todos');
-  });
-
-  it('shows the active project picker in the mobile layout', () => {
-    isMobileMock.mockReturnValue(true);
-    window.history.replaceState({}, '', '/prs?project=gavel');
+    window.history.replaceState({}, '', '/sessions?project=gavel');
 
     renderApp();
+    expect(screen.queryByTitle('Switch project / GitHub scope')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
 
+    expect(screen.getByRole('button', { name: 'More actions' }).getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByTitle('Switch project / GitHub scope').textContent).toContain('gavel');
   });
 
   it('updates the mobile route when a project is selected', () => {
     isMobileMock.mockReturnValue(true);
-    window.history.replaceState({}, '', '/todos?project=gavel');
+    window.history.replaceState({}, '', '/sessions?project=gavel');
     renderApp();
 
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     fireEvent.click(screen.getByTitle('Switch project / GitHub scope'));
     fireEvent.click(screen.getByRole('button', { name: 'Filter by clicky project' }));
 
-    expect(`${window.location.pathname}${window.location.search}`).toBe('/todos?project=clicky');
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/sessions?project=clicky');
     expect(saveConfigMock).toHaveBeenCalledWith({
       repos: ['acme/clicky'],
       project: 'clicky',
@@ -277,71 +293,67 @@ describe('compact project scope', () => {
   });
 });
 
-describe('mobile sessions', () => {
+describe('mobile shell', () => {
   beforeEach(() => {
     isMobileMock.mockReturnValue(true);
   });
 
   const url = () => `${window.location.pathname}${window.location.search}`;
 
-  it('puts the Sessions tab in the URL and lists sessions, polling only while it is open', () => {
+  it('moves the dashboard tabs into the navigation drawer as scoped route links', () => {
+    window.history.replaceState({}, '', '/sessions?project=gavel');
+    renderApp();
+
+    const links = screen.getAllByRole('link').map(link => [link.textContent, link.getAttribute('href'), link.getAttribute('aria-current')]);
+    expect(links).toEqual([
+      ['PRs', '/prs?project=gavel&authors=-%40bots', null],
+      ['Projects', '/projects?project=gavel', null],
+      ['Todos', '/todos?project=gavel', null],
+      ['Sessions', '/sessions?project=gavel', 'page'],
+      ['Tasks', '/tasks?project=gavel', null],
+      ['Prompts', '/prompts?project=gavel', null],
+      ['Activity', '/activity?project=gavel', null],
+    ]);
+  });
+
+  it.each([
+    ['/sessions/sess-1', 'Back to sessions', '/sessions'],
+    ['/projects/gavel', 'Back to projects', '/projects'],
+    ['/todos/abc', 'Back to todos', '/todos'],
+  ])('pages %s to the detail pane and returns to the list with %s', (deepLink, back, list) => {
+    window.history.replaceState({}, '', deepLink);
+    renderApp();
+    expect(screen.getByTestId('shell').dataset.bodyPane).toBe('main');
+
+    fireEvent.click(screen.getByRole('button', { name: back }));
+
+    expect(window.location.pathname).toBe(list);
+    expect(screen.getByTestId('shell').dataset.bodyPane).toBe('sidebar');
+  });
+
+  it('polls sessions only while the Sessions route is open', () => {
     window.history.replaceState({}, '', '/prs');
-    renderApp();
+    const { unmount } = renderApp();
     expect(agentSessionsMock).toHaveBeenLastCalledWith({ enabled: false });
+    unmount();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Sessions/ }));
-
-    expect(url()).toBe('/sessions');
+    window.history.replaceState({}, '', '/sessions');
+    renderApp();
     expect(agentSessionsMock).toHaveBeenLastCalledWith({ enabled: true });
-    expect(screen.getByText('Refactor parser')).toBeTruthy();
   });
 
-  it('opens a session full-screen at /sessions/{id} and goes back to the list', async () => {
+  it('keeps search and the Gavel assistant in the header and folds the rest under More actions', () => {
     window.history.replaceState({}, '', '/sessions');
     renderApp();
 
-    fireEvent.click(screen.getByText('Refactor parser'));
-
-    expect(url()).toBe('/sessions/sess-1');
-    expect(screen.getByTestId('inspector')).toBeTruthy();
-    expect(inspectorProps.current).toMatchObject({ src: '/api/captain/sessions/sess-1', follow: true, layout: 'compact' });
-    expect(await screen.findByPlaceholderText('Add a follow-up…')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
-
-    expect(url()).toBe('/sessions');
-    expect(screen.queryByTestId('inspector')).toBeNull();
-  });
-
-  it('restores the open session from a deep link', () => {
-    window.history.replaceState({}, '', '/sessions/sess-1?project=gavel');
-    renderApp();
-
-    expect(inspectorProps.current).toMatchObject({ src: '/api/captain/sessions/sess-1' });
-    expect(screen.getAllByText('Refactor parser').length).toBeGreaterThan(0);
-  });
-
-  it('keeps the mobile tab in the URL when switching back to PRs', () => {
-    window.history.replaceState({}, '', '/sessions');
-    renderApp();
-
-    fireEvent.click(screen.getByRole('button', { name: /^PRs/ }));
-
-    expect(window.location.pathname).toBe('/prs');
-  });
-
-  it('shows the Todos tab for /todos', () => {
-    window.history.replaceState({}, '', '/todos');
-    renderApp();
-
-    expect(screen.getByTestId('menubar-todos')).toBeTruthy();
-  });
-
-  it('offers the Gavel assistant launcher', () => {
-    window.history.replaceState({}, '', '/sessions');
-    renderApp();
-
+    expect(screen.getByRole('button', { name: 'Search pull requests, todos, and sessions' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open Gavel assistant' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Global settings' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+
+    expect(screen.getByRole('button', { name: 'Global settings' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Open Gavel assistant' })).toHaveLength(1);
   });
 
   it('keeps the native menubar on /menubar with local tab state and no assistant launcher', () => {
@@ -362,44 +374,3 @@ describe('mobile sessions', () => {
   });
 });
 
-describe('mobile projects', () => {
-  beforeEach(() => isMobileMock.mockReturnValue(true));
-
-  it('opens the project list, reviews a project, and returns to the list', () => {
-    window.history.replaceState({}, '', '/prs');
-    renderApp();
-    fireEvent.click(screen.getByRole('button', { name: 'Projects' }));
-    expect(window.location.pathname).toBe('/projects');
-    fireEvent.click(screen.getByRole('button', { name: 'Open gavel project' }));
-    expect(window.location.pathname).toBe('/projects/gavel');
-    expect(screen.getByTestId('project-review').textContent).toBe('gavel changes');
-    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
-    expect(window.location.pathname).toBe('/projects');
-    expect(screen.getByRole('button', { name: 'Open gavel project' })).toBeTruthy();
-  });
-
-  it('restores a file diff and worktree from the existing project URL', () => {
-    window.history.replaceState({}, '', '/projects/gavel?diff=src%2Fmain.go&ref=wt%3A%2Fwork%2Ffeature');
-    renderApp();
-    expect(screen.getByTestId('project-review').dataset).toMatchObject({ ref: 'wt:/work/feature', diff: 'src/main.go' });
-    expect(screen.queryByRole('button', { name: 'Projects' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Back to projects' })).toBeNull();
-  });
-
-  it('keeps Processes and Projects on separate mobile routes', () => {
-    window.history.replaceState({}, '', '/projects');
-    renderApp();
-    fireEvent.click(screen.getByRole('button', { name: /^Processes/ }));
-    expect(window.location.pathname).toBe('/processes');
-    fireEvent.click(screen.getByRole('button', { name: 'Projects' }));
-    expect(window.location.pathname).toBe('/projects');
-  });
-
-  it('keeps a way back to Projects for an unknown project diff link', () => {
-    window.history.replaceState({}, '', '/projects/missing?diff=src%2Fmain.go');
-    renderApp();
-    expect(screen.getByText('Project missing was not found')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
-    expect(window.location.pathname).toBe('/projects');
-  });
-});

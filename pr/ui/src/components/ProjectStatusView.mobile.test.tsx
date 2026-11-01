@@ -18,6 +18,36 @@ function Review({ worktree }: { worktree?: string }) {
 }
 
 describe('mobile project commit selection', () => {
+  it.each([undefined, '/work/feature'])('opens a PR from a clean checkout through the enabled action menu (%s)', async worktree => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => Response.json(
+      init?.method === 'POST' ? { runId: 'open-pr-review' } : { ...projectStatusResponse, files: [] },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><Review worktree={worktree} /></QueryClientProvider>);
+
+    await screen.findByText('Working tree clean');
+    expect((screen.getByRole('button', { name: 'Commit selected (0)' }) as HTMLButtonElement).disabled).toBe(true);
+    const menu = screen.getByRole('button', { name: 'Commit options' });
+    expect((menu as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(menu);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Open PR' }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1));
+    const request = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
+    expect(request?.[0]).toBe('/api/projects/gavel/commit-queue');
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ action: 'open-pr', files: [], ...(worktree ? { worktree } : {}) });
+  });
+
+  it('leaves project and branch identity to the ref header', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(projectStatusResponse)));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><Review /></QueryClientProvider>);
+
+    await screen.findByRole('treeitem', { name: 'one.go' });
+    expect(screen.queryByRole('heading', { name: 'gavel' })).toBeNull();
+  });
+
   it('offers a way back to files when the status request fails during a diff deep link', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'status unavailable' }), {
       status: 503, headers: { 'Content-Type': 'application/json' },

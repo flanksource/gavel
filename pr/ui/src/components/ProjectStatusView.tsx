@@ -322,24 +322,32 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     variant="default"
     size={mobile ? 'default' : 'sm'}
     className={mobile ? '[&_button]:min-h-11 [&_button]:min-w-11' : undefined}
-    disabled={selected.size === 0 || queueCommitMutation.isPending}
+    disabled={queueCommitMutation.isPending || (!mobile && selected.size === 0)}
+    primaryDisabled={selected.size === 0}
     label={<span className="flex items-center gap-1"><UiGitCommit />Commit selected ({selected.size})</span>}
     title="Commit options"
     onClick={() => void run('commit')}
-    items={[{ label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>, onSelect: () => setAdvancedAction('commit') }]}
+    items={[
+      ...(mobile ? [{
+        label: selected.size > 0 ? `Commit & open PR (${selected.size})` : 'Open PR',
+        disabled: commitTaskError !== '',
+        onSelect: () => void queueSelected('open-pr'),
+      }] : []),
+      { label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>, onSelect: () => setAdvancedAction('commit') },
+    ]}
   />;
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
-      {!reviewing && <div className="shrink-0 border-b border-border px-3 py-2 md:px-4 md:py-3">
+      {!reviewing && (!mobile || error || statusError || focus.error || (showResults && status.resultsStale)) && <div className="shrink-0 border-b border-border px-3 py-2 md:px-4 md:py-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
+          {!mobile && <div className="min-w-0">
             <h2 className="truncate text-base font-semibold text-foreground">{project.name}</h2>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span className="flex items-center gap-1"><UiGitBranch />{status.branch || '(detached)'}</span>
               <span className="hidden truncate md:inline" title={status.workDir}>{status.workDir}</span>
               <span>{status.files.length} change{status.files.length === 1 ? '' : 's'}</span>
             </div>
-          </div>
+          </div>}
           {!mobile && <div className="flex flex-wrap items-center gap-1.5">
             <SplitButton
               variant="outline"

@@ -23,7 +23,7 @@ vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
   Combobox: ({ ariaLabel, value, options, onChange }: { ariaLabel: string; value: string; options: ComboboxOption[]; onChange: (value: string) => void }) => (
     <div role="listbox" aria-label={ariaLabel} data-value={value}>
       {options.map(option => (
-        <div key={option.value} role="option" aria-selected={option.value === value} aria-label={option.value} data-group={option.group}>
+        <div key={option.value} role="option" aria-selected={option.value === value} aria-label={option.value} data-group={option.group} data-layout={option.layout}>
           <button type="button" disabled={option.disabled} onClick={() => onChange(option.value)}>{option.selectedLabel ?? option.label}</button>
           {option.trailing as ReactNode}
         </div>
@@ -121,6 +121,22 @@ afterEach(() => {
 const pickerValue = () => screen.getByRole('listbox', { name: 'Worktree or branch' }).getAttribute('data-value');
 
 describe('ProjectRefPane', () => {
+  it.each([0, 2])('reviews committed changes in the primary checkout with %s dirty files', async dirty => {
+    const checkout = { ...primary, branch: 'feat/primary', ahead: 2, changes: { ...changes, unstaged: dirty } };
+    stubGit(() => Response.json({ ...git, currentBranch: checkout.branch, baseCheckedOut: false,
+      worktrees: [checkout], branches: [branch(checkout.branch, checkout.path, checkout.ahead)] }));
+    renderPane();
+
+    const committed = await screen.findByRole('radio', { name: 'Committed changes (2 ahead)' });
+    if (dirty > 0) expect(screen.getByText('Status gavel in main checkout diff=')).toBeTruthy();
+    fireEvent.click(committed);
+    expect(screen.getByRole('button', { name: 'Branch view feat/primary' })).toBeTruthy();
+    expect(branchChanges.props).toMatchObject({ base: 'main', baseCheckedOut: false, dirtyCount: dirty, worktreePath: checkout.path });
+    await waitFor(() => expect(focusPosts.bodies).toContainEqual({ project: 'gavel' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Working changes' }));
+    expect(screen.getByText('Status gavel in main checkout diff=')).toBeTruthy();
+  });
+
   it('shows the main checkout straight away and the grouped picker once the git state loads', async () => {
     stubGit();
 
@@ -139,6 +155,12 @@ describe('ProjectRefPane', () => {
 
   const summaryParts = (option: HTMLElement) =>
     Array.from(option.querySelectorAll(':scope > span:last-child > span')).map(part => part.textContent);
+
+  it('uses responsive rows for branch names and their commit metadata', async () => {
+    stubGit();
+    renderPane();
+    expect((await screen.findByRole('option', { name: 'br:spike' })).getAttribute('data-layout')).toBe('responsive');
+  });
 
   it('shows each entry with its commits, uncommitted files, lines, last commit and last touched ages', async () => {
     stubGit();
@@ -185,8 +207,8 @@ describe('ProjectRefPane', () => {
     stubGit();
     const { onRefChange } = renderPane('br:spike');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Checkout main' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Worktree feat/x' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'gavel · main' }));
+    fireEvent.click(screen.getByRole('button', { name: 'gavel · feat/x' }));
 
     expect(onRefChange.mock.calls).toEqual([[''], ['wt:/work/gavel-feat']]);
   });

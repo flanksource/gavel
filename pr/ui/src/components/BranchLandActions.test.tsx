@@ -255,6 +255,7 @@ describe('BranchLandActions', () => {
     expect((screen.getByRole('button', { name: /Merge each commit/ }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: /^Create PR$/ }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getByRole('button', { name: /Squash & merge into main/ }).closest('[title]')?.getAttribute('title')).toMatch(/not on main/);
+    expect(screen.getByText('The main checkout is not on main: check out main there before merging.')).toBeTruthy();
   });
 });
 

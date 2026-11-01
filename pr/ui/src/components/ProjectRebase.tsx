@@ -48,7 +48,7 @@ export function ProjectRebase({ projectName, worktree, branch, generation }: { p
     void ai.start({ gavelExecutable: context.data.executable, worktree: operation.worktree, operation: operation.id, branch: operation.branch, target: operation.target, targetSha: operation.targetSha, phase: operation.phase, error: operation.error, conflicts: operation.conflicts, stashSha: operation.stashSha });
   };
 
-  return <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-1.5 text-xs">
+  return <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
     <Button variant="outline" size="sm" disabled={!!reason || busy || !!active} title={reason || undefined} onClick={() => { mutation.reset(); setOpen(true); void context.refetch(); }}>Rebase…</Button>
     {notice && !active && <span role="status">{notice}</span>}
     {error && <span role="alert" className="max-w-xl whitespace-pre-wrap break-words text-destructive">{error}</span>}
