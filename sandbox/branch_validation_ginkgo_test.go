@@ -10,9 +10,9 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestBranchValidation(t *testing.T) {
+func TestSandbox(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Sandbox branch validation")
+	RunSpecs(t, "Sandbox")
 }
 
 var _ = Describe("Sandbox branch validation", func() {

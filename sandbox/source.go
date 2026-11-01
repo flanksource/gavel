@@ -53,11 +53,11 @@ func (s *Sources) Bundle(ctx context.Context, repo Repo, ref string, w io.Writer
 	if err != nil {
 		return "", err
 	}
-	sha, err := runGit(ctx, nil, "-C", dir, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+	sha, err := runGit(ctx, gitOptions{}, "-C", dir, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
 	if err != nil {
 		return "", fmt.Errorf("resolve %s in %s: %w", ref, repo.ID, err)
 	}
-	if _, err := runGit(ctx, w, "-C", dir, "bundle", "create", "-", ref); err != nil {
+	if _, err := runGit(ctx, gitOptions{Stdout: w}, "-C", dir, "bundle", "create", "-", ref); err != nil {
 		return "", fmt.Errorf("bundle %s of %s: %w", ref, repo.ID, err)
 	}
 	return strings.TrimSpace(sha), nil
@@ -87,7 +87,7 @@ func (s *Sources) updateMirror(ctx context.Context, repo Repo) (string, error) {
 		}
 		return dir, nil
 	}
-	if _, err := runGit(ctx, nil, "-c", header, "-C", dir, "fetch", "--quiet", "--prune", "origin"); err != nil {
+	if _, err := runGit(ctx, gitOptions{}, "-c", header, "-C", dir, "fetch", "--quiet", "--prune", "origin"); err != nil {
 		return "", fmt.Errorf("fetch %s: %w", repo.Name, err)
 	}
 	return dir, nil
@@ -112,8 +112,6 @@ func (s *Sources) authHeader(ctx context.Context, repo Repo) (string, error) {
 	return "http.extraHeader=Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token)), nil
 }
 
-// runGit runs git, writing its output to stdout when set, or returning it otherwise. A failure
-// carries git's stderr, which never holds the token: it is only in a -c argument.
 // cloneWhole runs the git clone args name into dir by way of a directory beside it, which moves
 // into place once the clone completes: a clone cut off partway, as a cancelled request cuts it,
 // never leaves dir half made.
@@ -123,24 +121,28 @@ func cloneWhole(ctx context.Context, dir string, args ...string) error {
 		return err
 	}
 	defer safefs.SafeRemove(clone, safefs.RemoveContext{AllowedRoot: filepath.Dir(dir), Protected: []string{dir}}) //nolint:errcheck
-	if _, err := runGit(ctx, nil, append(args, clone)...); err != nil {
+	if _, err := runGit(ctx, gitOptions{}, append(args, clone)...); err != nil {
 		return err
 	}
 	return os.Rename(clone, dir)
 }
 
-func runGit(ctx context.Context, stdout io.Writer, args ...string) (string, error) {
-	return runGitEnv(ctx, nil, stdout, args...)
+type gitOptions struct {
+	Env    []string
+	Stdin  io.Reader
+	Stdout io.Writer
 }
 
-// runGitEnv is runGit with env added to git's environment.
-func runGitEnv(ctx context.Context, env []string, stdout io.Writer, args ...string) (string, error) {
+// runGit returns git's output, or writes it to Stdout when set. Errors carry stderr;
+// the authentication token is only in a -c argument, never in stderr.
+func runGit(ctx context.Context, opts gitOptions, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), env...)
+	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), opts.Env...)
+	cmd.Stdin = opts.Stdin
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
-	if stdout != nil {
-		cmd.Stdout = stdout
+	if opts.Stdout != nil {
+		cmd.Stdout = opts.Stdout
 	}
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
