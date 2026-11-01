@@ -20,7 +20,7 @@ type Options struct {
 
 func (o Options) Merge(override Options) Options {
 	out := o
-	out.Env = make(map[string]string, len(o.Env)+len(override.Env))
+	out.Env = make(map[string]string)
 	for key, value := range o.Env {
 		out.Env[key] = value
 	}
@@ -74,6 +74,17 @@ func (o Options) Validate() error {
 
 func (o Options) Isolated() bool {
 	return o.CPU != nil && *o.CPU > 0 || o.Mem != nil && *o.Mem != "" || o.Timeout != nil && *o.Timeout != ""
+}
+
+// ValidateInProcess accepts only controls that can be scoped to a caller's context.
+func (o Options) ValidateInProcess() error {
+	if err := o.Validate(); err != nil {
+		return err
+	}
+	if len(o.Env) > 0 || o.Nice != nil || o.CPU != nil && *o.CPU > 0 || o.Mem != nil && *o.Mem != "" {
+		return fmt.Errorf("in-process linters do not support runtime env, nice, cpu or mem; only timeout is supported")
+	}
+	return nil
 }
 
 func (o Options) Apply(p *cexec.Process) error {

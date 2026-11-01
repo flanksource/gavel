@@ -499,6 +499,11 @@ func PrepareCommand(linter Linter, opts RunOptions) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	if capability, ok := linter.(ExecutableRequired); ok && !capability.RequiresExecutable() {
+		if err := opts.Runtime.ValidateInProcess(); err != nil {
+			return "", nil, fmt.Errorf("%s runtime: %w", linter.Name(), err)
+		}
+	}
 	if excluder, ok := linter.(RuleExcluder); ok && len(opts.NativeRuleExclusions) > 0 {
 		excluded, err := excluder.RuleExclusionArgs(opts.NativeRuleExclusions)
 		if err != nil {
