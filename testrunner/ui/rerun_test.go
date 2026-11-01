@@ -446,8 +446,8 @@ func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 	for _, child := range virtualGroup.Children {
 		if child.Framework == parsers.Framework("task") && child.Command == "go test -json ./pkg/foo" {
 			foundTask = true
-			if !child.Pending {
-				t.Fatalf("child task should be pending/running: %+v", child)
+			if child.Pending == child.Running {
+				t.Fatalf("child task should be exactly one of pending or running: %+v", child)
 			}
 			if child.TaskID == "" {
 				t.Fatalf("child task should include task_id: %+v", child)
