@@ -1,0 +1,1 @@
+{"version":3,"file":"hooks.d.ts","sourceRoot":"","sources":["../../src/hooks.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,UAAU,EAAE,MAAM,sBAAsB,CAAC;AAClD,YAAY,EAAE,YAAY,EAAE,eAAe,EAAE,iBAAiB,EAAE,gBAAgB,EAAE,MAAM,sBAAsB,CAAC;AAC/G,OAAO,EACL,mBAAmB,EACnB,aAAa,EACb,eAAe,GAChB,MAAM,2BAA2B,CAAC;AACnC,YAAY,EAAE,iBAAiB,EAAE,sBAAsB,EAAE,MAAM,2BAA2B,CAAC"}
