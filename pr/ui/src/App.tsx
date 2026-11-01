@@ -50,6 +50,7 @@ import { useIsMobile } from './useIsMobile';
 import { UiActivity, UiCheck, UiCog, UiCopy, UiDotsVertical, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiPlay, UiRobotAi, UiSearch, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
 import { MenubarView } from './components/mobile/MenubarView';
+import { MobilePRList } from './components/mobile/MobilePRList';
 import { ProcessesPage } from './components/ProcessesPage';
 import type { MobileTab } from './mobileTabs';
 import { useAgentSessions } from './components/sessions/sessionQueries';
@@ -177,6 +178,7 @@ export function App() {
     error: mutationError,
     markSeen,
     refresh: refreshPRs,
+    refreshing: refreshingPRs,
     togglePause,
     saveConfig,
     setIncludeBots,
@@ -736,6 +738,7 @@ export function App() {
   // The PR filters, count and exports describe the list, so a phone showing a
   // PR's detail page leaves them out.
   const prListChrome = activeTab === 'prs' && !(isMobile && selected);
+  const prListProps = { prs: filtered, selected, onSelect: handleSelect, unread, syncStatus, gavelResults: gavelResultsMap, projectsByRepo, onProcChanged };
   const prFilterBar = prListChrome
     ? <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} />
     : undefined;
@@ -800,7 +803,9 @@ export function App() {
         }
         bodySidebar={
           activeTab === 'prs' ? (
-            <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} onProcChanged={onProcChanged} />
+            isMobile && !selected
+              ? <MobilePRList {...prListProps} onRefresh={refreshPRs} refreshing={refreshingPRs} />
+              : <PRList {...prListProps} />
           ) : activeTab === 'projects' && !hostControls ? (
             <HostedProjectsSidebar projects={visibleProjects} selectedName={selectedPath} onSelect={navigateProject} />
           ) : activeTab === 'projects' ? (

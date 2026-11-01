@@ -6,8 +6,9 @@ import { ChatWindowManagerProvider } from '@flanksource/clicky-ui/ai';
 import type { AgentSession, Project } from './types';
 import { App } from './App';
 
-const { isMobileMock, saveConfigMock, setProjectHiddenMock, agentSessionsMock, inspectorProps } = vi.hoisted(() => ({
+const { isMobileMock, refreshMock, saveConfigMock, setProjectHiddenMock, agentSessionsMock, inspectorProps } = vi.hoisted(() => ({
   isMobileMock: vi.fn(() => false),
+  refreshMock: vi.fn(),
   saveConfigMock: vi.fn(),
   setProjectHiddenMock: vi.fn(),
   agentSessionsMock: vi.fn(),
@@ -41,7 +42,8 @@ vi.mock('./useAppMutations', () => ({
   useAppMutations: () => ({
     error: '',
     markSeen: vi.fn(),
-    refresh: vi.fn(),
+    refresh: refreshMock,
+    refreshing: false,
     togglePause: vi.fn(),
     saveConfig: saveConfigMock,
     setIncludeBots: vi.fn(),
@@ -112,12 +114,12 @@ vi.mock('./useIsMobile', () => ({ useIsMobile: () => isMobileMock() }));
 vi.mock('./components/StatusIndicator', () => ({ StatusIndicator: () => null }));
 vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
   ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
-  // The desktop shell renders nothing; the phone shell renders its drawer links
-  // and header slots, which is all the mobile tests drive.
-  AppShell: ({ navSections, mobileActions, toolbar, bodyPane, onBodyBack, bodyBackLabel }: {
+  // Keep the shell slots under test while leaving layout to the browser checks.
+  AppShell: ({ navSections, mobileActions, toolbar, bodySidebar, bodyPane, onBodyBack, bodyBackLabel }: {
     navSections?: { items: { key: string; label: string; to: string; active?: boolean }[] }[];
     mobileActions?: ReactNode;
     toolbar?: ReactNode;
+    bodySidebar?: ReactNode;
     bodyPane?: 'sidebar' | 'main';
     onBodyBack?: () => void;
     bodyBackLabel?: string;
@@ -131,6 +133,7 @@ vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
       </nav>
       {mobileActions}
       {toolbar}
+      {bodyPane === 'sidebar' && navSections.some(section => section.items.some(item => item.key === 'prs' && item.active)) && bodySidebar}
     </div>
   ) : null,
 }));
@@ -180,6 +183,7 @@ const agentSession: AgentSession = {
 
 beforeEach(() => {
   isMobileMock.mockReturnValue(false);
+  refreshMock.mockReset();
   saveConfigMock.mockReset();
   setProjectHiddenMock.mockReset();
   agentSessionsMock.mockReset();
@@ -299,6 +303,27 @@ describe('mobile shell', () => {
   });
 
   const url = () => `${window.location.pathname}${window.location.search}`;
+
+  it('refreshes the mobile PR list through the existing mutation without navigating', () => {
+    window.history.replaceState({}, '', '/prs?project=gavel');
+    renderApp();
+    const list = screen.getByRole('region', { name: 'Pull requests' });
+    const touch = { identifier: 1, clientX: 100, clientY: 100 };
+    fireEvent.touchStart(list, { touches: [touch] });
+    fireEvent.touchMove(list, { touches: [{ ...touch, clientY: 220 }] });
+    fireEvent.touchEnd(list, { touches: [] });
+
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).toBe('/prs');
+    expect(new URLSearchParams(window.location.search).get('project')).toBe('gavel');
+  });
+
+  it.each(['/sessions', '/prs/acme/gavel/7'])('leaves %s outside the pull-to-refresh region', path => {
+    window.history.replaceState({}, '', path);
+    renderApp();
+    expect(screen.queryByRole('region', { name: 'Pull requests' })).toBeNull();
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
 
   it('moves the dashboard tabs into the navigation drawer as scoped route links', () => {
     window.history.replaceState({}, '', '/sessions?project=gavel');

@@ -9,6 +9,7 @@ export interface AppMutations {
   error: string;
   markSeen: (pr: PRItem) => void;
   refresh: () => void;
+  refreshing: boolean;
   togglePause: () => void;
   saveConfig: (config: SearchConfig) => void;
   setIncludeBots: (include: boolean) => void;
@@ -142,6 +143,7 @@ export function useAppMutations(): AppMutations {
     error,
     markSeen: seenMutation.mutate,
     refresh: refreshMutation.mutate,
+    refreshing: refreshMutation.isPending,
     togglePause: pauseMutation.mutate,
     saveConfig: configMutation.mutate,
     setIncludeBots: botsMutation.mutate,

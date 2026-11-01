@@ -46,6 +46,24 @@ afterEach(() => {
 });
 
 describe('useAppMutations', () => {
+  it.each([200, 503])('tracks refresh progress and settles after HTTP %i', async status => {
+    let finishRequest!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finishRequest = resolve; })));
+    const client = createClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
+    const { result } = renderHook(useAppMutations, { wrapper: wrapper(client) });
+
+    expect(result.current.refreshing).toBe(false);
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.refreshing).toBe(true));
+    act(() => finishRequest(new Response(JSON.stringify(status === 200 ? { status: 'refresh requested' } : { error: 'offline' }), { status })));
+
+    await waitFor(() => expect(result.current.refreshing).toBe(false));
+    expect(result.current.error).toBe(status === 200 ? '' : 'Refresh pull requests: offline');
+    expect(invalidate).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+    expect(fetch).toHaveBeenCalledWith('/api/prs/refresh', { method: 'POST' });
+  });
+
   it('optimistically marks a PR seen and rolls the exact snapshot back on failure', async () => {
     let finishRequest: (response: Response) => void = () => undefined;
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finishRequest = resolve; })));
