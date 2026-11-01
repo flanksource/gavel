@@ -99,6 +99,18 @@ func ResetMetrics() {
 	scansEnqueued.Reset()
 	rangesComputed.Reset()
 	readDuration.Reset()
+	exportRangesComputed()
+}
+
+// exportRangesComputed creates the label-less series so the counter is
+// exported at zero from registration and after a reset, not only once a range
+// has been computed. It is a vector only so ResetMetrics can zero it.
+func exportRangesComputed() {
+	rangesComputed.WithLabelValues()
+}
+
+func init() {
+	exportRangesComputed()
 }
 
 func scanResult(ran, changed bool, err error) string {

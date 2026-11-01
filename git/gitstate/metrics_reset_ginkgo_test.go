@@ -48,6 +48,24 @@ var _ = Describe("ResetMetrics", func() {
 		}))
 	})
 
+	It("keeps exporting the label-less range counter at zero after a reset", func() {
+		DeferCleanup(ResetMetrics)
+		recordGitMetrics()
+		ResetMetrics()
+
+		families, err := prometheus.DefaultGatherer.Gather()
+		Expect(err).NotTo(HaveOccurred())
+		var exported []float64
+		for _, family := range families {
+			if family.GetName() == "gavel_git_ranges_computed_total" {
+				for _, metric := range family.GetMetric() {
+					exported = append(exported, metric.GetCounter().GetValue())
+				}
+			}
+		}
+		Expect(exported).To(Equal([]float64{0}))
+	})
+
 	It("records new observations from zero after a reset", func() {
 		DeferCleanup(ResetMetrics)
 		recordGitMetrics()
