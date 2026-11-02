@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/sandbox/internal/substrate/ateapipb"
 	"github.com/flanksource/gavel/sandbox/internal/substrate/ateenvv1alpha"
 	"google.golang.org/grpc"
@@ -176,6 +177,7 @@ func (e *substrateExecutor) Submit(ctx context.Context, job Job) (Handle, error)
 		_ = handle.remove(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("set the egress policy of substrate environment %s: %w", id, err)
 	}
+	logger.Infof("sandbox run %s in substrate environment %s/%s: the egress gateway injects %s", job.RunID, e.options.Atespace, id, injections(job.Credentials))
 	started, err := e.processes.StartProcess(handle.guest(ctx), process)
 	if err != nil {
 		_ = handle.remove(context.WithoutCancel(ctx))
@@ -183,6 +185,19 @@ func (e *substrateExecutor) Submit(ctx context.Context, job Job) (Handle, error)
 	}
 	handle.process = started.GetProcessId()
 	return handle, nil
+}
+
+// injections names each credential the egress gateway puts into a job's requests by its host,
+// header and URI, none of them secret, so a run missing its key shows whether gavel asked for it.
+func injections(credentials []InjectedCredential) string {
+	if len(credentials) == 0 {
+		return "no credentials"
+	}
+	named := make([]string, len(credentials))
+	for i, credential := range credentials {
+		named[i] = credential.Host + " " + credential.Header + " from " + credential.URI
+	}
+	return strings.Join(named, ", ")
 }
 
 // substrateImage refuses an image that isn't pinned by digest, which Substrate requires.

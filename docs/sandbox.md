@@ -109,7 +109,11 @@ job exits or is cancelled.
   placeholder in the variable the agent reads. Substrate's credential provider resolves the URI
   by asking this gavel's `/api/credentials/fetch` with `GAVEL_CREDENTIAL_PROVIDER_TOKEN`; gavel
   answers only for an active run, asked for by that run's own environment. An agent run whose
-  organization has no key is refused. The job must trust the gateway's CA for those hosts: mount
+  organization has no key is refused. gavel serve logs what each run's policy injects
+  (`sandbox run <id> in substrate environment …: the egress gateway injects <host> <header> from
+  <URI>`, or `no credentials`) and each key it hands out (`credential fetch for run <id>`), so a
+  run that reaches the model API without its key shows whether gavel asked for the key and
+  whether the gateway fetched it. The job must trust the gateway's CA for those hosts: mount
   Substrate's `egress-mitm.ate.dev` trust bundle through the template's `systemInfo` volume and
   pass its path as `--substrate-trust-bundle`.
 - **Control plane.** gavel serve sets egress policies through ate-api-server
