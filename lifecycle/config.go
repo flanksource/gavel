@@ -3,7 +3,6 @@ package lifecycle
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
@@ -22,7 +21,7 @@ func Read(config verify.LifecycleConfig, dir string) (Lifecycle, error) {
 		if pathErr != nil {
 			return overlay, pathErr
 		}
-		data, err = os.ReadFile(path)
+		data, err = utils.ReadWithin(dir, config.File)
 		source = path
 	} else {
 		data, err = json.Marshal(config)

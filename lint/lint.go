@@ -170,7 +170,11 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 			if err != nil {
 				return nil, err
 			}
-			if ok, reason := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit); !ok {
+			selected, reason, err := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit)
+			if err != nil {
+				return nil, err
+			}
+			if !selected {
 				logger.V(2).Infof("Skipping %s at %s: %s", linter.Name(), inv.projectRoot, reason)
 				if linter.Name() == "betterleaks" && !anyScheduled {
 					allResults = append(allResults, &linters.LinterResult{
@@ -457,7 +461,11 @@ func dryRunGroup(opts Options) error {
 			if err != nil {
 				return err
 			}
-			if ok, reason := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit); !ok {
+			selected, reason, err := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit)
+			if err != nil {
+				return err
+			}
+			if !selected {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, reason)
 				continue
 			}

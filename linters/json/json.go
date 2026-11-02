@@ -13,6 +13,7 @@ import (
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/utils"
 )
 
@@ -24,6 +25,9 @@ type JSON struct {
 func New(workDir string) *JSON           { return &JSON{RunOptions: linters.RunOptions{WorkDir: workDir}} }
 func (j *JSON) Name() string             { return "json" }
 func (j *JSON) RequiresExecutable() bool { return false }
+func (j *JSON) ValidateRuntime(options processruntime.Options) error {
+	return options.ValidateInProcess()
+}
 func (j *JSON) HasDefaultActivation(workDir string) bool {
 	return utils.AnyGlobMatchGitIgnored(workDir, j.DefaultIncludes(), nil)
 }

@@ -81,6 +81,17 @@ var _ = Describe("Rebase and keep", func() {
 		Expect(git(worktree, "stash", "list")).To(BeEmpty())
 	})
 
+	DescribeTable("rejects invalid target references before invoking Git", func(target string) {
+		opts.Target = target
+		_, err := branchrebase.Run(context.Background(), opts)
+		Expect(err).To(MatchError(ContainSubstring("target must be origin/main or a local branch ref")))
+		Expect(git(worktree, "rev-parse", "HEAD")).To(Equal(head))
+	},
+		Entry("an option", "--exec=touch outside"),
+		Entry("a newline", "refs/heads/main\n--exec=touch-outside"),
+		Entry("a NUL byte", "refs/heads/main\x00"),
+	)
+
 	It("retains a conflicting rebase and its stash across inspection, then aborts and restores edits", func() {
 		opts.ExpectedHead = commit(worktree, "shared file.txt", "topic conflict\n")
 		commit(repo, "shared file.txt", "main conflict\n")

@@ -101,16 +101,17 @@ job exits or is cancelled.
   name), proxy.golang.org, sum.golang.org, registry.npmjs.org, pypi.org, files.pythonhosted.org,
   github.com, codeload.github.com and objects.githubusercontent.com, plus any
   `--substrate-egress` hosts.
-- **Model keys.** They never enter the environment, and `--sandbox-secret-env` is refused.
-  Substrate's egress gateway injects them into requests instead: each `--substrate-credential`
-  names the host, the header to replace (and an optional `prefix`, such as `Bearer `), the
-  variable the agent reads (set to a placeholder in the job), and the credential's `ate-secret://`
-  URI, for example
-  `host=api.anthropic.com,header=x-api-key,env=ANTHROPIC_API_KEY,uri=ate-secret://k8s.io/default/gavel/anthropic/key`.
-  The job must trust the gateway's CA for those hosts: mount Substrate's `egress-mitm.ate.dev`
-  trust bundle through the template's `systemInfo` volume and pass its path as
-  `--substrate-trust-bundle`. Grant the atespace the Secret's namespace in Substrate's
-  credential provider.
+- **Model keys.** Each organization sets its own under Model keys in its settings; they never
+  enter the environment, and `--sandbox-secret-env` is refused. Substrate's egress gateway
+  injects them into requests instead: each run's policy names, for every key its organization
+  has, the model API host, the header to replace and the URI
+  `ate-secret://gavel/<--substrate-gavel-name>/<run id>/<provider>`, and the job gets a
+  placeholder in the variable the agent reads. Substrate's credential provider resolves the URI
+  by asking this gavel's `/api/credentials/fetch` with `GAVEL_CREDENTIAL_PROVIDER_TOKEN`; gavel
+  answers only for an active run, asked for by that run's own environment. An agent run whose
+  organization has no key is refused. The job must trust the gateway's CA for those hosts: mount
+  Substrate's `egress-mitm.ate.dev` trust bundle through the template's `systemInfo` volume and
+  pass its path as `--substrate-trust-bundle`.
 - **Control plane.** gavel serve sets egress policies through ate-api-server
   (`--substrate-control`), authenticating with `--substrate-token-file`, such as a projected
   ServiceAccount token with the `api.ate-system.svc` audience, which Substrate's access policy must

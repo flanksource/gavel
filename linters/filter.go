@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -144,7 +145,10 @@ func pathMatchesAnyScope(absPath string, scopes []string) bool {
 		if absPath == scope {
 			return true
 		}
-		info, err := os.Stat(scope)
+		info, err := utils.StatWithin(filepath.Dir(scope), filepath.Base(scope))
+		if err != nil && !os.IsNotExist(err) {
+			continue
+		}
 		pattern := filepath.ToSlash(scope)
 		if os.IsNotExist(err) && doublestar.ValidatePattern(pattern) && doublestar.MatchUnvalidated(pattern, filepath.ToSlash(absPath)) {
 			return true

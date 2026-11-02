@@ -9,6 +9,7 @@ import (
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -19,6 +20,7 @@ func TestCommand(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Command
 var _ = Describe("Command linter", func() {
 	var root, binary, argsFile string
 	BeforeEach(func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		root = GinkgoT().TempDir()
 		content, err := os.ReadFile("testdata/report.sh")
 		Expect(err).NotTo(HaveOccurred())
@@ -56,6 +58,47 @@ var _ = Describe("Command linter", func() {
 		Expect(result.Error).To(BeEmpty())
 		Expect(result.Sources).To(Equal(map[string]linters.SourceFile{"tr/Fee": {URL: "https://rules.example/Fee", Content: "<Transaction/>"}}))
 	})
+
+	It("applies runtime environment overrides to a declared subprocess", func() {
+		const report = `[{"linter":"rules","success":true,"file_count":3}]`
+		GinkgoT().Setenv("COMMAND_TEST_REPORT", "invalid report")
+		GinkgoT().Setenv("COMMAND_TEST_EXIT", "2")
+		linter := New(root, "rules", verify.LintLinterConfig{Command: []string{binary}})
+		runtimeArgs := filepath.Join(root, "runtime-args")
+		result := linters.RunLinterWithTask(context.Background(), nil, linter, linters.RunOptions{
+			WorkDir: root,
+			Runtime: processruntime.Options{Env: map[string]string{
+				"COMMAND_TEST_REPORT": report,
+				"COMMAND_TEST_EXIT":   "0",
+				"COMMAND_TEST_ARGS":   runtimeArgs,
+			}},
+		})
+		Expect(result.Error).To(BeEmpty())
+		Expect(result.Success).To(BeTrue())
+		Expect(result.FileCount).To(Equal(3))
+		Expect(os.ReadFile(runtimeArgs)).To(BeEquivalentTo("--format json\n"))
+	})
+
+	DescribeTable("accepts process controls for a declared subprocess", func(field string) {
+		options := processruntime.Options{}
+		switch field {
+		case "env":
+			options.Env = map[string]string{"EXAMPLE": "value"}
+		case "nice":
+			nice := 5
+			options.Nice = &nice
+		case "cpu":
+			cpu := 100.0
+			options.CPU = &cpu
+		case "mem":
+			memory := "1GiB"
+			options.Mem = &memory
+		}
+		linter := New(root, "rules", verify.LintLinterConfig{Command: []string{binary}})
+		command, _, err := linters.PrepareCommand(linter, linters.RunOptions{WorkDir: root, Runtime: options})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(command).To(Equal(binary))
+	}, Entry("environment", "env"), Entry("niceness", "nice"), Entry("CPU", "cpu"), Entry("memory", "mem"))
 
 	It("fails on a report that disagrees with the exit status, keeping its findings", func() {
 		_, found, err := run(`[{"linter":"x","success":true,"violations":[{"file":"a.xml","severity":"error"}]}]`, "0")

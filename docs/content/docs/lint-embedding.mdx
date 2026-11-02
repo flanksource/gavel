@@ -13,6 +13,8 @@ A Go program can run its own checks through the same engine as `gavel lint`, so 
 - `lint.ReportView(results, lint.ReportOptions{Summary, SummaryLimit})` is the value `gavel lint` prints, so your command renders the same way. `lint.Snapshot`, `lint.SaveSnapshot` and `lint.Serve` publish a run.
 - A `testui.Server` that shows your results can rerun your linters from the lint tab: `srv.SetLintRerun([]string{"acme-entities"}, fn)`. A rerun request that names only those linters calls `fn(ctx, linters, files)`, and each result replaces the one with the same linter and work dir; other linters' results are kept. A request mixing your linters with others is refused with a 400.
 
+In-process linters support `runtime.timeout`; environment overrides, niceness, and active CPU or memory limits fail before execution. A filesystem adapter such as the built-in JSON linter can implement `linters.RuntimeValidator` (`ValidateRuntime(processruntime.Options) error`) and call `Options.ValidateInProcess()` to enforce these limits while retaining automatic discovery and file scoping. Validation runs before `SetOptions`. `RequiresExecutable()` controls executable discovery; declared command linters still run subprocesses and support process runtime controls.
+
 ## Example
 
 A runnable program (`go run . orders/42 customers/7` inside a git checkout):

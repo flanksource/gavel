@@ -49,34 +49,51 @@ func Resolve(dir string) (Dirs, error) {
 	if err != nil {
 		return Dirs{}, fmt.Errorf("resolve %s: %w", dir, err)
 	}
-	info, err := os.Stat(abs)
+	root, err := os.OpenRoot(abs)
 	if err != nil {
 		return Dirs{}, fmt.Errorf("working directory %s: %w", abs, err)
 	}
-	if !info.IsDir() {
-		return Dirs{}, fmt.Errorf("working directory %s is not a directory", abs)
+	if err := root.Close(); err != nil {
+		return Dirs{}, err
 	}
 	user, err := resolveUserDirs()
 	if err != nil {
 		return Dirs{}, err
 	}
 	gitRoot := utils.FindGitRoot(abs)
-	return Dirs{Invocation: abs, GitRoot: gitRoot, StateRoot: findStateRoot(abs, gitRoot), User: user}, nil
+	stateRoot, err := findStateRoot(abs, gitRoot)
+	if err != nil {
+		return Dirs{}, err
+	}
+	return Dirs{Invocation: abs, GitRoot: gitRoot, StateRoot: stateRoot, User: user}, nil
 }
 
 // findStateRoot walks up from dir to the first directory holding a .gavel
 // directory, never past gitRoot, so a user-level ~/.gavel above the repo is
 // never taken for repo state.
-func findStateRoot(dir, gitRoot string) string {
+func findStateRoot(dir, gitRoot string) (string, error) {
 	if gitRoot == "" {
-		return dir
+		return dir, nil
 	}
+	root, err := os.OpenRoot(gitRoot)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 	for current := dir; ; current = filepath.Dir(current) {
-		if info, err := os.Stat(filepath.Join(current, StateDirName)); err == nil && info.IsDir() {
-			return current
+		rel, err := filepath.Rel(gitRoot, filepath.Join(current, StateDirName))
+		if err != nil {
+			return "", err
+		}
+		info, err := root.Stat(rel)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("workspace state %s: %w", rel, err)
+		}
+		if err == nil && info.IsDir() {
+			return current, nil
 		}
 		if current == gitRoot || filepath.Dir(current) == current {
-			return gitRoot
+			return gitRoot, nil
 		}
 	}
 }

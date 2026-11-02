@@ -30,6 +30,10 @@ func writeSyncWorkbook(path string, keys []string) {
 }
 
 var _ = Describe("Jira sync command", func() {
+	BeforeEach(func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+	})
+
 	It("resyncs a renamed file in place with explicit false attachment overrides", func() {
 		commandServer(func(w http.ResponseWriter, r *http.Request) {
 			switch {
@@ -66,7 +70,7 @@ var _ = Describe("Jira sync command", func() {
 		path := filepath.Join(GinkgoT().TempDir(), "empty.xlsx")
 		Expect(excel.WriteFile([]map[string]any{{"Issue Key": ""}}, path)).To(Succeed())
 		_, err := commandOutput([]string{"sync", "@" + path + ":Issue Key", "--site", "https://user:password@example.test"}, "json")
-		Expect(err).To(MatchError("Jira sync requires at least one issue key or ID"))
+		Expect(err).To(MatchError("jira sync requires at least one issue key or ID"))
 	})
 
 	It("syncs multiple positional IDs and selected Excel worksheets using one catalog refresh", func() {

@@ -59,7 +59,9 @@ inputs:
     description: >-
       URL of a hosted gavel to upload the results to with `gavel ci upload`. The job authenticates
       with its OIDC token, so the workflow needs `permissions: id-token: write`, and the repository
-      must be linked to a gavel organization through the gavel GitHub App.
+      must be linked to a gavel organization through the gavel GitHub App. `gavel test` also
+      streams its in-flight results, and each diagnostics capture, to the server every 15s while
+      it runs, so a job killed before the upload step still leaves its latest state there.
     required: false
     default: ""
 
@@ -138,6 +140,9 @@ runs:
         JSON_FILE: ${{ inputs.json-file }}
         HTML_FILE: ${{ inputs.html-file }}
         GAVEL_LOG_FILE: gavel.log
+        # gavel test streams its in-flight results here and writes the run it
+        # created to this step's ci_run_id output.
+        GAVEL_CI_SERVER: ${{ inputs.gavel-server }}
       run: |
         set +e
         rm -f "${JSON_FILE}" "${HTML_FILE}" "${GAVEL_LOG_FILE}"
@@ -188,7 +193,16 @@ runs:
       env:
         GAVEL_SERVER: ${{ inputs.gavel-server }}
         JSON_FILE: ${{ inputs.json-file }}
-      run: gavel ci upload --server "${GAVEL_SERVER}" --file "${JSON_FILE}"
+        # The run gavel test streamed to, which the upload replaces; empty when
+        # it streamed nothing (or a gavel too old to stream ran), and the
+        # upload then adds a new run.
+        CI_RUN_ID: ${{ steps.run.outputs.ci_run_id }}
+      run: |
+        run_flag=()
+        if [ -n "${CI_RUN_ID}" ]; then
+          run_flag=(--run "${CI_RUN_ID}")
+        fi
+        gavel ci upload --server "${GAVEL_SERVER}" --file "${JSON_FILE}" "${run_flag[@]}"
 
     - name: Upload artifacts
       id: upload

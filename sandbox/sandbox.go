@@ -26,7 +26,10 @@ type Job struct {
 	// SecretEnv holds credentials, GAVEL_RUN_TOKEN and model API keys, which never appear on a
 	// command line or in a pod spec.
 	SecretEnv map[string]string
-	Limits    Limits
+	// Credentials are the organization's model keys substrate's egress gateway injects into the
+	// job's requests; other executors ignore them.
+	Credentials []InjectedCredential
+	Limits      Limits
 }
 
 // Limits bounds a job. CPU and Memory are Kubernetes quantities ("2", "500m", "4Gi").
@@ -77,6 +80,12 @@ type Executor interface {
 // jobName is the backend name of run's job.
 func jobName(run uuid.UUID) string {
 	return "gavel-run-" + run.String()
+}
+
+// SubstrateActor is the SPIFFE ID substrate's egress gateway reports for run's environment in
+// atespace, the actor named after the run.
+func SubstrateActor(atespace string, run uuid.UUID) string {
+	return "spiffe://substrate-actor.local/actor/" + atespace + "/" + jobName(run)
 }
 
 // sortedEnv lists env as KEY=VALUE, sorted, rejecting a name that would split differently.

@@ -42,16 +42,16 @@ func NewClient(ctx context.Context, options ClientOptions) (*Client, error) {
 		credentials.CloudID = options.Credentials.CloudID
 	}
 	if credentials.APIToken == "" && credentials.AccessToken == "" {
-		return nil, fmt.Errorf("Jira credentials require an API token or an OAuth access token")
+		return nil, fmt.Errorf("jira credentials require an API token or an OAuth access token")
 	}
 	if credentials.APIToken != "" && credentials.AccessToken != "" {
 		return nil, fmt.Errorf("configure either a Jira API token or an OAuth access token")
 	}
 	if credentials.APIToken != "" && credentials.Username == "" {
-		return nil, fmt.Errorf("Jira API token requires a username or email")
+		return nil, fmt.Errorf("jira API token requires a username or email")
 	}
 	if strings.IndexFunc(credentials.AccessToken, func(r rune) bool { return r <= ' ' || r >= 127 }) >= 0 {
-		return nil, fmt.Errorf("Jira OAuth access token contains invalid characters")
+		return nil, fmt.Errorf("jira OAuth access token contains invalid characters")
 	}
 	client := options.HTTP
 	if client == nil {
@@ -81,7 +81,7 @@ func NewClient(ctx context.Context, options ClientOptions) (*Client, error) {
 
 func normalizeSite(site string) (string, error) {
 	if site == "" {
-		return "", fmt.Errorf("Jira site is required: use --site, JIRA_URL, ATLASSIAN_SITE or TWG_SITE")
+		return "", fmt.Errorf("jira site is required: use --site, JIRA_URL, ATLASSIAN_SITE or TWG_SITE")
 	}
 	if !strings.Contains(site, "://") {
 		if !strings.Contains(site, ".") && !strings.Contains(site, ":") {
@@ -93,8 +93,8 @@ func normalizeSite(site string) (string, error) {
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", fmt.Errorf("invalid Jira site URL")
 	}
-	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && (parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1")) {
-		return "", fmt.Errorf("Jira site requires HTTPS")
+	if parsed.Scheme != "https" && (parsed.Scheme != "http" || (parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1")) {
+		return "", fmt.Errorf("jira site requires HTTPS")
 	}
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
@@ -173,13 +173,13 @@ func (c *Client) request(ctx context.Context, options requestOptions) (*httpclie
 	}
 	response, err := request.Do(method, endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("Jira %s %s: %w", method, options.Path, err)
+		return nil, fmt.Errorf("jira %s %s: %w", method, options.Path, err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		defer response.Body.Close()
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
 		if readErr != nil {
-			return nil, fmt.Errorf("Jira %s %s: HTTP %d; read error response: %w", method, options.Path, response.StatusCode, readErr)
+			return nil, fmt.Errorf("jira %s %s: HTTP %d; read error response: %w", method, options.Path, response.StatusCode, readErr)
 		}
 		message := string(body)
 		for _, secret := range []string{c.credentials.APIToken, c.credentials.AccessToken, basicToken(c.credentials.Username, c.credentials.APIToken)} {
@@ -187,7 +187,7 @@ func (c *Client) request(ctx context.Context, options requestOptions) (*httpclie
 				message = strings.ReplaceAll(message, secret, "[REDACTED]")
 			}
 		}
-		return nil, fmt.Errorf("Jira %s %s: HTTP %d: %s", method, options.Path, response.StatusCode, strings.TrimSpace(message))
+		return nil, fmt.Errorf("jira %s %s: HTTP %d: %s", method, options.Path, response.StatusCode, strings.TrimSpace(message))
 	}
 	return response, nil
 }

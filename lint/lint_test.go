@@ -157,7 +157,10 @@ func TestShouldSelectLinterIgnoresRepoRootConfigFromSubdir(t *testing.T) {
 		t.Fatalf("write ts file: %v", err)
 	}
 
-	ok, _ := shouldSelectLinter(subdir, verify.GavelConfig{}, eslint.NewESLint(subdir), false)
+	ok, _, err := shouldSelectLinter(subdir, verify.GavelConfig{}, eslint.NewESLint(subdir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok {
 		t.Fatal("expected eslint to be skipped when config exists only at repo root")
 	}
@@ -169,7 +172,10 @@ func TestShouldSelectLinterUsesDirectCWDConfig(t *testing.T) {
 		t.Fatalf("write eslint config: %v", err)
 	}
 
-	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
+	ok, reason, err := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("expected eslint to be selected, got skip reason %q", reason)
 	}
@@ -181,7 +187,10 @@ func TestShouldSelectReactDoctorUsesDirectConfig(t *testing.T) {
 		t.Fatalf("write react-doctor config: %v", err)
 	}
 
-	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	ok, reason, err := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("expected react-doctor to be selected, got skip reason %q", reason)
 	}
@@ -193,7 +202,10 @@ func TestShouldSelectReactDoctorUsesPackageJSONConfig(t *testing.T) {
 		t.Fatalf("write package.json: %v", err)
 	}
 
-	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	ok, reason, err := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("expected react-doctor to be selected from package.json#reactDoctor, got %q", reason)
 	}
@@ -212,7 +224,10 @@ func TestShouldSelectReactDoctorUsesReactDependency(t *testing.T) {
 		t.Fatalf("write App.tsx: %v", err)
 	}
 
-	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	ok, reason, err := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("expected react-doctor to be selected from React dependency, got %q", reason)
 	}
@@ -231,7 +246,10 @@ func TestShouldSelectReactDoctorRequiresReactOrConfigForImplicitRun(t *testing.T
 		t.Fatalf("write App.tsx: %v", err)
 	}
 
-	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	ok, reason, err := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok {
 		t.Fatal("expected react-doctor to be skipped without React dependency or config on implicit run")
 	}
@@ -250,7 +268,10 @@ func TestShouldSelectReactDoctorExplicitRunAllowsSourceWithoutConfig(t *testing.
 		t.Fatalf("write App.tsx: %v", err)
 	}
 
-	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), true)
+	ok, reason, err := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("expected explicit react-doctor run to be selected, got %q", reason)
 	}
@@ -266,7 +287,10 @@ func TestShouldSelectLinterIgnoresNestedConfig(t *testing.T) {
 		t.Fatalf("write nested eslint config: %v", err)
 	}
 
-	ok, _ := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
+	ok, _, err := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok {
 		t.Fatal("expected nested eslint config to be ignored")
 	}
@@ -292,7 +316,10 @@ func TestShouldSelectLinterAllowsExplicitGavelEnablementWithoutToolConfig(t *tes
 	if err != nil {
 		t.Fatalf("load gavel config: %v", err)
 	}
-	ok, reason := shouldSelectLinter(subdir, cfg, eslint.NewESLint(subdir), false)
+	ok, reason, err := shouldSelectLinter(subdir, cfg, eslint.NewESLint(subdir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("expected eslint to be selected via inherited .gavel enablement, got %q", reason)
 	}
@@ -321,7 +348,10 @@ func TestShouldSelectBetterleaksFromHomeConfigExtras(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load gavel config: %v", err)
 	}
-	ok, reason := shouldSelectLinter(workDir, cfg, betterleaks.NewBetterleaks(workDir), false)
+	ok, reason, err := shouldSelectLinter(workDir, cfg, betterleaks.NewBetterleaks(workDir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("expected betterleaks to be selected via home secrets.configs, got %q", reason)
 	}
@@ -350,7 +380,10 @@ func TestShouldSelectBetterleaksSkipsWhenExtraConfigMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load gavel config: %v", err)
 	}
-	ok, reason := shouldSelectLinter(workDir, cfg, betterleaks.NewBetterleaks(workDir), false)
+	ok, reason, err := shouldSelectLinter(workDir, cfg, betterleaks.NewBetterleaks(workDir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok {
 		t.Fatal("expected betterleaks to be skipped when configured extra file is missing")
 	}
@@ -369,7 +402,10 @@ func TestShouldSelectLinterExplicitFilesDoNotBypassConfigRequirement(t *testing.
 		t.Fatalf("write nested ts file: %v", err)
 	}
 
-	ok, _ := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
+	ok, _, err := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok {
 		t.Fatal("expected nested file to be insufficient without direct cwd config or enablement")
 	}
@@ -391,7 +427,10 @@ func TestShouldSelectLinterSkipsMatchInsideGitignoredDir(t *testing.T) {
 		t.Fatalf("write vendored js: %v", err)
 	}
 
-	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), true)
+	ok, reason, err := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok {
 		t.Fatal("expected eslint to be skipped when its only match is inside a gitignored directory")
 	}
@@ -414,7 +453,10 @@ func TestShouldSelectLinterSkipsMatchInGavelGitignoredDir(t *testing.T) {
 	}
 
 	cfg := verify.GavelConfig{Commit: verify.CommitConfig{GitIgnore: []string{"dist/"}}}
-	ok, reason := shouldSelectLinter(workDir, cfg, eslint.NewESLint(workDir), true)
+	ok, reason, err := shouldSelectLinter(workDir, cfg, eslint.NewESLint(workDir), true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok {
 		t.Fatal("expected eslint to be skipped when its only match is under a .gavel gitignore path")
 	}
@@ -439,7 +481,10 @@ func TestShouldSelectLinterExplicitSelectsWhenMatchNotIgnored(t *testing.T) {
 		t.Fatalf("write src js: %v", err)
 	}
 
-	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), true)
+	ok, reason, err := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatalf("expected eslint to be selected for src/index.js, got skip reason %q", reason)
 	}
@@ -636,7 +681,15 @@ func TestExecuteRunsNestedOxlintWithWorkspaceLocalBinary(t *testing.T) {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
-	t.Setenv("PATH", t.TempDir())
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(git, filepath.Join(bin, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
 	t.Setenv("HOME", t.TempDir())
 
 	results, err := Execute(Options{WorkDir: repo, Timeout: "5s"})

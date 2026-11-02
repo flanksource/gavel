@@ -23,11 +23,14 @@ import (
 	"time"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/api/clerktest"
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/githubtest"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/internal/logtest"
+	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sshkeys"
 	"github.com/google/uuid"
@@ -324,12 +327,49 @@ func TestHostedDashboardServesTheRunAPIWithoutClerk(t *testing.T) {
 	assert.Contains(t, string(body), "run token", "answered by the run API, not the Clerk middleware")
 }
 
+func TestHostedDashboardServesTheCredentialFetchWithoutClerk(t *testing.T) {
+	fetch := func(f hostedFixture) (int, string) {
+		t.Helper()
+		resp, err := http.Post(f.server.URL+"/api/credentials/fetch", "application/json", strings.NewReader(`{}`))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	substrate := newHostedFixture(t, func(o *DashboardOptions) {
+		o.Sandbox, o.SandboxImage = "substrate", "runner@sha256:"+strings.Repeat("a", 64)
+		o.SubstrateEnvAPI, o.SubstrateControl = "ate-env-api.example:443", "substrate-api.example:443"
+		o.SubstrateGavelName, o.credentialProviderToken = "beta", "provider-token"
+	})
+	status, body := fetch(substrate)
+	assert.Equal(t, http.StatusUnauthorized, status)
+	assert.Contains(t, body, "credential provider's token", "answered by the credential fetch, not the Clerk middleware")
+
+	status, body = fetch(newHostedFixture(t))
+	assert.NotContains(t, body, "credential provider", "not served without substrate and a provider token (%d)", status)
+}
+
+func TestCredentialProviderTokenComesFromTheEnvironment(t *testing.T) {
+	opts := DashboardOptions{}.withEnv(func(name string) string {
+		return map[string]string{"GAVEL_CREDENTIAL_PROVIDER_TOKEN": "provider-token"}[name]
+	})
+	assert.Equal(t, "provider-token", opts.credentialProviderToken)
+}
+
 func TestRunTokenKeyIsDerivedFromTheSecret(t *testing.T) {
 	secret := []byte(strings.Repeat("k", 32))
 	key := runTokenKey(secret)
 	assert.Len(t, key, 32)
 	assert.NotEqual(t, secret, key, "not the secret itself")
 	assert.Equal(t, key, runTokenKey(secret))
+}
+
+func TestHostedDashboardEncryptsModelKeysWithTheSecret(t *testing.T) {
+	previous := secret.KMSConnection
+	t.Cleanup(func() { secret.KMSConnection = previous; secret.InvalidateKeeper() })
+	secret.KMSConnection = ""
+	newHostedFixture(t)
+	assert.Equal(t, modelkeys.KeeperConnection([]byte(strings.Repeat("k", 32))), secret.KMSConnection)
 }
 
 func TestHostedDashboardWithoutASandboxHasNoDispatcher(t *testing.T) {
@@ -344,10 +384,12 @@ func TestHostedDashboardRefusesAnUnpreparedContainerSandbox(t *testing.T) {
 	opts.SandboxNetwork = "gavel-sandbox-missing-" + uuid.NewString()[:8]
 	require.NoError(t, opts.Validate())
 
+	logged := logtest.Capture(t)
 	_, err := hostedDashboard(t.Context(), opts, f.db.Gorm(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "the sandbox network "+opts.SandboxNetwork+" is missing")
 	assert.Contains(t, err.Error(), "docker network create "+opts.SandboxNetwork)
+	assert.Contains(t, logged.String(), "--sandbox docker: runs get no model keys")
 }
 
 func TestHostedDashboardServesTodosInTheOrgsRepositories(t *testing.T) {

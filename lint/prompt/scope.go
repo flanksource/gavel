@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/flanksource/gavel/utils"
 )
 
 // fileScope is what one review covers: Paths as given, relative to the work
@@ -21,8 +23,28 @@ type fileScope struct {
 // a deleted changed file, is still a file name and stays enumerable.
 func newFileScope(dir string, paths []string) (fileScope, error) {
 	scope := fileScope{Paths: paths, Exact: len(paths) > 0}
+	if len(paths) == 0 {
+		return scope, nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fileScope{}, err
+	}
+	root, err := os.OpenRoot(abs)
+	if err != nil {
+		return fileScope{}, err
+	}
+	defer root.Close()
 	for _, path := range paths {
-		info, err := os.Stat(scopePath(dir, path))
+		path, err := utils.ResolveWithin(abs, path)
+		if err != nil {
+			return fileScope{}, err
+		}
+		path, err = filepath.Rel(abs, path)
+		if err != nil {
+			return fileScope{}, err
+		}
+		info, err := root.Stat(path)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fileScope{}, fmt.Errorf("prompt lint path: %w", err)
 		}

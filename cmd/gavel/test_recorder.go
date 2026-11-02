@@ -13,7 +13,8 @@ import (
 // downstream consumer of opts.Updates. Each batch of test results from the
 // runner is funneled into a fresh Snapshot (Status.Running=true) and fed to
 // the recorder. The batch is also forwarded unchanged to downstream so the
-// UI server (when --ui) keeps receiving its updates.
+// UI server (when --ui) keeps receiving its updates. stream, when the run
+// streams to a hosted gavel, receives the same snapshots.
 //
 // Returns the new send channel that should replace opts.Updates. When the
 // runner closes the new channel (single-root via Done(); multi-root via the
@@ -21,6 +22,7 @@ import (
 // downstream channel too, preserving existing close semantics.
 func attachRecorderTee(
 	rec *snapshots.Recorder,
+	stream *ciStream,
 	opts testrunner.RunOptions,
 	runStarted time.Time,
 	downstream chan<- []parsers.Test,
@@ -33,7 +35,9 @@ func attachRecorderTee(
 			}
 		}()
 		for batch := range tee {
-			rec.Update(buildRunningSnapshot(opts, batch, runStarted))
+			snap := buildRunningSnapshot(opts, batch, runStarted)
+			rec.Update(snap)
+			stream.Update(snap)
 			if downstream != nil {
 				downstream <- batch
 			}

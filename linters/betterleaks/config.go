@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/hairyhenderson/toml"
 )
@@ -38,11 +39,21 @@ type configLayer struct {
 // Paths are deduped so the same file referenced twice only appears once.
 // Non-existent paths are silently skipped — the caller treats an empty
 // result as "no secrets config present, skip the linter".
-func DiscoverConfigs(workDir string) []string {
+func DiscoverConfigs(workDir string) ([]string, error) {
+	layers, err := discoverConfigLayers(workDir)
+	if err != nil {
+		return nil, err
+	}
 	var candidates []string
-	for _, layer := range discoverConfigLayers(workDir) {
-		candidates = appendConfigsInDir(candidates, layer.dir)
-		candidates = appendExtraConfigs(candidates, layer.dir, layer.cfg.Secrets.Configs)
+	for _, layer := range layers {
+		candidates, err = appendConfigsInDir(candidates, layer.dir)
+		if err != nil {
+			return nil, err
+		}
+		candidates, err = appendExtraConfigs(candidates, layer.dir, layer.cfg.Secrets.Configs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	seen := make(map[string]struct{}, len(candidates))
@@ -50,7 +61,7 @@ func DiscoverConfigs(workDir string) []string {
 	for _, p := range candidates {
 		abs, err := filepath.Abs(p)
 		if err != nil {
-			abs = p
+			return nil, err
 		}
 		if _, ok := seen[abs]; ok {
 			continue
@@ -58,22 +69,22 @@ func DiscoverConfigs(workDir string) []string {
 		seen[abs] = struct{}{}
 		out = append(out, abs)
 	}
-	return out
+	return out, nil
 }
 
-func discoverConfigLayers(workDir string) []configLayer {
+func discoverConfigLayers(workDir string) ([]configLayer, error) {
 	sourceConfigs := make(map[string]verify.GavelConfig)
-	if trace, err := verify.LoadGavelConfigTrace(workDir); err == nil {
-		for _, source := range trace.Sources {
-			sourceConfigs[source.Path] = source.Config
-		}
-	} else {
-		logger.V(2).Infof("betterleaks: failed to load config trace for %s: %v", workDir, err)
+	trace, err := verify.LoadGavelConfigTrace(workDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, source := range trace.Sources {
+		sourceConfigs[source.Path] = source.Config
 	}
 
 	absWorkDir, err := filepath.Abs(workDir)
 	if err != nil {
-		absWorkDir = workDir
+		return nil, err
 	}
 	dirs := verify.GavelConfigDirs(absWorkDir)
 	layers := make([]configLayer, 0, len(dirs))
@@ -83,33 +94,36 @@ func discoverConfigLayers(workDir string) []configLayer {
 			cfg: sourceConfigs[filepath.Join(dir.Dir, verify.GavelConfigFileName)],
 		})
 	}
-	return layers
+	return layers, nil
 }
 
-func appendConfigsInDir(acc []string, dir string) []string {
+func appendConfigsInDir(acc []string, dir string) ([]string, error) {
 	for _, name := range configFilenames {
-		p := filepath.Join(dir, name)
-		if _, err := os.Stat(p); err == nil {
-			acc = append(acc, p)
-			return acc
+		if _, err := utils.StatWithin(dir, name); err == nil {
+			return append(acc, filepath.Join(dir, name)), nil
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("inspect secrets config %s: %w", filepath.Join(dir, name), err)
 		}
 	}
-	return acc
+	return acc, nil
 }
 
-func appendExtraConfigs(acc []string, baseDir string, extras []string) []string {
+func appendExtraConfigs(acc []string, baseDir string, extras []string) ([]string, error) {
 	for _, extra := range extras {
-		resolved := extra
-		if !filepath.IsAbs(resolved) {
-			resolved = filepath.Join(baseDir, extra)
+		base, name := baseDir, extra
+		if filepath.IsAbs(extra) {
+			base, name = filepath.Dir(extra), filepath.Base(extra)
 		}
-		if _, err := os.Stat(resolved); err == nil {
+		resolved := filepath.Join(base, name)
+		if _, err := utils.StatWithin(base, name); err == nil {
 			acc = append(acc, resolved)
-		} else {
+		} else if os.IsNotExist(err) {
 			logger.V(2).Infof("betterleaks: skipping missing extra config %s", resolved)
+		} else {
+			return nil, fmt.Errorf("inspect extra secrets config %s: %w", resolved, err)
 		}
 	}
-	return acc
+	return acc, nil
 }
 
 // ResolveConfig returns a path suitable to pass to `betterleaks -c`.
@@ -144,12 +158,15 @@ func resolveBaseConfig(workDir string, configs []string) (string, error) {
 		return "", nil
 	}
 	if len(configs) == 1 {
+		if _, err := utils.StatWithin(filepath.Dir(configs[0]), filepath.Base(configs[0])); err != nil {
+			return "", fmt.Errorf("inspect secrets config %s: %w", configs[0], err)
+		}
 		return configs[0], nil
 	}
 
 	var merged tomlConfig
 	for _, p := range configs {
-		data, err := os.ReadFile(p)
+		data, err := utils.ReadWithin(filepath.Dir(p), filepath.Base(p))
 		if err != nil {
 			return "", fmt.Errorf("read %s: %w", p, err)
 		}

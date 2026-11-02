@@ -30,7 +30,7 @@ Browse [gavel.flanksource.com/docs](https://gavel.flanksource.com/docs) or read 
 - [Configuration](docs/content/docs/configuration-reference.mdx), [JSON Schema](gavel.schema.json), and [annotated example](gavel.yaml.example)
 - [Agent skills](docs/content/docs/agent-skills.mdx)
 - [Embedding the lint engine](docs/content/docs/lint-embedding.mdx): run your own in-process Go linters through `gavel lint`'s engine, reports and UI
-- [Hosted authentication](api/README.md): `gavel login` (`--no-browser` for headless terminals), `gavel whoami`, and `gavel logout`. Local tests and linting do not require login. The GitHub Action's `gavel-server` input uploads results through `gavel ci upload`, using `id-token: write` and a repository linked through the Gavel GitHub App.
+- [Hosted authentication](api/README.md): `gavel login` (`--no-browser` for headless terminals), `gavel whoami`, and `gavel logout`. Local tests and linting do not require login. The GitHub Action's `gavel-server` input uploads results through `gavel ci upload`; `gavel test` also streams in-flight results and diagnostics every 15 seconds, using `id-token: write` and a repository linked through the Gavel GitHub App.
 
 ## Contributing
 

@@ -84,6 +84,11 @@ type InProcess interface {
 	InProcess() bool
 }
 
+// RuntimeValidator checks runtime controls before a linter receives its options.
+type RuntimeValidator interface {
+	ValidateRuntime(processruntime.Options) error
+}
+
 // ResultLinter is implemented by linters that produce a whole LinterResult
 // rather than bare violations, so fields only they know survive the run —
 // Sources for findings on virtual files, RawOutput, counts. RunLinterWithTask
@@ -544,6 +549,16 @@ func PrepareCommand(linter Linter, opts RunOptions) (string, []string, error) {
 	opts, err = opts.resolveRuntime(linter.Name())
 	if err != nil {
 		return "", nil, err
+	}
+	if IsInProcess(linter) {
+		if err := opts.Runtime.ValidateInProcess(); err != nil {
+			return "", nil, fmt.Errorf("%s runtime: %w", linter.Name(), err)
+		}
+	}
+	if validator, ok := linter.(RuntimeValidator); ok {
+		if err := validator.ValidateRuntime(opts.Runtime); err != nil {
+			return "", nil, fmt.Errorf("%s runtime: %w", linter.Name(), err)
+		}
 	}
 	if excluder, ok := linter.(RuleExcluder); ok && len(opts.NativeRuleExclusions) > 0 {
 		excluded, err := excluder.RuleExclusionArgs(opts.NativeRuleExclusions)

@@ -119,6 +119,12 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	defer func() {
 		runErr = errors.Join(runErr, recorder.Stop(runSucceeded))
 	}()
+	// In a GitHub Actions job with GAVEL_CI_SERVER, the same in-flight
+	// snapshots, and every diagnostics capture, are uploaded while the run is
+	// in progress.
+	stream := startCIStream(os.Getenv)
+	defer stream.Stop()
+	diagnostics.streamTo(stream)
 
 	// Load .gavel.yaml once at the top — previously the lint path loaded it
 	// lazily, but the push-hook support needs Pre/Post from the same config
@@ -210,7 +216,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 				}
 			}
 		}
-		opts.Updates = attachRecorderTee(recorder, opts, runStarted, attachUIUpdates())
+		opts.Updates = attachRecorderTee(recorder, stream, opts, runStarted, attachUIUpdates())
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			clicky.ClearGlobalTasks()
 			rerunCtx, cancelRerun := newStopContext(opts.Context, opts.Timeout)
@@ -258,7 +264,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	// In non-UI mode the recorder still needs a feed of test updates; attach
 	// a tee with no downstream so each batch reaches the recorder.
 	if opts.Updates == nil {
-		opts.Updates = attachRecorderTee(recorder, opts, runStarted, nil)
+		opts.Updates = attachRecorderTee(recorder, stream, opts, runStarted, nil)
 	}
 
 	if !opts.SkipHooks && len(gavelCfg.Pre) > 0 {

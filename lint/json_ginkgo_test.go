@@ -36,10 +36,12 @@ var _ = Describe("JSON lint integration", func() {
 
 	It("activates automatically when matching files exist", func() {
 		adapter := jsonlint.New(root)
-		selected, _ := shouldSelectLinter(root, verify.GavelConfig{}, adapter, false)
+		selected, _, err := shouldSelectLinter(root, verify.GavelConfig{}, adapter, false)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(selected).To(BeFalse())
 		Expect(os.WriteFile(filepath.Join(root, "data.yaml"), []byte("enabled: true\n"), 0o600)).To(Succeed())
-		selected, _ = shouldSelectLinter(root, verify.GavelConfig{}, adapter, false)
+		selected, _, err = shouldSelectLinter(root, verify.GavelConfig{}, adapter, false)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(selected).To(BeTrue())
 		Expect(builtinLinterRegistry(root).Has("json")).To(BeTrue())
 	})
@@ -48,7 +50,8 @@ var _ = Describe("JSON lint integration", func() {
 		nested := filepath.Join(root, "configs")
 		Expect(os.Mkdir(nested, 0o700)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(nested, "data.yaml"), []byte("enabled: true\n"), 0o600)).To(Succeed())
-		selected, _ := shouldSelectLinter(root, verify.GavelConfig{}, jsonlint.New(root), false)
+		selected, _, err := shouldSelectLinter(root, verify.GavelConfig{}, jsonlint.New(root), false)
+		Expect(err).NotTo(HaveOccurred())
 		Expect(selected).To(BeTrue())
 	})
 

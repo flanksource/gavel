@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,7 +27,8 @@ import (
 // maxCIResultsBytes bounds one uploaded snapshot.
 const maxCIResultsBytes = 50 << 20
 
-// CIResults serves POST /api/ci/results, authenticated by a GitHub Actions OIDC token whose
+// CIResults serves POST /api/ci/results, and PUT /api/ci/results/{run} that replaces a run a
+// job streams while it is in progress, authenticated by a GitHub Actions OIDC token whose
 // repository is linked to an organization.
 type CIResults struct {
 	DB    *gorm.DB
@@ -38,10 +40,19 @@ type CIResults struct {
 func (c *CIResults) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/ci/results", c.handleUpload)
+	mux.HandleFunc("PUT /api/ci/results/{run}", c.handleUpload)
 	return mux
 }
 
+// ciRunID matches the run IDs ingestRunSnapshot allocates, the only runs a PUT may replace.
+var ciRunID = regexp.MustCompile(`^run-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(-\d+)?$`)
+
 func (c *CIResults) handleUpload(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("run")
+	if r.Method == http.MethodPut && !ciRunID.MatchString(runID) {
+		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("%q is not a gavel run ID", runID))
+		return
+	}
 	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || raw == "" {
 		writeCIError(w, http.StatusUnauthorized, "send the job's GitHub Actions OIDC token as Authorization: Bearer")
@@ -66,12 +77,12 @@ func (c *CIResults) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeCIError(w, http.StatusForbidden, fmt.Sprintf("%s (%d) is not linked to a gavel organization; install the gavel GitHub App on it", claims.Repository, claims.RepositoryID))
 		return
 	}
-	storeResults(w, r, c.Cache, repo.OrgID, repo.ID, claims.SHA, claims.Repository)
+	storeResults(w, r, c.Cache, repo.OrgID, repo.ID, claims.SHA, claims.Repository, runID)
 }
 
 // storeResults reads a snapshot of up to 50 MB from r and stores it as a run of repoID in org,
-// answering 201 with its run ID.
-func storeResults(w http.ResponseWriter, r *http.Request, store *cache.Store, org, repoID uuid.UUID, sha, what string) {
+// answering 201 with its run ID. With runID it replaces that run, or creates it, answering 200.
+func storeResults(w http.ResponseWriter, r *http.Request, store *cache.Store, org, repoID uuid.UUID, sha, what, runID string) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCIResultsBytes))
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
@@ -87,14 +98,18 @@ func storeResults(w http.ResponseWriter, r *http.Request, store *cache.Store, or
 		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("decode the results as a gavel snapshot: %v", err))
 		return
 	}
-	runID, err := ingestRunSnapshot(r.Context(), store, org, repoID, sha, data, snap)
+	status := http.StatusCreated
+	if runID != "" {
+		status = http.StatusOK
+	}
+	runID, err = ingestRunSnapshot(r.Context(), store, org, repoID, sha, data, snap, runID)
 	if err != nil {
 		logger.Warnf("store results for %s: %v", what, err)
 		writeCIError(w, http.StatusInternalServerError, "could not store the results")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"runId": runID})
 }
 
@@ -115,9 +130,10 @@ func RepoWorkspace(repoID uuid.UUID) string {
 }
 
 // ingestRunSnapshot stores data, the raw snapshot snap, as a run of repoID in org's blob store and
-// indexes it in test_run_caches. sha fills in the commit when the snapshot names none. It
-// returns the run ID.
-func ingestRunSnapshot(ctx context.Context, store *cache.Store, org, repoID uuid.UUID, sha string, data []byte, snap testui.Snapshot) (string, error) {
+// indexes it in test_run_caches. sha fills in the commit when the snapshot names none. A
+// non-empty runID names the run to replace; otherwise a free one is allocated. It returns the
+// run ID.
+func ingestRunSnapshot(ctx context.Context, store *cache.Store, org, repoID uuid.UUID, sha string, data []byte, snap testui.Snapshot, runID string) (string, error) {
 	blobs := store.OrgBlobs(org)
 	if blobs == nil {
 		return "", errors.New("no blob store for run results")
@@ -128,7 +144,6 @@ func ingestRunSnapshot(ctx context.Context, store *cache.Store, org, repoID uuid
 		started = snap.Metadata.Started.UTC()
 	}
 	stem := snapshots.PerRunPrefix + started.Format(snapshots.PerRunTimestampLayout)
-	runID := ""
 	for i := 1; i < 1000 && runID == ""; i++ {
 		candidate := stem
 		if i > 1 {

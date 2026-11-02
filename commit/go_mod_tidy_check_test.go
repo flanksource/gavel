@@ -5,14 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
-	"github.com/flanksource/commons/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/flanksource/gavel/internal/logtest"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -37,17 +36,6 @@ func withStubbedTidyRecording(t *testing.T, sideEffect func(modDir string) error
 	}
 	t.Cleanup(func() { runGoModTidy = prev })
 	return &calls
-}
-
-// captureLogger redirects the global logger to a buffer for the duration of
-// the test. Returns the buffer so tests can match on emitted lines.
-func captureLogger(t *testing.T) *strings.Builder {
-	t.Helper()
-	var buf strings.Builder
-	prev := logger.StandardLogger()
-	logger.Use(&buf)
-	t.Cleanup(func() { logger.SetLogger(prev) })
-	return &buf
 }
 
 func writeGoMod(t *testing.T, dir, module string) {
@@ -194,7 +182,7 @@ func TestApplyGoModTidy_SkipsDeletedGoMod(t *testing.T) {
 func TestApplyGoModTidy_SingleModuleChanged(t *testing.T) {
 	repo := initCommitRepo(t)
 	stageGoModEdit(t, repo, ".", "example.com/app")
-	logBuf := captureLogger(t)
+	logBuf := logtest.Capture(t)
 
 	calls := withStubbedTidyRecording(t, func(modDir string) error {
 		// Simulate `go mod tidy` adding a require line.
@@ -216,7 +204,7 @@ func TestApplyGoModTidy_SingleModuleChanged(t *testing.T) {
 func TestApplyGoModTidy_NoChange(t *testing.T) {
 	repo := initCommitRepo(t)
 	stageGoModEdit(t, repo, ".", "example.com/app")
-	logBuf := captureLogger(t)
+	logBuf := logtest.Capture(t)
 	calls := withStubbedTidyRecording(t, nil) // no-op stub
 
 	source, err := readStagedSource(repo)
@@ -237,7 +225,7 @@ func TestApplyGoModTidy_OnlyStagedNestedModule(t *testing.T) {
 	gitRun(t, repo, "commit", "-m", "add root go.mod")
 	nested := filepath.Join(repo, "services", "api")
 	stageGoModEdit(t, repo, "services/api", "example.com/app/services/api")
-	logBuf := captureLogger(t)
+	logBuf := logtest.Capture(t)
 
 	calls := withStubbedTidyRecording(t, func(modDir string) error {
 		return os.WriteFile(filepath.Join(modDir, "go.mod"), []byte("module example.com/app/services/api\n\ngo 1.23\n\nrequire example.com/dep v1.0.0\n"), 0o644)
@@ -272,7 +260,7 @@ func TestApplyGoModTidy_FailsLoudly(t *testing.T) {
 func TestApplyGoModTidy_GoSumCreated(t *testing.T) {
 	repo := initCommitRepo(t)
 	stageGoModEdit(t, repo, ".", "example.com/app")
-	logBuf := captureLogger(t)
+	logBuf := logtest.Capture(t)
 
 	withStubbedTidyRecording(t, func(modDir string) error {
 		// Tidy writes a new go.sum and leaves go.mod alone.

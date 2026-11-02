@@ -86,10 +86,8 @@ spec:
             - --substrate-egress
             - {{ . | quote }}
             {{- end }}
-            {{- range .credentials }}
-            - --substrate-credential
-            - {{ . | quote }}
-            {{- end }}
+            - --substrate-gavel-name
+            - {{ .gavelName | quote }}
             {{- if .trustBundle }}
             - --substrate-trust-bundle
             - {{ .trustBundle | quote }}
@@ -128,6 +126,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "gavel.secretName" . }}
                   key: GAVEL_SECRET_KEY
+            {{- if .Values.sandbox.enabled }}
+            - name: GAVEL_CREDENTIAL_PROVIDER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sandbox.substrate.credentialProviderToken.secretName }}
+                  key: {{ .Values.sandbox.substrate.credentialProviderToken.key }}
+            {{- end }}
             - name: GAVEL_DB_DSN
               valueFrom:
                 secretKeyRef:

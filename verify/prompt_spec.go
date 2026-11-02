@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -217,13 +216,9 @@ func (s *PromptSpec) adoptString(str string) error {
 // A configured-but-unreadable File is a hard error.
 func (s PromptSpec) TemplateSource(dir, fallback string) (string, error) {
 	if s.File != "" {
-		path, err := s.readableFilePath(dir)
+		data, err := s.readFile(dir)
 		if err != nil {
-			return "", err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return "", fmt.Errorf("read prompt override file %q: %w", path, err)
+			return "", fmt.Errorf("read prompt override file %q: %w", s.resolvedFilePath(dir), err)
 		}
 		return string(data), nil
 	}
@@ -240,18 +235,9 @@ func (s PromptSpec) ResolvedFilePath(fallbackDir string) string {
 	return s.resolvedFilePath(fallbackDir)
 }
 
-// readableFilePath is resolvedFilePath plus the containment reading requires: a
-// relative File must stay inside the directory of the .gavel.yaml that declared
-// it, so a config layer cannot make gavel read — and hand back — an arbitrary
-// file by walking out with `../`. The declaring directory itself is
-// caller-supplied (the settings API resolves it from a request parameter), so
-// the relative half is the part that has to be pinned. An absolute File is the
-// documented escape hatch for a prompt kept outside the project and is used
-// verbatim.
-func (s PromptSpec) readableFilePath(fallbackDir string) (string, error) {
-	if filepath.IsAbs(s.File) {
-		return s.File, nil
-	}
+// readFile confines relative files to their declaring layer; an explicitly
+// absolute file selects its own parent as the read boundary.
+func (s PromptSpec) readFile(fallbackDir string) ([]byte, error) {
 	base := s.baseDir
 	if base == "" {
 		base = fallbackDir
@@ -261,12 +247,15 @@ func (s PromptSpec) readableFilePath(fallbackDir string) (string, error) {
 		// is relative to wherever gavel is running.
 		base = "."
 	}
-	return utils.ResolveWithin(base, s.File)
+	if filepath.IsAbs(s.File) {
+		base = filepath.Dir(s.File)
+	}
+	return utils.ReadWithin(base, s.File)
 }
 
 // resolvedFilePath returns File as an absolute path relative to the config layer
 // that declared it (baseDir), falling back to fallbackDir. It is the display
-// form; reading goes through readableFilePath, which also enforces containment.
+// form; reading goes through readFile, which also enforces containment.
 func (s PromptSpec) resolvedFilePath(fallbackDir string) string {
 	if s.File == "" || filepath.IsAbs(s.File) {
 		return s.File

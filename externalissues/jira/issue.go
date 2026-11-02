@@ -59,7 +59,7 @@ func ParseIssue(raw json.RawMessage, options ParseOptions) (Issue, error) {
 		return Issue{}, fmt.Errorf("decode Jira issue: %w", err)
 	}
 	if strings.TrimSpace(payload.Key) == "" || strings.TrimSpace(payload.Summary) == "" {
-		return Issue{}, fmt.Errorf("Jira issue requires a valid key and summary")
+		return Issue{}, fmt.Errorf("jira issue requires a valid key and summary")
 	}
 	issue := Issue{Issue: externalissues.Issue{
 		Provider: "jira", Site: options.Site, ID: payload.ID, Key: payload.Key,

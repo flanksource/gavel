@@ -79,4 +79,20 @@ var _ = Describe("file scope", func() {
 		Expect(os.Remove(filepath.Join(workDir, fileB))).To(Succeed())
 		Expect(scopeOf(fileA, fileB)).To(Equal(fileScope{Paths: []string{fileA, fileB}, Exact: true}))
 	})
+
+	DescribeTable("rejects paths outside the work directory", func(path string) {
+		_, err := newFileScope(workDir, []string{path})
+		Expect(err).To(HaveOccurred())
+	}, Entry("parent traversal", "../outside.go"), Entry("absolute path", "/etc/passwd"))
+
+	It("rejects a scope directory that escapes through a symlink", func() {
+		Expect(os.Symlink(GinkgoT().TempDir(), filepath.Join(workDir, "linked"))).To(Succeed())
+		_, err := newFileScope(workDir, []string{"linked"})
+		Expect(err).To(MatchError(ContainSubstring("path escapes")))
+	})
+
+	It("accepts an absolute file path within the work directory", func() {
+		path := filepath.Join(workDir, fileA)
+		Expect(scopeOf(path)).To(Equal(fileScope{Paths: []string{path}, Exact: true}))
+	})
 })

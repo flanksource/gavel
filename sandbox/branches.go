@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -24,27 +25,32 @@ func (s *Sources) Branches(ctx context.Context, repo Repo) (Branches, error) {
 	if err != nil {
 		return Branches{}, err
 	}
-	out, err := runGit(ctx, nil, "-C", dir, "for-each-ref", "--sort=refname", "--format=%(refname:strip=2)", "refs/heads")
+	out, err := runGit(ctx, gitOptions{}, "-C", dir, "for-each-ref", "--sort=refname", "--format=%(refname:strip=2)", "refs/heads")
 	if err != nil {
 		return Branches{}, fmt.Errorf("list the branches of %s: %w", repo.label(), err)
 	}
 	branches := Branches{Names: strings.Fields(out)}
-	if head, err := runGit(ctx, nil, "-C", dir, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
+	if head, err := runGit(ctx, gitOptions{}, "-C", dir, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
 		branches.Default = strings.TrimSpace(head)
 	}
 	return branches, nil
 }
 
+var branchNamePattern = regexp.MustCompile(`^[^-\x00-\x20\x7f][^\x00-\x20\x7f]*$`)
+
 // BranchCommit is the commit repo's branch is at.
 func (s *Sources) BranchCommit(ctx context.Context, repo Repo, branch string) (string, error) {
-	if _, err := runGit(ctx, nil, "check-ref-format", "--branch", branch); err != nil || strings.HasPrefix(branch, "-") {
+	if !branchNamePattern.MatchString(branch) {
+		return "", fmt.Errorf("%w %q: not a valid branch name", ErrUnknownBranch, branch)
+	}
+	if _, err := runGit(ctx, gitOptions{}, "check-ref-format", "--branch", branch); err != nil {
 		return "", fmt.Errorf("%w %q: not a valid branch name", ErrUnknownBranch, branch)
 	}
 	dir, err := s.sourceDir(ctx, repo)
 	if err != nil {
 		return "", err
 	}
-	sha, err := runGit(ctx, nil, "-C", dir, "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/heads/"+branch+"^{commit}")
+	sha, err := runGit(ctx, gitOptions{}, "-C", dir, "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/heads/"+branch+"^{commit}")
 	if err != nil {
 		return "", fmt.Errorf("%w %q: %s has no such branch", ErrUnknownBranch, branch, repo.label())
 	}

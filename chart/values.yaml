@@ -70,8 +70,13 @@ sandbox:
     template: ""
     # Hosts environments may reach besides gavel serve, the Go, npm and Python registries and GitHub.
     egress: []
-    # Model keys substrate's egress gateway injects, as host=,header=,env=,uri=[,prefix=].
-    credentials: []
+    # The name substrate's credential provider knows this gavel by, in each run's model key URI,
+    # e.g. beta. Organizations' own model keys are injected into their runs' requests.
+    gavelName: ""
+    # Secret holding the token substrate's credential provider fetches model keys with.
+    credentialProviderToken:
+      secretName: ""
+      key: token
     # Path in the environment of the egress gateway's CA, for hosts with an injected credential.
     trustBundle: ""
     # Audience of the ServiceAccount token gavel serve authenticates to ate-api-server with.

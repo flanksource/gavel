@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/repomap"
 	"github.com/ghodss/yaml"
 )
@@ -211,7 +212,7 @@ func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 	if filepath.Base(path) != GavelConfigFileName {
 		return GavelConfig{}, "", fmt.Errorf("load gavel config: %q is not a %s file", path, GavelConfigFileName)
 	}
-	data, err := os.ReadFile(path)
+	data, err := readFileInDir(filepath.Dir(path), GavelConfigFileName)
 	if err != nil {
 		return GavelConfig{}, "", err
 	}
@@ -298,7 +299,11 @@ func resolveGavelConfigTarget(path string) (string, string, error) {
 		return "", "", fmt.Errorf("resolve absolute path: %w", err)
 	}
 
-	info, err := os.Stat(absPath)
+	if root, err := os.OpenRoot(absPath); err == nil {
+		defer root.Close()
+		return absPath, absPath, nil
+	}
+	info, err := utils.StatWithin(filepath.Dir(absPath), filepath.Base(absPath))
 	if err != nil {
 		return "", "", fmt.Errorf("stat %s: %w", absPath, err)
 	}

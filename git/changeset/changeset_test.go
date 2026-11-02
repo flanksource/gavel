@@ -47,6 +47,16 @@ func localEnvironment() changeset.Environment {
 }
 
 var _ = Describe("Shared changesets", func() {
+	DescribeTable("rejects invalid commit references before invoking Git", func(ref string) {
+		_, err := changeset.Resolve(context.Background(), changeset.Options{Dir: repository(), Since: ref, Environment: localEnvironment()})
+		Expect(err).To(MatchError(ContainSubstring("invalid commit reference")))
+	},
+		Entry("a long option", "--output=outside"),
+		Entry("a short option", "-h"),
+		Entry("a newline", "HEAD\n--output=outside"),
+		Entry("a NUL byte", "HEAD\x00"),
+	)
+
 	It("accepts known files without Git and resolves aliases of repository paths", func() {
 		dir := GinkgoT().TempDir()
 		selected, err := changeset.Resolve(context.Background(), changeset.Options{Dir: dir, Files: []string{"known.go"}})
