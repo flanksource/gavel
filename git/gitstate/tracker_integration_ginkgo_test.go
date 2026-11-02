@@ -93,6 +93,24 @@ func (r *trackedRepo) generation() int64 {
 }
 
 var _ = Describe("Tracker", func() {
+	It("loads worktrees and branches against the remote default branch master", func(ctx SpecContext) {
+		r := newTrackedRepo(ctx, gitstate.Options{})
+		git(r.root, "branch", "-m", "main", "master")
+		git(r.root, "remote", "add", "origin", filepath.Join(filepath.Dir(r.root), "origin.git"))
+		git(r.root, "update-ref", "refs/remotes/origin/master", r.base)
+		git(r.root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+
+		state, err := r.tracker.State(ctx, r.root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Error).To(BeEmpty())
+		Expect(state.Base).To(Equal("master"))
+		Expect(state.BaseSHA).To(Equal(r.base))
+		Expect(state.BaseCheckedOut).To(BeTrue())
+		Expect(state.Worktrees).To(HaveLen(2))
+		Expect(state.Branches).To(HaveLen(1))
+		Expect(state.Branches[0].Name).To(Equal("feature"))
+	})
+
 	It("scans a repository on first read: base, worktrees with uncommitted changes, and unmerged branches", func(ctx SpecContext) {
 		r := newTrackedRepo(ctx, gitstate.Options{})
 		write(r.feature, "a.txt", "a1\na2\na3\n")
@@ -245,6 +263,7 @@ var _ = Describe("Tracker", func() {
 
 	It("tracks a repository whose first scan fails and reports the failure as its state's error", func(ctx SpecContext) {
 		r := newTrackedRepo(ctx, gitstate.Options{})
+		write(r.root, ".gavel.yaml", "pr:\n  base: main\n")
 		git(r.root, "branch", "-m", "main", "trunk")
 
 		_, err := r.tracker.Track(ctx, r.root)

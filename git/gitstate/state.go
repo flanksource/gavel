@@ -127,7 +127,7 @@ func (state State) Primary() (Worktree, bool) {
 }
 
 // Base is the local branch project work merges into: the PR base (.gavel.yaml
-// pr.base, else origin/main) without its remote prefix.
+// pr.base, else origin's default branch) without its remote prefix.
 func Base(dir string) (string, error) {
 	ref, err := prcreate.ResolveBase(dir, "")
 	if err != nil {
