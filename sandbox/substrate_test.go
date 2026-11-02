@@ -3,13 +3,17 @@
 package sandbox
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/flanksource/gavel/internal/logtest"
 	"github.com/flanksource/gavel/sandbox/internal/substrate/ateapipb"
+	"github.com/flanksource/gavel/sandbox/internal/substrate/ateenvv1alpha"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 var testCredential = InjectedCredential{
@@ -115,6 +119,50 @@ func TestSubstrateEgressRefusesAPortOutOfRange(t *testing.T) {
 		_, err := substrateEgressPolicy(SubstrateOptions{}, "ate-env", server, nil)
 		require.EqualError(t, err, `substrate egress: GAVEL_SERVER "`+server+`" has port `+port+`, outside 1-65535`)
 	}
+}
+
+// acceptingSubstrate accepts the calls Submit makes and fails any other.
+type acceptingSubstrate struct {
+	ateenvv1alpha.EnvironmentServiceClient
+	ateenvv1alpha.ProcessServiceClient
+	ateapipb.ControlClient
+}
+
+func (acceptingSubstrate) CreateEnvironment(context.Context, *ateenvv1alpha.CreateEnvironmentRequest, ...grpc.CallOption) (*ateenvv1alpha.CreateEnvironmentResponse, error) {
+	return &ateenvv1alpha.CreateEnvironmentResponse{}, nil
+}
+
+func (acceptingSubstrate) CreateActorEgressPolicy(context.Context, *ateapipb.CreateActorEgressPolicyRequest, ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	return &ateapipb.EgressPolicy{}, nil
+}
+
+func (acceptingSubstrate) StartProcess(context.Context, *ateenvv1alpha.StartProcessRequest, ...grpc.CallOption) (*ateenvv1alpha.Process, error) {
+	return &ateenvv1alpha.Process{ProcessId: "process"}, nil
+}
+
+func TestSubstrateSubmitLogsTheCredentialsTheGatewayInjects(t *testing.T) {
+	substrate := acceptingSubstrate{}
+	executor := &substrateExecutor{options: SubstrateOptions{Atespace: "ate-env"}, envs: substrate, processes: substrate, control: substrate}
+	run := uuid.MustParse("6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f")
+	job := Job{
+		RunID:       run,
+		Image:       "ghcr.io/flanksource/gavel-runner@sha256:" + strings64("a"),
+		Command:     []string{"gavel", "runner", "exec", "--run", run.String()},
+		Env:         map[string]string{"GAVEL_SERVER": "https://gavel.example.com"},
+		Credentials: []InjectedCredential{testCredential},
+	}
+	logged := logtest.Capture(t)
+
+	_, err := executor.Submit(context.Background(), job)
+	require.NoError(t, err)
+	assert.Contains(t, logged.String(), "sandbox run 6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f in substrate environment ate-env/gavel-run-6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f: the egress gateway injects api.anthropic.com x-api-key from ate-secret://gavel/beta/6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f/anthropic")
+
+	keyless := job
+	keyless.RunID = uuid.MustParse("7a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d")
+	keyless.Credentials = nil
+	_, err = executor.Submit(context.Background(), keyless)
+	require.NoError(t, err)
+	assert.Contains(t, logged.String(), "sandbox run 7a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d in substrate environment ate-env/gavel-run-7a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d: the egress gateway injects no credentials")
 }
 
 func TestSubstrateActorIsTheSPIFFEIDOfTheRunsEnvironment(t *testing.T) {
