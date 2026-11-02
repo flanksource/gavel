@@ -123,7 +123,7 @@ func stageSessionFiles(ctx context.Context, workDir, sessionID string, cfg verif
 	if len(keep) == 0 {
 		return fmt.Errorf("stage session %q (%d edited, all skipped): %w", sessionID, len(modified), ErrSessionNoFiles)
 	}
-	return addFiles(ctx, workDir, keep)
+	return addFiles(ctx, addFilesOptions{WorkDir: workDir, Files: keep})
 }
 
 // symlinkedParent returns the first directory of rel (relative to root) that is

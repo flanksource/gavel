@@ -288,6 +288,84 @@ var _ = Describe("dry-run new-PR push generates title/body and reports without p
 	})
 })
 
+var _ = Describe("pushAfterCommit with PushModeBranch on an already-pushed branch", func() {
+	const (
+		branch      = "feat/pushed"
+		baseBranch  = "main"
+		prNumber    = 42
+		mergeMethod = "rebase"
+	)
+	var (
+		workDir  string
+		pushed   []string
+		created  []model.CreatePRInput
+		merged   []string
+		seededBy []string
+		deps     pushDeps
+	)
+
+	BeforeEach(func() {
+		workDir = GinkgoT().TempDir()
+		runGit(workDir, "init", "-b", baseBranch)
+		runGit(workDir, "commit", "--allow-empty", "-m", "root")
+		runGit(workDir, "update-ref", filepath.Join("refs/remotes/origin", baseBranch), baseBranch)
+		runGit(workDir, "checkout", "-b", branch)
+		runGit(workDir, "commit", "--allow-empty", "-m", "feat: first")
+		runGit(workDir, "commit", "--allow-empty", "-m", "fix: second")
+		// The branch is already on the remote at HEAD, so nothing is ahead of its upstream.
+		runGit(workDir, "update-ref", filepath.Join("refs/remotes/origin", branch), "HEAD")
+		pushed, created, merged, seededBy = nil, nil, nil, nil
+		deps = pushDeps{
+			searchPRs: func(github.Options, github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error) {
+				return github.PRSearchResults{}, nil, nil
+			},
+			defaultBranch: func(github.Options) (string, error) { return baseBranch, nil },
+			isAncestor:    func(_, _, _ string) bool { return false },
+			aheadCommits:  loadAheadCommits,
+			rebaseOnto:    func(_, _ string) error { return nil },
+			generatePRPrompt: func(_ context.Context, in PRContentInput) (PRContent, error) {
+				for _, c := range in.Commits {
+					seededBy = append(seededBy, c.Message)
+				}
+				return PRContent{Title: "feat: pushed branch", Body: "body", Branch: "feat/unused"}, nil
+			},
+			gitPush: func(_, refspec string) error { pushed = append(pushed, refspec); return nil },
+			createPR: func(_ github.Options, in model.CreatePRInput) (*model.CreatePRResult, error) {
+				created = append(created, in)
+				return &model.CreatePRResult{Number: prNumber, NodeID: "PR_node", Base: in.Base, URL: "http://x/42"}, nil
+			},
+			enableAutoMerge: func(_ github.Options, nodeID, method string) error {
+				merged = append(merged, nodeID+":"+method)
+				return nil
+			},
+		}
+	})
+
+	It("still reports nothing to push in the default commits mode", func() {
+		err := pushAfterCommitForTest(context.Background(), Options{WorkDir: workDir, Push: true}, &Result{}, deps)
+		Expect(err).To(MatchError(ErrNothingToPush))
+	})
+
+	It("opens an auto-merge PR for every commit on the branch ahead of the default branch", func() {
+		opts := Options{WorkDir: workDir, Push: true, PushMode: PushModeBranch, AutoMerge: true, MergeType: mergeMethod}
+		Expect(pushAfterCommitForTest(context.Background(), opts, &Result{}, deps)).To(Succeed())
+
+		Expect(seededBy).To(Equal([]string{"feat: first", "fix: second"}))
+		Expect(pushed).To(Equal([]string{"HEAD:" + branch}))
+		Expect(created).To(Equal([]model.CreatePRInput{{Title: "feat: pushed branch", Body: "body", Head: branch, Base: baseBranch}}))
+		Expect(merged).To(Equal([]string{"PR_node:" + mergeMethod}))
+	})
+
+	It("seeds the PR from the whole branch, not only the commit this run made", func() {
+		runGit(workDir, "commit", "--allow-empty", "-m", "chore: third")
+		fresh := CommitResult{Hash: "abc", Message: "chore: third"}
+		opts := Options{WorkDir: workDir, Push: true, PushMode: PushModeBranch}
+		Expect(pushAfterCommitForTest(context.Background(), opts, &Result{Commits: []CommitResult{fresh}}, deps)).To(Succeed())
+
+		Expect(seededBy).To(Equal([]string{"feat: first", "fix: second", "chore: third"}))
+	})
+})
+
 // pushAfterCommitForTest mirrors pushAfterCommit but lets tests inject
 // pushDeps directly. Keeps tests honest about the exported entry point
 // without exposing the deps in production code.

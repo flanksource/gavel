@@ -25,6 +25,7 @@ func registerCommitCommand(parent *cobra.Command, run func(CommitOptions) (any, 
 	cmd.Use = "commit [files...]"
 	cmd.Args = cobra.ArbitraryArgs
 	cmd.Flags().Lookup("ai-fix").NoOptDefVal = "true"
+	cmd.Flags().Lookup("push").NoOptDefVal = "true"
 	if f := cmd.Flags().Lookup("fixup"); f != nil {
 		f.NoOptDefVal = commitpkg.FixupAuto
 	}

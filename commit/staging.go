@@ -133,7 +133,7 @@ func addUntracked(ctx context.Context, workDir string, cfg verify.CommitConfig) 
 			keep = append(keep, f)
 		}
 	}
-	return addFiles(ctx, workDir, keep)
+	return addFiles(ctx, addFilesOptions{WorkDir: workDir, Files: keep})
 }
 
 func stageCommitAllSource(ctx context.Context, workDir string, cfg verify.CommitConfig) error {

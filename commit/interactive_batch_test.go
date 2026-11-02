@@ -81,7 +81,7 @@ var _ = Describe("collectInteractiveBatches", func() {
 			Fail("batch collection must not reset the index")
 			return nil
 		}
-		addFilesFunc = func(context.Context, string, []string) error {
+		addFilesFunc = func(context.Context, addFilesOptions) error {
 			Fail("batch collection must not stage files")
 			return nil
 		}

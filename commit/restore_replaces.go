@@ -77,7 +77,7 @@ func applyGoModReplaceUpgrade(ctx context.Context, workDir, gitRoot, file string
 	if _, err := os.Stat(filepath.Join(gitRoot, goSumRel)); err == nil {
 		toStage = append(toStage, goSumRel)
 	}
-	if err := addFiles(ctx, workDir, toStage); err != nil {
+	if err := addFiles(ctx, addFilesOptions{WorkDir: workDir, Files: toStage}); err != nil {
 		return fmt.Errorf("stage %v: %w", toStage, err)
 	}
 	return nil

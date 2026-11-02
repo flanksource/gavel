@@ -79,6 +79,8 @@ type Options struct {
 	DryRun     bool
 	Force      bool
 	Push       bool
+	// PushMode, with Push, selects which commits are published and seed the PR.
+	PushMode PushMode
 	// PushBranch, with Push, pushes HEAD to this remote branch instead of
 	// searching for the PR to push to: the caller already knows which PR it is
 	// working on, and may be committing on a scratch branch no PR is open for.

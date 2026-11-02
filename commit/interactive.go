@@ -76,7 +76,7 @@ func runInteractiveStaging(ctx context.Context, opts Options) ([]string, error) 
 	if err := resetAllStagedFn(ctx, opts.WorkDir); err != nil {
 		return nil, fmt.Errorf("reset index before staging selection: %w", err)
 	}
-	if err := addFilesFunc(ctx, opts.WorkDir, picked.Selected); err != nil {
+	if err := addFilesFunc(ctx, addFilesOptions{WorkDir: opts.WorkDir, Files: picked.Selected}); err != nil {
 		return nil, fmt.Errorf("stage selected files: %w", err)
 	}
 

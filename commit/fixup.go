@@ -272,7 +272,7 @@ func restageOnly(ctx context.Context, workDir string, original, keep []string) e
 	if err := resetFiles(ctx, workDir, original); err != nil {
 		return err
 	}
-	return addFiles(ctx, workDir, keep)
+	return addFiles(ctx, addFilesOptions{WorkDir: workDir, Files: keep})
 }
 
 // runAutosquash runs `git rebase -i --autosquash <base>` non-interactively

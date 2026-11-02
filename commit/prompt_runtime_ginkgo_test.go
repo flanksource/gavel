@@ -36,6 +36,14 @@ func (*promptRuntimeProbe) GetCosts() clickyai.Costs { return nil }
 func (*promptRuntimeProbe) Close() error             { return nil }
 
 var _ = Describe("commit prompt runtime preservation", func() {
+	It("uses the editable squash body without replacing it with generated instructions", func() {
+		got, err := (Options{WorkDir: GinkgoT().TempDir(), Saved: &captainconfig.Config{}, AI: api.Spec{Model: api.Model{Name: "api:haiku"}}}).resolvePrompt(commitPromptOptions{
+			Prompt: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "Custom: {{#each messages}}{{{this}}}{{/each}}"}}},
+			Name:   "commit.squash", Default: squashPrompt, Data: map[string]any{"messages": []string{"fix: parser"}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.Request.Prompt.User).To(Equal("Custom: fix: parser"))
+	})
 	It("rejects an explicitly cleared grouping model instead of recovering an inherited selection", func() {
 		opts := promptTestOptions()
 		opts.Flags = modelFlags("api:sonnet")

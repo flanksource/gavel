@@ -191,7 +191,8 @@ func analyzeGroup(ctx context.Context, opts Options, group commitGroup) (CommitR
 func stageAndCommitGroup(ctx context.Context, workDir string, group commitGroup, message string) (string, error) {
 	commitSerializeMu.Lock()
 	defer commitSerializeMu.Unlock()
-	if err := addFiles(ctx, workDir, group.GitPaths()); err != nil {
+	// Group paths come from the approved index, including force-added files.
+	if err := addFiles(ctx, addFilesOptions{WorkDir: workDir, Files: group.GitPaths(), Force: true}); err != nil {
 		return "", fmt.Errorf("stage commit group %s: %w", group.labelOrDefault(), err)
 	}
 	hash, err := commitWithMessage(ctx, workDir, message)

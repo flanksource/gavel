@@ -172,12 +172,22 @@ func splitLines(out string) []string {
 	return lines
 }
 
-func addFiles(ctx context.Context, workDir string, files []string) error {
-	if len(files) == 0 {
+type addFilesOptions struct {
+	WorkDir string
+	Files   []string
+	Force   bool
+}
+
+func addFiles(ctx context.Context, opts addFilesOptions) error {
+	if len(opts.Files) == 0 {
 		return nil
 	}
-	args := append([]string{"add", "-A", "--"}, files...)
-	if out, err := runGitRetryingLocks(ctx, workDir, args...); err != nil {
+	args := []string{"add", "-A"}
+	if opts.Force {
+		args = append(args, "-f")
+	}
+	args = append(append(args, "--"), opts.Files...)
+	if out, err := runGitRetryingLocks(ctx, opts.WorkDir, args...); err != nil {
 		return fmt.Errorf("git add -A: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
