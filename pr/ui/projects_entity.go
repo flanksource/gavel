@@ -44,13 +44,14 @@ func newProjectInfo(ctx context.Context, p Project, counts todoCountsResult) (pr
 	hasProcfile := dir != "" && procfile.Find(dir, "") != ""
 	stopFile()
 	info := projectInfo{
-		Name:        p.Name,
-		Short:       query.ShortProjectName(p.Name),
-		Dir:         dir,
-		Repos:       p.Repos,
-		HasProcfile: hasProcfile,
-		TodoBackend: "db",
-		Hidden:      p.Hidden,
+		Name:          p.Name,
+		Short:         query.ShortProjectName(p.Name),
+		Dir:           dir,
+		Repos:         p.Repos,
+		ReposInferred: p.ReposInferred,
+		HasProcfile:   hasProcfile,
+		TodoBackend:   "db",
+		Hidden:        p.Hidden,
 	}
 	if p.Hidden {
 		return info, nil

@@ -90,6 +90,7 @@ export function HeaderActionsMenu({
 }) {
   // Owned here, not by the menu content: that unmounts the moment the menu closes.
   const [linkingPR, setLinkingPR] = useState(false);
+  const advancedBlocked = awaitingHumanAction && todo.status !== 'review';
   return (
     <>
     <DropdownMenu
@@ -178,8 +179,8 @@ export function HeaderActionsMenu({
                 <MobileMenuItem
                   icon={UiCog}
                   label="Advanced run"
-                  detail={awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
-                  disabled={busy || runBusy || awaitingHumanAction}
+                  detail={advancedBlocked ? 'Resolve the pending question first' : undefined}
+                  disabled={busy || runBusy || advancedBlocked}
                   onClick={() => {
                     close();
                     onAdvanced('run');

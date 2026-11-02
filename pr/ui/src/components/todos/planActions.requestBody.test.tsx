@@ -50,6 +50,13 @@ function fetchLaunch(payload: unknown) {
 }
 
 describe('usePlanActions request bodies', () => {
+  it.each([false, true])('preserves the advanced run branch choice through approval: %s', async reuseBranch => {
+    const fetchMock = fetchLaunch({ todo: { ref: 'todo-1', title: 'Branch choice', status: 'in_progress', priority: 'medium' } });
+    const { result } = renderHook(() => usePlanActions('/workspace'), { wrapper: queryTestWrapper() });
+    await act(async () => { await result.current.approve('todo-1', { run: true, options: { step: 'run', reuseBranch, spec: {} } }); });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({ ref: 'todo-1', run: true, options: { step: 'run', reuseBranch, spec: {} } });
+  });
+
   it('sends only step/spec through approve, stripping the driver/runMode the caller carried', async () => {
     const fetchMock = fetchLaunch({ todo: { ref: 'todo-1', title: 'x', status: 'in_progress', priority: 'medium' } });
     const { result } = renderHook(() => usePlanActions('/workspace'), { wrapper: queryTestWrapper() });

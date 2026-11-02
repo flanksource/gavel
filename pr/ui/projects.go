@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos/query"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 )
@@ -33,6 +34,10 @@ type Project struct {
 	// "Manage hidden" view, and out of background git tracking. Only
 	// SetProjectHidden changes it; a form update keeps it.
 	Hidden bool `json:"hidden,omitempty"`
+	// ReposInferred marks Repos as derived from the directory's GitHub remotes
+	// because none were registered. Inferred repos are never written back, so
+	// they keep following the checkout's remotes.
+	ReposInferred bool `json:"reposInferred,omitempty"`
 }
 
 // LoadProjectsOptions selects which catalog entries LoadProjects returns.
@@ -103,7 +108,41 @@ func readProjects() ([]Project, error) {
 	if err := json.Unmarshal(data, &ps); err != nil {
 		return nil, fmt.Errorf("parse gavel projects file %s: %w", projectsPath, err)
 	}
+	for i := range ps {
+		if ps[i], err = ps[i].withInferredRepos(); err != nil {
+			return nil, err
+		}
+	}
 	return sortProjects(normalizeRepos(ps)), nil
+}
+
+// withInferredRepos fills an unregistered repo list from the project
+// directory's GitHub remotes. A directory that does not exist or is not a git
+// checkout has no repos to infer.
+func (p Project) withInferredRepos() (Project, error) {
+	if len(p.Repos) > 0 {
+		return p, nil
+	}
+	dir := p.ResolvedDir()
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return p, nil
+	}
+	repos, err := github.ReposFromRemotes(dir)
+	if err != nil {
+		return p, fmt.Errorf("infer repos of project %q from %s: %w", p.Name, projectsPath, err)
+	}
+	p.Repos, p.ReposInferred = repos, len(repos) > 0
+	return p, nil
+}
+
+// withoutInferredRepos drops inferred repos before the catalog is written.
+func withoutInferredRepos(ps []Project) []Project {
+	for i := range ps {
+		if ps[i].ReposInferred {
+			ps[i].Repos, ps[i].ReposInferred = nil, false
+		}
+	}
+	return ps
 }
 
 // SaveProjects writes the project list back to ~/.config/gavel/projects.json,
@@ -112,7 +151,7 @@ func SaveProjects(ps []Project) error {
 	if err := os.MkdirAll(filepath.Dir(projectsPath), 0o755); err != nil {
 		return fmt.Errorf("create gavel projects directory for %s: %w", projectsPath, err)
 	}
-	data, err := json.MarshalIndent(sortProjects(normalizeRepos(slices.Clone(ps))), "", "  ")
+	data, err := json.MarshalIndent(sortProjects(normalizeRepos(withoutInferredRepos(slices.Clone(ps)))), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal gavel projects file %s: %w", projectsPath, err)
 	}
@@ -291,6 +330,9 @@ func UpdateProject(name string, p Project) error {
 		return fmt.Errorf("%w: %q was not found in %s", ErrProjectNotFound, name, projectsPath)
 	}
 	p.Name, p.Hidden = name, existing.Hidden
+	// A form or CLI update echoes the repos it was shown; unchanged inferred
+	// repos stay inferred instead of being registered.
+	p.ReposInferred = existing.ReposInferred && slices.Equal(p.Repos, existing.Repos)
 	if p.Dir == "" {
 		return ErrProjectInvalid
 	}

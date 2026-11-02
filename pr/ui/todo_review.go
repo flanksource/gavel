@@ -245,7 +245,11 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !opts.Resume {
-		todo.Prompt = run.RevisionPrompt(feedback)
+		todo.Prompt, err = run.RevisionPrompt(r.Context(), source.Dir, feedback)
+		if err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	req.Todo = todo
 	sum, err := todoDetail(r.Context(), provider, source.Dir, todo)

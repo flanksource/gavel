@@ -197,11 +197,12 @@ interface CmuxSurface {
 // on. It only fetches while `enabled` (the menu is open) because each call shells
 // out to cmux; a stopped cmux or a closed terminal resolves to found=false with a
 // reason rather than throwing, so the control still offers Resume.
-function useCmuxSurface(dir: string, agent: string | undefined, enabled: boolean) {
+function useCmuxSurface(dir: string, sessionId: string, agent: string | undefined, enabled: boolean) {
   const query = useQuery({
-    queryKey: todoQueryKeys.cmuxSurface(dir, agent),
+    queryKey: [...todoQueryKeys.cmuxSurface(dir, agent), sessionId],
     queryFn: async ({ signal }) => {
       const params = new URLSearchParams(todoQuery(dir));
+      params.set('sessionId', sessionId);
       if (agent) params.set('agent', agent);
       return fetchJSON<CmuxSurface>({
         url: `/api/todos/session/cmux?${params.toString()}`,
@@ -238,11 +239,12 @@ export function CmuxSessionButton(props: CmuxSessionButtonProps) {
 
 function CmuxSessionMenu({ dir, sessionId, agent, onResume, resumeDisabled }: CmuxSessionButtonProps) {
   const [open, setOpen] = useState(false);
-  const { surface, loading } = useCmuxSurface(dir, agent, open);
+  const { surface, loading } = useCmuxSurface(dir, sessionId, agent, open);
   const focusMutation = useMutation({
     mutationKey: ['todos', 'session', 'focus', { dir: dir.trim(), agent: agent ?? '' }],
     mutationFn: () => {
       const params = new URLSearchParams(todoQuery(dir));
+      params.set('sessionId', sessionId);
       if (agent) params.set('agent', agent);
       return todoMutationJSON<{ focused: boolean }>(
         `/api/todos/session/focus?${params.toString()}`,

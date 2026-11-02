@@ -11,6 +11,7 @@ import (
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
@@ -247,7 +248,15 @@ func answerText(payload todoAnswerPayload) (string, error) {
 		answer = string(encoded)
 	}
 	if answer == "" && payload.Rejected {
-		answer = "The pending question was rejected. Continue without that answer or explain what is required."
+		dir := payload.Dir
+		if dir == "" {
+			dir = "."
+		}
+		rendered, err := library.Render(context.Background(), library.RenderOptions{Directory: dir, Name: "todos-answer-rejected"})
+		if err != nil {
+			return "", err
+		}
+		answer = rendered.User
 	}
 	if answer == "" {
 		return "", fmt.Errorf("answer is required")

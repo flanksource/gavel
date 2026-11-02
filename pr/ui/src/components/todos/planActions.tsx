@@ -75,6 +75,7 @@ function runRequestOptions(options: TodoRunOptions, action?: TodoRunAction): Tod
     runtimeProfile: normalized.runtimeProfile,
     spec: normalized.spec,
     resume: normalized.resume,
+    reuseBranch: normalized.reuseBranch,
     force: normalized.force,
   };
 }
