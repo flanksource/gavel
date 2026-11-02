@@ -1,5 +1,6 @@
 // The Projects tab of a hosted organization: its repositories, and on the selected one test or
-// lint started as a sandbox job on a picked branch, with the repository's recent test and lint runs.
+// lint started as a sandbox job on a picked branch, with the repository's recent test and lint runs
+// and the runs its GitHub Actions jobs uploaded.
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Select } from '@flanksource/clicky-ui/components';
@@ -7,6 +8,7 @@ import { UiFolderGit } from '@flanksource/clicky-ui/icons';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import type { Project } from '../types';
 import { kindLabels, runStatus, useSandboxRuns } from './RunsView';
+import { CIRunView, CIRunsList } from './HostedCIRuns';
 
 interface Branches {
   default: string;
@@ -58,10 +60,21 @@ export function HostedProjectPane({ project, onSelectRun }: { project: Project |
       </div>
     );
   }
-  return <ProjectActions key={project.name} project={project} onSelectRun={onSelectRun} />;
+  return <ProjectPane key={project.name} project={project} onSelectRun={onSelectRun} />;
 }
 
-function ProjectActions({ project, onSelectRun }: { project: Project; onSelectRun: (id: string) => void }) {
+// ProjectPane shows the repository's actions and runs, or the CI run picked from them.
+function ProjectPane({ project, onSelectRun }: { project: Project; onSelectRun: (id: string) => void }) {
+  const [ciRun, setCIRun] = useState('');
+  if (ciRun) return <CIRunView project={project} runId={ciRun} onBack={() => setCIRun('')} />;
+  return <ProjectActions project={project} onSelectRun={onSelectRun} onSelectCIRun={setCIRun} />;
+}
+
+function ProjectActions({ project, onSelectRun, onSelectCIRun }: {
+  project: Project;
+  onSelectRun: (id: string) => void;
+  onSelectCIRun: (runId: string) => void;
+}) {
   const queryClient = useQueryClient();
   const name = encodeURIComponent(project.name);
   const branches = useQuery({
@@ -119,6 +132,7 @@ function ProjectActions({ project, onSelectRun }: { project: Project; onSelectRu
           ))}
         </ul>
       </section>
+      <CIRunsList project={project} onSelect={onSelectCIRun} />
     </div>
   );
 }
