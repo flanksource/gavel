@@ -131,8 +131,9 @@ func RepoWorkspace(repoID uuid.UUID) string {
 
 // ingestRunSnapshot stores data, the raw snapshot snap, as a run of repoID in org's blob store and
 // indexes it in test_run_caches. sha fills in the commit when the snapshot names none. A
-// non-empty runID names the run to replace; otherwise a free one is allocated. It returns the
-// run ID.
+// non-empty runID names the run to replace; otherwise a free one is allocated. A replacement
+// without a log tail keeps the replaced run's: the action's final upload carries none, and would
+// otherwise erase the diagnostics the job streamed. It returns the run ID.
 func ingestRunSnapshot(ctx context.Context, store *cache.Store, org, repoID uuid.UUID, sha string, data []byte, snap testui.Snapshot, runID string) (string, error) {
 	blobs := store.OrgBlobs(org)
 	if blobs == nil {
@@ -144,6 +145,7 @@ func ingestRunSnapshot(ctx context.Context, store *cache.Store, org, repoID uuid
 		started = snap.Metadata.Started.UTC()
 	}
 	stem := snapshots.PerRunPrefix + started.Format(snapshots.PerRunTimestampLayout)
+	replacing := runID != ""
 	for i := 1; i < 1000 && runID == ""; i++ {
 		candidate := stem
 		if i > 1 {
@@ -161,6 +163,13 @@ func ingestRunSnapshot(ctx context.Context, store *cache.Store, org, repoID uuid
 		return "", fmt.Errorf("no free run id for %s", stem)
 	}
 	key := runID + ".json"
+	if replacing && snap.LogTail == "" {
+		kept, err := keepLogTail(ctx, runs, key, data)
+		if err != nil {
+			return "", err
+		}
+		data = kept
+	}
 	if err := runs.Write(ctx, key, bytes.NewReader(data)); err != nil {
 		return "", err
 	}
@@ -173,4 +182,31 @@ func ingestRunSnapshot(ctx context.Context, store *cache.Store, org, repoID uuid
 		return "", fmt.Errorf("index run %s: %w", runID, err)
 	}
 	return runID, nil
+}
+
+// keepLogTail returns data, a snapshot without a log tail, with the log tail of the run stored at
+// key, unchanged when there is no such run or it has none.
+func keepLogTail(ctx context.Context, runs blob.Store, key string, data []byte) ([]byte, error) {
+	reader, err := runs.Read(ctx, key)
+	if errors.Is(err, blob.ErrNotFound) {
+		return data, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the replaced run: %w", err)
+	}
+	defer reader.Close() //nolint:errcheck
+	var stored struct {
+		LogTail string `json:"log_tail"`
+	}
+	if err := json.NewDecoder(reader).Decode(&stored); err != nil || stored.LogTail == "" {
+		return data, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, fmt.Errorf("decode the results: %w", err)
+	}
+	if fields["log_tail"], err = json.Marshal(stored.LogTail); err != nil {
+		return nil, err
+	}
+	return json.Marshal(fields)
 }

@@ -38,6 +38,8 @@ var hostedPassThrough = []string{
 	// Hosted project actions run in sandbox jobs of the organization's repositories (see
 	// hosted_project_actions.go), before the host's projects are read.
 	"POST /api/projects/{name}/actions", "GET /api/projects/{name}/branches",
+	// The organization's CI runs, as its repositories' GitHub Actions jobs upload them (see ci_runs.go).
+	"GET /api/projects/{name}/ci-runs", "GET /api/projects/{name}/ci-runs/{run}",
 
 	"GET /api/projects", "/api/todos", "POST /api/todos/batch", "POST /api/todos/new", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
 	"/api/todos/pr-links", "POST /api/todos/criteria", "/api/todos/attachments", "GET /api/todos/attachments/{id}",
