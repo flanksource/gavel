@@ -11,6 +11,7 @@ import (
 
 var _ = Describe("tagged package graphs", func() {
 	It("loads dependencies enabled by the requested build tags", func() {
+		GinkgoT().Setenv("GOWORK", "off")
 		workDir := GinkgoT().TempDir()
 		Expect(os.MkdirAll(filepath.Join(workDir, "app"), 0o755)).To(Succeed())
 		Expect(os.MkdirAll(filepath.Join(workDir, "tagdep"), 0o755)).To(Succeed())

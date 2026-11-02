@@ -77,11 +77,11 @@ var _ = Describe("collectInteractiveBatches", func() {
 				return treePickerResult{}, nil
 			}
 		}
-		resetAllStagedFn = func(string) error {
+		resetAllStagedFn = func(context.Context, string) error {
 			Fail("batch collection must not reset the index")
 			return nil
 		}
-		addFilesFunc = func(string, []string) error {
+		addFilesFunc = func(context.Context, string, []string) error {
 			Fail("batch collection must not stage files")
 			return nil
 		}

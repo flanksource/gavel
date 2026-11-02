@@ -5,6 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PRDetail, PRItem, Project } from '../../types';
 import { CreateTodoFromPRDialog } from './CreateTodoFromPRDialog';
 import { queryTestWrapper } from './queryTestWrapper';
+import { CREATE_RUNTIME, CREATE_RUNTIME_CONTEXT } from './createRuntimeTestHelpers';
+
+vi.mock('./run', async importOriginal => ({
+  ...await importOriginal<typeof import('./run')>(),
+  useTodoRunContext: () => ({ context: CREATE_RUNTIME_CONTEXT, loading: false, error: '' }),
+}));
+vi.mock('./TodoRunActionButton', async () => ({ TodoRunRuntimeBar: (await import('./createRuntimeTestHelpers')).CreateRuntimeBarStub }));
 
 function render(ui: React.ReactElement, options?: RenderOptions) {
   return rtlRender(ui, { wrapper: queryTestWrapper(), ...options });
@@ -214,10 +221,12 @@ describe('CreateTodoFromPRDialog', () => {
     expect(select.value).toBe('');
     expect(Array.from(select.options, option => option.textContent)).toEqual(['None', 'Triage new']);
     fireEvent.change(select, { target: { value: 'triage.new' } });
+    fireEvent.click(screen.getByRole('button', { name: 'triage.new runtime' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     expect(body.step).toBe('triage.new');
+    expect(body.spec).toEqual(CREATE_RUNTIME);
     expect('triage' in body).toBe(false);
   });
   it('creates and selects a project without losing the todo draft', async () => {

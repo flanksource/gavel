@@ -127,6 +127,7 @@ export function AttemptWorkspaceSummary({ attempt }: { attempt: TodoSessionAttem
   const commits = workspace.commits?.length ?? 0;
   const title = [
     worktree?.branch,
+    worktree?.kept ? undefined : worktree?.path,
     worktree?.setup && worktree.head ? `${shortSha(worktree.setup)}..${shortSha(worktree.head)}` : '',
     `${commits} commit${commits === 1 ? '' : 's'}`,
     worktreeFate(worktree),

@@ -2,6 +2,7 @@ package lint
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -636,6 +637,7 @@ func TestExecuteRunsNestedOxlintWithWorkspaceLocalBinary(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	results, err := Execute(Options{WorkDir: repo, Timeout: "5s"})
 	if err != nil {
@@ -652,6 +654,48 @@ func TestExecuteRunsNestedOxlintWithWorkspaceLocalBinary(t *testing.T) {
 	}
 	if oxlintResults[0].WorkDir != nested {
 		t.Fatalf("oxlint work dir = %q, want %q", oxlintResults[0].WorkDir, nested)
+	}
+}
+
+// TestApplyPostLintFiltersKeepsNamedGitIgnoredFiles: naming a gitignored file
+// lints it, while a gitignored file reached only through a directory scope is
+// still filtered.
+func TestApplyPostLintFiltersKeepsNamedGitIgnoredFiles(t *testing.T) {
+	workDir := t.TempDir()
+	if out, err := exec.Command("git", "-C", workDir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".gitignore"), []byte("pages/\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workDir, "pages"), 0o755); err != nil {
+		t.Fatalf("mkdir pages: %v", err)
+	}
+	for _, name := range []string{"review.md", "other.md"} {
+		if err := os.WriteFile(filepath.Join(workDir, "pages", name), nil, 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	results := []*linters.LinterResult{{
+		Linter:  "markdownlint",
+		WorkDir: workDir,
+		Violations: []models.Violation{
+			{Source: "markdownlint", File: "pages/review.md"},
+			{Source: "markdownlint", File: "pages/other.md"},
+		},
+	}}
+
+	if err := applyPostLintFilters(results, workDir, []string{"pages/review.md", "pages"}); err != nil {
+		t.Fatalf("applyPostLintFilters: %v", err)
+	}
+
+	var files []string
+	for _, v := range results[0].Violations {
+		files = append(files, v.File)
+	}
+	if len(files) != 1 || files[0] != "pages/review.md" {
+		t.Fatalf("violations kept = %v, want only the named pages/review.md", files)
 	}
 }
 

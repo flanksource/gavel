@@ -1,21 +1,13 @@
-# Link the sibling @flanksource/clicky-ui checkout as a workspace package so
-# local clicky-ui edits are picked up without publishing. The package.json keeps
-# a published range ("^0.2.x"), and linkWorkspacePackages tells pnpm to symlink
-# the local package when its version satisfies that range. When the sibling is
-# absent (CI), the path below matches nothing and pnpm resolves clicky-ui from
-# the npm registry instead. See xero-cli/webapp/pnpm-workspace.yaml.
-#
-# The catalog mirrors clicky-ui/pnpm-workspace.yaml so the `catalog:` specifiers
-# declared by the linked clicky-ui package resolve. Keep in sync with clicky-ui.
+# @flanksource/clicky-ui always installs from the registry. Local clicky-ui
+# edits are picked up at the bundler level instead: vite.clicky.ts aliases the
+# package to the sibling checkout's source for `vite serve` and `vite build`, and that source
+# resolves its deps from clicky-ui's own install. The sibling is deliberately
+# not a workspace package here — that made this lockfile a second owner of
+# clicky-ui/packages/ui/node_modules and left two resolutions of its deps.
 packages:
   - "."
-  - "../../../clicky-ui/packages/ui"
 
-linkWorkspacePackages: true
-# Prefer the linked local clicky-ui even when the registry has a newer matching
-# version, so local edits always win. When the sibling is absent (CI) there is
-# no workspace package and clicky-ui resolves from the registry.
-preferWorkspacePackages: true
+enableGlobalVirtualStore: true
 catalogMode: prefer
 
 catalog:
@@ -23,6 +15,7 @@ catalog:
   "@codemirror/commands": ^6.10.4
   "@codemirror/lang-json": ^6.0.2
   "@codemirror/lang-sql": ^6.10.0
+  "@codemirror/language": ^6.12.4
   "@codemirror/state": ^6.7.0
   "@codemirror/view": ^6.43.4
   "@ai-sdk/react": ^3.0.201
@@ -52,8 +45,9 @@ catalog:
   "@shikijs/themes": ^1.24.0
   "@shikijs/transformers": ^1.24.0
   "@storybook/addon-essentials": ^8.6.18
-  "@storybook/react": ^8.6.18
-  "@storybook/react-vite": ^8.6.18
+  "@storybook/addon-vitest": 10.6.3
+  "@storybook/react": 10.6.3
+  "@storybook/react-vite": 10.6.3
   "@storybook/test": ^8.6.18
   "@tailwindcss/forms": ^0.5.9
   "@tanstack/react-query": ^5.66.8
@@ -84,15 +78,17 @@ catalog:
   react-dom: ^18.3.1
   shiki: ^1.24.0
   sonner: ^1.7.1
-  storybook: ^8.6.18
+  storybook: 10.6.3
   tailwind-merge: ^2.6.0
-  tailwindcss: ^3.4.17
+  tailwindcss: ^4.3.3
   typescript: ^5.7.2
-  vite: ^6.0.3
-  vite-plugin-dts: ^4.3.0
-  vitest: ^3.0.5
+  vite: ^8.3.5
+  vite-plugin-dts: ^4.5.4
+  vitest: ^5.0.5
   yaml: ^2.8.3
-  '@flanksource/clicky-ui': ^0.3.50
+  '@flanksource/clicky-ui': ^0.3.51
+  '@tailwindcss/vite': ^4.3.3
+  '@vitejs/plugin-react': ^6.1.2
 
 allowBuilds:
   "@parcel/watcher": true

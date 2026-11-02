@@ -10,7 +10,8 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
 	"github.com/flanksource/gavel/internal/database"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -25,7 +26,7 @@ func fixtureSpecResolver(cwd string, cfg verify.GavelConfig) func(context.Contex
 				err = fmt.Errorf("load fixture saved Captain config: %w", loadErr)
 				return
 			}
-			host := &lifecycle.Host{Config: cfg, WorkDir: cwd, Kind: lifecycle.HostCLI, Saved: &saved}
+			host := &lifecycle1.Host{Config: cfg, WorkDir: cwd, Kind: lifecycle1.HostCLI, Saved: &saved}
 			host.Catalog = func(ctx context.Context) (*runtimeprofiles.Catalog, error) {
 				db, err := database.Shared(ctx)
 				if err != nil {
@@ -40,7 +41,7 @@ func fixtureSpecResolver(cwd string, cfg verify.GavelConfig) func(context.Contex
 				return runtimeprofiles.NewDefaultCatalog(ctx, options)
 			}
 			var layers runtimeprofiles.LayerResult
-			layers, err = host.StepLayers(ctx, lifecycle.Step{Name: lifecycle.StepVerify})
+			layers, err = host.StepLayers(ctx, lifecycle.Step{Name: lifecycle1.StepVerify})
 			if err != nil {
 				return
 			}

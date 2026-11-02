@@ -14,12 +14,13 @@ import (
 const ginkgoMetadataPrefix = "GAVEL_GINKGO_V1:"
 
 type goPackageStream struct {
-	goOutput   bytes.Buffer
-	chunks     map[int]string
-	chunkCount int
-	cached     bool
-	finished   bool
-	failed     bool
+	goOutput      bytes.Buffer
+	chunks        map[int]string
+	chunkCount    int
+	cached        bool
+	finished      bool
+	failed        bool
+	metadataError error
 }
 
 // ParseGoTestBatch separates interleaved go test -json events by package and
@@ -44,8 +45,8 @@ func ParseGoTestBatch(output io.Reader, workDir string, ginkgoPackages map[strin
 				streams[pkg] = stream
 			}
 			if event.Action == "output" && strings.HasPrefix(strings.TrimSpace(event.Output), ginkgoMetadataPrefix) {
-				if parseErr := stream.addChunk(strings.TrimSpace(event.Output)); parseErr != nil {
-					return nil, fmt.Errorf("package %s: %w", pkg, parseErr)
+				if stream.metadataError == nil {
+					stream.metadataError = stream.addChunk(strings.TrimSpace(event.Output))
 				}
 			} else {
 				stream.goOutput.Write(line)
@@ -80,21 +81,8 @@ func ParseGoTestBatch(output io.Reader, workDir string, ginkgoPackages map[strin
 		if len(goTests) > 0 {
 			suites = append(suites, TestResults{Framework: GoTest, Tests: goTests})
 		}
-		if stream.chunkCount > 0 {
-			report, err := stream.report()
-			if err != nil {
-				return nil, fmt.Errorf("package %s: %w", pkg, err)
-			}
-			ginkgoTests, err := ginkgoParser.Parse(bytes.NewReader(report))
-			if err != nil {
-				return nil, fmt.Errorf("parse Ginkgo metadata for %s: %w", pkg, err)
-			}
-			for i := range ginkgoTests {
-				ginkgoTests[i].Cached = stream.cached
-			}
-			suites = append(suites, TestResults{Framework: Ginkgo, Tests: ginkgoTests})
-		} else if ginkgoPackages[pkg] && stream.finished && !stream.failed {
-			return nil, fmt.Errorf("package %s passed without Ginkgo metadata", pkg)
+		if ginkgo := stream.ginkgoResults(pkg, ginkgoPackages[pkg], ginkgoParser); ginkgo != nil {
+			suites = append(suites, *ginkgo)
 		}
 		failedTests := 0
 		for _, suite := range suites {
@@ -115,6 +103,33 @@ func ParseGoTestBatch(output io.Reader, workDir string, ginkgoPackages map[strin
 		results[pkg] = suites
 	}
 	return results, nil
+}
+
+func (s *goPackageStream) ginkgoResults(pkg string, required bool, parser *GinkgoJSON) *TestResults {
+	err := s.metadataError
+	var tests Tests
+	if err == nil && s.chunkCount > 0 {
+		var report []byte
+		report, err = s.report()
+		if err == nil {
+			tests, err = parser.Parse(bytes.NewReader(report))
+		}
+	} else if err == nil && required && s.finished && !s.failed {
+		err = fmt.Errorf("passed without Ginkgo metadata")
+	}
+	if err != nil {
+		return &TestResults{Framework: Ginkgo, ExitCode: 1, Tests: Tests{{
+			Name: "Ginkgo metadata", Package: pkg, Framework: Ginkgo, Failed: true, Cached: s.cached,
+			Message: fmt.Sprintf("package %s: %v", pkg, err),
+		}}}
+	}
+	if s.chunkCount == 0 {
+		return nil
+	}
+	for i := range tests {
+		tests[i].Cached = s.cached
+	}
+	return &TestResults{Framework: Ginkgo, Tests: tests}
 }
 
 func (s *goPackageStream) addChunk(output string) error {

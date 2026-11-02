@@ -25,6 +25,10 @@ class FakeEventSource {
     this.listeners.set(type, listener);
   }
 
+  removeEventListener(type: string, listener: EventListener) {
+    if (this.listeners.get(type) === listener) this.listeners.delete(type);
+  }
+
   emit(data: unknown) {
     const payload = typeof data === 'string' ? data : JSON.stringify(data);
     this.listeners.get('message')?.(new MessageEvent('message', { data: payload }));

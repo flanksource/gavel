@@ -123,13 +123,11 @@ func (v *Vale) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-// generatedConfig writes a Vale config into gavel's scratch dir (outside
-// WorkDir) when no custom --config is given and an arch config exists.
-// Returns "" when no config should be generated.
+// generatedConfig writes gavel's default Vale config into its scratch dir
+// (outside WorkDir) when vale would otherwise find none: no --config, no
+// VALE_CONFIG_PATH and no project .vale.ini. Without a config vale only prints
+// an error. Returns "" when the user's own config applies.
 func (v *Vale) generatedConfig() (string, error) {
-	if v.ArchConfig == nil {
-		return "", nil
-	}
 	if v.Config != nil {
 		for _, arg := range v.Config.Args {
 			if strings.HasPrefix(arg, "--config") {
@@ -137,9 +135,13 @@ func (v *Vale) generatedConfig() (string, error) {
 			}
 		}
 	}
-	path, err := GenerateValeConfig(v.WorkDir, v.ArchConfig, "markdown", v.DefaultExcludes())
+	hasConfig, err := hasProjectValeConfig(v.WorkDir)
+	if err != nil || hasConfig {
+		return "", err
+	}
+	path, err := GenerateValeConfig(v.WorkDir)
 	if err != nil {
-		return "", fmt.Errorf("generate Vale config with excludes: %w", err)
+		return "", fmt.Errorf("generate Vale config: %w", err)
 	}
 	return path, nil
 }
@@ -161,6 +163,15 @@ func (v *Vale) buildArgsWithConfig(configPath string) []string {
 	if len(v.Files) > 0 {
 		args = append(args, v.Files...)
 	} else if !v.hasPathArg(args) {
+		// vale skips only a top-level node_modules on its own; a walk of the
+		// whole tree has to be told about the rest of gavel's excludes.
+		if !v.hasGlobArg(args) {
+			excludes := append(models.GetBuiltinExcludePatterns(), v.DefaultExcludes()...)
+			if v.ArchConfig != nil {
+				excludes = v.ArchConfig.GetAllLanguageExcludes("markdown", v.DefaultExcludes())
+			}
+			args = append(args, walkExcludeGlob(excludes))
+		}
 		args = append(args, ".")
 	}
 	return args
@@ -224,6 +235,15 @@ func (v *Vale) hasOutputArg(args []string) bool {
 	return false
 }
 
+func (v *Vale) hasGlobArg(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--glob") {
+			return true
+		}
+	}
+	return false
+}
+
 // hasPathArg checks if the args already contain a path argument
 func (v *Vale) hasPathArg(args []string) bool {
 	for _, arg := range args {
@@ -241,15 +261,10 @@ func (v *Vale) parseViolations(output []byte) ([]models.Violation, error) {
 		Code string `json:"Code"`
 		Text string `json:"Text"`
 	}
+	// A run with no findings prints `{}`; an error object means vale did not
+	// lint at all, which must not pass as a clean result.
 	if err := json.Unmarshal(output, &errorResponse); err == nil && errorResponse.Code != "" {
-		// Vale returned an error - this might be OK (e.g., no violations found)
-		if strings.Contains(errorResponse.Text, ".vale.ini not found") || strings.Contains(errorResponse.Text, "no config file found") {
-			// Config issue - return empty violations
-			logger.Debugf("Vale config issue: %s", errorResponse.Text)
-			return []models.Violation{}, nil
-		}
-		logger.Debugf("Vale error response: %s", errorResponse.Text)
-		return []models.Violation{}, nil
+		return nil, fmt.Errorf("vale %s: %s", errorResponse.Code, strings.TrimSpace(errorResponse.Text))
 	}
 
 	// Vale JSON output is a map of filename to array of violations

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ProjectsBar } from './ProjectsBar';
 import type { ProjectGitSummaryView } from '../projectGitQueries';
@@ -7,7 +7,6 @@ import type { ProjectRuns } from './tests/types';
 
 vi.mock('./ProcControl', () => ({ ProcControl: () => <span>process</span> }));
 vi.mock('./TodoBadge', () => ({ TodoBadge: () => <span>todo-badge</span> }));
-vi.mock('./GitChangesBadge', () => ({ GitChangesBadge: () => null }));
 vi.mock('./RelativeTime', () => ({ RelativeTime: ({ iso }: { iso: string }) => <span>{iso}</span> }));
 
 const runHistory: ProjectRuns[] = [{
@@ -36,7 +35,7 @@ describe('ProjectsBar', () => {
       { name: 'clicky', dir: '/work/clicky', repos: [] },
     ];
     const gitSummary: ProjectGitSummaryView = {
-      byProject: new Map([['gavel', { name: 'gavel', base: 'main', adds: 40, dels: 7, worktrees: 2, branches: 1 }]]),
+      byProject: new Map([['gavel', { name: 'gavel', base: 'main', adds: 40, dels: 7, worktrees: 2, branches: 1, uncommittedBranches: 2 }]]),
       error: '',
       loading: false,
     };
@@ -45,7 +44,7 @@ describe('ProjectsBar', () => {
       <ProjectsBar
         projects={projects}
         runs={[]}
-        procStatus={{}}
+        procStatus={{ gavel: { hasProcfile: false, running: false, gitChanges: 9 } }}
         gitSummary={gitSummary}
         selected=""
         selectedRunId=""
@@ -60,9 +59,14 @@ describe('ProjectsBar', () => {
       />,
     );
 
-    expect(screen.getByText('+40')).toBeTruthy();
+    const nameRow = screen.getByRole('button', { name: 'Open gavel project' }).parentElement!;
+    expect(nameRow.contains(screen.getByText('+40'))).toBe(true);
+    expect(within(nameRow).getByText('process')).toBeTruthy();
     expect(screen.getByText('−7')).toBeTruthy();
     expect(screen.getByLabelText('2 linked worktrees')).toBeTruthy();
+    expect(screen.getByLabelText('1 unmerged branch')).toBeTruthy();
+    expect(screen.getByLabelText('2 branches with uncommitted changes')).toBeTruthy();
+    expect(screen.queryByTitle('9 uncommitted changes')).toBeNull();
     expect(screen.queryByText('todo-badge')).toBeNull();
   });
 

@@ -77,7 +77,7 @@ export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: b
   useEffect(() => {
     if (!enabled) return;
     const stream = openEventStream('/api/prs/stream');
-    stream.addEventListener('message', event => {
+    const onMessage = (event: Event) => {
       try {
         const incoming = parseSnapshot(JSON.parse((event as MessageEvent<string>).data));
         queryClient.setQueryData<Snapshot>(queryKeys.prSnapshot(), current => mergeSnapshot(current ?? initialSnapshot, incoming));
@@ -87,29 +87,37 @@ export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: b
           error: 'Pull request stream received an invalid update.',
         }));
       }
-    });
+    };
+    stream.addEventListener('message', onMessage);
     stream.onerror = () => {
       queryClient.setQueryData<Snapshot>(queryKeys.prSnapshot(), current => ({
         ...(current ?? initialSnapshot),
         error: 'Connection lost — retrying...',
       }));
     };
-    return () => stream.close();
+    return () => {
+      stream.removeEventListener('message', onMessage);
+      stream.close();
+    };
   }, [enabled, initialSnapshot, queryClient]);
 
   useEffect(() => {
     if (!hostEnabled) return;
     const stream = openEventStream('/api/proc/status/stream');
-    stream.addEventListener('message', event => {
+    const onMessage = (event: Event) => {
       try {
         queryClient.setQueryData(queryKeys.processStatuses(), parseProcStatuses(JSON.parse((event as MessageEvent<string>).data)));
         setProcessStreamError('');
       } catch {
         setProcessStreamError('Process status stream received an invalid update.');
       }
-    });
+    };
+    stream.addEventListener('message', onMessage);
     stream.onerror = () => setProcessStreamError(current => current || 'Process status stream disconnected; reconnecting…');
-    return () => stream.close();
+    return () => {
+      stream.removeEventListener('message', onMessage);
+      stream.close();
+    };
   }, [hostEnabled, queryClient]);
 
   // Git state is pushed, not polled: a generation change invalidates the

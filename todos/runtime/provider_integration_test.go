@@ -313,7 +313,10 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NotEmpty(t, preparation.SessionID)
 	resumeBefore, err := repository.GetIssue(t.Context(), mustUUID(t, resumeTodo.ID))
 	require.NoError(t, err)
-	_, err = provider.PrepareRun(t.Context(), resumeTodo, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "claude", Resume: true})
+	_, err = provider.PrepareRun(t.Context(), resumeTodo, todos.RunPreparation{
+		Mode: types.ModeRun, ExecutorName: "claude", Resume: true,
+		Requested: captaindb.PromptRunRuntimeSelection{Provider: "anthropic"},
+	})
 	require.ErrorIs(t, err, todos.ErrRunResumeModeMismatch)
 	resumeAfter, err := repository.GetIssue(t.Context(), mustUUID(t, resumeTodo.ID))
 	require.NoError(t, err)
@@ -381,6 +384,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	}
 	preparation, err = runtimetest.Admit(t.Context(), provider, planTodo, todos.RunPreparation{
 		Mode: types.ModePlan, ExecutorName: "claude", Resume: true,
+		Requested: captaindb.PromptRunRuntimeSelection{Provider: "anthropic"},
 	}, finishedRun("runtime-plan-1", revisedResult))
 	require.NoError(t, err)
 	require.NotEmpty(t, preparation.SessionID)

@@ -220,17 +220,18 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 	}
 	// Revise re-enters the plan step: it continues the plan run's own
 	// configuration, resuming its session with the feedback as the next turn
-	// when there is one, and otherwise planning afresh with the feedback in the
-	// todo's own prompt.
+	// when the requested runtime can continue it, and otherwise planning afresh
+	// with the feedback in the todo's own prompt.
 	c := run.Continuation{
 		Dir: source.Dir, Provider: provider, Todo: todo, Prior: planRun,
 		Override: override, Step: string(types.PlanPhase),
 	}
-	resume := run.PriorSessionID(todo) != ""
-	if resume {
-		c.Resume, c.Message = true, feedback
+	opts, err := run.Revise(r.Context(), c, feedback)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
 	}
-	req, err := s.continuationRequest(r.Context(), source, c)
+	req, err := s.dispatchRequest(r.Context(), source, c, opts)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -243,8 +244,8 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if !resume {
-		todo.Prompt = "Revise the existing plan using this reviewer feedback:\n\n" + feedback
+	if !opts.Resume {
+		todo.Prompt = run.RevisionPrompt(feedback)
 	}
 	req.Todo = todo
 	sum, err := todoDetail(r.Context(), provider, source.Dir, todo)
@@ -298,6 +299,11 @@ func (s *Server) continuationRequest(ctx context.Context, source todoSource, c r
 	if err != nil {
 		return run.Request{}, err
 	}
+	return s.dispatchRequest(ctx, source, c, opts)
+}
+
+// dispatchRequest brokers a continuation's resolved options as a dashboard run.
+func (s *Server) dispatchRequest(ctx context.Context, source todoSource, c run.Continuation, opts run.Options) (run.Request, error) {
 	req := run.Request{
 		Provider: c.Provider, Registry: todoRuns(), Todo: c.Todo, Dir: c.Dir,
 		Options: opts, Approvals: true,

@@ -10,7 +10,6 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	clickyai "github.com/flanksource/gavel/ai"
-	"github.com/flanksource/gavel/internal/prompting"
 )
 
 // PRCommitInput is the minimal commit description GeneratePRContent needs.
@@ -67,7 +66,6 @@ func GeneratePRContent(ctx context.Context, in PRContentInput) (content PRConten
 	}
 	defer closeAgent(agent, &err)
 
-	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{Name: "PR title and body", Spec: prepared.Request})
 	if err != nil {
 		return PRContent{}, fmt.Errorf("execute PR-content prompt: %w", err)

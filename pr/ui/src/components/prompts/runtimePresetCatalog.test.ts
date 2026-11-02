@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ResolvedRuntimeProfile, RuntimePreset } from '@flanksource/clicky-ui/ai';
-import { runtimePresetClient, type RuntimeRecordSource, type StoredRuntimePreset } from './runtimePresetCatalog';
+import { presetWrite, runtimePresetClient, type RuntimeRecordSource, type StoredRuntimePreset } from './runtimePresetCatalog';
 
 const preset: RuntimePreset = {
   id: 'review',
@@ -24,6 +24,12 @@ afterEach(() => {
 });
 
 describe('runtimePresetClient', () => {
+  it.each([0, 100, -100])('preserves authored preset order %s', (order) => {
+    expect(presetWrite({ ...preset, order })).toEqual({
+      name: 'Review', scope: 'context', spec: {}, presets: [], order,
+    });
+  });
+
   it('supports both published profile resolution and linked preset resolution', async () => {
     const bodies: unknown[] = [];
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {

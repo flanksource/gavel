@@ -5,6 +5,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoItem } from '../../types';
 import { RunAfterCreation, RunCreationRecovery, useRunAfterCreation } from './RunAfterCreation';
 import { readCreateStepChoice } from './runChoiceStorage';
+import { Button } from '@flanksource/clicky-ui/components';
+import { rememberTodoRunOptions } from './run';
+import { CREATE_MODEL as MODEL, CREATE_RUNTIME_CONTEXT as context } from './createRuntimeTestHelpers';
+const runtime = vi.hoisted(() => ({ loading: false, error: '', dirs: [] as string[] }));
+
+vi.mock('./run', async importOriginal => ({
+  ...await importOriginal<typeof import('./run')>(),
+  useTodoRunContext: ({ dir }: { dir: string }) => {
+    runtime.dirs.push(dir);
+    return { context: runtime.loading ? null : runtime.error ? { ...context, modes: [] } : context, loading: runtime.loading, error: runtime.error };
+  },
+}));
+
+vi.mock('./TodoRunActionButton', async () => ({ TodoRunRuntimeBar: (await import('./createRuntimeTestHelpers')).CreateRuntimeBarStub }));
 
 const DIR = '/work/acme';
 const STEPS_BY_STATUS: Record<string, { name: string; label: string; prompt: string; auxiliary: boolean }[]> = {
@@ -22,7 +36,7 @@ function stubSteps() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), 'http://gavel.test');
     expect(url.pathname).toBe('/api/todos/new/steps');
-    expect(url.searchParams.get('dir')).toBe(DIR);
+    expect(url.searchParams.get('dir')).toMatch(/^\/work\//);
     return { ok: true, status: 200, json: async () => ({ steps: STEPS_BY_STATUS[url.searchParams.get('status') ?? ''] ?? [] }) };
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -31,12 +45,17 @@ function stubSteps() {
 
 function Harness({ initialStatus }: { initialStatus: string }) {
   const [status, setStatus] = useState(initialStatus);
-  const runAfter = useRunAfterCreation({ dir: DIR, status });
+  const [dir, setDir] = useState(DIR);
+  const runAfter = useRunAfterCreation({ dir, status });
   return (
     <>
-      <button onClick={() => setStatus('pending')}>to pending</button>
+      <Button type="button" onClick={() => setStatus('pending')}>to pending</Button>
+      <Button onClick={() => setDir('/work/other')}>Other workspace</Button>
       <RunAfterCreation state={runAfter} disabled={false} />
-      <output aria-label="payload">{JSON.stringify({ title: 't', ...(runAfter.step ? { step: runAfter.step } : {}) })}</output>
+      <output aria-label="payload">{JSON.stringify({ title: 't', ...runAfter.fields })}</output>
+      <Button disabled={runAfter.blocked}>Save</Button>
+      <Button onClick={runAfter.capture}>Capture run</Button>
+      <output aria-label="submitted">{JSON.stringify(runAfter.submitted)}</output>
     </>
   );
 }
@@ -49,7 +68,12 @@ function renderHarness(initialStatus = 'draft') {
 const options = () => Array.from(screen.getByLabelText<HTMLSelectElement>('Run after creation').options).map(option => option.textContent);
 const payload = () => JSON.parse(screen.getByLabelText('payload').textContent ?? '');
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  runtime.loading = false;
+  runtime.error = '';
+  runtime.dirs = [];
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe('RunAfterCreation', () => {
@@ -75,7 +99,7 @@ describe('RunAfterCreation', () => {
     renderHarness('draft');
     await waitFor(() => expect(options()).toContain('Triage new'));
     fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'triage.new' } });
-    expect(payload()).toEqual({ title: 't', step: 'triage.new' });
+    expect(payload()).toEqual({ title: 't', step: 'triage.new', spec: {} });
   });
 
   it('refetches the steps when the status changes', async () => {
@@ -115,6 +139,70 @@ describe('RunAfterCreation', () => {
     renderHarness('draft');
     expect((await screen.findByRole('alert')).textContent).toContain('registry unavailable');
   });
+
+  it('edits and remembers runtime settings per step and omits them for None', async () => {
+    stubSteps();
+    renderHarness();
+    await waitFor(() => expect(options()).toContain('Plan'));
+    expect(screen.queryByRole('button', { name: 'plan runtime' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'plan' } });
+    fireEvent.click(screen.getByRole('button', { name: 'plan runtime' }));
+    const selected = { model: MODEL, mode: 'api', effort: 'high' };
+    expect(payload()).toEqual({ title: 't', step: 'plan', spec: selected });
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'triage.new' } });
+    expect(payload()).toEqual({ title: 't', step: 'triage.new', spec: {} });
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'plan' } });
+    expect(payload().spec).toEqual(selected);
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: '' } });
+    expect(payload()).toEqual({ title: 't' });
+  });
+
+  it('preserves remembered presets and advanced spec fields through runtime edits', async () => {
+    rememberTodoRunOptions('plan', { step: 'plan', presets: ['reviewer'], spec: { budget: { timeout: '3m' } } });
+    stubSteps();
+    renderHarness();
+    await waitFor(() => expect(options()).toContain('Plan'));
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'plan' } });
+    fireEvent.click(screen.getByRole('button', { name: 'plan runtime' }));
+    expect(payload()).toEqual({ title: 't', step: 'plan', presets: ['reviewer'], spec: { model: MODEL, mode: 'api', effort: 'high', budget: { timeout: '3m' } } });
+  });
+
+  it.each(['loading', 'error'] as const)('blocks a selected run when runtime context is %s but allows None', async state => {
+    rememberTodoRunOptions('plan', { step: 'plan', spec: { model: MODEL, mode: 'api' } });
+    runtime.loading = state === 'loading';
+    runtime.error = state === 'error' ? 'Catalog unavailable' : '';
+    stubSteps();
+    renderHarness();
+    await waitFor(() => expect(options()).toContain('Plan'));
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'plan' } });
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save' }).disabled).toBe(true);
+    if (runtime.error) expect(screen.getByRole('alert').textContent).toContain(runtime.error);
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: '' } });
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Save' }).disabled).toBe(false);
+  });
+
+  it('reloads the runtime catalog for the selected workspace', async () => {
+    stubSteps();
+    renderHarness();
+    await waitFor(() => expect(options()).toContain('Plan'));
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'plan' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Other workspace' }));
+    await waitFor(() => expect(runtime.dirs).toContain('/work/other'));
+  });
+
+  it('keeps the submitted runtime and workspace when the form selection changes', async () => {
+    stubSteps();
+    renderHarness();
+    await waitFor(() => expect(options()).toContain('Plan'));
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'plan' } });
+    fireEvent.click(screen.getByRole('button', { name: 'plan runtime' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Capture run' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Other workspace' }));
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: '' } });
+    expect(JSON.parse(screen.getByLabelText('submitted').textContent ?? '')).toEqual({
+      dir: DIR, step: 'plan', spec: { model: MODEL, mode: 'api', effort: 'high' },
+    });
+  });
 });
 
 describe('RunCreationRecovery', () => {
@@ -124,14 +212,15 @@ describe('RunCreationRecovery', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'started' }) });
     vi.stubGlobal('fetch', fetchMock);
     const onDone = vi.fn();
-    render(<RunCreationRecovery dir={DIR} step="triage.new" result={{ todo: { ref: 'saved-todo' } as TodoItem, run: { status: 'failed', error: 'Provider unavailable' } }} onDone={onDone} />);
+    const request = { dir: DIR, step: 'triage.new', spec: { model: MODEL, mode: 'api', effort: 'high' }, presets: ['reviewer'] };
+    render(<RunCreationRecovery request={request} result={{ todo: { ref: 'saved-todo' } as TodoItem, run: { status: 'failed', error: 'Provider unavailable' } }} onDone={onDone} />);
     expect(screen.getByText(/Provider unavailable/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open todo' }).getAttribute('href')).toBe('/todos/saved-todo');
     fireEvent.click(screen.getByRole('button', { name: 'Retry triage.new' }));
     await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, request] = fetchMock.mock.calls[0]!;
+    const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/todos/run');
-    expect(JSON.parse(request.body)).toEqual({ dir: DIR, ref: 'saved-todo', step: 'triage.new' });
+    expect(JSON.parse(init.body)).toEqual({ ...request, ref: 'saved-todo' });
   });
 });

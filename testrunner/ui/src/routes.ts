@@ -9,6 +9,7 @@ import {
   type LintSeverity,
   type TestFilters,
 } from '@flanksource/clicky-ui/data';
+import type { FileReviewView } from '@flanksource/clicky-ui/file-findings';
 import { basePath } from './config';
 
 const DEFAULT_STATUS_FILTER_TOKENS = ['!passed', '!skipped'];
@@ -26,13 +27,20 @@ function isDefaultStatusFilter(state: FilterState<string>): boolean {
   return want.every((token, i) => token === got[i]);
 }
 
-export type TabKey = 'tests' | 'lint' | 'bench' | 'processes';
+export type TabKey = 'tests' | 'lint' | 'files' | 'bench' | 'processes' | 'history';
 
-const TAB_KEYS: readonly TabKey[] = ['tests', 'lint', 'bench', 'processes'];
+const TAB_KEYS: readonly TabKey[] = ['tests', 'lint', 'files', 'bench', 'processes', 'history'];
 
 export interface RouteState {
   tab: TabKey;
+  // On the Files tab this is the open file's path relative to `workDir`.
   selectedPath: string;
+  // Files tab: the root `selectedPath` is relative to (`?dir=`), the same relative path can exist under several.
+  workDir?: string;
+  // Files tab: the open file's tab (`?view=`): preview (Source for code) unless it says source or problems.
+  view?: FileReviewView;
+  // Files tab: 1-based line to reveal (`?line=`).
+  line?: number;
   filters: TestFilters;
   lintGrouping: LintGrouping;
   lintFilters: LintFilters;
@@ -45,6 +53,10 @@ export type ExportFormat = 'json' | 'md' | 'pdf';
 function splitCSV(value: string | null): string[] {
   if (!value) return [];
   return value.split(',').map(v => v.trim()).filter(Boolean);
+}
+
+function parseView(value: string | null): FileReviewView {
+  return value === 'source' || value === 'problems' ? value : 'preview';
 }
 
 export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): RouteState {
@@ -65,6 +77,8 @@ export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): Rou
 
   const params = new URLSearchParams(location.search);
   const sample = params.get('sample');
+  const line = params.get('line');
+  const dir = params.get('dir');
   const rawStatus = params.get('status');
   let status: FilterState<string>;
   if (rawStatus === null) {
@@ -88,6 +102,9 @@ export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): Rou
     },
     sampleIndex: sample !== null && /^\d+$/.test(sample) ? Number(sample) : undefined,
     hideExited: params.get('hideExited') === '1',
+    ...(dir ? { workDir: dir } : {}),
+    view: parseView(params.get('view')),
+    line: line !== null && /^\d+$/.test(line) && Number(line) > 0 ? Number(line) : undefined,
   };
 }
 
@@ -111,6 +128,11 @@ export function buildRoute(state: RouteState): string {
     if (state.lintGrouping !== DEFAULT_LINT_GROUPING) params.set('grouping', state.lintGrouping);
     if (state.lintFilters.severity.size > 0) params.set('severity', encodeFilterState(state.lintFilters.severity).join(','));
     if (state.lintFilters.linter.size > 0) params.set('linter', encodeFilterState(state.lintFilters.linter).join(','));
+  }
+  if (state.tab === 'files') {
+    if (state.workDir) params.set('dir', state.workDir);
+    if (state.view && state.view !== 'preview') params.set('view', state.view);
+    if (state.line !== undefined) params.set('line', String(state.line));
   }
   if (state.tab === 'bench' && state.sampleIndex !== undefined) params.set('sample', String(state.sampleIndex));
   if (state.tab === 'processes' && state.hideExited) params.set('hideExited', '1');

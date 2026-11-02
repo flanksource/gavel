@@ -6,8 +6,9 @@ import (
 
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
@@ -109,20 +110,20 @@ func withoutTools(engine *lifecycle.Engine) *lifecycle.Engine {
 	return stripped
 }
 
-func newHost(provider *fakeProvider) *lifecycle.Host {
+func newHost(provider *fakeProvider) *lifecycle1.Host {
 	GinkgoHelper()
 	engine := defaultEngine()
-	return &lifecycle.Host{
+	return &lifecycle1.Host{
 		Provider: provider, Def: engine, Config: verify.DefaultGavelConfig(),
-		WorkDir: GinkgoT().TempDir(), Kind: lifecycle.HostCLI,
+		WorkDir: GinkgoT().TempDir(), Kind: lifecycle1.HostCLI,
 	}
 }
 
 // graderFor mirrors the verify chain the host resolves for the definition of
 // done's acceptance-criteria grader: `.gavel.yaml todos.verify` over `ai:`.
-func graderFor(host *lifecycle.Host) api.Spec {
+func graderFor(host *lifecycle1.Host) api.Spec {
 	GinkgoHelper()
-	resolved, err := lifecycle.ResolveLayers(lifecycle.LayerInput{Config: host.Config, Step: lifecycle.StepVerify})
+	resolved, err := lifecycle1.ResolveLayers(lifecycle1.LayerInput{Config: host.Config, Step: lifecycle1.StepVerify})
 	Expect(err).NotTo(HaveOccurred())
 	return resolved.Spec
 }
@@ -130,7 +131,7 @@ func graderFor(host *lifecycle.Host) api.Spec {
 var _ = Describe("Host", func() {
 	var (
 		provider *fakeProvider
-		host     *lifecycle.Host
+		host     *lifecycle1.Host
 		ctx      context.Context
 	)
 	BeforeEach(func() {
@@ -251,7 +252,7 @@ var _ = Describe("Host", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeTrue())
-			Expect(step.Name).To(Equal(lifecycle.StepVerify))
+			Expect(step.Name).To(Equal(lifecycle1.StepVerify))
 		})
 
 		It("plans a draft that has no plan", func() {
@@ -280,7 +281,7 @@ var _ = Describe("Host", func() {
 			req := api.Spec{Workflow: &api.Workflow{Commits: []api.Commit{{On: "run"}, {On: "turn"}}}}
 			meta := todos.RunStartMetadata{SessionID: "session-1"}
 
-			hooks := host.Hooks(hostTodo(), req, lifecycle.HookOptions{Meta: meta})
+			hooks := host.Hooks(hostTodo(), req, lifecycle1.HookOptions{Meta: meta})
 
 			Expect(hookNames(hooks)).To(Equal([]string{
 				"commit:run", "commit:turn", "gavel-run-env", "gavel-run-labels",
@@ -288,7 +289,7 @@ var _ = Describe("Host", func() {
 		})
 
 		It("declares no commit hook for a spec without commit policies", func() {
-			hooks := host.Hooks(hostTodo(), api.Spec{}, lifecycle.HookOptions{Meta: todos.RunStartMetadata{}})
+			hooks := host.Hooks(hostTodo(), api.Spec{}, lifecycle1.HookOptions{Meta: todos.RunStartMetadata{}})
 
 			Expect(hookNames(hooks)).To(Equal([]string{"gavel-run-env", "gavel-run-labels"}))
 		})
@@ -300,7 +301,7 @@ var _ = Describe("Host", func() {
 			var labeller interface {
 				PreRun(*agent.HookContext) error
 			}
-			for _, hook := range host.Hooks(todo, api.Spec{}, lifecycle.HookOptions{Meta: meta}) {
+			for _, hook := range host.Hooks(todo, api.Spec{}, lifecycle1.HookOptions{Meta: meta}) {
 				if hook.(interface{ Name() string }).Name() == "gavel-run-labels" {
 					labeller = hook.(interface {
 						PreRun(*agent.HookContext) error
@@ -327,7 +328,7 @@ var _ = Describe("Host", func() {
 			var labeller interface {
 				PreRun(*agent.HookContext) error
 			}
-			for _, hook := range host.Hooks(todo, api.Spec{}, lifecycle.HookOptions{Meta: todos.RunStartMetadata{}}) {
+			for _, hook := range host.Hooks(todo, api.Spec{}, lifecycle1.HookOptions{Meta: todos.RunStartMetadata{}}) {
 				if hook.(interface{ Name() string }).Name() == "gavel-run-labels" {
 					labeller = hook.(interface {
 						PreRun(*agent.HookContext) error
@@ -350,16 +351,16 @@ var _ = Describe("Host", func() {
 		var (
 			todo    *types.TODO
 			run     lifecycle.Step
-			outcome *lifecycle.StepOutcome
+			outcome *lifecycle1.StepOutcome
 		)
 		BeforeEach(func() {
 			todo = hostTodo()
 			run = stepNamed(host.Def, "run")
-			outcome = &lifecycle.StepOutcome{
+			outcome = &lifecycle1.StepOutcome{
 				Step:        run,
 				StartStatus: todo.Status,
 				Result: lifecycle.StepResult{
-					Run:    lifecycle.RunFacts{State: lifecycle.RunSucceeded, Iterations: 2, CostUSD: 0.5},
+					Run:    lifecycle.RunFacts{State: lifecycle1.RunSucceeded, Iterations: 2, CostUSD: 0.5},
 					Verify: &api.VerifyReport{Ran: true, Passed: true},
 				},
 				Execution: &todos.ExecutionResult{
@@ -384,7 +385,7 @@ var _ = Describe("Host", func() {
 			Expect(todo.Status).To(Equal(types.StatusVerified))
 			Expect(todo.LLM.Model).To(Equal("claude-sonnet"))
 			Expect(provider.events).To(HaveLen(1))
-			Expect(provider.events[0].Kind).To(Equal(lifecycle.EventLifecycleOutcome))
+			Expect(provider.events[0].Kind).To(Equal(lifecycle1.EventLifecycleOutcome))
 			Expect(provider.events[0].Body).To(Equal("**Lifecycle:** `run` → `verified`\n\nBuilt it.\n\n**Verification:** passed"))
 			Expect(provider.events[0].Payload).To(SatisfyAll(
 				HaveKeyWithValue("status", "verified"),
@@ -421,7 +422,7 @@ var _ = Describe("Host", func() {
 
 	Describe("RunStep", func() {
 		It("refuses a step the lifecycle does not declare", func() {
-			_, err := host.RunStep(ctx, hostTodo(), lifecycle.Step{Name: "deploy"}, lifecycle.RunOptions{})
+			_, err := host.RunStep(ctx, hostTodo(), lifecycle.Step{Name: "deploy"}, lifecycle1.RunOptions{})
 			Expect(err).To(MatchError(ContainSubstring(`step "deploy" is not part of lifecycle todos`)))
 		})
 
@@ -432,7 +433,7 @@ var _ = Describe("Host", func() {
 			Expect(err).NotTo(HaveOccurred())
 			host.Def = engine
 
-			_, err = host.RunStep(ctx, hostTodo(), def.Steps[3], lifecycle.RunOptions{})
+			_, err = host.RunStep(ctx, hostTodo(), def.Steps[3], lifecycle1.RunOptions{})
 
 			Expect(err).To(MatchError(ContainSubstring(`prompt "run" is neither todos.<name> nor file:<path>`)))
 		})

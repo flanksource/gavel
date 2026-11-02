@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/flanksource/gavel/workspace"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -57,10 +58,10 @@ var _ = Describe("PR reference parsing", func() {
 	})
 
 	It("rejects --pr alongside the other narrowing flags", func() {
-		_, err := resolvePRFailed("12", "", ".gavel/last.json", "", prNarrowTests)
+		_, err := resolvePRFailed("12", workspace.Dirs{}, ".gavel/last.json", "", prNarrowTests)
 		Expect(err).To(MatchError(ContainSubstring("--pr and --failed")))
 
-		_, err = resolvePRFailed("12", "", "", ".gavel/base.json", prNarrowLint)
+		_, err = resolvePRFailed("12", workspace.Dirs{}, "", ".gavel/base.json", prNarrowLint)
 		Expect(err).To(MatchError(ContainSubstring("--pr and --baseline")))
 	})
 

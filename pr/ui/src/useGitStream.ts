@@ -51,7 +51,7 @@ export function useGitStream({ enabled }: { enabled: boolean }): { error: string
   useEffect(() => {
     if (!enabled) return;
     const stream = openEventStream('/api/git/stream');
-    stream.addEventListener('message', event => {
+    const onMessage = (event: Event) => {
       try {
         const next = parseGenerations(JSON.parse((event as MessageEvent<string>).data));
         if (seen.current) invalidateChangedProjects({ queryClient, seen: seen.current, next });
@@ -61,9 +61,13 @@ export function useGitStream({ enabled }: { enabled: boolean }): { error: string
         console.error('[git stream] invalid update:', cause);
         setError('Git change stream received an invalid update.');
       }
-    });
+    };
+    stream.addEventListener('message', onMessage);
     stream.onerror = () => setError(current => current || 'Git change stream disconnected; reconnecting…');
-    return () => stream.close();
+    return () => {
+      stream.removeEventListener('message', onMessage);
+      stream.close();
+    };
   }, [enabled, queryClient]);
 
   return { error };

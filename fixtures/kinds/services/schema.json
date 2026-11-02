@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "services step",
-  "description": "Starts deps catalog services, supervised exec processes and seeded git repositories in declaration order; stops them in reverse order at teardown.",
+  "description": "Starts deps services, dbtest databases, supervised commands and seeded git repositories in declaration order; cleans up in reverse order.",
   "type": "object",
   "additionalProperties": false,
   "required": ["services"],
@@ -37,9 +37,28 @@
     "entry": {
       "type": "object",
       "additionalProperties": false,
-      "oneOf": [{ "required": ["deps"] }, { "required": ["exec"] }, { "required": ["git"] }],
+      "oneOf": [{ "required": ["deps"] }, { "required": ["exec"] }, { "required": ["git"] }, { "required": ["dbtest"] }],
       "properties": {
         "name": { "type": "string" },
+        "dbtest": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Lease PostgreSQL through commons-db/dbtest. The default database automatically configures child connection variables; multiple databases require exactly one default: true.",
+          "properties": {
+            "default": { "type": "boolean", "description": "Configure standard connection variables for this database. Defaults to true for a sole database; false disables automatic connections." },
+            "migrations": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["dir"],
+              "properties": {
+                "dir": { "type": "string", "minLength": 1, "description": "Directory of HCL/SQL migrations, relative to the effective fixture working directory." },
+                "name": { "type": "string", "description": "Native migration metadata scope; omitted uses commons-db's default." },
+                "schema": { "type": "string", "description": "Target PostgreSQL schema; omitted uses public." },
+                "variables": { "type": "object", "additionalProperties": true, "description": "Typed JSON values supplied to native HCL variables." }
+              }
+            }
+          }
+        },
         "deps": { "type": "string", "description": "deps catalog service name, e.g. postgres." },
         "version": { "type": "string", "description": "deps: version constraint." },
         "runtime": { "type": "string", "enum": ["binary", "docker", "helm", "command"], "description": "deps: force a runtime; docker/helm use an ephemeral volume." },

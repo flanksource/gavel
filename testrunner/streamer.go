@@ -7,13 +7,13 @@ import (
 )
 
 type TestStreamer struct {
-	mu             sync.Mutex
-	completedTests []parsers.Test
-	pendingPkgs    []parsers.Test
-	fixtureTests   []parsers.Test
-	updates        chan<- []parsers.Test
-	closeUpdates   bool
-	closed         bool
+	mu               sync.Mutex
+	completedResults parsers.TestSuiteResults
+	pendingPkgs      []parsers.Test
+	fixtureTests     []parsers.Test
+	updates          chan<- []parsers.Test
+	closeUpdates     bool
+	closed           bool
 }
 
 func NewTestStreamer(updates chan<- []parsers.Test) *TestStreamer {
@@ -41,14 +41,7 @@ func (s *TestStreamer) SetPackageOutline(pkgs []parsers.Test) {
 	s.buildAndSendLocked()
 }
 
-// UpdateGinkgoProgress implements parsers.GinkgoProgressSink. Ginkgo
-// streaming parsers call this while a suite is still running with a summary
-// Test whose Children reflect observed spec completions so far.
-func (s *TestStreamer) UpdateGinkgoProgress(progress parsers.Test) {
-	s.UpdatePackageProgress(progress.PackagePath, progress.Framework, progress)
-}
-
-// UpdatePackageProgress replaces the pending outline entry for (pkgPath,
+// UpdatePackageProgress implements parsers.ProgressSink. It replaces the pending outline entry for (pkgPath,
 // framework) with a richer tree containing currently-running and already-
 // finished children from the streaming parser. Called while the subprocess
 // is still alive — final results come through CompletePackage once the
@@ -90,9 +83,7 @@ func (s *TestStreamer) CompletePackage(pkgPath string, framework parsers.Framewo
 	s.pendingPkgs = filtered
 
 	// Add all completed test results (UI always shows everything)
-	for _, tr := range results {
-		s.completedTests = append(s.completedTests, tr.Tests...)
-	}
+	s.completedResults = append(s.completedResults, results...)
 
 	s.buildAndSendLocked()
 }
@@ -118,7 +109,7 @@ func (s *TestStreamer) UpdateFixtures(tests []parsers.Test) {
 }
 
 func (s *TestStreamer) buildAndSendLocked() {
-	tree := parsers.BuildTestTree(s.completedTests)
+	tree := s.completedResults.Tree()
 	tree = append(tree, s.pendingPkgs...)
 	tree = append(tree, s.fixtureTests...)
 	s.sendLocked(tree)

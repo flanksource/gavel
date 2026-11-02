@@ -74,7 +74,14 @@ vi.mock('./components/todos/PlanReview', () => ({
 }));
 
 vi.mock('./useProjectCatalog', () => ({
-  useProjectCatalog: () => ({ projects: [] }),
+  useProjectCatalog: ({ configured, selectedName }: { configured: Project[]; selectedName: string }) => ({
+    projects: configured, selected: configured.find(project => project.name === selectedName), runs: [], loading: false, error: '',
+  }),
+}));
+vi.mock('./components/ProjectRefPane', () => ({
+  ProjectRefPane: ({ project, projectRef, diffPath }: { project: Project; projectRef: string; diffPath: string }) => (
+    <div data-testid="project-review" data-ref={projectRef} data-diff={diffPath}>{project.name} changes</div>
+  ),
 }));
 
 vi.mock('./useCopyFeedback', () => ({
@@ -223,6 +230,15 @@ describe('hidden projects', () => {
 });
 
 describe('compact project scope', () => {
+  it('keeps the lifecycle editor route visible on a compact screen', () => {
+    isMobileMock.mockReturnValue(true);
+    window.history.replaceState({}, '', '/prompts/lifecycles/todos?project=gavel');
+    renderApp();
+    expect(screen.getByRole('link', { name: 'Back to dashboard' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Lifecycles' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/prompts/lifecycles/todos');
+  });
+
   it('shows the active project picker in the mobile layout', () => {
     isMobileMock.mockReturnValue(true);
     window.history.replaceState({}, '', '/prs?project=gavel');
@@ -343,5 +359,47 @@ describe('mobile sessions', () => {
     expect(inspectorProps.current).toMatchObject({ src: '/api/captain/sessions/sess-1' });
     fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
     expect(screen.getByText('Refactor parser')).toBeTruthy();
+  });
+});
+
+describe('mobile projects', () => {
+  beforeEach(() => isMobileMock.mockReturnValue(true));
+
+  it('opens the project list, reviews a project, and returns to the list', () => {
+    window.history.replaceState({}, '', '/prs');
+    renderApp();
+    fireEvent.click(screen.getByRole('button', { name: 'Projects' }));
+    expect(window.location.pathname).toBe('/projects');
+    fireEvent.click(screen.getByRole('button', { name: 'Open gavel project' }));
+    expect(window.location.pathname).toBe('/projects/gavel');
+    expect(screen.getByTestId('project-review').textContent).toBe('gavel changes');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
+    expect(window.location.pathname).toBe('/projects');
+    expect(screen.getByRole('button', { name: 'Open gavel project' })).toBeTruthy();
+  });
+
+  it('restores a file diff and worktree from the existing project URL', () => {
+    window.history.replaceState({}, '', '/projects/gavel?diff=src%2Fmain.go&ref=wt%3A%2Fwork%2Ffeature');
+    renderApp();
+    expect(screen.getByTestId('project-review').dataset).toMatchObject({ ref: 'wt:/work/feature', diff: 'src/main.go' });
+    expect(screen.queryByRole('button', { name: 'Projects' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back to projects' })).toBeNull();
+  });
+
+  it('keeps Processes and Projects on separate mobile routes', () => {
+    window.history.replaceState({}, '', '/projects');
+    renderApp();
+    fireEvent.click(screen.getByRole('button', { name: /^Processes/ }));
+    expect(window.location.pathname).toBe('/processes');
+    fireEvent.click(screen.getByRole('button', { name: 'Projects' }));
+    expect(window.location.pathname).toBe('/projects');
+  });
+
+  it('keeps a way back to Projects for an unknown project diff link', () => {
+    window.history.replaceState({}, '', '/projects/missing?diff=src%2Fmain.go');
+    renderApp();
+    expect(screen.getByText('Project missing was not found')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
+    expect(window.location.pathname).toBe('/projects');
   });
 });

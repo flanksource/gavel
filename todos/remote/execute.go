@@ -141,7 +141,7 @@ func (h *startedHook) PreRun(hc *agent.HookContext) error {
 	}
 	h.reporter.mu.Lock()
 	defer h.reporter.mu.Unlock()
-	if err := h.reporter.send(StartedMessage(spec)); err != nil {
+	if err := h.reporter.send(StartedMessage(spec, hc.Workspace())); err != nil {
 		h.reporter.startErr = fmt.Errorf("report the run's start to serve: %w", err)
 		h.reporter.err = h.reporter.startErr
 		return h.reporter.startErr

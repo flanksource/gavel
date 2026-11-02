@@ -24,6 +24,9 @@ type repoRow struct {
 	BaseSHA        *string
 	CurrentBranch  *string
 	BaseCheckedOut bool
+	UpstreamBranch *string
+	UpstreamAhead  *int
+	UpstreamBehind *int
 	RefsScannedAt  *time.Time
 	Generation     int64
 	Error          *string
@@ -74,12 +77,16 @@ func (s *Store) Load(ctx context.Context, repoIDs []uuid.UUID) (map[uuid.UUID]St
 	// Every repo has an overview row (schema/171 inserts it with the repo, and
 	// the tracker's start rebuilds the table after crash recovery), so a
 	// generation of 0 can only be read between a crash and that rebuild, whose
-	// announcement then makes every client reload.
+	// announcement then makes every client reload. A ref scan saves the
+	// upstream range in the same transaction as the upstream itself.
 	if err := db.Raw(`
 		SELECT r.id, r.root_dir, r.base_branch, r.base_sha, r.current_branch, r.base_checked_out,
+			r.upstream_branch, us.ahead AS upstream_ahead, us.behind AS upstream_behind,
 			GREATEST(o.refs_scanned_at, r.refs_scanned_at) AS refs_scanned_at, COALESCE(o.generation, 0) AS generation, r.error
 		FROM git_repos r
 		LEFT JOIN git_repo_overview o ON o.repo_id = r.id
+		LEFT JOIN git_worktrees pw ON pw.repo_id = r.id AND pw.is_primary AND pw.removed_at IS NULL
+		LEFT JOIN git_range_stats us ON us.repo_id = r.id AND us.base_sha = r.upstream_sha AND us.head_sha = pw.head_sha
 		WHERE r.id IN ? AND r.org_id = ? AND (r.refs_scanned_at IS NOT NULL OR r.error IS NOT NULL)`, repoIDs, s.org).Scan(&repos).Error; err != nil {
 		return nil, fmt.Errorf("load git repos: %w", err)
 	}
@@ -106,12 +113,19 @@ func (s *Store) Load(ctx context.Context, repoIDs []uuid.UUID) (map[uuid.UUID]St
 	}
 
 	for _, repo := range repos {
-		states[repo.ID] = State{
+		state := State{
 			Base: deref(repo.BaseBranch), BaseSHA: deref(repo.BaseSHA),
 			CurrentBranch: deref(repo.CurrentBranch), BaseCheckedOut: repo.BaseCheckedOut,
 			Worktrees: []Worktree{}, Branches: []gavelgit.BranchInfo{},
 			ComputedAt: utc(repo.RefsScannedAt), Generation: repo.Generation, Error: deref(repo.Error),
 		}
+		if repo.UpstreamBranch != nil {
+			if repo.UpstreamAhead == nil || repo.UpstreamBehind == nil {
+				return nil, fmt.Errorf("load git repo %s: no range stats for its upstream %s", repo.RootDir, *repo.UpstreamBranch)
+			}
+			state.Upstream, state.UpstreamAhead, state.UpstreamBehind = *repo.UpstreamBranch, *repo.UpstreamAhead, *repo.UpstreamBehind
+		}
+		states[repo.ID] = state
 	}
 	ahead := map[uuid.UUID]map[string]int{}
 	for _, b := range branches {

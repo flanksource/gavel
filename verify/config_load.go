@@ -41,23 +41,19 @@ func LoadGavelConfig(cwd string) (GavelConfig, error) {
 	if err != nil {
 		return GavelConfig{}, fmt.Errorf("resolve config directory %q: %w", cwd, err)
 	}
-	layers, err := readGavelConfigLayers(gavelConfigDirs(absCwd))
+	layers, err := readGavelConfigLayers(GavelConfigDirs(absCwd))
 	if err != nil {
 		return GavelConfig{}, err
 	}
 	if cached, ok := cachedGavelConfig(absCwd, layers); ok {
 		return cloneGavelConfig(cached)
 	}
-
+	configs, err := loadConfigLayers(absCwd, layers)
+	if err != nil {
+		return GavelConfig{}, err
+	}
 	cfg := DefaultGavelConfig()
-	for _, layer := range layers {
-		if !layer.exists {
-			continue
-		}
-		parsed, err := parseGavelConfig(layer.path, layer.data)
-		if err != nil {
-			return GavelConfig{}, err
-		}
+	for _, parsed := range configs {
 		cfg = MergeGavelConfig(cfg, parsed)
 	}
 	storeGavelConfig(absCwd, layers, cfg)
@@ -98,30 +94,66 @@ func LoadRepositoryGavelConfig(root string) (GavelConfig, error) {
 	return MergeGavelConfig(cfg, parsed), nil
 }
 
-// gavelConfigDirs lists the directories whose .gavel.yaml LoadGavelConfig
-// consults for absCwd, lowest precedence first. $HOME and the git root are
-// resolved on every call, so a changed $HOME or a newly created .git moves the
-// chain — and with it the cache fingerprint.
-func gavelConfigDirs(absCwd string) []string {
-	var dirs []string
+const (
+	originUserHome        = "user-home"
+	originGitRootParent   = "git-root-parent"
+	originGitRoot         = "git-root"
+	originTargetDirectory = "target-directory"
+	originParentDirectory = "parent-directory"
+)
+
+// GavelConfigDir is one directory whose .gavel.yaml joins the config chain,
+// labelled with why it is consulted.
+type GavelConfigDir struct {
+	Origin string
+	Dir    string
+}
+
+// GavelConfigDirs is the single source of truth for the .gavel.yaml chain of
+// the absolute directory absTarget, lowest precedence first: $HOME, the git
+// root's immediate parent (so one file can cover every repo checked out side
+// by side), the git root, then absTarget. Only the one parent level is read,
+// never further ancestors, and it is skipped outside a git repository or when
+// it is "/". A directory reached twice keeps its first, lower-precedence
+// origin. $HOME and the git root are resolved on every call, so a changed
+// $HOME or a newly created .git moves the chain — and with it the cache
+// fingerprint.
+func GavelConfigDirs(absTarget string) []GavelConfigDir {
+	var dirs []GavelConfigDir
+	add := func(origin, dir string) {
+		for _, existing := range dirs {
+			if existing.Dir == dir {
+				return
+			}
+		}
+		dirs = append(dirs, GavelConfigDir{Origin: origin, Dir: dir})
+	}
 	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, home)
+		add(originUserHome, home)
 	}
-	gitRoot := repomap.FindGitRoot(absCwd)
-	if gitRoot != "" {
-		dirs = append(dirs, gitRoot)
+	if gitRoot := repomap.FindGitRoot(absTarget); gitRoot != "" {
+		if parent := filepath.Dir(gitRoot); filepath.Dir(parent) != parent {
+			add(originGitRootParent, parent)
+		}
+		add(originGitRoot, gitRoot)
+		var nested []string
+		for dir := filepath.Dir(absTarget); absTarget != gitRoot && dir != gitRoot && dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			nested = append(nested, dir)
+		}
+		for i := len(nested) - 1; i >= 0; i-- {
+			add(originParentDirectory, nested[i])
+		}
 	}
-	if absCwd != gitRoot {
-		dirs = append(dirs, absCwd)
-	}
+	add(originTargetDirectory, absTarget)
 	return dirs
 }
 
 // LoadGavelConfigTrace resolves the effective config for the provided file or
 // directory path and records which .gavel.yaml files contributed to the merged
-// result. Resolution order matches normal loading: built-in defaults, then the
-// user's home config, then the git-root config, then the target directory (or
-// the parent directory when the target path is a file).
+// result. Resolution order matches normal loading (GavelConfigDirs): built-in
+// defaults, then the user's home config, the git root's parent, the git root,
+// then the target directory (or the parent directory when the target path is
+// a file).
 func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
 	targetPath, targetDir, err := resolveGavelConfigTarget(path)
 	if err != nil {
@@ -131,42 +163,16 @@ func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
 	trace := GavelConfigTrace{
 		TargetPath: targetPath,
 		TargetDir:  targetDir,
+		GitRoot:    repomap.FindGitRoot(targetDir),
 		Merged:     DefaultGavelConfig(),
 	}
 
-	var candidates []GavelConfigSource
-	seen := make(map[string]struct{})
-	addCandidate := func(origin, candidatePath string) {
-		if candidatePath == "" {
-			return
+	for _, dir := range GavelConfigDirs(targetDir) {
+		candidate := GavelConfigSource{Origin: dir.Origin, Path: filepath.Join(dir.Dir, GavelConfigFileName)}
+		if candidate.Origin == originTargetDirectory && targetPath != targetDir {
+			candidate.Origin = originParentDirectory
 		}
-		if _, ok := seen[candidatePath]; ok {
-			return
-		}
-		seen[candidatePath] = struct{}{}
-		candidates = append(candidates, GavelConfigSource{
-			Origin: origin,
-			Path:   candidatePath,
-		})
-	}
-
-	if home, err := os.UserHomeDir(); err == nil {
-		addCandidate("user-home", filepath.Join(home, ".gavel.yaml"))
-	}
-
-	trace.GitRoot = repomap.FindGitRoot(targetDir)
-	if trace.GitRoot != "" {
-		addCandidate("git-root", filepath.Join(trace.GitRoot, ".gavel.yaml"))
-	}
-
-	origin := "target-directory"
-	if targetPath != targetDir {
-		origin = "parent-directory"
-	}
-	addCandidate(origin, filepath.Join(targetDir, ".gavel.yaml"))
-
-	for _, candidate := range candidates {
-		cfg, raw, err := loadSingleGavelConfig(candidate.Path)
+		data, err := readFileInDir(dir.Dir, GavelConfigFileName)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -174,7 +180,11 @@ func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
 			return GavelConfigTrace{}, err
 		}
 
-		candidate.Raw = raw
+		cfg, err := parseGavelConfig(candidate.Path, data)
+		if err != nil {
+			return GavelConfigTrace{}, err
+		}
+		candidate.Raw = string(data)
 		candidate.Config = cfg
 		trace.Sources = append(trace.Sources, candidate)
 		trace.Merged = MergeGavelConfig(trace.Merged, cfg)
@@ -228,12 +238,19 @@ func parseGavelConfig(path string, data []byte) (GavelConfig, error) {
 	if err != nil {
 		return GavelConfig{}, fmt.Errorf("parse %s: %w", path, err)
 	}
+	return decodeGavelConfig(path, encoded)
+}
+
+func decodeGavelConfig(path string, encoded []byte) (GavelConfig, error) {
 	var gc GavelConfig
 	if err := DecodeJSON(encoded, &gc, DecodeOptions{Source: path, Renames: legacyFieldHints}); err != nil {
 		return GavelConfig{}, err
 	}
 	if err := gc.Todos.Validate(); err != nil {
 		return GavelConfig{}, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := gc.PR.Lifecycle.Validate(); err != nil {
+		return GavelConfig{}, fmt.Errorf("%s: pr.%w", path, err)
 	}
 	if err := gc.validateRuntime(); err != nil {
 		return GavelConfig{}, fmt.Errorf("%s: %w", path, err)
@@ -242,6 +259,12 @@ func parseGavelConfig(path string, data []byte) (GavelConfig, error) {
 		return GavelConfig{}, err
 	}
 	setPromptSpecBaseDirs(&gc, filepath.Dir(path))
+	gc.resolveOptionPaths(filepath.Dir(path))
+	for i := range gc.Lint.Ignore {
+		if gc.Lint.Ignore[i].File != "" {
+			gc.Lint.Ignore[i].baseDir = filepath.Dir(path)
+		}
+	}
 	return gc, nil
 }
 

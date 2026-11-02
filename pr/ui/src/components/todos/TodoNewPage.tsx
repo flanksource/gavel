@@ -191,12 +191,12 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
   }
 
   async function submitNew() {
-    if (!title.trim() || busy || created) return;
+    if (!title.trim() || busy || created || runAfter.blocked) return;
     setError('');
     try {
       // With attachments, post multipart so the image bytes ride along and the
       // server persists them; otherwise keep the lighter JSON path.
-      const fields = { title, body, priority, status, labels, ...(runAfter.step ? { step: runAfter.step } : {}), pr: todoPRLink(prURL) };
+      const fields = { title, body, priority, status, labels, ...runAfter.capture(), pr: todoPRLink(prURL) };
       const data = await createTodo.mutateAsync(attachments.length
         ? { body: todoFormData(fields, attachments) }
         : {
@@ -248,7 +248,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
 
   const submitDisabled = workspaceMissing || (mode === 'existing'
     ? !selectedRef || busy || (!body.trim() && attachments.length === 0)
-    : !title.trim() || busy);
+    : !title.trim() || busy || runAfter.blocked);
 
   if (completeMessage) {
     return (
@@ -258,7 +258,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
     );
   }
 
-  if (created) return <main className="mx-auto max-w-4xl p-4"><RunCreationRecovery result={created} dir={dir} step={runAfter.step} onDone={() => {
+  if (created) return <main className="mx-auto max-w-4xl p-4"><RunCreationRecovery result={created} request={runAfter.submitted} onDone={() => {
     if (embed) { setCompleteMessage('Todo created'); finish('todo-created', created.todo.ref); }
     else leave(back ?? `/todos/${encodeURIComponent(created.todo.ref)}`);
   }} /></main>;

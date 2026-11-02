@@ -3,6 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoItem } from '../../types';
 import { loadRecentTodos, rememberRecentTodo } from './recentTodos';
 import { TodoNewPage } from './TodoNewPage';
+import { CREATE_RUNTIME, CREATE_RUNTIME_CONTEXT } from './createRuntimeTestHelpers';
+
+vi.mock('./run', async importOriginal => ({
+  ...await importOriginal<typeof import('./run')>(),
+  useTodoRunContext: () => ({ context: CREATE_RUNTIME_CONTEXT, loading: false, error: '' }),
+}));
+vi.mock('./TodoRunActionButton', async () => ({ TodoRunRuntimeBar: (await import('./createRuntimeTestHelpers')).CreateRuntimeBarStub }));
 
 const mocks = vi.hoisted(() => ({
   items: [] as unknown[],
@@ -65,6 +72,17 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('TodoNewPage', () => {
+  it('posts the runtime selected beside the lifecycle step', async () => {
+    mocks.create.mockResolvedValue({ todo: todo('saved', 'Repair parser') });
+    render(<TodoNewPage projects={[workspace]} />);
+    chooseWorkspace();
+    fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Repair parser' } });
+    fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'triage.new' } });
+    fireEvent.click(screen.getByRole('button', { name: 'triage.new runtime' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledOnce());
+    expect(JSON.parse(mocks.create.mock.calls[0][0].body)).toMatchObject({ step: 'triage.new', spec: CREATE_RUNTIME });
+  });
 	 it('keeps the saved issue available after the chosen step fails to start', async () => {
 	   mocks.create.mockResolvedValue({ todo: todo('saved', 'Repair parser'), run: { status: 'failed', error: 'Admission unavailable' } });
 	   render(<TodoNewPage projects={[workspace]} />);
