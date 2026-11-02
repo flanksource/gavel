@@ -29,7 +29,7 @@ func TestRetiredTodoRunFlagsNameTheirReplacement(t *testing.T) {
 	}
 	for _, flag := range []string{"driver", "mode", "prompt", "group-by", "check"} {
 		if _, ok := retiredTodoRunFlags[flag]; !ok {
-			t.Errorf("--%s is documented as retired in MANUAL.md but missing from retiredTodoRunFlags", flag)
+			t.Errorf("--%s is documented as retired in the TODO runtime documentation but missing from retiredTodoRunFlags", flag)
 		}
 	}
 }

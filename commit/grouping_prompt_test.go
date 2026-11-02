@@ -42,7 +42,7 @@ func TestRenderGroupingPromptBase(t *testing.T) {
 	require.NoError(t, err)
 	got, schema, strictness := prepared.Request.Prompt.User, prepared.Request.Prompt.SchemaJSON, prepared.Request.Prompt.SchemaStrictness
 	require.NotEmpty(t, schema, "frontmatter output.schema must be carried through")
-	require.Equal(t, api.SchemaStrictnessRetry, strictness, "frontmatter declares schemaStrictness: retry")
+	require.Equal(t, api.SchemaStrictnessRepair, strictness, "frontmatter declares schemaStrictness: retry")
 
 	require.NotContains(t, got, "&amp;", "table must not be HTML-escaped")
 	require.NotContains(t, got, "&lt;", "table must not be HTML-escaped")

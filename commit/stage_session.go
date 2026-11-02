@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,7 +35,7 @@ func resolveEnvSessionID() string {
 // `gavel commit --stage=session|<session-id>` and the todo runner's auto-commit.
 // Files edited outside workDir, no longer present, or matching an ignore rule
 // are skipped (each logged).
-func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error {
+func stageSessionFiles(ctx context.Context, workDir, sessionID string, cfg verify.CommitConfig) error {
 	value, err := captaincli.RunChanges(captaincli.ChangesOptions{
 		SessionID: sessionID,
 		All:       true,
@@ -122,7 +123,7 @@ func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error
 	if len(keep) == 0 {
 		return fmt.Errorf("stage session %q (%d edited, all skipped): %w", sessionID, len(modified), ErrSessionNoFiles)
 	}
-	return addFiles(workDir, keep)
+	return addFiles(ctx, workDir, keep)
 }
 
 // symlinkedParent returns the first directory of rel (relative to root) that is

@@ -98,9 +98,10 @@ vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
   reconcileModelCapabilities: (value: unknown) => value,
 }));
 
-vi.mock('@flanksource/clicky-ui/icons', () => {
+vi.mock('@flanksource/clicky-ui/icons', async importOriginal => {
   const Icon = (props: React.SVGProps<SVGSVGElement>) => <svg {...props} />;
   return {
+    ...(await importOriginal<typeof import('@flanksource/clicky-ui/icons')>()),
     UiCancel: Icon,
     UiAdd: Icon,
     UiBatteryChargingVertical: Icon,

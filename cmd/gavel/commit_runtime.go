@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
@@ -16,10 +17,14 @@ func registerCommitCommand(parent *cobra.Command, run func(CommitOptions) (any, 
 		if cmd.Flags().Changed("group-model") {
 			opts.groupModelFields = api.FieldPresence{"/model": true}
 		}
+		if cmd.Flags().Changed("ai-fix-max-iterations") && opts.AIFixMaxIterations < 1 {
+			return nil, fmt.Errorf("--ai-fix-max-iterations must be positive")
+		}
 		return run(opts)
 	})
 	cmd.Use = "commit [files...]"
 	cmd.Args = cobra.ArbitraryArgs
+	cmd.Flags().Lookup("ai-fix").NoOptDefVal = "true"
 	if f := cmd.Flags().Lookup("fixup"); f != nil {
 		f.NoOptDefVal = commitpkg.FixupAuto
 	}

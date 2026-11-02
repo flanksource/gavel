@@ -36,9 +36,14 @@ jobs:
 
       - uses: ./.github/actions/setup-task
 
-      - name: Install site dependencies
-        run: npm ci
-        working-directory: site
+      # The tsc lint check resolves its imports from these UI projects' dependencies.
+      - name: Install test runner dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: testrunner/ui
+
+      - name: Install PR UI dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: pr/ui
 
       - name: Install golangci-lint
         shell: bash

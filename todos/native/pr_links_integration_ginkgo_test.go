@@ -95,12 +95,34 @@ var _ = Describe("issue PR links", Ordered, func() {
 		})
 		Expect(err).To(MatchError(native.ErrPRLinkExists))
 
-		linked, err := repo.ListPRLinkedIssues(ctx, workspace.ID, "https://github.com/Acme/widgets/pull/30")
+		linked, err := repo.ListPRLinkedIssues(ctx, native.PRLinkedIssuesQuery{WorkspaceID: workspace.ID, URL: "https://github.com/Acme/widgets/pull/30"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(linked).To(HaveLen(1))
 		Expect(linked[0].Issue.ID).To(Equal(issue.ID))
 		Expect(linked[0].Relation).To(Equal(types.PRRelationRelated))
 		Expect(linked[0].Source).To(Equal(types.PRLinkSourceTriage))
+	})
+
+	It("lists the issues linking a PR across every workspace when no workspace is given", func() {
+		const sharedURL = "https://github.com/acme/widgets/pull/77"
+		local := create("Local work", &types.PR{Number: 77, URL: sharedURL})
+		other, err := repo.CreateWorkspace(ctx, native.CreateWorkspaceInput{RepoKey: "github.com/acme/other"})
+		Expect(err).NotTo(HaveOccurred())
+		remote, err := repo.CreateIssue(ctx, native.CreateIssueInput{WorkspaceID: other.ID, Title: "Remote work", PR: &types.PR{Number: 77, URL: sharedURL}})
+		Expect(err).NotTo(HaveOccurred())
+
+		issueIDs := func(query native.PRLinkedIssuesQuery) []uuid.UUID {
+			GinkgoHelper()
+			linked, err := repo.ListPRLinkedIssues(ctx, query)
+			Expect(err).NotTo(HaveOccurred())
+			ids := []uuid.UUID{}
+			for _, entry := range linked {
+				ids = append(ids, entry.Issue.ID)
+			}
+			return ids
+		}
+		Expect(issueIDs(native.PRLinkedIssuesQuery{WorkspaceID: workspace.ID, URL: sharedURL})).To(Equal([]uuid.UUID{local.ID}))
+		Expect(issueIDs(native.PRLinkedIssuesQuery{URL: sharedURL})).To(ConsistOf(local.ID, remote.ID))
 	})
 
 	It("rejects a URL that is not a hosted PR", func() {

@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import type { PRItem, PRDetail, SearchConfig, PRSyncStatus, GavelResultsSummary, Project } from '../../types';
 import { Button } from '@flanksource/clicky-ui/components';
 import { ChatButton } from '@flanksource/clicky-ui/ai';
-import { UiArrowLeft, UiCheck, UiGitPr, UiTerminal } from '@flanksource/clicky-ui/icons';
+import { UiArrowLeft, UiCheck, UiFolderGit, UiGitPr, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { PRList } from '../PRList';
 import { PRDetailPanel } from '../PRDetail';
 import { MenubarTodos } from '../MenubarTodos';
@@ -50,6 +50,8 @@ export function MenubarView({
   sessionId,
   onSessionChange,
   chatEnabled,
+  projectsView,
+  focusProjects = false,
 }: {
   prs: PRItem[];
   selected: PRItem | null;
@@ -79,6 +81,8 @@ export function MenubarView({
   onSessionChange: (id: string) => void;
   // False in the native menubar webview, which has no assistant layer.
   chatEnabled: boolean;
+  projectsView?: ReactNode;
+  focusProjects?: boolean;
 }) {
   useMenubarExternalLinks();
   const procStatus = useProcStatus();
@@ -97,12 +101,13 @@ export function MenubarView({
   const failedTodos = projects.reduce((n, p) => n + (p.todoCounts?.failed ?? 0), 0);
   const unreadCount = prs.filter(pr => unread[prKey(pr)]).length;
   const fetched = fetchedAt ? new Date(fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  const reviewing = menubarTab === 'projects' && focusProjects;
 
   if (menubarTab === 'sessions' && sessionId) {
     return <MobileSessionScreen query={sessions} sessionId={sessionId} onBack={() => onSessionChange('')} />;
   }
 
-  if (selected) {
+  if (menubarTab === 'prs' && selected) {
     return (
       <div
         className="h-dvh overflow-hidden bg-background text-foreground"
@@ -145,7 +150,7 @@ export function MenubarView({
       onPointerEnter={() => postMenubarMessage(menubarPointerEnterMessage)}
       onPointerLeave={() => postMenubarMessage(menubarPointerLeaveMessage)}
     >
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
+      <div hidden={reviewing} className={`${reviewing ? 'hidden' : 'flex'} shrink-0 items-center justify-between border-b border-border px-3 py-2`}>
         <div className="flex items-center gap-2 min-w-0">
           <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} />
           <div className="min-w-0">
@@ -172,7 +177,13 @@ export function MenubarView({
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-1">
+      <div hidden={reviewing} className={`${reviewing ? 'hidden' : 'flex'} shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-1`}>
+        {projectsView && <MenubarTab
+          label="Projects"
+          icon={UiFolderGit}
+          active={menubarTab === 'projects'}
+          onClick={() => onTabChange('projects')}
+        />}
         <MenubarTab
           label="Processes"
           dot={dot}
@@ -204,8 +215,8 @@ export function MenubarView({
         />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {menubarTab === 'processes' ? (
+      <div className={`min-h-0 min-w-0 flex-1 ${menubarTab === 'projects' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+        {menubarTab === 'projects' ? projectsView : menubarTab === 'processes' ? (
           workspaces.length > 0 ? (
             <div className="divide-y divide-border p-2">
               {workspaces.map(w => (

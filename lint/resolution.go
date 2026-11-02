@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/gavel/lint/shims"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/workspace"
 )
 
 func resolveLintPath(workDir, value string) string {
@@ -86,8 +87,10 @@ func lintGitRoot(workDir string) string {
 	return workDir
 }
 
+// lintToolBinDir is <gitRoot>/.gavel: lint groups fan out per git root, and
+// a state-root walk started at a git root always stops there.
 func lintToolBinDir(gitRoot string) string {
-	return filepath.Join(gitRoot, ".gavel")
+	return filepath.Join(gitRoot, workspace.StateDirName)
 }
 
 func executableFileName(name string) string {
@@ -104,6 +107,9 @@ func golangciInstalledPath(gitRoot string) string {
 var installGolangciLint = deps.InstallWithContext
 
 func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot, projectRoot string, hasDirectConfig bool, dryRun bool) (string, string, error) {
+	if required, ok := linter.(linters.ExecutableRequired); ok && !required.RequiresExecutable() {
+		return "", "", nil
+	}
 	candidates := []string{linter.Name()}
 	if provider, ok := linter.(linters.ExecutableCandidateProvider); ok {
 		if provided := provider.ExecutableCandidates(projectRoot); len(provided) > 0 {
@@ -157,6 +163,12 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 	}
 
 	if len(candidates) == 1 {
+		if required, ok := linter.(linters.ExecutableRequired); ok && required.RequiresExecutable() {
+			if dryRun {
+				return candidates[0], "", nil
+			}
+			return "", "", fmt.Errorf("%s executable not found on PATH; install it before running this linter", linter.Name())
+		}
 		return "", "not found on PATH", nil
 	}
 	return "", fmt.Sprintf("none of %s found on PATH", strings.Join(candidates, ", ")), nil

@@ -7,8 +7,9 @@ import (
 	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	clickyapi "github.com/flanksource/clicky/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -20,7 +21,7 @@ import (
 // with it. Before this the CLI printed one hardcoded-green
 // "<step> finished — <status>" line, and the summary, the error, the questions,
 // the verdict and a response that failed to decode were all dropped.
-func renderRunResult(todoRef, step string, outcome *lifecycle.StepOutcome, status string, runErr error) string {
+func renderRunResult(todoRef, step string, outcome *lifecycle1.StepOutcome, status string, runErr error) string {
 	if outcome == nil || outcome.Execution == nil {
 		return ""
 	}
@@ -152,7 +153,7 @@ func renderUndecodedResponse(execution *todos.ExecutionResult) []string {
 }
 
 // printRunResult writes the report, unless the run produced nothing to report.
-func printRunResult(todoRef, step string, outcome *lifecycle.StepOutcome, status string, runErr error) {
+func printRunResult(todoRef, step string, outcome *lifecycle1.StepOutcome, status string, runErr error) {
 	if report := renderRunResult(todoRef, step, outcome, status, runErr); report != "" {
 		fmt.Println(report)
 	}

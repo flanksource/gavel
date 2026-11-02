@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
@@ -22,7 +23,7 @@ import (
 // the one place a todo's status is written from a run.
 type Host struct {
 	Provider todos.Provider
-	Def      *Engine
+	Def      *lifecycle.Engine
 	Config   verify.GavelConfig
 	WorkDir  string
 	Kind     HostKind
@@ -53,7 +54,11 @@ func NewHost(provider todos.Provider, workDir string, kind HostKind) (*Host, err
 	if err != nil {
 		return nil, &ConfigurationError{Err: fmt.Errorf("load Captain defaults: %w", err)}
 	}
-	return newHost(provider, workDir, kind, cfg, &saved)
+	def, err := Load(workDir)
+	if err != nil {
+		return nil, &ConfigurationError{Err: err}
+	}
+	return newHost(provider, workDir, kind, cfg, def, &saved)
 }
 
 // NewRepositoryHost is NewHost for a hosted repository checked out at workDir: its
@@ -64,15 +69,15 @@ func NewRepositoryHost(provider todos.Provider, workDir string, kind HostKind) (
 	if err != nil {
 		return nil, &ConfigurationError{Err: fmt.Errorf("load .gavel.yaml: %w", err)}
 	}
-	return newHost(provider, workDir, kind, cfg, &captainconfig.Config{})
-}
-
-func newHost(provider todos.Provider, workDir string, kind HostKind, cfg verify.GavelConfig, saved *captainconfig.Config) (*Host, error) {
 	def, err := LoadWith(cfg.Todos.Lifecycle, workDir)
 	if err != nil {
 		return nil, &ConfigurationError{Err: err}
 	}
-	engine, err := New(def)
+	return newHost(provider, workDir, kind, cfg, def, &captainconfig.Config{})
+}
+
+func newHost(provider todos.Provider, workDir string, kind HostKind, cfg verify.GavelConfig, def lifecycle.Lifecycle, saved *captainconfig.Config) (*Host, error) {
+	engine, err := lifecycle.New(def)
 	if err != nil {
 		return nil, &ConfigurationError{Err: err}
 	}
@@ -157,7 +162,7 @@ func (h *Host) planState(ctx context.Context, todo *types.TODO) (todos.PlanState
 // included — so `size(runs)` counts them and `last.<step>` is the newest of
 // each. The provider must expose the history: a lifecycle evaluated against
 // runs it cannot see would re-verify work it never saw land.
-func (h *Host) Runs(ctx context.Context, todo *types.TODO) ([]StepRun, error) {
+func (h *Host) Runs(ctx context.Context, todo *types.TODO) ([]lifecycle.StepRun, error) {
 	if h.Provider == nil {
 		return nil, fmt.Errorf("lifecycle runs: host has no provider")
 	}
@@ -169,9 +174,9 @@ func (h *Host) Runs(ctx context.Context, todo *types.TODO) ([]StepRun, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lifecycle runs: %w", err)
 	}
-	runs := make([]StepRun, 0, len(records))
+	runs := make([]lifecycle.StepRun, 0, len(records))
 	for _, record := range records {
-		runs = append(runs, StepRun{
+		runs = append(runs, lifecycle.StepRun{
 			Step: record.Step, State: record.State, Outcome: record.Outcome, PromptRunID: record.PromptRunID,
 			StartedAt: record.StartedAt, FinishedAt: record.FinishedAt,
 		})
@@ -180,23 +185,23 @@ func (h *Host) Runs(ctx context.Context, todo *types.TODO) ([]StepRun, error) {
 }
 
 // Context is the todo as the engine evaluates it.
-func (h *Host) Context(ctx context.Context, todo *types.TODO) (Context, error) {
+func (h *Host) Context(ctx context.Context, todo *types.TODO) (lifecycle.Context, error) {
 	subject, err := h.Subject(ctx, todo)
 	if err != nil {
-		return Context{}, err
+		return lifecycle.Context{}, err
 	}
 	runs, err := h.Runs(ctx, todo)
 	if err != nil {
-		return Context{}, err
+		return lifecycle.Context{}, err
 	}
-	return Context{Subject: subject, Runs: runs}, nil
+	return lifecycle.Context{Subject: subject, Runs: runs}, nil
 }
 
 // Next is the step the lifecycle would run for this todo now.
-func (h *Host) Next(ctx context.Context, todo *types.TODO) (Step, bool, error) {
+func (h *Host) Next(ctx context.Context, todo *types.TODO) (lifecycle.Step, bool, error) {
 	lc, err := h.Context(ctx, todo)
 	if err != nil {
-		return Step{}, false, err
+		return lifecycle.Step{}, false, err
 	}
 	return h.Def.Next(lc)
 }
@@ -263,7 +268,7 @@ func (h *Host) graderSpec(ctx context.Context, todo *types.TODO) (api.Spec, erro
 // agent turn; a built-in prompt runs as the class it is compiled with; a
 // project prompt is a read-only pass when the step asks for plan permissions,
 // and otherwise implements.
-func classOf(step Step) types.RunMode {
+func classOf(step lifecycle.Step) types.RunMode {
 	if step.Name == StepVerify || step.Prompt == promptRefPrefix+StepVerify {
 		return types.ModeVerify
 	}
@@ -290,7 +295,7 @@ const (
 // A verify-class step has no prompt to resolve — it runs the definition of
 // done — and Lifecycle.Validate has already refused a `verify` step that
 // references anything but todos.verify.
-func (h *Host) promptFor(step Step) (todoprompt.Definition, error) {
+func (h *Host) promptFor(step lifecycle.Step) (todoprompt.Definition, error) {
 	ref := strings.TrimSpace(step.Prompt)
 	switch {
 	case classOf(step) == types.ModeVerify:

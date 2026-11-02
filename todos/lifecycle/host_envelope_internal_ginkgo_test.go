@@ -10,6 +10,7 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/tools"
@@ -23,7 +24,7 @@ import (
 // classifies agrees with the state the runtime records for the prompt run.
 var _ = ginkgo.Describe("collecting a finished run", func() {
 	const completed = `{"success":true,"event":"completed","comment":"Built it."}`
-	runStep := Step{Name: "run", Events: []string{"completed", "blocked"}}
+	runStep := lifecycle.Step{Name: "run", Events: []string{"completed", "blocked"}}
 
 	var (
 		host      *Host
@@ -53,7 +54,7 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 
 		gomega.Expect(out.Result.Run.State).To(gomega.Equal(RunSucceeded))
 		gomega.Expect(out.Result.Run.StopReason).To(gomega.Equal("condition-met"))
-		gomega.Expect(out.Result.Envelope).To(gomega.Equal(Envelope{Success: true, Event: "completed", Comment: "Built it."}))
+		gomega.Expect(out.Result.Envelope).To(gomega.Equal(lifecycle.Envelope{Success: true, Event: "completed", Comment: "Built it."}))
 		gomega.Expect(out.Execution.Summary).To(gomega.Equal("Built it."))
 		gomega.Expect(out.Execution.OutputJSON).To(gomega.Equal(map[string]any{"success": true, "event": "completed", "comment": "Built it."}))
 		gomega.Expect(out.Execution.Success).To(gomega.BeTrue())
@@ -192,7 +193,7 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 	})
 
 	ginkgo.Describe("a plan-mode run", func() {
-		planStep := Step{Name: "plan", Events: []string{"new", "updated", "unchanged"}}
+		planStep := lifecycle.Step{Name: "plan", Events: []string{"new", "updated", "unchanged"}}
 		ginkgo.BeforeEach(func() {
 			prepared.class, prepared.existingPlan = types.ModePlan, "1. Old plan"
 		})
@@ -256,10 +257,10 @@ var _ = ginkgo.Describe("collecting a finished run", func() {
 		passed := true
 		report := &api.VerifyReport{Ran: true, Passed: false, Reason: "1 of 2 criteria failed",
 			Checklist: []api.VerifyChecklistItem{{Item: "Greets", Passed: &passed}, {Item: "Formats"}}}
-		out := host.collect(Step{Name: StepVerify, Events: VerifyEvents}, prepared,
+		out := host.collect(lifecycle.Step{Name: StepVerify, Events: VerifyEvents}, prepared,
 			dispatched{out: promptrun.Result{Report: report}, execution: execution}, time.Now())
 
-		gomega.Expect(out.Result.Envelope).To(gomega.Equal(Envelope{
+		gomega.Expect(out.Result.Envelope).To(gomega.Equal(lifecycle.Envelope{
 			Success: false, Event: "failed", Comment: "1 of 2 criteria failed\n\n- [x] Greets\n- [ ] Formats",
 		}))
 	})

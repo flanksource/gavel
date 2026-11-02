@@ -61,6 +61,8 @@ func TestX(t *testing.T) {}
 		t.Fatal(err)
 	}
 
+	// A Ginkgo suite beside a plain-testing benchmark: the suite's bootstrap is
+	// the package's runnable test, so benchmarks are opt-in and never displace it.
 	ginkgoSuite := filepath.Join(tmpDir, "ginkgosuite")
 	if err := os.MkdirAll(ginkgoSuite, 0755); err != nil {
 		t.Fatal(err)
@@ -141,6 +143,12 @@ func BenchmarkZ(b *testing.B) {}
 			bench: "",
 			pkg:   "./ginkgosuite",
 			want:  nil,
+		},
+		{
+			name:  "Ginkgo suite with bench=true runs the benchmark beside its specs",
+			bench: "true",
+			pkg:   "./ginkgosuite",
+			want:  []string{"-bench=."},
 		},
 		{
 			name:      "user-supplied -bench in extraArgs is preserved as-is",

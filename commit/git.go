@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -115,8 +116,8 @@ func stagedFiles(workDir string) ([]string, error) {
 // tracked files. Tracked-but-gitignored bundles (e.g. pr/ui/dist/prui.js) get
 // staged here too, then stripped by unstageGitIgnored so they stay out of the
 // commit while remaining tracked.
-func gitAddUpdate(workDir string) error {
-	if out, err := runGitRetryingLocks(workDir, "add", "-u"); err != nil {
+func gitAddUpdate(ctx context.Context, workDir string) error {
+	if out, err := runGitRetryingLocks(ctx, workDir, "add", "-u"); err != nil {
 		return fmt.Errorf("git add -u: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -171,12 +172,12 @@ func splitLines(out string) []string {
 	return lines
 }
 
-func addFiles(workDir string, files []string) error {
+func addFiles(ctx context.Context, workDir string, files []string) error {
 	if len(files) == 0 {
 		return nil
 	}
 	args := append([]string{"add", "-A", "--"}, files...)
-	if out, err := runGitRetryingLocks(workDir, args...); err != nil {
+	if out, err := runGitRetryingLocks(ctx, workDir, args...); err != nil {
 		return fmt.Errorf("git add -A: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -189,30 +190,30 @@ func addFiles(workDir string, files []string) error {
 //
 // `--ignore-unmatch` keeps the call idempotent when a file has already been
 // untracked (e.g. by a previous picker iteration).
-func gitRmCached(workDir string, files []string) error {
+func gitRmCached(ctx context.Context, workDir string, files []string) error {
 	if len(files) == 0 {
 		return nil
 	}
 	args := append([]string{"rm", "--cached", "--ignore-unmatch", "--"}, files...)
-	if out, err := runGitRetryingLocks(workDir, args...); err != nil {
+	if out, err := runGitRetryingLocks(ctx, workDir, args...); err != nil {
 		return fmt.Errorf("git rm --cached: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-func resetFiles(workDir string, files []string) error {
+func resetFiles(ctx context.Context, workDir string, files []string) error {
 	if len(files) == 0 {
 		return nil
 	}
 	args := append([]string{"reset", "--"}, files...)
-	if out, err := runGitRetryingLocks(workDir, args...); err != nil {
+	if out, err := runGitRetryingLocks(ctx, workDir, args...); err != nil {
 		return fmt.Errorf("git reset --: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-func commitWithMessage(workDir, msg string) (string, error) {
-	if out, err := runGitRetryingLocks(workDir, "commit", "-m", msg); err != nil {
+func commitWithMessage(ctx context.Context, workDir, msg string) (string, error) {
+	if out, err := runGitRetryingLocks(ctx, workDir, "commit", "-m", msg); err != nil {
 		return "", fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	hashCmd := exec.Command("git", "rev-parse", "HEAD")
@@ -340,8 +341,8 @@ func lastTouchingCommit(workDir, base, file string) (string, error) {
 // staged index and returns the new HEAD hash. The fixup message format
 // (`fixup! <subject of target>`) is produced by git itself, so we do not
 // build it manually.
-func commitFixup(workDir, targetHash string) (string, error) {
-	if out, err := runGitRetryingLocks(workDir, "commit", "--fixup="+targetHash); err != nil {
+func commitFixup(ctx context.Context, workDir, targetHash string) (string, error) {
+	if out, err := runGitRetryingLocks(ctx, workDir, "commit", "--fixup="+targetHash); err != nil {
 		return "", fmt.Errorf("git commit --fixup=%s: %w: %s", targetHash, err, strings.TrimSpace(string(out)))
 	}
 	hashCmd := exec.Command("git", "rev-parse", "HEAD")

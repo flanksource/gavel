@@ -7,7 +7,8 @@ describe('mobile tab <-> route tab', () => {
     ['prs', 'prs'],
     ['todos', 'todos'],
     ['sessions', 'sessions'],
-    ['projects', 'processes'],
+    ['projects', 'projects'],
+    ['processes', 'processes'],
   ] as const)('route tab %s is the %s mobile tab', (route, mobile) => {
     expect(mobileTabFromRoute(route)).toBe(mobile);
     expect(routeTabFromMobile(mobile)).toBe(route);
@@ -28,5 +29,11 @@ describe('mobile tab <-> route tab', () => {
     const parsed = parseRoute({ pathname: '/sessions/abc-123', search: '?project=gavel' } as Location);
     expect(mobileTabFromRoute(parsed.tab)).toBe('sessions');
     expect(parsed.selectedPath).toBe('abc-123');
+  });
+
+  it('keeps a mobile project diff and worktree deep link intact', () => {
+    const parsed = parseRoute({ pathname: '/projects/acme', search: '?diff=src%2Fmain.go&ref=wt%3A%2Fwork%2Facme' } as Location);
+    expect(mobileTabFromRoute(parsed.tab)).toBe('projects');
+    expect(buildRoute(parsed)).toBe('/projects/acme?diff=src%2Fmain.go&ref=wt%3A%2Fwork%2Facme');
   });
 });

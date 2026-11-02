@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/commit"
+	corelifecycle "github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
@@ -73,7 +74,7 @@ var _ = Describe("a host whose runs execute elsewhere", func() {
 				}}
 			}
 		}
-		engine, err := lifecycle.New(def)
+		engine, err := corelifecycle.New(def)
 		Expect(err).NotTo(HaveOccurred())
 		host.Def = engine
 	})

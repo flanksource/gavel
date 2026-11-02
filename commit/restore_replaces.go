@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,7 +33,7 @@ type pendingRestore struct {
 // drops each replace listed in ups and pins/adds the corresponding require to
 // the new version. Then runs `go mod tidy` in the module directory and
 // re-stages go.mod (plus go.sum if it exists).
-func applyGoModReplaceUpgrade(workDir, gitRoot, file string, ups []goModUpgrade) error {
+func applyGoModReplaceUpgrade(ctx context.Context, workDir, gitRoot, file string, ups []goModUpgrade) error {
 	if len(ups) == 0 {
 		return nil
 	}
@@ -76,7 +77,7 @@ func applyGoModReplaceUpgrade(workDir, gitRoot, file string, ups []goModUpgrade)
 	if _, err := os.Stat(filepath.Join(gitRoot, goSumRel)); err == nil {
 		toStage = append(toStage, goSumRel)
 	}
-	if err := addFiles(workDir, toStage); err != nil {
+	if err := addFiles(ctx, workDir, toStage); err != nil {
 		return fmt.Errorf("stage %v: %w", toStage, err)
 	}
 	return nil

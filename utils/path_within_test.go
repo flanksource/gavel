@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"os"
 	"path/filepath"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -65,4 +66,34 @@ var _ = Describe("ResolveWithin", func() {
 		_, err = ResolveWithin("", nested)
 		Expect(err).To(MatchError(ContainSubstring("base directory is required")))
 	})
+})
+
+var _ = Describe("ReadWithin", func() {
+	DescribeTable("reads files and internal relative symlinks", func(absoluteBase, absoluteName, symlink bool) {
+		base := GinkgoT().TempDir()
+		const name = "workflow.yaml"
+		want := []byte("order: [run, plan]\n")
+		Expect(os.WriteFile(filepath.Join(base, name), want, 0600)).To(Succeed())
+		path := name
+		if symlink {
+			path = "linked.yaml"
+			Expect(os.Symlink(name, filepath.Join(base, path))).To(Succeed())
+		}
+		if absoluteName {
+			path = filepath.Join(base, path)
+		}
+		if !absoluteBase {
+			cwd, err := os.Getwd()
+			Expect(err).NotTo(HaveOccurred())
+			base, err = filepath.Rel(cwd, base)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Expect(ReadWithin(base, path)).To(Equal(want))
+	},
+		Entry("absolute base, relative file", true, false, false),
+		Entry("absolute base and file", true, true, false),
+		Entry("relative base, relative file", false, false, false),
+		Entry("relative base, absolute file", false, true, false),
+		Entry("relative symlink within the base", true, false, true),
+	)
 })

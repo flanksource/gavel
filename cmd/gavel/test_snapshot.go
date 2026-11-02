@@ -1,18 +1,43 @@
 package main
 
 import (
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
-	"github.com/flanksource/gavel/utils"
 )
+
+// failedRun is a run the runner returned an error for, with what completed.
+type failedRun struct {
+	Opts        testrunner.RunOptions
+	Tests       []parsers.Test
+	Lint        []*linters.LinterResult
+	Started     time.Time
+	Trace       *runTrace
+	Performance *fixtures.BenchmarkPerformance
+	Err         error
+}
+
+// saveFailedRun writes run's per-run snapshot, carrying its error and exit
+// code 1, and returns it.
+func saveFailedRun(run failedRun) testui.Snapshot {
+	snapshot := buildTestSnapshot(run.Opts, run.Tests, run.Lint, run.Started, time.Now().UTC(), run.Trace)
+	snapshot.Performance = run.Performance
+	snapshot.Error = run.Err.Error()
+	failed := 1
+	snapshot.Metadata.ExitCode = &failed
+	if path, err := snapshots.SavePerRun(run.Opts.Dirs.StateRoot, &snapshot, run.Started, ""); err != nil {
+		logger.Warnf("persist per-run snapshot: %v", err)
+	} else {
+		logger.V(1).Infof("wrote per-run snapshot to %s", path)
+	}
+	return snapshot
+}
 
 func buildTestSnapshot(
 	opts testrunner.RunOptions,
@@ -36,10 +61,12 @@ func buildTestSnapshot(
 			Kind:         "initial",
 			Sequence:     1,
 			Args:         snapshotArgs(opts),
+			Changes:      opts.Selection.Snapshot(),
 			RunID:        trace.runID(),
+			StateRoot:    opts.Dirs.StateRoot,
 			ProcessTrace: trace.processRefs(),
 		},
-		Git: snapshotGitInfo(opts.WorkDir),
+		Git: snapshots.GitInfo(opts.WorkDir),
 		Status: testui.SnapshotStatus{
 			Running: false,
 			LintRun: opts.Lint,
@@ -82,6 +109,7 @@ func snapshotArgs(opts testrunner.RunOptions) map[string]any {
 		"cache":          opts.Cache,
 		"changed":        opts.Changed,
 		"since":          opts.Since,
+		"changed_files":  append([]string(nil), opts.ChangedFiles...),
 		"bench":          opts.Bench,
 		"fixtures":       opts.Fixtures,
 		"fixture_files":  append([]string(nil), opts.FixtureFiles...),
@@ -112,40 +140,4 @@ func durationString(d time.Duration) string {
 		return ""
 	}
 	return d.String()
-}
-
-func snapshotGitInfo(workDir string) *testui.SnapshotGit {
-	if workDir == "" {
-		return nil
-	}
-
-	root := utils.FindGitRoot(workDir)
-	if root == "" {
-		abs, err := filepath.Abs(workDir)
-		if err == nil {
-			root = abs
-		} else {
-			root = workDir
-		}
-	}
-
-	git := &testui.SnapshotGit{
-		Repo: filepath.Base(root),
-		Root: root,
-	}
-	if utils.FindGitRoot(workDir) != "" {
-		git.SHA = gitHeadSHA(root)
-	}
-	return git
-}
-
-func gitHeadSHA(workDir string) string {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	cmd.Dir = workDir
-	out, err := cmd.Output()
-	if err != nil {
-		logger.V(2).Infof("git rev-parse HEAD in %s failed: %v", workDir, err)
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }

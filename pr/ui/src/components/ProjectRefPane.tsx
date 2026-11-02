@@ -1,13 +1,15 @@
 import { useState, type ReactNode } from 'react';
 import { Button, Combobox, SegmentedControl, type ComboboxOption } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiEdit, UiFolderGit, UiGitBranch, UiGitCommit, UiHome, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { UiArrowDown, UiArrowUp, UiCheck, UiEdit, UiFolderGit, UiGitBranch, UiGitCommit, UiHome, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import { useProjectGit } from '../projectGitQueries';
 import { parseProjectRef } from '../projectRef';
 import type { BranchMergeResult, GitBranchInfo, GitWorktree, Project, ProjectGit } from '../types';
 import { GIT_HOT_REFRESH_MS, useGitFocus } from '../useGitFocus';
 import { useNow } from '../useNow';
+import { useIsMobile } from '../useIsMobile';
 import { ProjectBranchChanges } from './ProjectBranchChanges';
 import { ProjectStatusView } from './ProjectStatusView';
+import { ProjectRebase } from './ProjectRebase';
 import { dirtyFileCount, gitStateAge, gitStateScannedAt, projectRefAges, projectRefEntries, type ProjectRefEntry } from './projectGitView';
 
 type WorktreeView = 'work' | 'branch';
@@ -38,6 +40,7 @@ const shortSha = (sha: string) => sha.slice(0, 7);
  * also show their committed changes with the actions that land them.
  */
 export function ProjectRefPane({ project, projectRef, diffPath, showResults, onRefChange, onDiffPathChange, onChanged }: Props) {
+  const reviewing = useIsMobile() && diffPath !== '';
   const gitQuery = useProjectGit(project.name, { refetchIntervalMs: GIT_HOT_REFRESH_MS });
   const [landed, setLanded] = useState<Landed | null>(null);
   const [viewChoice, setViewChoice] = useState<{ ref: string; view: WorktreeView } | null>(null);
@@ -83,8 +86,11 @@ export function ProjectRefPane({ project, projectRef, diffPath, showResults, onR
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <div hidden={reviewing} className={reviewing ? 'hidden' : 'contents'}>
       <RefBar git={git} scannedAt={git ? gitStateScannedAt(git.computedAt, shownWorktree) : ''} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} notices={notices} value={projectRef} onChange={onRefChange} />
+      <ProjectRebase key={`${project.name}:${shownWorktree?.path ?? projectRef}`} projectName={project.name} worktree={shownWorktree?.path} branch={shownWorktree?.branch} generation={git?.generation} />
       {landed && <LandedBanner landed={landed} onDismiss={() => setLanded(null)} />}
+      </div>
       <div className="min-h-0 flex-1">{body}</div>
     </div>
   );
@@ -130,7 +136,7 @@ function RefBar({ git, scannedAt, loading, error, notices, value, onChange }: { 
         placeholder="Worktree or branch"
         className="w-[42rem] min-w-0 max-w-full shrink"
       />
-      {selected && <RefSummary entry={selected} />}
+      {selected && <RefSummary entry={selected} className="hidden md:flex" />}
       <GitNotices notices={notices} />
       <GitStateAge scannedAt={scannedAt} />
     </div>
@@ -175,12 +181,20 @@ const GROUP_NOUNS: Record<ProjectRefEntry['group'], string> = { Checkout: 'Check
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
 
-/** One line: commits · uncommitted · +adds −dels, then the commit and touched ages. */
-function RefSummary({ entry: { stats, lastCommitAt, touchedAt } }: { entry: ProjectRefEntry }) {
+/** One line: ↑ahead ↓behind upstream · commits · uncommitted · +adds −dels, then the commit and touched ages. */
+function RefSummary({ entry: { stats, lastCommitAt, touchedAt }, className = 'flex' }: { entry: ProjectRefEntry; className?: string }) {
   useNow();
   const { committed, touched } = projectRefAges({ lastCommitAt, touchedAt });
+  const upstream = stats.upstream;
+  const upstreamLabel = upstream && `${plural(upstream.ahead, 'commit')} ahead of ${upstream.name}, ${upstream.behind} behind`;
   return (
-    <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+    <span className={`${className} shrink-0 items-center gap-2 whitespace-nowrap text-xs tabular-nums text-muted-foreground`}>
+      {upstream && (upstream.ahead > 0 || upstream.behind > 0) && (
+        <span className="flex items-center gap-1" title={upstreamLabel} aria-label={upstreamLabel}>
+          {upstream.ahead > 0 && <span className="flex items-center"><UiArrowUp />{upstream.ahead}</span>}
+          {upstream.behind > 0 && <span className="flex items-center"><UiArrowDown />{upstream.behind}</span>}
+        </span>
+      )}
       {stats.commits > 0 && <span>{plural(stats.commits, 'commit')}</span>}
       {stats.uncommitted > 0 && <span>{stats.uncommitted} uncommitted</span>}
       {stats.lines && (

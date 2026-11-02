@@ -1,7 +1,7 @@
 // Wire shapes of the project git endpoints (pr/ui/project_git.go).
 
-// GET /api/projects/git-summary — one entry per project. adds/dels cover all
-// work not yet in the base branch (uncommitted changes plus unmerged commits).
+// GET /api/projects/git-summary — one entry per project. adds/dels are the
+// primary checkout's uncommitted changes only.
 export interface ProjectGitSummary {
   name: string;
   base: string;
@@ -9,6 +9,9 @@ export interface ProjectGitSummary {
   dels: number;
   worktrees: number;
   branches: number;
+  // Distinct named branches with uncommitted files in any live worktree,
+  // including the primary checkout and base branch.
+  uncommittedBranches: number;
   // Set when this project's git state could not be read; the other fields are
   // then not meaningful and must not be shown as zero work.
   error?: string;
@@ -71,6 +74,12 @@ export interface ProjectGit {
   currentBranch: string;
   // Whether the primary checkout is on the base branch; merging needs it.
   baseCheckedOut: boolean;
+  // The ref the primary checkout tracks (e.g. origin/main); absent when it
+  // tracks none or that ref is gone. The counts are the checkout's commits not
+  // in it (ahead) and its commits not in the checkout (behind).
+  upstream?: string;
+  upstreamAhead: number;
+  upstreamBehind: number;
   worktrees: GitWorktree[];
   branches: GitBranchInfo[];
   // When the repo's refs (branches, worktree list) were last scanned (RFC

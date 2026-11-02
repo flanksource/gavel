@@ -255,7 +255,7 @@ func TestHostedTodoRunsNeedASandbox(t *testing.T) {
 }
 
 func TestEveryHostedRunGoesToASandbox(t *testing.T) {
-	hosted := todoSource{Dir: "/srv/gavel/workspaces/org/repo", Hosted: &HostedWorkspace{Repo: sandbox.Repo{ID: uuid.New()}, SHA: "abc123"}}
+	hosted := todoSource{Dir: t.TempDir(), Hosted: &HostedWorkspace{Repo: sandbox.Repo{ID: uuid.New()}, SHA: "abc123"}}
 	todo := &types.TODO{ID: uuid.NewString()}
 	override, err := continuationOverride(nil)
 	require.NoError(t, err)

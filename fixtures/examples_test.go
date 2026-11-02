@@ -28,6 +28,10 @@ func TestExampleFixturesParse(t *testing.T) {
 		"pre-release.fixture.md": {test: true, lint: true},
 		"smoke-test.fixture.md":  {test: true},
 		"help.fixture.md":        {},
+		// The agent review is a prompt fence plus a scored checklist; the Jev
+		// variant judges the same rules from a plain bash command step.
+		"go-code-review.fixture.md":     {ai: true},
+		"go-code-review-jev.fixture.md": {},
 	}
 
 	seen := map[string]bool{}

@@ -1,6 +1,7 @@
 import { renderHook } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import type { TodoItem, TodoListResponse } from '../../types';
+import type { SelectedTodo } from './todoSelection';
 import { useParentTitles, useTodoFamily } from './useTodoFamily';
 
 const DIR = '/repos/billing';
@@ -23,7 +24,7 @@ type Listing = { listReady: boolean; error: string; errorsByDir: Record<string, 
 const loaded: Listing = { listReady: true, error: '', errorsByDir: {} };
 
 function family(detail: TodoItem | null, { select = vi.fn(), listing = loaded, lists = byDir }: {
-  select?: ReturnType<typeof vi.fn>;
+  select?: Mock<(next: SelectedTodo | null) => void>;
   listing?: Listing;
   lists?: Record<string, TodoListResponse>;
 } = {}) {

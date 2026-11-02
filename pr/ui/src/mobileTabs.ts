@@ -1,13 +1,11 @@
 import type { Tab } from './routes';
 
-// The compact (mobile / native menubar) layout has four tabs. Three share a
-// route tab with the desktop app; Processes has no route of its own, so it
-// lives at /projects, the desktop tab that hosts the same workspaces.
-export const MOBILE_TABS = ['processes', 'prs', 'todos', 'sessions'] as const;
+export const MOBILE_TABS = ['projects', 'processes', 'prs', 'todos', 'sessions'] as const;
 export type MobileTab = (typeof MOBILE_TABS)[number];
 
 const ROUTE_TAB: Record<MobileTab, Tab> = {
-  processes: 'projects',
+  projects: 'projects',
+  processes: 'processes',
   prs: 'prs',
   todos: 'todos',
   sessions: 'sessions',

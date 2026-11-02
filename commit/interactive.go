@@ -73,10 +73,10 @@ func runInteractiveStaging(ctx context.Context, opts Options) ([]string, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := resetAllStagedFn(opts.WorkDir); err != nil {
+	if err := resetAllStagedFn(ctx, opts.WorkDir); err != nil {
 		return nil, fmt.Errorf("reset index before staging selection: %w", err)
 	}
-	if err := addFilesFunc(opts.WorkDir, picked.Selected); err != nil {
+	if err := addFilesFunc(ctx, opts.WorkDir, picked.Selected); err != nil {
 		return nil, fmt.Errorf("stage selected files: %w", err)
 	}
 
@@ -123,7 +123,7 @@ func selectInteractiveFiles(ctx context.Context, opts Options, excluded map[stri
 	}
 
 	if len(picked.RmCached) > 0 {
-		if err := gitRmCachedFunc(opts.WorkDir, picked.RmCached); err != nil {
+		if err := gitRmCachedFunc(ctx, opts.WorkDir, picked.RmCached); err != nil {
 			return treePickerResult{}, len(candidates), fmt.Errorf("git rm --cached for newly-ignored files: %w", err)
 		}
 	}
@@ -222,8 +222,8 @@ func startCandidateSummaries(ctx context.Context, opts Options, candidates []sta
 // resetAllStaged unstages everything currently in the index. Used to clear
 // state before re-staging just the user's selection. We use `git reset HEAD --`
 // (no paths after `--`) which does NOT touch the working tree.
-func resetAllStaged(workDir string) error {
-	if out, err := runGitRetryingLocks(workDir, "reset", "--mixed"); err != nil {
+func resetAllStaged(ctx context.Context, workDir string) error {
+	if out, err := runGitRetryingLocks(ctx, workDir, "reset", "--mixed"); err != nil {
 		// `git reset --mixed` with an empty index can fail benignly when there
 		// are no commits yet; tolerate that one case so the first commit on a
 		// fresh repo still works.

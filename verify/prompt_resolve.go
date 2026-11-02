@@ -2,7 +2,6 @@ package verify
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
@@ -11,6 +10,7 @@ import (
 
 type PromptResolveOptions struct {
 	Base          api.Spec
+	Context       *api.Spec
 	DefaultPrompt string
 	FileSource    *string
 	Data          map[string]any
@@ -71,12 +71,15 @@ func (s PromptSpec) Layers(opts PromptResolveOptions) ([]api.SpecLayer, error) {
 	if err := addPrompt("built-in "+opts.Name+" prompt", opts.DefaultPrompt); err != nil {
 		return nil, err
 	}
+	if opts.Context != nil {
+		layers = append(layers, api.PromptSpecLayer(opts.Name+" lifecycle", *opts.Context))
+	}
 	if s.File != "" {
 		var source string
 		if opts.FileSource != nil {
 			source = *opts.FileSource
 		} else {
-			raw, err := os.ReadFile(s.resolvedFilePath(opts.Dir))
+			raw, err := s.readFile(opts.Dir)
 			if err != nil {
 				return nil, fmt.Errorf("read prompt override file: %w", err)
 			}

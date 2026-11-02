@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -16,7 +17,7 @@ import (
 // picker, and the step a run defaults to — three surfaces that must not be able
 // to disagree about which step comes next.
 type StepState struct {
-	Step Step
+	Step lifecycle.Step
 	// Applicable is the step's `when` predicate over this todo.
 	Applicable bool
 	// Suggested marks the one step Next would run: the first non-auxiliary
@@ -26,7 +27,7 @@ type StepState struct {
 	// words, so a caller can show why a step is offered or withheld.
 	Reason string
 	// LastRun is the step's most recent recorded run, nil when it has never run.
-	LastRun *StepRun
+	LastRun *lifecycle.StepRun
 	// Done reports that the step's last run finished successfully.
 	Done bool
 }
@@ -50,7 +51,7 @@ func (h *Host) Steps(ctx context.Context, todo *types.TODO) ([]StepState, error)
 	if err != nil {
 		return nil, err
 	}
-	last := map[string]StepRun{}
+	last := map[string]lifecycle.StepRun{}
 	for _, run := range lc.Runs {
 		last[run.Step] = run
 	}
@@ -80,29 +81,29 @@ func (h *Host) Steps(ctx context.Context, todo *types.TODO) ([]StepState, error)
 // no way to re-plan a todo the definition considers planned. An unknown name is
 // an error that enumerates the lifecycle's own steps, because the set is
 // project-specific and not discoverable from the error otherwise.
-func (h *Host) StepFor(ctx context.Context, todo *types.TODO, name string) (Step, string, error) {
+func (h *Host) StepFor(ctx context.Context, todo *types.TODO, name string) (lifecycle.Step, string, error) {
 	if h.Def == nil {
-		return Step{}, "", fmt.Errorf("lifecycle host: no lifecycle loaded")
+		return lifecycle.Step{}, "", fmt.Errorf("lifecycle host: no lifecycle loaded")
 	}
 	def := h.Def.Definition()
 	if name = strings.TrimSpace(name); name != "" {
 		step, ok := def.Step(name)
 		if !ok {
-			return Step{}, "", fmt.Errorf("step %q is not part of lifecycle %s; steps: %s",
+			return lifecycle.Step{}, "", fmt.Errorf("step %q is not part of lifecycle %s; steps: %s",
 				name, def.Name, strings.Join(def.StepNames(), ", "))
 		}
 		return step, "requested with --step " + name, nil
 	}
 	lc, err := h.Context(ctx, todo)
 	if err != nil {
-		return Step{}, "", err
+		return lifecycle.Step{}, "", err
 	}
 	step, ok, err := h.Def.Next(lc)
 	if err != nil {
-		return Step{}, "", err
+		return lifecycle.Step{}, "", err
 	}
 	if !ok {
-		return Step{}, "", fmt.Errorf(
+		return lifecycle.Step{}, "", fmt.Errorf(
 			"no lifecycle step applies to todo %s (status %s); name one with --step, or move the todo on",
 			todoName(todo), todo.Status)
 	}
@@ -110,7 +111,7 @@ func (h *Host) StepFor(ctx context.Context, todo *types.TODO, name string) (Step
 }
 
 // stepReason renders a step's predicate as the sentence a caller reads.
-func stepReason(step Step, applies bool) string {
+func stepReason(step lifecycle.Step, applies bool) string {
 	when := strings.Join(strings.Fields(step.When), " ")
 	if when == "" {
 		return "always applies (no `when` predicate)"

@@ -121,6 +121,7 @@ type Message struct {
 	Kind      string            `json:"kind"`
 	Iteration int               `json:"iteration,omitempty"`
 	Spec      *api.Spec         `json:"spec,omitempty"`
+	Workspace *api.Workspace    `json:"workspace,omitempty"`
 	Event     *api.Event        `json:"event,omitempty"`
 	Progress  *api.VerifyReport `json:"progress,omitempty"`
 	Result    *Result           `json:"result,omitempty"`
@@ -175,9 +176,10 @@ func decodedEvent(event api.Event) api.Event {
 	return event
 }
 
-// StartedMessage reports that the run's setup is done and its first turn is next.
-func StartedMessage(spec api.Spec) Message {
-	return Message{Kind: KindStarted, Spec: &spec}
+// StartedMessage reports that the run's setup is done and its first turn is next, with the
+// workspace setup prepared for it.
+func StartedMessage(spec api.Spec, workspace *api.Workspace) Message {
+	return Message{Kind: KindStarted, Spec: &spec, Workspace: workspace}
 }
 
 // EventMessage reports one of the run's events, without its backend-native value.

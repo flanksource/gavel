@@ -3,12 +3,17 @@ package testui
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky/api"
+	clickyexec "github.com/flanksource/clicky/exec"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
@@ -18,10 +23,15 @@ import (
 )
 
 type Server struct {
-	mu               sync.RWMutex
-	tests            []parsers.Test
-	lint             []*linters.LinterResult
-	lintRun          bool
+	mu       sync.RWMutex
+	revision atomic.Uint64
+	encoding snapshotEncodingCache
+	tests    []parsers.Test
+	lint     []*linters.LinterResult
+	lintRun  bool
+	// dismissed holds the fingerprints a reviewer set aside for this server's
+	// lifetime; every lint result that arrives is filtered by it.
+	dismissed        map[string]bool
 	benchCmp         *bench.BenchComparison
 	fixtureBenchmark *FixtureBenchmarkState
 	performance      *fixtures.BenchmarkPerformance
@@ -42,13 +52,22 @@ type Server struct {
 	processSessions *traces.ProcessSessions
 	// devProxy, when set, serves the page from a Vite dev server (SetDevProxy).
 	devProxy http.Handler
+	// basePath is the URL prefix the page resolves its API and routes under
+	// (SetBasePath).
+	basePath string
+	queryApp http.Handler
 
 	rerunMu       sync.Mutex
+	lintFixFn     LintFixFunc
+	lintFix       *LintFixRecord
 	rerunFn       RerunFunc
 	rerunOutput   *RerunOutputBuffer
 	stopFn        func()
 	stopMessage   string
 	stopRequested bool
+	taskSource    func() []clickytask.TaskSnapshot
+	frozenTasks   []clickytask.TaskSnapshot
+	tasksFrozen   bool
 }
 
 func NewServer() *Server {
@@ -71,15 +90,21 @@ func (s *Server) BeginRun(kind string) {
 	meta.Ended = time.Time{}
 	s.done = false
 	s.fixtureBenchmark = nil
+	s.replayed = false
 	s.performance = nil
 	s.runError = ""
 	s.logTail = ""
 	s.stopRequested = false
 	s.stopMessage = ""
+	s.frozenTasks, s.tasksFrozen = nil, false
 	s.notify()
 }
 
 func (s *Server) finishRunLocked() {
+	if s.taskSource != nil && !s.tasksFrozen {
+		s.frozenTasks = append([]clickytask.TaskSnapshot(nil), s.taskSource()...)
+		s.tasksFrozen = true
+	}
 	if s.metadata == nil || !s.metadata.Ended.IsZero() {
 		return
 	}
@@ -94,6 +119,7 @@ func (s *Server) ensureMetadataLocked() *SnapshotMetadata {
 }
 
 func (s *Server) SetVersion(version string) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureMetadataLocked().Version = version
@@ -102,6 +128,7 @@ func (s *Server) SetVersion(version string) {
 // SetRunProcess records the parent gavel process identity (PID + command
 // line). Intended to be called once per run from BeginRun's caller.
 func (s *Server) SetRunProcess(pid int, command string) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	meta := s.ensureMetadataLocked()
@@ -111,6 +138,7 @@ func (s *Server) SetRunProcess(pid int, command string) {
 
 // SetRunFrameworks records which test frameworks the run scheduled.
 func (s *Server) SetRunFrameworks(frameworks []string) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureMetadataLocked().Frameworks = append([]string(nil), frameworks...)
@@ -118,6 +146,7 @@ func (s *Server) SetRunFrameworks(frameworks []string) {
 
 // SetRunExitCode records the final exit code once the run completes.
 func (s *Server) SetRunExitCode(code int, timedOut bool) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	meta := s.ensureMetadataLocked()
@@ -126,6 +155,7 @@ func (s *Server) SetRunExitCode(code int, timedOut bool) {
 }
 
 func (s *Server) SetRunArgs(args map[string]any) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if args == nil {
@@ -140,6 +170,7 @@ func (s *Server) SetRunArgs(args map[string]any) {
 }
 
 func (s *Server) SetGitInfo(git *SnapshotGit) {
+	defer s.notify()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.git = cloneSnapshotGit(git)
@@ -156,6 +187,7 @@ func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.benchCmp = snapshot.Bench
 	s.fixtureBenchmark = snapshot.FixtureBenchmark
 	s.performance = snapshot.Performance
+	s.lintFix = snapshot.LintFix
 	s.runError = snapshot.Error
 	s.logTail = snapshot.LogTail
 	s.metadata = cloneSnapshotMetadata(snapshot.Metadata)
@@ -183,9 +215,43 @@ func (s *Server) SetResults(tests []parsers.Test) {
 func (s *Server) SetLintResults(results []*linters.LinterResult) {
 	s.mu.Lock()
 	s.lint = results
+	linters.DismissViolations(s.lint, s.dismissed)
 	s.lintRun = true
 	s.mu.Unlock()
 	s.notify()
+}
+
+// UpsertLintResult replaces the lint result with the same linter and work dir,
+// or appends it, so a result can appear while it is still pending or running.
+func (s *Server) UpsertLintResult(result *linters.LinterResult) {
+	s.mu.Lock()
+	linters.DismissViolations([]*linters.LinterResult{result}, s.dismissed)
+	i := slices.IndexFunc(s.lint, func(r *linters.LinterResult) bool {
+		return r.Linter == result.Linter && r.WorkDir == result.WorkDir
+	})
+	if i < 0 {
+		s.lint = append(s.lint, result)
+	} else {
+		s.lint[i] = result
+	}
+	s.lintRun = true
+	s.mu.Unlock()
+	s.notify()
+}
+
+// RemoveLintResult drops the lint result with this linter and work dir, as when
+// a pending entry is replaced by per-model results.
+func (s *Server) RemoveLintResult(linter, workDir string) {
+	s.mu.Lock()
+	s.lint = slices.DeleteFunc(s.lint, func(r *linters.LinterResult) bool {
+		return r.Linter == linter && r.WorkDir == workDir
+	})
+	s.mu.Unlock()
+	s.notify()
+}
+
+func (s *Server) lintInFlightLocked() bool {
+	return slices.ContainsFunc(s.lint, (*linters.LinterResult).InFlight)
 }
 
 // SetBenchComparison stores a benchmark comparison so it appears in the next snapshot.
@@ -243,6 +309,7 @@ func (s *Server) Snapshot() Snapshot {
 // SetGitRoot records the git root used for resolving relative paths and
 // locating the .gavel.yaml written by the ignore endpoint.
 func (s *Server) SetGitRoot(root string) {
+	defer s.notify()
 	s.mu.Lock()
 	s.gitRoot = root
 	s.mu.Unlock()
@@ -273,8 +340,8 @@ func (s *Server) Done() bool {
 	return s.done
 }
 
-func (s *Server) StreamFrom(ch <-chan []parsers.Test) {
-	s.streamFrom(ch, false)
+func (s *Server) StreamFrom(ch <-chan []parsers.Test) <-chan struct{} {
+	return s.streamFrom(ch, false)
 }
 
 // StreamRerunFrom consumes a rerun's update channel and merges each snapshot
@@ -285,8 +352,10 @@ func (s *Server) StreamRerunFrom(ch <-chan []parsers.Test) {
 	s.streamFrom(ch, true)
 }
 
-func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) {
+func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for tests := range ch {
 			s.mu.Lock()
 			if mergeAttempts {
@@ -304,9 +373,11 @@ func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) {
 		s.mu.Unlock()
 		s.notify()
 	}()
+	return done
 }
 
 func (s *Server) notify() {
+	s.revision.Add(1)
 	select {
 	case s.updated <- struct{}{}:
 	default:
@@ -324,8 +395,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
+	mux.HandleFunc("/api/lint/dismiss", s.handleLintDismiss)
+	mux.HandleFunc("/api/lint/fix", s.handleLintFix)
 	mux.HandleFunc("/api/tests/edit", s.handleTestEdit)
+	mux.HandleFunc("/api/file", s.handleFileSource)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
+	// Prompt lint results name the Captain prompt run producing them; the run and
+	// its transcript are Captain's to serve and follow.
+	mux.Handle("/api/captain/sessions/", http.StripPrefix("/api/captain/sessions", captaincli.SessionHandler()))
+	mux.Handle("/api/captain/prompt/runs/", http.StripPrefix("/api/captain/prompt/runs", captaincli.PromptRunHandler()))
+	mux.HandleFunc(AssetsMount+"/", handleAssets)
 	return mux
 }
 
@@ -352,15 +431,27 @@ func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.IsExport {
-		if req.Tab == viewTabProcesses {
+		if !exportableTab(req.Tab) {
 			http.NotFound(w, r)
 			return
 		}
 		s.handleExport(w, r, req)
 		return
 	}
+	s.mu.RLock()
+	basePath := s.basePath
+	s.mu.RUnlock()
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, pageHTML())
+	fmt.Fprint(w, pageHTML(basePath))
+}
+
+// SetBasePath declares the URL prefix this server is mounted under (stripped
+// before its handler sees the request), so the page resolves its API and route
+// URLs under it.
+func (s *Server) SetBasePath(basePath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.basePath = basePath
 }
 
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeRequest) {
@@ -378,7 +469,9 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeR
 	writeExportResponse(w, r, report, req.Format)
 }
 
-func pageHTML() string {
+func pageHTML(basePath string) string {
+	// json.Marshal escapes <, > and & so the value cannot close the script.
+	encodedBase, _ := json.Marshal(basePath)
 	return renderHTML(
 		api.HtmlElement{Tag: "", Content: "<!DOCTYPE html>\n"},
 		api.HtmlElement{
@@ -391,13 +484,14 @@ func pageHTML() string {
 						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"charset": "UTF-8"}},
 						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"name": "viewport", "content": "width=device-width, initial-scale=1.0"}},
 						api.HtmlElement{Tag: "title", Content: "Test Results"},
+						api.HtmlElement{Tag: "script", Content: "window.__gavelBasePath = " + string(encodedBase) + ";"},
 					),
 				},
 				api.HtmlElement{
 					Tag: "body",
 					Content: renderHTML(
 						api.HtmlElement{Tag: "div", Attributes: map[string]string{"id": "root"}},
-						api.HtmlElement{Tag: "script", Content: bundleJS},
+						api.HtmlElement{Tag: "script", Attributes: map[string]string{"type": "module", "src": html.EscapeString(basePath + BundlePath)}},
 					),
 				},
 			),
@@ -414,32 +508,27 @@ func renderHTML(elements ...api.Textable) string {
 }
 
 func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
-	s.mu.RLock()
-	data := s.snapshot()
-	s.mu.RUnlock()
-
-	b, err := json.Marshal(data)
+	b, _, err := s.encodedSnapshot()
 	if err != nil {
 		http.Error(w, "encode test snapshot: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b) //nolint:errcheck
+	fmt.Fprint(w, b)
 }
 
 // writeSSESnapshot sends data as one SSE frame unless it equals the last one
 // sent. An unencodable snapshot goes out as an error event and ok is false, so
 // the stream ends instead of reporting a run it could not serialise as done.
-func writeSSESnapshot(w http.ResponseWriter, flusher http.Flusher, data Snapshot, last *string) bool {
-	b, err := json.Marshal(data)
+func writeSSESnapshot(w http.ResponseWriter, flusher http.Flusher, payload string, err error, last *string) bool {
 	if err != nil {
 		message, _ := json.Marshal(map[string]string{"error": "encode test snapshot: " + err.Error()})
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", message)
 		flusher.Flush()
 		return false
 	}
-	if payload := string(b); payload != *last {
-		fmt.Fprintf(w, "data: %s\n\n", b)
+	if payload != *last {
+		fmt.Fprintf(w, "data: %s\n\n", payload)
 		flusher.Flush()
 		*last = payload
 	}
@@ -447,22 +536,39 @@ func writeSSESnapshot(w http.ResponseWriter, flusher http.Flusher, data Snapshot
 }
 
 func (s *Server) snapshot() Snapshot {
+	return s.snapshotWithTasks(s.liveTaskTestsLocked())
+}
+
+func (s *Server) liveTaskTestsLocked() ([]parsers.Test, bool) {
+	if s.replayed {
+		return nil, false
+	}
+	if s.taskSource == nil {
+		return virtualTaskTests(), !tasksDone()
+	}
+	snapshots := s.frozenTasks
+	if !s.tasksFrozen {
+		snapshots = s.taskSource()
+	}
+	return scopedTaskTests(snapshots), !s.tasksFrozen && taskSnapshotsRunning(snapshots)
+}
+
+func (s *Server) snapshotWithTasks(taskTests []parsers.Test, taskRunning bool) Snapshot {
 	tests := s.tests
 	// Virtual task tests surface live (running/pending) clicky tasks while a
 	// run is in progress. A server replayed from a JSON snapshot has its
 	// results fixed in s.tests with no live run behind it, so consulting the
 	// process-global task registry would only leak phantom tasks (and pollute
 	// replay tests that share that registry).
-	running := !s.done
+	running := !s.done || s.lintInFlightLocked()
 	if !s.replayed {
-		taskTests := virtualTaskTests()
 		if len(taskTests) > 0 {
 			merged := make([]parsers.Test, 0, len(taskTests)+len(s.tests))
 			merged = append(merged, taskTests...)
 			merged = append(merged, s.tests...)
 			tests = merged
 		}
-		running = running || !tasksDone()
+		running = running || taskRunning
 	}
 	stopped := s.stopRequested && !running
 	stopMessage := ""
@@ -477,6 +583,7 @@ func (s *Server) snapshot() Snapshot {
 			LintRun:           s.lintRun,
 			Traces:            s.tracesStatusLocked(),
 			StopSupported:     s.stopFn != nil,
+			LintFixSupported:  s.lintFixFn != nil,
 			TestEditSupported: s.testEditSupportedLocked(),
 			Stopped:           stopped,
 			StopMessage:       stopMessage,
@@ -486,13 +593,14 @@ func (s *Server) snapshot() Snapshot {
 		Bench:            s.benchCmp,
 		FixtureBenchmark: s.fixtureBenchmark,
 		Performance:      s.performance,
+		LintFix:          s.lintFix,
 		Error:            s.runError,
 		LogTail:          s.logTail,
 	}
 }
 
 func virtualTaskTests() []parsers.Test {
-	snapshots := clickytask.SnapshotAll(TestTaskGroupName, LintTaskGroupName)
+	snapshots := clickytask.SnapshotAll(liveTaskGroupNames...)
 	if len(snapshots) == 0 {
 		return nil
 	}
@@ -552,13 +660,29 @@ func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
 		t.Stderr = strings.Join(lines, "\n")
 	}
 	t.Context = map[string]any{
-		"duration": snap.Duration,
-		"status":   snap.Status,
-		"type":     snap.Type,
+		"status": snap.Status,
+		"type":   snap.Type,
+	}
+	if snap.Status != "running" && snap.Status != "pending" {
+		t.Context.(map[string]any)["duration"] = snap.Duration
+	}
+	if details, ok := snap.Details.(clickyexec.ExecTaskDetails); ok && details.PID > 0 && details.Started != nil {
+		t.Command = strings.TrimSpace(details.Command + " " + strings.Join(details.Args, " "))
+		attempt := parsers.TestAttempt{Sequence: 1, PID: details.PID, Started: *details.Started, Command: t.Command}
+		if details.Status != "running" && details.Status != "pending" {
+			attempt.Duration = details.Duration
+			attempt.ExitCode = &details.ExitCode
+			attempt.Passed = details.Status == "success"
+			attempt.Failed = !attempt.Passed
+			attempt.TimedOut = details.Status == "timeout"
+		}
+		t.Attempts = []parsers.TestAttempt{attempt}
 	}
 
 	switch snap.Status {
-	case "running", "pending":
+	case "running":
+		t.Running = true
+	case "pending":
 		t.Pending = true
 	case "success", "PASS":
 		t.Passed = true
@@ -570,6 +694,10 @@ func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
 
 	return t
 }
+
+// snapshotStreamInterval is the minimum gap between test-tree frames on the
+// SSE stream while a run is in progress.
+const snapshotStreamInterval = time.Second
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
@@ -583,13 +711,12 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	// Send initial snapshot immediately
-	s.mu.RLock()
-	initial := s.snapshot()
-	s.mu.RUnlock()
+	initial, _, err := s.encodedSnapshot()
 	lastPayload := ""
-	if !writeSSESnapshot(w, flusher, initial, &lastPayload) {
+	if !writeSSESnapshot(w, flusher, initial, err, &lastPayload) {
 		return
 	}
+	lastSent := time.Now()
 
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
@@ -602,15 +729,24 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 		}
 
-		s.mu.RLock()
-		data := s.snapshot()
-		s.mu.RUnlock()
-
-		if !writeSSESnapshot(w, flusher, data, &lastPayload) {
-			return
+		// Live progress notifies per test; coalesce bursts so the UI re-renders
+		// at most once per interval. The ticker delivers the trailing frame, and
+		// a finished run is never held back.
+		if !s.Done() && time.Since(lastSent) < snapshotStreamInterval {
+			continue
 		}
 
-		if !data.Status.Running {
+		payload, running, err := s.encodedSnapshot()
+
+		previous := lastPayload
+		if !writeSSESnapshot(w, flusher, payload, err, &lastPayload) {
+			return
+		}
+		if lastPayload != previous {
+			lastSent = time.Now()
+		}
+
+		if !running {
 			fmt.Fprintf(w, "event: done\ndata: {}\n\n")
 			flusher.Flush()
 			return
@@ -619,7 +755,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func tasksDone() bool {
-	snapshots := clickytask.SnapshotAll(TestTaskGroupName, LintTaskGroupName)
+	snapshots := clickytask.SnapshotAll(liveTaskGroupNames...)
 	if len(snapshots) == 0 {
 		return true
 	}

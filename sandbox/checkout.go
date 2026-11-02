@@ -25,7 +25,7 @@ func (s *Sources) Checkout(ctx context.Context, repo Repo) (Checkout, error) {
 	if err != nil {
 		return Checkout{}, err
 	}
-	if _, err := runGit(ctx, nil, "-C", source, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err != nil {
+	if _, err := runGit(ctx, gitOptions{}, "-C", source, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err != nil {
 		return Checkout{}, fmt.Errorf("repository %s has no default branch yet: push a branch to it first", repo.label())
 	}
 	dir := filepath.Join(s.DataDir, "workspaces", repo.Org.String(), repo.ID.String())
@@ -40,15 +40,15 @@ func (s *Sources) Checkout(ctx context.Context, repo Repo) (Checkout, error) {
 		if err := cloneWhole(ctx, dir, "clone", "--quiet", "--no-checkout", "--config", "core.symlinks=false", source); err != nil {
 			return Checkout{}, fmt.Errorf("clone the workspace of %s: %w", repo.label(), err)
 		}
-	} else if _, err := runGit(ctx, nil, "-C", dir, "fetch", "--quiet", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+	} else if _, err := runGit(ctx, gitOptions{}, "-C", dir, "fetch", "--quiet", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 		return Checkout{}, fmt.Errorf("refresh the workspace of %s: %w", repo.label(), err)
 	}
-	head, err := runGit(ctx, nil, "-C", source, "rev-parse", "HEAD^{commit}")
+	head, err := runGit(ctx, gitOptions{}, "-C", source, "rev-parse", "HEAD^{commit}")
 	if err != nil {
 		return Checkout{}, fmt.Errorf("resolve the default branch of %s: %w", repo.label(), err)
 	}
 	sha := strings.TrimSpace(head)
-	if _, err := runGit(ctx, nil, "-C", dir, "checkout", "--quiet", "--force", "--detach", sha); err != nil {
+	if _, err := runGit(ctx, gitOptions{}, "-C", dir, "checkout", "--quiet", "--force", "--detach", sha); err != nil {
 		return Checkout{}, fmt.Errorf("check out the default branch of %s: %w", repo.label(), err)
 	}
 	return Checkout{Dir: dir, SHA: sha}, nil

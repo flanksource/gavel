@@ -30,6 +30,14 @@
       },
       "type": "object"
     },
+    "AccessLevel": {
+      "description": "Portable access contract, compiled to each runtime's native dialect. read-only: the agent may read the workspace but cannot create, modify or delete files, spawn sub-agents, use third-party MCP servers, or obtain write access by approval. full: no access restriction, overriding a read-only intent from an earlier layer. Unset leaves every runtime unchanged.",
+      "enum": [
+        "read-only",
+        "full"
+      ],
+      "type": "string"
+    },
     "AfterStep": {
       "additionalProperties": false,
       "properties": {
@@ -42,6 +50,15 @@
         "cwd": {
           "type": "string"
         },
+        "if": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
         "when": {
           "enum": [
             "onVerify",
@@ -49,6 +66,9 @@
             "always"
           ],
           "type": "string"
+        },
+        "with": {
+          "type": "object"
         }
       },
       "type": "object"
@@ -94,6 +114,18 @@
         },
         "tenantID": {
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Batch": {
+      "additionalProperties": false,
+      "properties": {
+        "concurrency": {
+          "type": "integer"
+        },
+        "size": {
+          "type": "integer"
         }
       },
       "type": "object"
@@ -188,12 +220,7 @@
           "type": "boolean"
         },
         "gates": {
-          "enum": [
-            "none",
-            "cheap",
-            "full"
-          ],
-          "type": "string"
+          "$ref": "#/$defs/CommitGateSpecs"
         },
         "message": {
           "type": "string"
@@ -234,6 +261,38 @@
         }
       },
       "type": "object"
+    },
+    "CommitGateSpecs": {
+      "description": "Gates each commit must pass. The excludes gate always runs. Retired level strings none, cheap and full are still accepted.",
+      "oneOf": [
+        {
+          "items": {
+            "properties": {
+              "config": {
+                "description": "Gate configuration, e.g. max-size's bytes.",
+                "type": "object"
+              },
+              "name": {
+                "description": "Registered gate name: secret-names, max-size, or a host's own.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "enum": [
+            "none",
+            "cheap",
+            "full"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ConfigMapKeySelector": {
       "additionalProperties": false,
@@ -349,6 +408,9 @@
         "kubernetes": {
           "$ref": "#/$defs/KubernetesConnection"
         },
+        "opensearch": {
+          "$ref": "#/$defs/OpenSearchConnection"
+        },
         "serviceAccount": {
           "type": "boolean"
         }
@@ -406,6 +468,48 @@
       },
       "type": "object"
     },
+    "Grant": {
+      "additionalProperties": false,
+      "properties": {
+        "headers": {
+          "items": {
+            "$ref": "#/$defs/HeaderGrant"
+          },
+          "type": "array"
+        },
+        "methods": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "HeaderGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "valueFrom": {
+          "$ref": "#/$defs/EnvVar"
+        }
+      },
+      "type": "object"
+    },
     "HelmRefKeySelector": {
       "additionalProperties": false,
       "properties": {
@@ -415,6 +519,117 @@
         "name": {
           "type": "string"
         }
+      },
+      "type": "object"
+    },
+    "HookAction": {
+      "additionalProperties": false,
+      "properties": {
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "if": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "with": {
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "InlineTool": {
+      "additionalProperties": false,
+      "properties": {
+        "baseDir": {
+          "type": "string"
+        },
+        "checkout": {
+          "$ref": "#/$defs/Checkout"
+        },
+        "connections": {
+          "$ref": "#/$defs/ExecConnections"
+        },
+        "credentials": {
+          "enum": [
+            "none",
+            "direct",
+            "proxied",
+            "sidecar",
+            "sidecar-proxied"
+          ],
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "destructive": {
+          "type": "boolean"
+        },
+        "dotenv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "envVars": {
+          "items": {
+            "$ref": "#/$defs/EnvVar"
+          },
+          "type": "array"
+        },
+        "exec": {
+          "type": "string"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/Grant"
+          },
+          "type": "array"
+        },
+        "input": true,
+        "output": true,
+        "patch": {
+          "type": "string"
+        },
+        "permission": {
+          "$ref": "#/$defs/ToolPolicy"
+        },
+        "placement": {
+          "enum": [
+            "host",
+            "sandbox",
+            "supervisor",
+            "sidecar"
+          ],
+          "type": "string"
+        },
+        "readonly": {
+          "type": "boolean"
+        },
+        "retry": {
+          "$ref": "#/$defs/ToolRetry"
+        },
+        "timeout": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "InlineTools": {
+      "additionalProperties": {
+        "$ref": "#/$defs/InlineTool"
       },
       "type": "object"
     },
@@ -592,6 +807,36 @@
       },
       "type": "array"
     },
+    "OpenSearchConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "boolean"
+        },
+        "index": {
+          "type": "string"
+        },
+        "insecureSkipVerify": {
+          "type": "boolean"
+        },
+        "password": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "urls": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "username": {
+          "$ref": "#/$defs/EnvVar"
+        }
+      },
+      "type": "object"
+    },
     "Part": {
       "additionalProperties": false,
       "properties": {
@@ -676,6 +921,9 @@
     "Permissions": {
       "additionalProperties": false,
       "properties": {
+        "access": {
+          "$ref": "#/$defs/AccessLevel"
+        },
         "approvalTimeout": {
           "type": "string"
         },
@@ -729,6 +977,12 @@
           },
           "type": "array"
         },
+        "inputHooks": {
+          "items": {
+            "$ref": "#/$defs/HookAction"
+          },
+          "type": "array"
+        },
         "inputSchemaJSON": true,
         "inputSchemaType": {
           "type": "string"
@@ -741,6 +995,12 @@
         },
         "outputSchemaType": {
           "type": "string"
+        },
+        "schemaHooks": {
+          "items": {
+            "$ref": "#/$defs/HookAction"
+          },
+          "type": "array"
         },
         "schemaJSON": true,
         "schemaStrictness": {
@@ -755,6 +1015,9 @@
         "typeSafeQuestions": true,
         "user": {
           "type": "string"
+        },
+        "variables": {
+          "type": "object"
         }
       },
       "required": [
@@ -1079,6 +1342,9 @@
             "$ref": "#/$defs/EnvVar"
           },
           "type": "array"
+        },
+        "patch": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -1086,6 +1352,9 @@
     "Spec": {
       "additionalProperties": false,
       "properties": {
+        "batch": {
+          "$ref": "#/$defs/Batch"
+        },
         "budget": {
           "$ref": "#/$defs/Budget"
         },
@@ -1187,6 +1456,9 @@
         },
         "toolPreferences": {
           "$ref": "#/$defs/ToolPreferences"
+        },
+        "tools": {
+          "$ref": "#/$defs/InlineTools"
         },
         "workflow": {
           "$ref": "#/$defs/Workflow"
@@ -1330,6 +1602,30 @@
       },
       "type": "object"
     },
+    "ToolRetry": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "type": "integer"
+        },
+        "backoff": {
+          "type": "number"
+        },
+        "delay": {
+          "type": "string"
+        },
+        "exitCodes": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "maxDelay": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Tools": {
       "additionalProperties": {
         "description": "Authority for one tool: auto inherits the posture, ask requires approval, allow auto-approves, deny forbids.",
@@ -1456,12 +1752,15 @@
   "$id": "https://raw.githubusercontent.com/flanksource/gavel/main/gavel.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Root configuration for Gavel. Place .gavel.yaml (or .gavel.yml) in ~/, the git root, or the target directory; layers merge in that order with later layers overriding earlier ones. Run `gavel config [path]` to inspect the merged result.",
+  "description": "Root configuration for Gavel. Place .gavel.yaml in ~/, the git root's parent, the git root, or any directory through the target; layers merge in that order with nearer layers overriding earlier ones. Run `gavel config [path]` to inspect the merged result.",
   "properties": {
     "ai": {
       "additionalProperties": false,
       "description": "Base AI spec inherited by every AI operation. Configure model, prompt, workspace, permissions, environment, and runtime defaults here.",
       "properties": {
+        "batch": {
+          "$ref": "#/$defs/Batch"
+        },
         "budget": {
           "$ref": "#/$defs/Budget"
         },
@@ -1565,6 +1864,9 @@
         "toolPreferences": {
           "$ref": "#/$defs/ToolPreferences"
         },
+        "tools": {
+          "$ref": "#/$defs/InlineTools"
+        },
         "workflow": {
           "$ref": "#/$defs/Workflow"
         }
@@ -1644,6 +1946,83 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "fix": {
+          "additionalProperties": false,
+          "description": "AI repair settings for commit lint findings. Inherits ai and lint.fix, independently of commit.message.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "commit.fix"
         },
         "gitignore": {
           "description": "Extra ignore globs applied when selecting files to commit. Appended and deduped across layers.",
@@ -1759,6 +2138,15 @@
           "additionalProperties": false,
           "description": "Gates that run linters over the staged file set before the commit is created. CLI flags --lint and --lint-secrets override these per invocation.",
           "properties": {
+            "aiFix": {
+              "description": "Automatically repair lint findings when true; false disables repair, including the implicit -y trigger. Omit to retain interactive/-y behavior.",
+              "type": "boolean"
+            },
+            "aiFixMaxIterations": {
+              "default": 3,
+              "description": "Positive maximum number of commit AI repair iterations.",
+              "type": "integer"
+            },
             "enabled": {
               "default": false,
               "description": "Toggle every non-secrets linter. Omit to keep off.",
@@ -1994,6 +2382,27 @@
       },
       "type": "object"
     },
+    "externalIssues": {
+      "additionalProperties": false,
+      "description": "External issue provider settings.",
+      "properties": {
+        "jira": {
+          "additionalProperties": false,
+          "description": "Jira issue settings.",
+          "properties": {
+            "ignoreFields": {
+              "description": "Field IDs or Jira display names omitted from issue get, list and sync outputs. Matches either value using commons MatchItems: case-insensitive exact, prefix*, *suffix or *contains*. Patterns accumulate uniquely across configuration layers. Empty leaves all fields unchanged. Identity fields id, key, summary, url and project are always retained. Exclusions override list --fields; comment and attachment exclusions omit their counts, and attachment exclusions disable sync downloads and extraction. Explicit comment and attachment operations are unaffected.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "fixtures": {
       "additionalProperties": false,
       "description": "Fixture-test discovery for `gavel test`.",
@@ -2101,11 +2510,19 @@
           "description": "Rules that suppress matching lint violations. Each rule matches when every populated field matches; an empty rule never matches. Appended across layers.",
           "items": {
             "additionalProperties": false,
-            "description": "A single lint-ignore rule. At least one of rule/source/file must be set.",
+            "description": "A single lint-ignore rule. At least one of rule/source/file/fingerprint must be set.",
             "properties": {
               "file": {
                 "description": "Match the violation's file path using doublestar globs (e.g. \"pkg/**/*.go\").",
                 "type": "string"
+              },
+              "fingerprint": {
+                "description": "Match one occurrence by the fingerprint gavel reports for it (linter, rule, anchor and message, without the line), so the rule survives code shifting. line is then only a hint.",
+                "type": "string"
+              },
+              "line": {
+                "description": "Match only the violation reported on this 1-based line, ignoring one occurrence. Requires file; the rule stops matching once the code moves.",
+                "type": "integer"
               },
               "rule": {
                 "description": "Match the violation's rule ID. Accepts literals, `*` globs (\"acme-*\"), and `!`-prefixed negations.",
@@ -2132,9 +2549,176 @@
                 },
                 "type": "array"
               },
+              "command": {
+                "description": "Declares an external linter under this name, which must not be a built-in's: the argv of a command printing one gavel LinterResult as a JSON array, run with --format json and the files to lint appended, exiting 0 without failures and 1 with them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "config": {
+                "additionalProperties": true,
+                "description": "Native UIR configuration document, passed to the executable through a temporary project .uir.d fragment. UIR validates its contents.",
+                "type": "object"
+              },
               "enabled": {
                 "description": "Force the linter on (true) or off (false). Omit to keep the linter's built-in default.",
                 "type": "boolean"
+              },
+              "includes": {
+                "description": "Globs of the files a command linter lints. Empty lints every file.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "options": {
+                "additionalProperties": false,
+                "properties": {
+                  "addr": {
+                    "description": "Dashboard listen address.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "ai-fix": {
+                    "description": "Repair findings with lint.fix.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "ai-fix-max-iterations": {
+                    "description": "Maximum repair iterations.",
+                    "minimum": 1,
+                    "not": {},
+                    "type": "integer"
+                  },
+                  "baseline": {
+                    "description": "Baseline snapshot.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "changed": {
+                    "description": "Select changed files.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "changed-files": {
+                    "description": "Explicit changed paths.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "dry-run": {
+                    "description": "Preview commands without executing.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "exclude": {
+                    "description": "Excluded native rule identifiers.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "failed": {
+                    "description": "Snapshot used to select failed lint.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "files": {
+                    "description": "Selected file paths.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "fix": {
+                    "description": "Enable native fixes.",
+                    "type": "boolean"
+                  },
+                  "generated": {
+                    "description": "Include generated files.",
+                    "type": "boolean"
+                  },
+                  "ignore": {
+                    "description": "Excluded file globs.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "linters": {
+                    "description": "Selected linters.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "no-lint-cache": {
+                    "description": "Disable lint result caching.",
+                    "type": "boolean"
+                  },
+                  "pr": {
+                    "description": "Pull request whose failed lint is selected.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "schema": {
+                    "description": "JSON Schema path or HTTP(S) URL; defaults to document schema declarations.",
+                    "type": "string"
+                  },
+                  "since": {
+                    "description": "Select changes since a Git reference.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "summary": {
+                    "description": "Summarize findings by rule.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "summary-limit": {
+                    "description": "Maximum examples per rule.",
+                    "minimum": 0,
+                    "not": {},
+                    "type": "integer"
+                  },
+                  "tags": {
+                    "description": "Build tags.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "timeout": {
+                    "description": "Per-linter deadline.",
+                    "type": "string"
+                  },
+                  "triage": {
+                    "description": "Interactively triage findings.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "ui": {
+                    "description": "Open the lint dashboard.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "work-dir": {
+                    "description": "Execution working directory.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "yes": {
+                    "description": "Accept AI repair without prompting.",
+                    "not": {},
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
               },
               "runtime": {
                 "additionalProperties": false,
@@ -2174,6 +2758,136 @@
             "type": "object"
           },
           "description": "Per-linter overrides keyed by linter name. Useful for opt-in linters like jscpd or disabling a single tool.",
+          "type": "object"
+        },
+        "options": {
+          "additionalProperties": false,
+          "properties": {
+            "addr": {
+              "description": "Dashboard listen address.",
+              "type": "string"
+            },
+            "ai-fix": {
+              "description": "Repair findings with lint.fix.",
+              "type": "boolean"
+            },
+            "ai-fix-max-iterations": {
+              "description": "Maximum repair iterations.",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "baseline": {
+              "description": "Baseline snapshot.",
+              "type": "string"
+            },
+            "changed": {
+              "description": "Select changed files.",
+              "type": "boolean"
+            },
+            "changed-files": {
+              "description": "Explicit changed paths.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "dry-run": {
+              "description": "Preview commands without executing.",
+              "type": "boolean"
+            },
+            "exclude": {
+              "description": "Excluded native rule identifiers.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "failed": {
+              "description": "Snapshot used to select failed lint.",
+              "type": "string"
+            },
+            "files": {
+              "description": "Selected file paths.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "fix": {
+              "description": "Enable native fixes.",
+              "type": "boolean"
+            },
+            "generated": {
+              "description": "Include generated files.",
+              "type": "boolean"
+            },
+            "ignore": {
+              "description": "Excluded file globs.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "linters": {
+              "description": "Selected linters.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "no-lint-cache": {
+              "description": "Disable lint result caching.",
+              "type": "boolean"
+            },
+            "pr": {
+              "description": "Pull request whose failed lint is selected.",
+              "type": "string"
+            },
+            "schema": {
+              "description": "JSON Schema path or HTTP(S) URL; defaults to document schema declarations.",
+              "type": "string"
+            },
+            "since": {
+              "description": "Select changes since a Git reference.",
+              "type": "string"
+            },
+            "summary": {
+              "description": "Summarize findings by rule.",
+              "type": "boolean"
+            },
+            "summary-limit": {
+              "description": "Maximum examples per rule.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tags": {
+              "description": "Build tags.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "timeout": {
+              "description": "Per-linter deadline.",
+              "type": "string"
+            },
+            "triage": {
+              "description": "Interactively triage findings.",
+              "type": "boolean"
+            },
+            "ui": {
+              "description": "Open the lint dashboard.",
+              "type": "boolean"
+            },
+            "work-dir": {
+              "description": "Execution working directory.",
+              "type": "string"
+            },
+            "yes": {
+              "description": "Accept AI repair without prompting.",
+              "type": "boolean"
+            }
+          },
           "type": "object"
         },
         "runtime": {
@@ -2397,6 +3111,395 @@
             "object"
           ],
           "x-prompt-id": "pr.fix"
+        },
+        "lifecycle": {
+          "additionalProperties": false,
+          "description": "Overrides the built-in lifecycle: ordered steps with a Captain prompt reference, a CEL `when` over subject/event/runs/last, and ordered `outcomes` mapping the finished run onto a status. Either `file` (a lifecycle YAML relative to the project) or an inline `name`/`subject`/`steps`. A step named like an inherited step replaces it wholesale; a new name is appended. TODO verification must remain enabled.",
+          "properties": {
+            "disabled": {
+              "description": "Inherited step names to disable. An explicit empty list re-enables inherited steps. TODO verification cannot be disabled.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a lifecycle YAML document, relative to the project root. Mutually exclusive with the inline form.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Name of the lifecycle; inherits the built-in name.",
+              "type": "string"
+            },
+            "order": {
+              "description": "Step names in priority order. Unlisted steps retain their inherited relative order.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "steps": {
+              "description": "Steps to replace or add: {name, prompt, events, when, inputs, spec, outcomes, auxiliary}. Outcomes are `{status, when}` pairs evaluated in order; the first true wins and none true is an error.",
+              "items": {
+                "additionalProperties": false,
+                "description": "One lifecycle step.",
+                "properties": {
+                  "auxiliary": {
+                    "description": "Offer for explicit selection without making it the default next step.",
+                    "type": "boolean"
+                  },
+                  "events": {
+                    "description": "Allowed events in the prompt's result envelope.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "inputs": {
+                    "additionalProperties": {
+                      "description": "CEL expression.",
+                      "type": "string"
+                    },
+                    "description": "Prompt inputs, mapped to CEL expressions.",
+                    "type": "object"
+                  },
+                  "name": {
+                    "description": "Unique lower-case step name.",
+                    "type": "string"
+                  },
+                  "outcomes": {
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "First matching outcome wins.",
+                      "properties": {
+                        "status": {
+                          "description": "Outcome name; TODO workflows require a supported TODO status.",
+                          "type": "string"
+                        },
+                        "when": {
+                          "description": "CEL predicate over the completed run.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "prompt": {
+                    "description": "Built-in prompt ID or file:\u003cproject prompt path\u003e.",
+                    "type": "string"
+                  },
+                  "spec": {
+                    "additionalProperties": false,
+                    "description": "Captain execution settings for this step.",
+                    "properties": {
+                      "batch": {
+                        "$ref": "#/$defs/Batch"
+                      },
+                      "budget": {
+                        "$ref": "#/$defs/Budget"
+                      },
+                      "callerTools": {
+                        "type": "boolean"
+                      },
+                      "cliArgs": {
+                        "type": "object"
+                      },
+                      "effort": {
+                        "enum": [
+                          "",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max",
+                          "ultra"
+                        ],
+                        "type": "string"
+                      },
+                      "fallbacks": {
+                        "$ref": "#/$defs/ModelList"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "interrupt": {
+                        "type": "boolean"
+                      },
+                      "labels": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "mediaTypes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "memory": {
+                        "$ref": "#/$defs/Memory"
+                      },
+                      "messages": {
+                        "items": {
+                          "$ref": "#/$defs/Message"
+                        },
+                        "type": "array"
+                      },
+                      "mode": {
+                        "enum": [
+                          "api",
+                          "agent",
+                          "cli",
+                          "cmux"
+                        ],
+                        "type": "string"
+                      },
+                      "model": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "noCache": {
+                        "type": "boolean"
+                      },
+                      "permissions": {
+                        "$ref": "#/$defs/Permissions"
+                      },
+                      "prompt": {
+                        "$ref": "#/$defs/Prompt"
+                      },
+                      "resume": {
+                        "type": "boolean"
+                      },
+                      "sandbox": {
+                        "$ref": "#/$defs/SandboxRef"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "setup": {
+                        "$ref": "#/$defs/Setup"
+                      },
+                      "steer": {
+                        "type": "boolean"
+                      },
+                      "streaming": {
+                        "type": "boolean"
+                      },
+                      "temperature": {
+                        "type": "number"
+                      },
+                      "toolApproval": {
+                        "$ref": "#/$defs/ToolApprovalResume"
+                      },
+                      "toolPolicy": {
+                        "$ref": "#/$defs/PermissionPolicy"
+                      },
+                      "toolPreferences": {
+                        "$ref": "#/$defs/ToolPreferences"
+                      },
+                      "tools": {
+                        "$ref": "#/$defs/InlineTools"
+                      },
+                      "workflow": {
+                        "$ref": "#/$defs/Workflow"
+                      }
+                    },
+                    "required": [
+                      "model"
+                    ],
+                    "type": "object"
+                  },
+                  "tools": {
+                    "description": "Tool sets available to this step.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "when": {
+                    "description": "CEL applicability over subject, event, runs and last.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "prompt",
+                  "events",
+                  "outcomes"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "subject": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Extra subject declarations a custom step's predicates may read, field → CEL type (string, bool, int, double, dyn, list\u003cstring\u003e, list\u003cdyn\u003e, map\u003cstring,dyn\u003e).",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "review": {
+          "additionalProperties": false,
+          "description": "Read-only review of a PR creation or update.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "pr.review"
+        },
+        "steps": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "description": "Spec overrides for this PR lifecycle step.",
+            "properties": {
+              "budget": {
+                "additionalProperties": false,
+                "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+                "properties": {
+                  "cost": {
+                    "description": "Maximum spend in USD; 0 = no ceiling.",
+                    "type": "number"
+                  },
+                  "maxTokens": {
+                    "description": "Cap on output tokens per model call; 0 = backend default.",
+                    "type": "integer"
+                  },
+                  "maxTurns": {
+                    "description": "Cap on agent turns; 0 = backend default.",
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "effort": {
+                "description": "Reasoning effort for thinking-capable models.",
+                "enum": [
+                  "",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max",
+                  "ultra"
+                ],
+                "type": "string"
+              },
+              "fallbacks": {
+                "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "file": {
+                "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+                "type": "string"
+              },
+              "model": {
+                "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+                "type": "string"
+              },
+              "prompt": {
+                "additionalProperties": false,
+                "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+                "properties": {
+                  "system": {
+                    "description": "Optional system-prompt framing.",
+                    "type": "string"
+                  },
+                  "user": {
+                    "description": "The user prompt / template body (Handlebars).",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "workflow": {
+                "$ref": "#/$defs/Workflow",
+                "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+              }
+            },
+            "type": [
+              "string",
+              "object"
+            ],
+            "x-prompt-id": ""
+          },
+          "description": "Captain spec overrides for named PR lifecycle steps.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -2918,6 +4021,222 @@
                 },
                 "type": "array"
               },
+              "enabled": {
+                "description": "Enable or disable this framework within the configured directory.",
+                "type": "boolean"
+              },
+              "options": {
+                "additionalProperties": false,
+                "properties": {
+                  "addr": {
+                    "description": "Dashboard listen address.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "auto-stop": {
+                    "description": "Detached dashboard lifetime.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "baseline": {
+                    "description": "Baseline snapshot.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "bench": {
+                    "description": "Benchmark name pattern.",
+                    "type": "string"
+                  },
+                  "cache": {
+                    "description": "Reuse passing package results.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "changed": {
+                    "description": "Select tests affected by changes.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "changed-files": {
+                    "description": "Explicit changed paths.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "concurrency": {
+                    "description": "Maximum package concurrency; zero selects automatically.",
+                    "minimum": 0,
+                    "not": {},
+                    "type": "integer"
+                  },
+                  "dev": {
+                    "description": "Use the dashboard development server.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "diagnostics": {
+                    "description": "Capture process diagnostics.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "dry-run": {
+                    "description": "Preview commands without executing.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "extra-args": {
+                    "description": "Native runner arguments.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "failed": {
+                    "description": "Snapshot used to select failed tests.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "fixture-files": {
+                    "description": "Fixture discovery globs.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "fixtures": {
+                    "description": "Discover fixture files.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "framework": {
+                    "description": "Selected test frameworks.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "idle-timeout": {
+                    "description": "Detached dashboard idle deadline.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "ignore": {
+                    "description": "Paths excluded from discovery.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "lint": {
+                    "description": "Run lint with tests.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "lint-timeout": {
+                    "description": "Per-linter deadline.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "nodes": {
+                    "description": "Parallel Ginkgo nodes; -1 selects automatically.",
+                    "minimum": -1,
+                    "type": "integer"
+                  },
+                  "paths": {
+                    "description": "Package paths to discover.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "not": {},
+                    "type": "array"
+                  },
+                  "pr": {
+                    "description": "Pull request whose failed tests are selected.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "process-facets": {
+                    "description": "Capture process files, connections, and environment.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "recursive": {
+                    "description": "Discover packages recursively.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "show-passed": {
+                    "description": "Include passing tests in terminal output.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "show-stderr": {
+                    "description": "When to display stderr.",
+                    "enum": [
+                      "Never",
+                      "OnFailure",
+                      "Always",
+                      "true",
+                      "false"
+                    ],
+                    "not": {},
+                    "type": "string"
+                  },
+                  "show-stdout": {
+                    "description": "When to display stdout.",
+                    "enum": [
+                      "Never",
+                      "OnFailure",
+                      "Always",
+                      "true",
+                      "false"
+                    ],
+                    "not": {},
+                    "type": "string"
+                  },
+                  "since": {
+                    "description": "Select changes since a Git reference.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "skip-hooks": {
+                    "description": "Skip pre/post hooks.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "tags": {
+                    "description": "Build tags.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "test-timeout": {
+                    "description": "Per-package deadline.",
+                    "type": "string"
+                  },
+                  "timeout": {
+                    "description": "Whole-run deadline.",
+                    "not": {},
+                    "type": "string"
+                  },
+                  "ui": {
+                    "description": "Open the test dashboard.",
+                    "not": {},
+                    "type": "boolean"
+                  },
+                  "work-dir": {
+                    "description": "Execution working directory.",
+                    "not": {},
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
               "runtime": {
                 "additionalProperties": false,
                 "description": "Process settings inherited by all linter and test types. Within each config file, global defaults precede category and type overrides; later files and explicit caller options win.",
@@ -2962,6 +4281,189 @@
           "default": "5m",
           "description": "Deadline for each linter subprocess when --lint is set, as a Go duration. Overridden by --lint-timeout.",
           "type": "string"
+        },
+        "options": {
+          "additionalProperties": false,
+          "properties": {
+            "addr": {
+              "description": "Dashboard listen address.",
+              "type": "string"
+            },
+            "auto-stop": {
+              "description": "Detached dashboard lifetime.",
+              "type": "string"
+            },
+            "baseline": {
+              "description": "Baseline snapshot.",
+              "type": "string"
+            },
+            "bench": {
+              "description": "Benchmark name pattern.",
+              "type": "string"
+            },
+            "cache": {
+              "description": "Reuse passing package results.",
+              "type": "boolean"
+            },
+            "changed": {
+              "description": "Select tests affected by changes.",
+              "type": "boolean"
+            },
+            "changed-files": {
+              "description": "Explicit changed paths.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "concurrency": {
+              "description": "Maximum package concurrency; zero selects automatically.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "dev": {
+              "description": "Use the dashboard development server.",
+              "type": "boolean"
+            },
+            "diagnostics": {
+              "description": "Capture process diagnostics.",
+              "type": "boolean"
+            },
+            "dry-run": {
+              "description": "Preview commands without executing.",
+              "type": "boolean"
+            },
+            "extra-args": {
+              "description": "Native runner arguments.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "failed": {
+              "description": "Snapshot used to select failed tests.",
+              "type": "string"
+            },
+            "fixture-files": {
+              "description": "Fixture discovery globs.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "fixtures": {
+              "description": "Discover fixture files.",
+              "type": "boolean"
+            },
+            "framework": {
+              "description": "Selected test frameworks.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "idle-timeout": {
+              "description": "Detached dashboard idle deadline.",
+              "type": "string"
+            },
+            "ignore": {
+              "description": "Paths excluded from discovery.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "lint": {
+              "description": "Run lint with tests.",
+              "type": "boolean"
+            },
+            "lint-timeout": {
+              "description": "Per-linter deadline.",
+              "type": "string"
+            },
+            "nodes": {
+              "description": "Parallel Ginkgo nodes; -1 selects automatically.",
+              "minimum": -1,
+              "type": "integer"
+            },
+            "paths": {
+              "description": "Package paths to discover.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "pr": {
+              "description": "Pull request whose failed tests are selected.",
+              "type": "string"
+            },
+            "process-facets": {
+              "description": "Capture process files, connections, and environment.",
+              "type": "boolean"
+            },
+            "recursive": {
+              "description": "Discover packages recursively.",
+              "type": "boolean"
+            },
+            "show-passed": {
+              "description": "Include passing tests in terminal output.",
+              "type": "boolean"
+            },
+            "show-stderr": {
+              "description": "When to display stderr.",
+              "enum": [
+                "Never",
+                "OnFailure",
+                "Always",
+                "true",
+                "false"
+              ],
+              "type": "string"
+            },
+            "show-stdout": {
+              "description": "When to display stdout.",
+              "enum": [
+                "Never",
+                "OnFailure",
+                "Always",
+                "true",
+                "false"
+              ],
+              "type": "string"
+            },
+            "since": {
+              "description": "Select changes since a Git reference.",
+              "type": "string"
+            },
+            "skip-hooks": {
+              "description": "Skip pre/post hooks.",
+              "type": "boolean"
+            },
+            "tags": {
+              "description": "Build tags.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "test-timeout": {
+              "description": "Per-package deadline.",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Whole-run deadline.",
+              "type": "string"
+            },
+            "ui": {
+              "description": "Open the test dashboard.",
+              "type": "boolean"
+            },
+            "work-dir": {
+              "description": "Execution working directory.",
+              "type": "string"
+            }
+          },
+          "type": "object"
         },
         "outlineSummary": {
           "additionalProperties": false,
@@ -3101,19 +4603,221 @@
         },
         "lifecycle": {
           "additionalProperties": false,
-          "description": "Overrides the built-in todo lifecycle: the ordered steps (a captain prompt reference, a CEL `when` over subject/runs/last, and ordered `outcomes` mapping the finished run onto a status). Either `file` (a lifecycle YAML relative to the project) or an inline `name`/`subject`/`steps`. A step named like a built-in step replaces it wholesale; a new name is appended. A `verify` step must remain.",
+          "description": "Overrides the built-in lifecycle: ordered steps with a Captain prompt reference, a CEL `when` over subject/event/runs/last, and ordered `outcomes` mapping the finished run onto a status. Either `file` (a lifecycle YAML relative to the project) or an inline `name`/`subject`/`steps`. A step named like an inherited step replaces it wholesale; a new name is appended. TODO verification must remain enabled.",
           "properties": {
+            "disabled": {
+              "description": "Inherited step names to disable. An explicit empty list re-enables inherited steps. TODO verification cannot be disabled.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "file": {
               "description": "Path to a lifecycle YAML document, relative to the project root. Mutually exclusive with the inline form.",
               "type": "string"
             },
             "name": {
-              "description": "Name of the lifecycle; defaults to the built-in `todos`.",
+              "description": "Name of the lifecycle; inherits the built-in name.",
               "type": "string"
             },
-            "steps": {
-              "description": "Steps to replace or add: {name, prompt, envelope, when, inputs, spec, outcomes, auxiliary}. Outcomes are `{status, when}` pairs evaluated in order; the first true wins and none true is an error.",
+            "order": {
+              "description": "Step names in priority order. Unlisted steps retain their inherited relative order.",
               "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "steps": {
+              "description": "Steps to replace or add: {name, prompt, events, when, inputs, spec, outcomes, auxiliary}. Outcomes are `{status, when}` pairs evaluated in order; the first true wins and none true is an error.",
+              "items": {
+                "additionalProperties": false,
+                "description": "One lifecycle step.",
+                "properties": {
+                  "auxiliary": {
+                    "description": "Offer for explicit selection without making it the default next step.",
+                    "type": "boolean"
+                  },
+                  "events": {
+                    "description": "Allowed events in the prompt's result envelope.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "inputs": {
+                    "additionalProperties": {
+                      "description": "CEL expression.",
+                      "type": "string"
+                    },
+                    "description": "Prompt inputs, mapped to CEL expressions.",
+                    "type": "object"
+                  },
+                  "name": {
+                    "description": "Unique lower-case step name.",
+                    "type": "string"
+                  },
+                  "outcomes": {
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "First matching outcome wins.",
+                      "properties": {
+                        "status": {
+                          "description": "Outcome name; TODO workflows require a supported TODO status.",
+                          "type": "string"
+                        },
+                        "when": {
+                          "description": "CEL predicate over the completed run.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "prompt": {
+                    "description": "Built-in prompt ID or file:\u003cproject prompt path\u003e.",
+                    "type": "string"
+                  },
+                  "spec": {
+                    "additionalProperties": false,
+                    "description": "Captain execution settings for this step.",
+                    "properties": {
+                      "batch": {
+                        "$ref": "#/$defs/Batch"
+                      },
+                      "budget": {
+                        "$ref": "#/$defs/Budget"
+                      },
+                      "callerTools": {
+                        "type": "boolean"
+                      },
+                      "cliArgs": {
+                        "type": "object"
+                      },
+                      "effort": {
+                        "enum": [
+                          "",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max",
+                          "ultra"
+                        ],
+                        "type": "string"
+                      },
+                      "fallbacks": {
+                        "$ref": "#/$defs/ModelList"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "interrupt": {
+                        "type": "boolean"
+                      },
+                      "labels": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "mediaTypes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "memory": {
+                        "$ref": "#/$defs/Memory"
+                      },
+                      "messages": {
+                        "items": {
+                          "$ref": "#/$defs/Message"
+                        },
+                        "type": "array"
+                      },
+                      "mode": {
+                        "enum": [
+                          "api",
+                          "agent",
+                          "cli",
+                          "cmux"
+                        ],
+                        "type": "string"
+                      },
+                      "model": {
+                        "description": "",
+                        "type": "string"
+                      },
+                      "noCache": {
+                        "type": "boolean"
+                      },
+                      "permissions": {
+                        "$ref": "#/$defs/Permissions"
+                      },
+                      "prompt": {
+                        "$ref": "#/$defs/Prompt"
+                      },
+                      "resume": {
+                        "type": "boolean"
+                      },
+                      "sandbox": {
+                        "$ref": "#/$defs/SandboxRef"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "setup": {
+                        "$ref": "#/$defs/Setup"
+                      },
+                      "steer": {
+                        "type": "boolean"
+                      },
+                      "streaming": {
+                        "type": "boolean"
+                      },
+                      "temperature": {
+                        "type": "number"
+                      },
+                      "toolApproval": {
+                        "$ref": "#/$defs/ToolApprovalResume"
+                      },
+                      "toolPolicy": {
+                        "$ref": "#/$defs/PermissionPolicy"
+                      },
+                      "toolPreferences": {
+                        "$ref": "#/$defs/ToolPreferences"
+                      },
+                      "tools": {
+                        "$ref": "#/$defs/InlineTools"
+                      },
+                      "workflow": {
+                        "$ref": "#/$defs/Workflow"
+                      }
+                    },
+                    "required": [
+                      "model"
+                    ],
+                    "type": "object"
+                  },
+                  "tools": {
+                    "description": "Tool sets available to this step.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "when": {
+                    "description": "CEL applicability over subject, event, runs and last.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "prompt",
+                  "events",
+                  "outcomes"
+                ],
                 "type": "object"
               },
               "type": "array"
@@ -3400,6 +5104,9 @@
             "additionalProperties": false,
             "description": "Spec one custom lifecycle step runs as. It overrides the step's prompt frontmatter and its lifecycle declaration, and is overridden by the todo's llm: and the request.",
             "properties": {
+              "batch": {
+                "$ref": "#/$defs/Batch"
+              },
               "budget": {
                 "$ref": "#/$defs/Budget"
               },
@@ -3514,6 +5221,9 @@
               },
               "toolPreferences": {
                 "$ref": "#/$defs/ToolPreferences"
+              },
+              "tools": {
+                "$ref": "#/$defs/InlineTools"
               },
               "workflow": {
                 "$ref": "#/$defs/Workflow"
@@ -3713,6 +5423,9 @@
           "additionalProperties": false,
           "description": "Spec a verification run executes as: `gavel todos check`, the dashboard's verify action, and the acceptance-criteria grader inside a run's definition-of-done loop. It overrides ai: and is overridden by the request. There is no prompt to override — the checklist is generated from the todo's acceptance criteria.",
           "properties": {
+            "batch": {
+              "$ref": "#/$defs/Batch"
+            },
             "budget": {
               "$ref": "#/$defs/Budget"
             },
@@ -3827,6 +5540,9 @@
             },
             "toolPreferences": {
               "$ref": "#/$defs/ToolPreferences"
+            },
+            "tools": {
+              "$ref": "#/$defs/InlineTools"
             },
             "workflow": {
               "$ref": "#/$defs/Workflow"

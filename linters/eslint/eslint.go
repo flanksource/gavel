@@ -297,7 +297,7 @@ func (m *ESLintMessage) ToViolation(workDir, filePath string) models.Violation {
 		calledMethod = severity
 	}
 
-	return models.NewViolationBuilder().
+	v := models.NewViolationBuilder().
 		WithFile(filename).
 		WithLocation(m.Line, m.Column).
 		WithCaller(filepath.Dir(filename), "unknown").
@@ -307,4 +307,6 @@ func (m *ESLintMessage) ToViolation(workDir, filePath string) models.Violation {
 		WithRuleFromLinter("eslint", calledMethod).
 		WithFixable(m.Fix != nil).
 		Build()
+	v.EndLine, v.EndColumn = m.EndLine, m.EndColumn
+	return v
 }

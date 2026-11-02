@@ -96,7 +96,7 @@ func applyGoModTidy(ctx context.Context, opts Options, source stagedSource) (sta
 		return source, nil
 	}
 
-	if err := addFiles(opts.WorkDir, toStage); err != nil {
+	if err := addFiles(ctx, opts.WorkDir, toStage); err != nil {
 		return source, fmt.Errorf("stage tidy updates: %w", err)
 	}
 	refreshed, err := readStagedSource(opts.WorkDir)

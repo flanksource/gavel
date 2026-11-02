@@ -13,6 +13,10 @@ export default defineConfig({
     // A linked clicky-ui checkout resolves its own React; pin every copy to this package's.
     dedupe: ['react', 'react-dom', '@tanstack/react-query'],
     alias: [
+      // monaco-editor ships no `main`, only `module`, which vitest's node-side
+      // resolver does not follow; the specs that import the Files tab stub the
+      // package itself (vi.mock) and only need the id to resolve.
+      { find: /^monaco-editor$/, replacement: 'monaco-editor/esm/vs/editor/editor.api' },
       { find: /^react$/, replacement: require.resolve('react') },
       { find: /^react-dom$/, replacement: require.resolve('react-dom') },
       { find: /^react-dom\/client$/, replacement: require.resolve('react-dom/client') },
@@ -26,7 +30,7 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     server: {
       deps: {
-        inline: [/@flanksource\/clicky-ui/, /@floating-ui\/react/, /@tanstack\/react-virtual/, /@radix-ui\//],
+        inline: [/@flanksource\/clicky-ui/, /@floating-ui\/react/, /@tanstack\/react-virtual/, /@radix-ui\//, /country-flag-icons/],
       },
     },
   },

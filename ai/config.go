@@ -5,6 +5,7 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
+	flagmeta "github.com/flanksource/clicky/flags"
 	"github.com/spf13/pflag"
 )
 
@@ -71,6 +72,12 @@ func BindFlags(flags *pflag.FlagSet, cfg *AgentConfig) {
 	flags.BoolVar(&cfg.NoCache, "ai-no-cache", cfg.NoCache, "Disable AI response caching")
 	flags.StringVar(&cfg.CacheDBPath, "ai-cache-db", cfg.CacheDBPath, "Path to AI cache database (default: ~/.cache/clicky-ai.db)")
 	flags.StringVar(&cfg.ProjectName, "ai-project", cfg.ProjectName, "Project name for cache grouping")
+	for _, name := range []string{"ai-model", "ai-no-cache"} {
+		flagmeta.SetCategory(flags.Lookup(name), flagmeta.CategoryModelSelection)
+	}
+	for _, name := range []string{"ai-max-tokens", "ai-max-concurrent", "ai-cache-ttl", "ai-cache-db", "ai-project"} {
+		flagmeta.SetCategory(flags.Lookup(name), flagmeta.CategoryModelRuntime)
+	}
 }
 
 func FlagSpec(cfg AgentConfig, flags *pflag.FlagSet) api.Spec {
