@@ -102,6 +102,49 @@ func openHost(runID string) *traces.Host {
 	return host
 }
 
+var _ = Describe("--test-timeout in a go test batch", Serial, func() {
+	It("bounds each package, not the batch as a whole", func() {
+		if runtime.GOOS == "windows" {
+			Skip("needs SIGQUIT")
+		}
+		workDir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/slow\n\ngo 1.22\n"), 0o600)).To(Succeed())
+		write := func(pkg, body string) {
+			Expect(os.MkdirAll(filepath.Join(workDir, pkg), 0o755)).To(Succeed())
+			src := "package " + pkg + "\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\n" + body + "\n"
+			Expect(os.WriteFile(filepath.Join(workDir, pkg, pkg+"_test.go"), []byte(src), 0o600)).To(Succeed())
+		}
+		// Three packages of 2s each run one after another: 6s together, past
+		// the 5s deadline, each well within it.
+		for _, pkg := range []string{"a", "b", "c"} {
+			write(pkg, "func TestSlow_"+pkg+"(t *testing.T) { time.Sleep(2 * time.Second) }")
+		}
+		write("hang", "func TestHang(t *testing.T) { <-time.After(time.Hour) }")
+		warm := osexec.Command("go", "test", "-count=1", "-run", "^$", "./...")
+		warm.Dir = workDir
+		Expect(warm.CombinedOutput()).Error().NotTo(HaveOccurred())
+		GinkgoT().Setenv("GOFLAGS", "-p=1")
+
+		o := &TestOrchestrator{
+			RunOptions: RunOptions{WorkDir: workDir, TestTimeout: 5 * time.Second},
+			registry:   DefaultRegistry(workDir),
+		}
+		results, err := o.detectAndRun([]Framework{parsers.GoTest}, []string{"./a", "./b", "./c", "./hang"}, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, pkg := range []string{"a", "b", "c"} {
+			slow := findTest(results, "TestSlow_"+pkg)
+			Expect(slow).NotTo(BeNil(), pkg)
+			Expect(slow.Failed).To(BeFalse(), "%s ran within its own deadline: %s", pkg, slow.Message)
+			Expect(slow.TimedOut).To(BeFalse(), pkg)
+		}
+		hang := findTest(results, "TestHang")
+		Expect(hang).NotTo(BeNil())
+		Expect(hang.TimedOut).To(BeTrue())
+		Expect(hang.Attempts[len(hang.Attempts)-1].StackTrace).To(ContainSubstring("hang.TestHang"))
+	})
+})
+
 var _ = Describe("a Go test package that times out", Ordered, func() {
 	var workDir string
 
