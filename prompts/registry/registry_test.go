@@ -13,10 +13,10 @@ import (
 )
 
 // registeredPromptCount is the number of surviving prompt-driven operations
-// (lint.fix, pr.fix, pr.review, commit.message/summary/grouping/fix,
+// (lint.fix, pr.fix, pr.review, commit.message/summary/grouping/fix/squash,
 // pr.content, todos.run/plan/triage/triageNew, todos.merge, status.summary,
-// test.outlineSummary).
-const registeredPromptCount = 15
+// test.outlineSummary, todos.verify, git.initConfig, chat.assistant).
+const registeredPromptCount = 19
 
 func TestAllRegisteredPromptsAreUnique(t *testing.T) {
 	all := All()
@@ -28,6 +28,19 @@ func TestAllRegisteredPromptsAreUnique(t *testing.T) {
 		assert.False(t, seen[desc.ID], desc.ID)
 		seen[desc.ID] = true
 	}
+}
+
+func TestVerifierBuiltinModeHasConfigurationProvenance(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("todos:\n  verify:\n    model: gpt-5\n"), 0o600))
+	trace, err := verify.LoadGavelConfigTrace(dir)
+	require.NoError(t, err)
+	items, err := Resolve(ResolveOptions{Preview: true, Trace: trace})
+	require.NoError(t, err)
+	item := resolvedByID(t, items, prompts.TodosVerify)
+	assert.Equal(t, verify.DefaultVerifyMode, item.Effective.Mode)
+	assert.Equal(t, "built-in Gavel configuration", item.Provenance["/mode"].Source.Name)
 }
 
 // The operation spec's model wins over both the base ai: spec and the built-in

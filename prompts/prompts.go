@@ -17,6 +17,9 @@ package prompts
 // .gavel.yaml path of the operation's PromptSpec field (e.g. commit.message).
 const (
 	CommitMessage      = "commit.message"
+	CommitSquash       = "commit.squash"
+	ChatAssistant      = "chat.assistant"
+	GitInitConfig      = "git.initConfig"
 	CommitSummary      = "commit.summary"
 	CommitGrouping     = "commit.grouping"
 	LintFix            = "lint.fix"
@@ -25,6 +28,7 @@ const (
 	PRFix              = "pr.fix"
 	PRReview           = "pr.review"
 	TodosRun           = "todos.run"
+	TodosVerify        = "todos.verify"
 	TodosPlan          = "todos.plan"
 	TodosTriage        = "todos.triage"
 	TodosTriageNew     = "todos.triageNew"

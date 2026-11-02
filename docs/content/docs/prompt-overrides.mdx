@@ -5,7 +5,7 @@ order: 13
 parent: configuration-reference
 ---
 
-Every AI prompt Gavel ships is overridable from `.gavel.yaml`. Each override is inline `.prompt` text, a structured Captain spec, or a file reference. Layers merge home, the git root's immediate parent, the git root, and every directory through the target (last write wins). `commit.fix` inherits `lint.fix` and can independently override its model, effort, budget, permissions, or prompt.
+AI operation prompts are overridable from `.gavel.yaml`; reusable context templates use Captain's prompt sources as described below. Each operation override is inline `.prompt` text, a structured Captain spec, or a file reference. Layers merge home, the git root's immediate parent, the git root, and every directory through the target (last write wins). `commit.fix` inherits `lint.fix` and can independently override its model, effort, budget, permissions, or prompt.
 
 ```yaml
 commit:
@@ -41,6 +41,9 @@ Gavel validates the parsed output and fails loudly on a shape mismatch (no zero-
 | Config path | Prompt | Input variables | Output schema |
 | --- | --- | --- | --- |
 | `commit.message` | Commit message | `{{patch}}`, `{{maxBodyLines}}` | frontmatter |
+| `commit.squash` | Consolidate messages (`commit --since`) | `{{messages}}` | plain commit message |
+| `git.initConfig` | Repository filter recommendations | `{{configPath}}`, `{{workDir}}` | agent edits the configuration |
+| `chat.assistant` | Dashboard assistant | none | chat messages |
 | `commit.summary` | Commit-group summary (`git analyze --summary`) | scope/commit fields | frontmatter |
 | `commit.grouping` | AI commit grouping (`commit -G`) | `{{table}}`, `{{groupByScope}}`, `{{maxCommits}}`, `{{consolidation}}`, `{{prevCount}}`, `{{prevGroups}}` | frontmatter (`groups[]`+`ignore[]`) |
 | `lint.fix` | Lint source repair (`lint --ai-fix`, `commit --fix`) | violation fields | frontmatter |
@@ -52,15 +55,37 @@ Gavel validates the parsed output and fails loudly on a shape mismatch (no zero-
 | `todos.triage` | Todo triage | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{backlog}}` | **fixed** (triage envelope) |
 | `todos.triageNew` | New todo triage (`triage.new`) | `{{body}}`, `{{count}}`, `{{backlog}}`, `{{labels}}` | **fixed** (triage.new envelope; title and labels required) |
 | `todos.merge` | Todo merge (`todos merge`) | `{{body}}` (fixtures verbatim), `{{count}}`, `{{plans}}` | frontmatter (`{title, body, verification, plan, …}`) |
+| `todos.verify` | Acceptance checklist | `{{repoPath}}`, `{{changed}}`, `{{description}}`, `{{instructions}}`, `{{previous}}`, `{{criteria}}` | **fixed** (checklist verdicts) |
 | `status.summary` | Per-file summary (`status --ai`) | `{{details}}` | frontmatter (`{summary}`) |
 | `test.outlineSummary` | Per-test summary (`test outline --ai-summary`) | `{{ids}}`, `{{file}}`, `{{source}}` | frontmatter (`tests[]`) |
 
-### White-box vs black-box verify
+### Reusable context templates
 
-The verification prompt (`todos.verify`) is owned by the lifecycle rather than overridable as a file — its checklist is generated from the todo's acceptance criteria. It is white-box or black-box by **which variables it references**, not by a mode flag:
+Revision feedback, rejected questions, reused-branch context, acceptance-checklist instructions, effort directives, and TODO section framing use named `.prompt` files through Captain's existing prompt sources. Copy the corresponding template into the workspace's `.captain/prompts` directory to edit it. Their names are `todos-plan-revision`, `todos-answer-rejected`, `todos-reuse-branch`, `acceptance-checklist`, `todos-effort`, and `todos-context`. Reused-branch context must retain its system role. Invalid overrides fail the operation; rendering a fragment does not call a model.
 
-- **White-box** — reference `{{sessionId}}` to have the reviewer inspect the implementation session's transcript.
-- **Black-box** — reference `{{changedFiles}}` / `{{worktree}}` (the final worktree state) to review purely from the result, which lets a cheap non-agentic model verify without agent tools. These are computed lazily, only when the template references them.
+`commit.squash` controls consolidation independently of `commit.message`. `gavel git init-config` inherits the configured runtime when `--model` is omitted; `--model=none` explicitly skips AI recommendations.
+
+### Merge conflicts and rebase recovery
+
+The dashboard's **Prompts** list includes Captain-discovered library templates alongside Gavel's configuration slots. Open a library entry to inspect its embedded default and writable source directories, preview variables, or save a `.prompt` override. Library entries support file storage; embedded sources remain read-only. Removing an override reveals the next source, while removing a workspace-only template removes its catalog entry. A conflicting edit requires reloading before saving.
+
+Conflict resolution already uses editable `.prompt` sources and Captain execution. Override a library template by copying it into `.captain/prompts/<name>.prompt`; its frontmatter owns model selection, permissions, setup, verification, and finalization.
+
+| Prompt | Used by | Source |
+| --- | --- | --- |
+| `branch-merge` | Branch landing's **Merge with AI** and **Resolve with AI** actions | `prompts/library/branch-merge.prompt` |
+| `branch-rebase` | **Send to rebase prompt** after a failed worktree rebase | `prompts/library/branch-rebase.prompt` |
+| `pr-rebase` | PR update's AI rebase action after a conflict | `prompts/library/pr-rebase.prompt` |
+| `pr.fix` | Resolve base-branch conflicts before repairing PR checks | `ai/prfix/pr-status-fix.prompt`; override with `pr.fix.file` in `.gavel.yaml` |
+
+The dashboard passes repository, branch, operation, and conflicting-path data to these templates through the shared prompt-run API. Keep each template's verification and finalization contract when editing it: landing, restoring saved edits, and publishing a rebased PR have different outcomes.
+
+### Checklist verification
+
+The verification prompt (`todos.verify`) accepts file and inline instruction overrides. Its criteria come from the TODO and its verdict schema is enforced by the fixture runner. The grader runtime and captured template remain separate from the implementation session.
+
+- `repoPath` identifies the repository to inspect; `changed` narrows the files under review.
+- `previous` supplies completed executable results as evidence; `criteria` supplies the ordered checklist.
 
 ### Fixed-schema prompts
 

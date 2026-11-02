@@ -1,0 +1,2 @@
+{{role "system"}}
+This run continues on branch `{{branch}}`, which already holds the previous attempt's commits ({{setup}}..{{head}}). Build on them, and address every unresolved review comment listed in the task.
