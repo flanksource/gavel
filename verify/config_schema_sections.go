@@ -81,7 +81,8 @@ func commitSchema() map[string]any {
 			"message": promptSpecSchema(prompts.CommitMessage,
 				"AI spec for commit-message generation. Model/prompt/budget/effort override the base "+
 					"ai: spec field-wise."),
-			"fix": promptSpecSchema(prompts.CommitFix, "AI repair settings for commit lint findings. Inherits ai and lint.fix, independently of commit.message."),
+			"squash": promptSpecSchema(prompts.CommitSquash, "AI spec for consolidating commit messages with gavel commit --since."),
+			"fix":    promptSpecSchema(prompts.CommitFix, "AI repair settings for commit lint findings. Inherits ai and lint.fix, independently of commit.message."),
 			"grouping": promptSpecSchema(prompts.CommitGrouping,
 				"AI spec for AI commit grouping (`gavel commit -G`) that sorts uncommitted changes into "+
 					"logical commits. The output schema (groups[]+ignore[]) is fixed; the prompt changes "+
@@ -188,15 +189,7 @@ func todosSchema(specSchema map[string]any) map[string]any {
 				"How many definition-of-done checks run at once (`gavel todos check`, and the verification " +
 					"phase after a bulk triage). Each check runs the TODO's fixture, so an unbounded fan-out " +
 					"over a large selection thrashes the machine. Defaults to 4."),
-			"verify": withRuntimePresetSchema(specNodeSchema(specSchema,
-				"Spec a verification run executes as: `gavel todos check`, the dashboard's verify action, "+
-					"and the acceptance-criteria grader inside a run's definition-of-done loop. It overrides "+
-					"ai: and is overridden by the request. There is no prompt to override — the checklist is "+
-					"generated from the todo's acceptance criteria.",
-				"",
-				"Catalog model slug the grader runs as. It must run on an agentic mechanism (mode agent, "+
-					"cli or cmux — e.g. `agent:sonnet`): the grader is told to inspect the change with its "+
-					"own tools, and an API model returns confident verdicts without reading the diff.")),
+			"verify": withRuntimePresetSchema(promptSpecSchema(prompts.TodosVerify, "Acceptance-checklist instructions and grader runtime. Criteria and the native verdict schema are fixed.")),
 			"steps": mapObject(
 				"Spec layer for lifecycle steps that are not built in, keyed by step name: a `handoff` step "+
 					"added under todos.lifecycle reads its project configuration from todos.steps.handoff, "+

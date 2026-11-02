@@ -16,7 +16,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/claude"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -284,7 +283,12 @@ func (h *Host) prepare(ctx context.Context, todo *types.TODO, step lifecycle.Ste
 		provenance:     resolved.Resolved.Provenance, warnings: resolved.Resolved.Warnings,
 		batch: opts.Batch, tools: step.Tools,
 	}
-	prepared.agent, _ = claude.ResolveAgent(spec.Name)
+	if class != types.ModeVerify && (spec.Provider == nil || spec.Provider.AgentName == "") {
+		return nil, fmt.Errorf("step %s has no resolved Captain provider identity", step.Name)
+	}
+	if spec.Provider != nil {
+		prepared.agent = spec.Provider.AgentName
+	}
 	prepared.pr, err = h.resolvePR(ctx, todo, class, workDir)
 	if err != nil {
 		return nil, err

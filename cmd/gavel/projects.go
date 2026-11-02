@@ -22,11 +22,12 @@ type ProjectsListOptions struct{}
 // projectListRow is the display shape for `projects list`: the stored config
 // plus the native TODO backend.
 type projectListRow struct {
-	Name        string   `json:"name"`
-	Dir         string   `json:"dir"`
-	Repos       []string `json:"repos"`
-	TodoBackend string   `json:"todoBackend"`
-	Hidden      bool     `json:"hidden"`
+	Name          string   `json:"name"`
+	Dir           string   `json:"dir"`
+	Repos         []string `json:"repos"`
+	ReposInferred bool     `json:"reposInferred"`
+	TodoBackend   string   `json:"todoBackend"`
+	Hidden        bool     `json:"hidden"`
 }
 
 func runProjectsList(_ ProjectsListOptions) ([]projectListRow, error) {
@@ -37,11 +38,12 @@ func runProjectsList(_ ProjectsListOptions) ([]projectListRow, error) {
 	rows := make([]projectListRow, 0, len(ps))
 	for _, p := range ps {
 		rows = append(rows, projectListRow{
-			Name:        p.Name,
-			Dir:         p.Dir,
-			Repos:       p.Repos,
-			TodoBackend: "db",
-			Hidden:      p.Hidden,
+			Name:          p.Name,
+			Dir:           p.Dir,
+			Repos:         p.Repos,
+			ReposInferred: p.ReposInferred,
+			TodoBackend:   "db",
+			Hidden:        p.Hidden,
 		})
 	}
 	return rows, nil

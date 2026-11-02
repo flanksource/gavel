@@ -223,7 +223,10 @@ func runTodosPlanRevise(target TodosPlanReviseOptions) error {
 		return err
 	}
 	if !opts.Resume {
-		todo.Prompt = run.RevisionPrompt(feedback)
+		todo.Prompt, err = run.RevisionPrompt(ctx, workDir, feedback)
+		if err != nil {
+			return err
+		}
 	}
 	if err := runTodoStep(ctx, workDir, provider, todo, opts, runStepPolicy{AllowCommit: true}); err != nil {
 		return fmt.Errorf("revise plan: %w", err)

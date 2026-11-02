@@ -261,6 +261,24 @@ func runOrgBranchStatus(opts PRListOptions) (any, error) {
 	return results, nil
 }
 
+// scopePRSearch applies the dashboard's current scope to the startup search.
+// The config's repos are the whole repo scope: the startup repo list only seeds
+// the config, so clearing the repos in the dashboard returns the search to the
+// startup mode (org-wide for `gavel serve`) instead of the startup repos.
+func scopePRSearch(so github.PRSearchOptions, cfg ui.SearchConfig) github.PRSearchOptions {
+	so.Repos = cfg.Repos
+	if len(cfg.Repos) > 0 {
+		so.All = false
+	}
+	// IgnoredOrgs lets ResolveDefaultOrg skip hidden orgs when --all is set
+	// without an explicit --org.
+	so.IgnoredOrgs = cfg.IgnoredOrgs
+	if cfg.Org != "" {
+		so.Org = cfg.Org
+	}
+	return so
+}
+
 func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	ghOpts, searchOpts, err := buildPRSearchOpts(opts)
 	if err != nil {
@@ -361,16 +379,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 				so.Since = time.Now().Add(-closedPRLookback)
 			}
 		}
-		if len(cfg.Repos) > 0 {
-			so.Repos = cfg.Repos
-			so.All = false
-		}
-		// Propagate IgnoredOrgs so ResolveDefaultOrg skips hidden orgs
-		// when --all is set without an explicit --org.
-		so.IgnoredOrgs = cfg.IgnoredOrgs
-		if cfg.Org != "" {
-			so.Org = cfg.Org
-		}
+		so = scopePRSearch(so, cfg)
 		so.ShowAuthor = true
 		// Drop known bots at the source unless the user asked to see them via
 		// the @bots author chip. The bot set is learned from prior fetches, so

@@ -1876,6 +1876,9 @@ func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions, c
 		return nil, err
 	}
 	runnerOpts.Args = append(runtimeArgs, runnerOpts.Args...)
+	// The runner's display options prune passing results from its tree, but
+	// every result is merged into the tests; RunOptions' Show* filter them.
+	runnerOpts.Display = nil
 	if streamer != nil || onProgress != nil {
 		upstream := runnerOpts.ProgressSink
 		runnerOpts.ProgressSink = func(ctx context.Context, snapshot fixtures.ExecutionSnapshot) error {

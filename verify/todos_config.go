@@ -37,8 +37,8 @@ type TodosConfig struct {
 	// definition-of-done loop. It overrides the base ai: spec field-wise and is
 	// itself overridden by the request.
 	//
-	// File overrides are unsupported because the lifecycle owns the verification
-	// prompt; the checklist is generated from the todo's acceptance criteria.
+	// File overrides customize checklist instructions; criteria and verdict schema
+	// remain owned by the fixture runner.
 	//
 	// The implementer's own run spec is deliberately NOT a layer in this chain: a
 	// grader built from it inherited the session it was grading, along with the
@@ -72,9 +72,6 @@ var builtinStepBlocks = map[string]bool{"run": true, "plan": true, "triage": tru
 // and its map entry disagree with no rule saying which wins; a lifecycle that
 // points at a file and also declares steps inline has the same problem.
 func (c TodosConfig) Validate() error {
-	if c.Verify.File != "" {
-		return fmt.Errorf("todos.verify.file: prompt file overrides are unsupported; configure the step prompt under todos.lifecycle")
-	}
 	for name, spec := range c.Steps {
 		if builtinStepBlocks[name] {
 			return fmt.Errorf("todos.steps.%s: the built-in %s step is configured under todos.%s, not todos.steps", name, name, name)

@@ -2,6 +2,7 @@ package verify
 
 import (
 	"encoding/json"
+	"github.com/flanksource/gavel/prompts"
 
 	"github.com/flanksource/captain/pkg/api"
 )
@@ -36,6 +37,8 @@ func gavelConfigSchema() map[string]any {
 			"ai":             aiSchema(specSchema),
 			"lint":           lintSchema(),
 			"commit":         commitSchema(),
+			"chat":           object("Dashboard chat settings.", map[string]any{"assistant": promptSpecSchema(prompts.ChatAssistant, "System instructions and runtime for the dashboard assistant.")}),
+			"git":            object("Git analysis settings.", map[string]any{"initConfig": promptSpecSchema(prompts.GitInitConfig, "Repository configuration recommendations.")}),
 			"fixtures":       fixturesSchema(),
 			"ssh":            sshSchema(),
 			"pre":            hookStepsSchema("Top-level hooks run before the main test/lint pipeline, in declaration order. Appended across layers."),

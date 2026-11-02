@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/lifecycle"
+	"github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -59,10 +60,9 @@ func reusedWorktree(previous api.WorktreeState, step *shell.Worktree) *shell.Wor
 // reusedBranchNotice tells the agent which commits the branch it continues on
 // already holds. It is phrased without position because codex folds an appended
 // system prompt in after the user prompt rather than ahead of it.
-func reusedBranchNotice(previous api.WorktreeState) string {
-	return fmt.Sprintf("This run continues on branch `%s`, which already holds the previous attempt's commits (%s..%s). "+
-		"Build on them, and address every unresolved review comment listed in the task.",
-		previous.Branch, shortSHA(previous.Setup), shortSHA(previous.Head))
+func reusedBranchNotice(ctx context.Context, dir string, previous api.WorktreeState) (string, error) {
+	rendered, err := library.Render(ctx, library.RenderOptions{Directory: dir, Name: "todos-reuse-branch", System: true, Data: map[string]any{"branch": previous.Branch, "setup": shortSHA(previous.Setup), "head": shortSHA(previous.Head)}})
+	return rendered.System, err
 }
 
 // applyReusedBranch makes the step continue on the todo's previous run branch:
@@ -92,7 +92,10 @@ func (h *Host) applyReusedBranch(ctx context.Context, todo *types.TODO, step lif
 	checkout.Worktree = reusedWorktree(*previous, checkout.Worktree)
 	setup.Checkout = &checkout
 	prepared.request.Setup = &setup
-	notice := reusedBranchNotice(*previous)
+	notice, err := reusedBranchNotice(ctx, prepared.workDir, *previous)
+	if err != nil {
+		return err
+	}
 	if existing := strings.TrimSpace(prepared.request.Prompt.AppendSystem); existing != "" {
 		notice = existing + "\n\n" + notice
 	}

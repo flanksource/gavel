@@ -58,7 +58,6 @@ var _ = Describe("TODO runtime preset configuration", func() {
 			Expect(err).To(MatchError(ContainSubstring(path)))
 			Expect(err).To(MatchError(ContainSubstring("todos.lifecycle")))
 		},
-		Entry("verification", `{"verify":{"file":"review.prompt"}}`, "todos.verify.file"),
 		Entry("custom steps", `{"steps":{"handoff":{"file":"handoff.prompt"}}}`, "todos.steps.handoff.file"),
 	)
 
@@ -98,7 +97,7 @@ var _ = Describe("TODO runtime preset configuration", func() {
 		}))
 	})
 
-	It("preserves presets through saved configuration and rejects unsupported files on load", func() {
+	It("preserves presets and verifier file overrides through saved configuration", func() {
 		dir := GinkgoT().TempDir()
 		path := filepath.Join(dir, ".gavel.yaml")
 		cfg := GavelConfig{Todos: TodosConfig{
@@ -113,9 +112,9 @@ var _ = Describe("TODO runtime preset configuration", func() {
 		Expect(loaded.Todos.Verify.Presets).To(Equal([]string{"reviewer"}))
 		Expect(loaded.Todos.Steps["handoff"].Presets).To(Equal([]string{"publisher"}))
 		Expect(os.WriteFile(path, []byte("todos:\n  verify:\n    file: review.prompt\n"), 0o600)).To(Succeed())
-		_, err = LoadSingleGavelConfig(path)
-		Expect(err).To(MatchError(ContainSubstring("todos.verify.file")))
-		Expect(err).To(MatchError(ContainSubstring(path)))
+		loaded, err = LoadSingleGavelConfig(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loaded.Todos.Verify.ResolvedFilePath(dir)).To(Equal(filepath.Join(dir, "review.prompt")))
 	})
 
 	It("documents global and step presets while marking profiles deprecated", func() {
@@ -132,7 +131,7 @@ var _ = Describe("TODO runtime preset configuration", func() {
 			Expect(properties).To(HaveKey("presets"), name)
 			Expect(properties).To(HaveKey("runtimeProfile"), name)
 			if name == "verify" {
-				Expect(properties).NotTo(HaveKey("file"))
+				Expect(properties).To(HaveKey("file"))
 			}
 		}
 		custom := todos["steps"].(map[string]any)["additionalProperties"].(map[string]any)

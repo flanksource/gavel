@@ -262,6 +262,7 @@ type CommitConfig struct {
 	// commit-group summaries (`gavel git analyze --summary`). Each overrides the
 	// base ai: spec field-wise; empty uses the built-in default.
 	Message  PromptSpec `yaml:"message,omitempty" json:"message,omitempty"`
+	Squash   PromptSpec `yaml:"squash,omitempty" json:"squash,omitempty"`
 	Fix      PromptSpec `yaml:"fix,omitempty" json:"fix,omitempty"`
 	Grouping PromptSpec `yaml:"grouping,omitempty" json:"grouping,omitempty"`
 	Summary  PromptSpec `yaml:"summary,omitempty" json:"summary,omitempty"`
@@ -343,6 +344,8 @@ type GavelConfig struct {
 	// AI is the base spec (model/fallbacks/budget/effort defaults) that every AI
 	// operation inherits and overrides field-wise. See DefaultAIConfig.
 	AI       api.Spec       `yaml:"ai,omitempty" json:"ai,omitempty"`
+	Chat     ChatConfig     `yaml:"chat,omitempty" json:"chat,omitempty"`
+	Git      GitConfig      `yaml:"git,omitempty" json:"git,omitempty"`
 	Lint     LintConfig     `yaml:"lint,omitempty" json:"lint,omitempty"`
 	Commit   CommitConfig   `yaml:"commit,omitempty" json:"commit,omitempty"`
 	Fixtures FixturesConfig `yaml:"fixtures,omitempty" json:"fixtures,omitempty"`
@@ -365,6 +368,13 @@ type GavelConfig struct {
 	// Storage is where gavel serve keeps run results, attachments, trace stores and logs. Only the
 	// home config's is read (see LoadGlobalGavelConfig), so a repository can't redirect it.
 	Storage blob.Config `yaml:"storage,omitempty" json:"storage,omitempty"`
+}
+
+type ChatConfig struct {
+	Assistant PromptSpec `yaml:"assistant,omitempty" json:"assistant,omitempty"`
+}
+type GitConfig struct {
+	InitConfig PromptSpec `yaml:"initConfig,omitempty" json:"initConfig,omitempty"`
 }
 
 // PRConfig configures `gavel pr`.

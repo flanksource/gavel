@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"strings"
 
+	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
+	"github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -52,7 +54,24 @@ func (h *Host) profileLayers(ctx context.Context, in LayerInput) (runtimeprofile
 		PinnedProfile:       in.RuntimeProfile.Pinned,
 		DefaultProfile:      in.RuntimeProfile.Default,
 	}
-	for _, layer := range Layers(in) {
+	layers := Layers(in)
+	if in.Step == StepVerify && (in.Config.Todos.Verify.File != "" || in.Config.Todos.Verify.Spec.Prompt.User != "") {
+		source, err := in.Config.Todos.Verify.TemplateSource(h.WorkDir, library.ChecklistDefault)
+		if err != nil {
+			return runtimeprofiles.LayerResult{}, &ConfigurationError{Err: err}
+		}
+		doc, err := dotprompt.Parse(source)
+		if err != nil {
+			return runtimeprofiles.LayerResult{}, &ConfigurationError{Err: err}
+		}
+		spec := withoutPromptBody(doc.Spec)
+		if spec.Prompt.Metadata == nil {
+			spec.Prompt.Metadata = map[string]string{}
+		}
+		spec.Prompt.Metadata[library.ChecklistTemplateKey] = source
+		layers = append([]api.SpecLayer{api.PromptSpecLayer("todos.verify template", spec)}, layers...)
+	}
+	for _, layer := range layers {
 		switch layer.Scope {
 		case api.SpecLayerGlobal, api.SpecLayerContext:
 			options.BaseLayers = append(options.BaseLayers, layer)

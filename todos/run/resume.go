@@ -6,6 +6,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/todos"
 )
 
@@ -77,6 +78,7 @@ func Revise(ctx context.Context, c Continuation, feedback string) (Options, erro
 }
 
 // RevisionPrompt is the todo prompt a fresh revision plans with.
-func RevisionPrompt(feedback string) string {
-	return "Revise the existing plan using this reviewer feedback:\n\n" + feedback
+func RevisionPrompt(ctx context.Context, dir, feedback string) (string, error) {
+	got, err := library.Render(ctx, library.RenderOptions{Directory: dir, Name: "todos-plan-revision", Data: map[string]any{"feedback": feedback}})
+	return got.User, err
 }

@@ -44,7 +44,7 @@ type Provider interface {
 type Options struct {
 	Via native.LandingVia
 	// Base is the ref a PR branches from; empty resolves pr.base from
-	// .gavel.yaml, then prcreate.DefaultBase. A merge lands onto the checked-out
+	// .gavel.yaml, then origin's default branch. A merge lands onto the checked-out
 	// branch, so it takes no base.
 	Base  string
 	Draft bool
