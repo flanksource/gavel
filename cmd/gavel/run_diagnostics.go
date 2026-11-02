@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -41,6 +42,15 @@ type runDiagnosticsReporter struct {
 	options runDiagnosticsOptions
 	mu      sync.Mutex
 	trace   diagnosticsTrace
+	stream  *ciStream
+}
+
+// streamTo sends every later capture to stream, the run's upload to a hosted
+// gavel, besides logging it.
+func (r *runDiagnosticsReporter) streamTo(stream *ciStream) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stream = stream
 }
 
 // recordOn checkpoints every later capture into trace, the run's process
@@ -73,6 +83,15 @@ func (r *runDiagnosticsReporter) Capture(reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	output := r.options.Output
+	var captured bytes.Buffer
+	if r.stream != nil {
+		r.options.Output = io.MultiWriter(output, &captured)
+		defer func() {
+			r.options.Output = output
+			r.stream.Diagnostics(captured.String())
+		}()
+	}
 	fmt.Fprintf(r.options.Output, "\n=== Gavel diagnostics: %s (%s) ===\n", reason, time.Now().UTC().Format(time.RFC3339))
 	fmt.Fprintln(r.options.Output, "-- goroutine stack --")
 	if err := r.options.CaptureStack(r.options.Output); err != nil {

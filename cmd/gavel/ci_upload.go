@@ -20,7 +20,7 @@ import (
 
 func init() {
 	ciCmd := &cobra.Command{Use: "ci", Short: "Work with a hosted gavel from CI"}
-	var server, file string
+	var server, file, run string
 	upload := &cobra.Command{
 		Use:   "upload",
 		Short: "Upload a gavel results file from GitHub Actions to a hosted gavel",
@@ -39,7 +39,11 @@ func init() {
 			if err != nil {
 				return err
 			}
-			runID, err := uploadCIResults(ctx, client, server, token, file)
+			data, err := os.ReadFile(file)
+			if err != nil {
+				return fmt.Errorf("read the results: %w", err)
+			}
+			runID, err := sendCIResults(ctx, client, server, token, run, data)
 			if err != nil {
 				return err
 			}
@@ -49,6 +53,7 @@ func init() {
 	}
 	upload.Flags().StringVar(&server, "server", "", "The hosted gavel's URL, which is also the OIDC token's audience")
 	upload.Flags().StringVar(&file, "file", "", "The results JSON to upload")
+	upload.Flags().StringVar(&run, "run", "", "Replace this run, the one gavel test streamed to the server while it ran, instead of adding a new run")
 	ciCmd.AddCommand(upload)
 	rootCmd.AddCommand(ciCmd)
 }
@@ -97,38 +102,39 @@ func requestActionsOIDCToken(ctx context.Context, client *http.Client, getenv fu
 	return body.Value, nil
 }
 
-// uploadCIResults posts the results file to server with token and returns the stored run's ID.
-func uploadCIResults(ctx context.Context, client *http.Client, server, token, file string) (string, error) {
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return "", fmt.Errorf("read the results: %w", err)
+// sendCIResults posts data, a results snapshot, to server with token and returns the stored
+// run's ID. With runID it replaces that run instead.
+func sendCIResults(ctx context.Context, client *http.Client, server, token, runID string, data []byte) (string, error) {
+	method, target, want := http.MethodPost, strings.TrimRight(server, "/")+"/api/ci/results", http.StatusCreated
+	if runID != "" {
+		method, target, want = http.MethodPut, target+"/"+url.PathEscape(runID), http.StatusOK
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/api/ci/results", bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(data))
 	if err != nil {
-		return "", fmt.Errorf("upload %s: %w", file, err)
+		return "", fmt.Errorf("upload the results: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("upload %s: %w", file, err)
+		return "", fmt.Errorf("upload the results: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != want {
 		var failure struct {
 			Error string `json:"error"`
 		}
 		if json.Unmarshal(body, &failure) == nil && failure.Error != "" {
-			return "", fmt.Errorf("upload %s: HTTP %d: %s", file, resp.StatusCode, failure.Error)
+			return "", fmt.Errorf("upload the results: HTTP %d: %s", resp.StatusCode, failure.Error)
 		}
-		return "", fmt.Errorf("upload %s: HTTP %d", file, resp.StatusCode)
+		return "", fmt.Errorf("upload the results: HTTP %d", resp.StatusCode)
 	}
 	var created struct {
 		RunID string `json:"runId"`
 	}
 	if err := json.Unmarshal(body, &created); err != nil {
-		return "", fmt.Errorf("upload %s: the server's reply isn't JSON: %w", file, err)
+		return "", fmt.Errorf("upload the results: the server's reply isn't JSON: %w", err)
 	}
 	return created.RunID, nil
 }

@@ -163,7 +163,7 @@ func (a *RunsAPI) handleResults(w http.ResponseWriter, r *http.Request, run sand
 		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("run %s has no repository to store results under", run.ID))
 		return
 	}
-	storeResults(w, r, a.Cache, run.Org, run.Spec.RepoID, run.Spec.SHA, "sandbox run "+run.ID.String())
+	storeResults(w, r, a.Cache, run.Org, run.Spec.RepoID, run.Spec.SHA, "sandbox run "+run.ID.String(), "")
 }
 
 // runRepo reads run's repository, answering the request itself when it can't.
