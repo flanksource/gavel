@@ -53,6 +53,8 @@ type goTestEvent struct {
 	Test       string  `json:"Test"`
 	Elapsed    float64 `json:"Elapsed"`
 	Output     string  `json:"Output"`
+	// FailedBuild names the package whose build failure failed this one.
+	FailedBuild string `json:"FailedBuild"`
 }
 
 // getPackage returns the package name from either Package or ImportPath field.
