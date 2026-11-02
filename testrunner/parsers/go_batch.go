@@ -20,6 +20,11 @@ type goPackageStream struct {
 	cached     bool
 	finished   bool
 	failed     bool
+	// tested is set once go test reports the package itself; streams built
+	// only from build-output/build-fail events are dependencies of a test.
+	tested      bool
+	buildOutput strings.Builder
+	failedBuild string
 }
 
 // ParseGoTestBatch separates interleaved go test -json events by package and
@@ -56,6 +61,15 @@ func ParseGoTestBatch(output io.Reader, workDir string, ginkgoPackages map[strin
 			if event.Test == "" && (event.Action == "pass" || event.Action == "fail" || event.Action == "build-fail" || event.Action == "skip") {
 				stream.finished = true
 				stream.failed = event.Action == "fail" || event.Action == "build-fail"
+			}
+			if event.Package != "" {
+				stream.tested = true
+			}
+			if event.Action == "build-output" {
+				stream.buildOutput.WriteString(event.Output)
+			}
+			if event.Action == "fail" && event.FailedBuild != "" {
+				stream.failedBuild = (&goTestEvent{ImportPath: event.FailedBuild}).getPackage()
 			}
 		}
 		if err == io.EOF {
@@ -100,6 +114,13 @@ func ParseGoTestBatch(output io.Reader, workDir string, ginkgoPackages map[strin
 		for _, suite := range suites {
 			failedTests += suite.Sum().Failed
 		}
+		// go test reports a broken dependency's compiler output under the
+		// dependency's import path and only names it in FailedBuild on each
+		// package whose build it broke; attach that output to those packages.
+		if dep := streams[stream.failedBuild]; dep != nil && stream.failedBuild != pkg && failedTests == 0 {
+			suites = append(suites, TestResults{Framework: GoTest, Tests: Tests{{Name: "Build Failed", Package: pkg, Failed: true, Message: "build failed in " + stream.failedBuild + ":\n" + dep.buildOutput.String()}}})
+			failedTests++
+		}
 		if stream.failed && failedTests == 0 {
 			suites = append(suites, TestResults{Framework: GoTest, Tests: Tests{{Name: "Package failed", Package: pkg, Failed: true, Message: "go test reported package failure"}}})
 		}
@@ -113,6 +134,11 @@ func ParseGoTestBatch(output io.Reader, workDir string, ginkgoPackages map[strin
 			}
 		}
 		results[pkg] = suites
+	}
+	for _, stream := range streams {
+		if dep := streams[stream.failedBuild]; dep != nil && !dep.tested {
+			delete(results, stream.failedBuild)
+		}
 	}
 	return results, nil
 }

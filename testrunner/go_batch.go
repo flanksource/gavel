@@ -322,22 +322,27 @@ func resolveGoBatchPaths(workDir string, packages, importPaths []string, allowEx
 		paths[remainingImports[0]] = remainingPackages[0]
 		return paths, nil
 	}
-	if allowExtras && len(remainingImports) > 0 {
+	if len(remainingImports) > 0 {
 		prefix, err := goImportPrefix(workDir)
 		if err != nil {
 			return nil, err
 		}
+		var unmapped []string
 		for _, importPath := range remainingImports {
 			rel, ok := strings.CutPrefix(importPath, prefix+"/")
 			if !ok || rel == "" || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "..") {
-				return nil, fmt.Errorf("go test package %s is outside %s", importPath, prefix)
+				// A dependency outside the module only reaches here when its
+				// build failed without go test naming the package it broke.
+				paths[importPath] = "build-failure:" + importPath
+			} else if allowExtras {
+				paths[importPath] = "./" + rel
+			} else {
+				unmapped = append(unmapped, importPath)
 			}
-			paths[importPath] = "./" + rel
 		}
-		remainingImports = nil
-	}
-	if len(remainingImports) > 0 {
-		return nil, fmt.Errorf("cannot map go test packages %v to requested paths %v", remainingImports, remainingPackages)
+		if len(unmapped) > 0 {
+			return nil, fmt.Errorf("cannot map go test packages %v to requested paths %v", unmapped, remainingPackages)
+		}
 	}
 	for _, pkg := range remainingPackages {
 		paths["gavel-unreported:"+pkg] = pkg
