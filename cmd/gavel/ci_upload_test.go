@@ -68,12 +68,14 @@ func TestCIUpload(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "oidc-token", token)
 
-	runID, err := uploadCIResults(context.Background(), http.DefaultClient, gavel.URL, token, file)
+	data, err := os.ReadFile(file)
+	require.NoError(t, err)
+	runID, err := sendCIResults(context.Background(), http.DefaultClient, gavel.URL, token, "", data)
 	require.NoError(t, err)
 	assert.Equal(t, "run-2026-10-15T09-00-00Z", runID)
 	assert.JSONEq(t, `{"tests":[]}`, string(uploaded))
 
-	_, err = uploadCIResults(context.Background(), http.DefaultClient, gavel.URL, "wrong", file)
+	_, err = sendCIResults(context.Background(), http.DefaultClient, gavel.URL, "wrong", "", data)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTP 403: rejected")
 }

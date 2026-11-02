@@ -81,7 +81,7 @@ If you disable PR commenting (`comment: "false"`), `contents: read` is sufficien
 | `comment-header` | `gavel` | Unique marker for the sticky comment (allows multiple comments per PR) |
 | `github-token` | `${{ github.token }}` | Token used to post PR comments |
 | `fail-on-error` | `true` | Fail the step when gavel exits non-zero (artifacts are still uploaded) |
-| `gavel-server` | — | Upload the results to this hosted gavel with `gavel ci upload`. Needs `permissions: id-token: write` and a repository linked through the gavel GitHub App |
+| `gavel-server` | — | Upload the results to this hosted gavel with `gavel ci upload`; `gavel test` also streams its in-flight results and diagnostics there every 15s, so a killed job keeps its latest state. Needs `permissions: id-token: write` and a repository linked through the gavel GitHub App |
 
 ### Outputs
 
