@@ -2,6 +2,7 @@ package testrunner
 
 import (
 	"fmt"
+	"io"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -143,8 +144,16 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 	}
 	t.SetName(formatRunningCommand(process.Cmd, process.Args))
 	started := time.Now()
-	runContext, cancel, supervision := o.supervisePackage(ctx, process, strings.Join(plan.targets, " "))
+	// --test-timeout bounds each package, not the batch: the process itself
+	// is held only to the run's --timeout.
+	budget := o.packageTimeout(process)
+	runContext, cancel, supervision := o.superviseProcess(ctx, process, strings.Join(plan.targets, " "), 0)
 	defer cancel()
+	var deadlines *goPackageDeadlines
+	if budget > 0 {
+		deadlines = newGoPackageDeadlines(budget, process, func() { _ = process.KillTree() })
+		process.Stream(deadlines, io.Discard)
+	}
 	if o.SigquitDumper != nil {
 		defer o.SigquitDumper.watch(process)()
 	}
@@ -153,6 +162,14 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 		return packageResult{}, err
 	}
 	result := process.WithContext(runContext).Run().Result()
+	var dumped []goTestBinary
+	if deadlines != nil {
+		deadlines.stop()
+		dumped = deadlines.Dumped()
+	}
+	if supervision.TimedOut() {
+		dumped = append(dumped, supervision.Dumped()...)
+	}
 	if result == nil {
 		return packageResult{}, fmt.Errorf("go test produced no process result")
 	}
@@ -197,7 +214,10 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 				packageSuites[i].Tests[j].Command = packageSuites[i].Command
 			}
 		}
-		if supervision.TimedOut() {
+		packageTimedOut := deadlines != nil && deadlines.TimedOut(importPath)
+		if packageTimedOut {
+			markTimedOutTests(packageSuites, budget, result.Stdout, result.Stderr, parsers.GoTest)
+		} else if supervision.TimedOut() {
 			markTimedOutTests(packageSuites, time.Since(started), result.Stdout, result.Stderr, parsers.GoTest)
 		}
 		dedupeGinkgoBootstraps(packageSuites)
@@ -207,8 +227,8 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 				ExitCode: packageSuites[i].ExitCode, Usage: usage, SharedProcess: len(paths) > 1,
 			})
 		}
-		if supervision.TimedOut() {
-			o.checkpointTimeoutDump(pkgPath, packageSuites, supervision.Dumped())
+		if packageTimedOut || supervision.TimedOut() {
+			o.checkpointTimeoutDump(pkgPath, packageSuites, dumped)
 		}
 		suites = append(suites, packageSuites...)
 		if o.streamer != nil {
