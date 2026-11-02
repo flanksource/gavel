@@ -159,6 +159,14 @@ func stepBranchSchema(name string, raw json.RawMessage, traces map[string]any) (
 			branch[key] = value
 		}
 	}
+	if name == "exec" {
+		branch["required"] = required[1:]
+		constraints, _ := branch["allOf"].([]any)
+		branch["allOf"] = append(constraints, map[string]any{"anyOf": []any{
+			map[string]any{"required": []string{"kind"}},
+			map[string]any{"required": []string{"exec"}},
+		}})
+	}
 	if branch["definitions"] != nil || branch["$defs"] != nil {
 		branch["$id"] = "kind://" + name + ".json"
 	}

@@ -185,7 +185,10 @@ func splitStep(raw json.RawMessage) (StepSpec, error) {
 		return StepSpec{}, fmt.Errorf("a step must be a mapping, got %s", raw)
 	}
 	envelope, config := orderedObject{}, orderedObject{}
+	hasKind, hasExec := false, false
 	for _, field := range fields {
+		hasKind = hasKind || field.Key == "kind"
+		hasExec = hasExec || field.Key == "exec"
 		if slices.Contains(StepSpecKeys, field.Key) {
 			envelope = append(envelope, field)
 		} else {
@@ -201,6 +204,9 @@ func splitStep(raw json.RawMessage) (StepSpec, error) {
 	strict.DisallowUnknownFields()
 	if err := strict.Decode(&spec); err != nil {
 		return spec, err
+	}
+	if !hasKind && hasExec {
+		spec.Kind = "exec"
 	}
 	if spec.Kind == "" {
 		return spec, fmt.Errorf("kind is required")

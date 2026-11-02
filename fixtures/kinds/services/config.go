@@ -11,7 +11,8 @@ import (
 
 // Entry is one service of a `kind: services` step. Exactly one resource selects its type.
 type Entry struct {
-	Name string `json:"name,omitempty"`
+	Name       string            `json:"name,omitempty"`
+	Connection *ConnectionLookup `json:"connection,omitempty"`
 
 	// Deps starts a deps catalog service (postgres, valkey, …) through
 	// github.com/flanksource/deps/start.
@@ -73,7 +74,8 @@ type rawEntry struct {
 }
 
 var (
-	entryNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
+	entryNamePattern     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
+	connectionRefPattern = regexp.MustCompile(`^connection://[^/\s]+(/[^/\s]+)?$`)
 	// reservedNames are the step-level output keys that sit next to the
 	// per-name aliases.
 	reservedNames = map[string]bool{"services": true, "ready": true}
@@ -209,6 +211,11 @@ func decodeEntry(name string, body map[string]any) (Entry, error) {
 }
 
 func (e Entry) validate() error {
+	if e.Connection != nil {
+		if e.Deps == "" || !connectionRefPattern.MatchString(e.Connection.Ref) {
+			return fmt.Errorf("entry %q: connection requires deps and a nonempty ref", e.Name)
+		}
+	}
 	types := 0
 	for _, set := range []bool{e.Deps != "", e.Exec != "", e.Git != nil, e.DBTest != nil} {
 		if set {
