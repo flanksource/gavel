@@ -16,6 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var testCredential = substrate.Credential{
@@ -136,6 +138,23 @@ func TestSubstrateRunsTheJobAndRemovesItsEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, result.ExitCode)
 	assert.Equal(t, []string{"ate-env/gavel-run-" + run.String()}, server.Deleted(), "the environment is deleted once the job exits")
+}
+
+func TestSubstrateWarnsWhenAFinishedJobsEnvironmentIsNotDeleted(t *testing.T) {
+	server, executor, logged := startSubstrate(t)
+	run := uuid.MustParse("6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	handle, err := executor.Submit(ctx, testJob(run, "exit 0"))
+	require.NoError(t, err)
+	server.RefuseDelete = status.Error(codes.Internal, "object-store plugin upload failed")
+	result, err := handle.Wait(ctx)
+	require.NoError(t, err, "the job finished, so its run stands")
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Contains(t, logged.String(), "the job in substrate environment gavel-run-6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f exited 0, "+
+		"but deleting the environment failed, so it is left behind until it is deleted by hand: "+
+		"delete substrate environment ate-env/gavel-run-6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f: rpc error: code = Internal desc = object-store plugin upload failed")
 }
 
 func TestSubstrateCancelKillsTheJobAndRemovesItsEnvironment(t *testing.T) {

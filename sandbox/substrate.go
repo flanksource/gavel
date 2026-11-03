@@ -149,13 +149,17 @@ func (h *substrateHandle) Logs(ctx context.Context) (io.ReadCloser, error) {
 	return h.proc.Output(ctx), nil
 }
 
-// Wait returns the job's exit code once it exits, then removes its environment.
+// Wait returns the job's exit code once it exits, then removes its environment. The job's run
+// stands when the environment can't be removed, so that is a warning, not Wait's error.
 func (h *substrateHandle) Wait(ctx context.Context) (Result, error) {
 	code, err := h.proc.Wait(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{ExitCode: code}, h.env.Delete(context.WithoutCancel(ctx))
+	if err := h.env.Delete(context.WithoutCancel(ctx)); err != nil {
+		logger.Warnf("the job in substrate environment %s exited %d, but deleting the environment failed, so it is left behind until it is deleted by hand: %v", h.env.ID(), code, err)
+	}
+	return Result{ExitCode: code}, nil
 }
 
 // Cancel kills the job and removes its environment.
