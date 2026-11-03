@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flanksource/commons/logger"
 	deps "github.com/flanksource/deps"
+	depsconfig "github.com/flanksource/deps/pkg/config"
 	"github.com/flanksource/gavel/lint/shims"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/utils"
@@ -103,6 +105,26 @@ func golangciInstalledPath(gitRoot string) string {
 
 var installGolangciLint = deps.InstallWithContext
 
+var registerGolangciLintPackage = sync.OnceFunc(func() {
+	// deps has no registry entry for golangci-lint, and its owner/repo fallback
+	// pattern also matches the release's .deb and .rpm assets.
+	registry := depsconfig.GetGlobalRegistry().Registry
+	if _, exists := registry["golangci-lint"]; exists {
+		return
+	}
+	registry["golangci-lint"] = deps.Package{
+		Name:    "golangci-lint",
+		Manager: "github_release",
+		Repo:    "golangci/golangci-lint",
+		AssetPatterns: map[string]string{
+			"windows-*": "golangci-lint-{{.version}}-{{.os}}-{{.arch}}.zip",
+			"*":         "golangci-lint-{{.version}}-{{.os}}-{{.arch}}.tar.gz",
+		},
+		ChecksumFile:   "golangci-lint-{{.version}}-checksums.txt",
+		VersionCommand: "--version",
+	}
+})
+
 func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot, projectRoot string, hasDirectConfig bool, dryRun bool) (string, string, error) {
 	candidates := []string{linter.Name()}
 	if provider, ok := linter.(linters.ExecutableCandidateProvider); ok {
@@ -141,18 +163,22 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			result, err := installGolangciLint(ctx, "golangci/golangci-lint", "stable", deps.WithBinDir(binDir))
+			registerGolangciLintPackage()
+			result, err := installGolangciLint(ctx, "golangci-lint", "stable", deps.WithBinDir(binDir))
 			if err != nil {
 				return "", "", fmt.Errorf("install golangci-lint in %s: %w", binDir, err)
 			}
 			if result != nil && result.BinDir != "" {
 				installed = filepath.Join(result.BinDir, executableFileName("golangci-lint"))
 			}
-			if info, err := os.Stat(installed); err == nil && !info.IsDir() {
-				logger.V(1).Infof("Resolved golangci-lint to %s", installed)
-				return installed, "", nil
+			if info, err := os.Stat(installed); err != nil || info.IsDir() {
+				return "", "", fmt.Errorf("golangci-lint install completed but %s was not found", installed)
 			}
-			return "", "", fmt.Errorf("golangci-lint install completed but %s was not found", installed)
+			if err := validateExecutable(ctx, installed); err != nil {
+				return "", "", fmt.Errorf("installed golangci-lint at %s cannot be executed: `--version` failed: %w", installed, err)
+			}
+			logger.V(1).Infof("Resolved golangci-lint to %s", installed)
+			return installed, "", nil
 		}
 	}
 
