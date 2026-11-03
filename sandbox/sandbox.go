@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -28,7 +29,7 @@ type Job struct {
 	SecretEnv map[string]string
 	// Credentials are the organization's model keys substrate's egress gateway injects into the
 	// job's requests; other executors ignore them.
-	Credentials []InjectedCredential
+	Credentials []substrate.Credential
 	Limits      Limits
 }
 
@@ -85,7 +86,7 @@ func jobName(run uuid.UUID) string {
 // SubstrateActor is the SPIFFE ID substrate's egress gateway reports for run's environment in
 // atespace, the actor named after the run.
 func SubstrateActor(atespace string, run uuid.UUID) string {
-	return "spiffe://substrate-actor.local/actor/" + atespace + "/" + jobName(run)
+	return substrate.Actor(atespace, jobName(run))
 }
 
 // sortedEnv lists env as KEY=VALUE, sorted, rejecting a name that would split differently.

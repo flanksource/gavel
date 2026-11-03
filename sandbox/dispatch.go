@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	clickytask "github.com/flanksource/clicky/task"
 	commonscontext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
@@ -64,7 +65,7 @@ var ErrNoModelKey = errors.New("this organization has no model key")
 
 // credentials are the injected credentials of run, one per model key of org; none unless
 // CredentialURI is set. An agent run needs at least one.
-func (d *Dispatcher) credentials(ctx context.Context, run, org uuid.UUID, kind string) ([]InjectedCredential, error) {
+func (d *Dispatcher) credentials(ctx context.Context, run, org uuid.UUID, kind string) ([]substrate.Credential, error) {
 	if d.CredentialURI == nil {
 		return nil, nil
 	}
@@ -75,13 +76,13 @@ func (d *Dispatcher) credentials(ctx context.Context, run, org uuid.UUID, kind s
 	if kind == "agent" && len(keys) == 0 {
 		return nil, fmt.Errorf("%w: an organization admin adds one under Model keys in the organization's settings", ErrNoModelKey)
 	}
-	credentials := make([]InjectedCredential, 0, len(keys))
+	credentials := make([]substrate.Credential, 0, len(keys))
 	for _, key := range keys {
 		k, ok := modelkeys.KindNamed(key.Kind)
 		if !ok {
 			return nil, fmt.Errorf("organization %s's %s key is of kind %q, which gavel no longer knows; an organization admin must set it again", org, key.Provider, key.Kind)
 		}
-		credentials = append(credentials, InjectedCredential{
+		credentials = append(credentials, substrate.Credential{
 			Host: k.Host, Header: k.Header, Prefix: k.Prefix, Env: k.Env, URI: d.CredentialURI(run, k.Provider),
 		})
 	}

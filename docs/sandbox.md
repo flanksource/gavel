@@ -127,9 +127,10 @@ job exits or is cancelled.
   every connection and call, so renewed ones are picked up without a restart. The token is then
   minted in Substrate's cluster for a ServiceAccount there, since this cluster's tokens aren't
   trusted by it.
-- **API.** gavel carries copies of Substrate's and env's generated gRPC packages in
-  `sandbox/internal/substrate`, refreshed by its `sync.sh`, rather than depending on their Go
-  modules.
+- **API.** gavel reaches Substrate through captain's `pkg/substrate` client. It carries a copy of
+  only the credential provider's generated gRPC package, which `gavel credential-provider` serves,
+  in `sandbox/internal/substrate`, refreshed by its `sync.sh`, rather than depending on Substrate's
+  Go modules.
 
 - **User.** env's guest starts the job as root, whatever user the image names; gVisor is what
   isolates it.

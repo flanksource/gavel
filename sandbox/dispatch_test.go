@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/blob"
@@ -193,7 +194,7 @@ func TestDispatcherGivesEachRunItsOrganizationsKeys(t *testing.T) {
 	_, err = run.Wait(t.Context())
 	require.NoError(t, err)
 	require.Len(t, executor.submitted, 1)
-	assert.Equal(t, []InjectedCredential{{
+	assert.Equal(t, []substrate.Credential{{
 		Host: "api.anthropic.com", Header: "Authorization", Prefix: "Bearer ", Env: "CLAUDE_CODE_OAUTH_TOKEN",
 		URI: "ate-secret://gavel/beta/" + run.ID.String() + "/anthropic",
 	}}, executor.submitted[0].Credentials)
