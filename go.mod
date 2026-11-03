@@ -4,9 +4,9 @@ go 1.26.1
 
 require (
 	github.com/flanksource/captain v0.0.75
-	github.com/flanksource/clicky v1.21.90
+	github.com/flanksource/clicky v1.21.89-0.20261028120101-94d2bf481c97
 	github.com/flanksource/commons v1.63.0
-	github.com/flanksource/commons-db v0.1.68
+	github.com/flanksource/commons-db v0.1.67
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
@@ -29,10 +29,10 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
-	github.com/flanksource/clicky/aichat v1.21.89
-	github.com/flanksource/commons-db/cmd/query v0.1.68
-	github.com/flanksource/commons-db/recordstore v0.1.68
-	github.com/flanksource/commons-db/tracing v0.1.68
+	github.com/flanksource/clicky/aichat v1.21.88
+	github.com/flanksource/commons-db/cmd/query v0.1.67
+	github.com/flanksource/commons-db/recordstore v0.1.67
+	github.com/flanksource/commons-db/tracing v0.1.67
 	github.com/flanksource/deps v1.0.51
 	github.com/flanksource/deps/start v0.0.0-20261103114210-92d640aba10a
 	github.com/fsnotify/fsnotify v1.10.1
@@ -217,6 +217,7 @@ require (
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
+	github.com/go-jose/go-jose/v3 v3.0.5 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
@@ -326,7 +327,6 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/mxschmitt/playwright-go v0.6201.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/nukilabs/ftoa v1.0.0 // indirect
 	github.com/nukilabs/unicodeid v0.1.0 // indirect
@@ -348,6 +348,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/sftp v1.13.10 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20250313105119-ba97887b0a25 // indirect
+	github.com/playwright-community/playwright-go v0.5700.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/common v0.68.1 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
