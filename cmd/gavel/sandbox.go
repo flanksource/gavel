@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/commons/logger"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/modelkeys"
@@ -52,17 +53,20 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		if len(opts.SandboxSecretEnv) > 0 {
 			return nil, fmt.Errorf("--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env; organizations set their own model keys, which substrate's egress gateway injects")
 		}
-		substrate, err := sandbox.NewSubstrate(sandbox.SubstrateOptions{
-			EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
-			ControlTokenFile: opts.SubstrateTokenFile, CAFile: opts.SubstrateCAFile,
-			ClientCertFile: opts.SubstrateClientCert, ClientKeyFile: opts.SubstrateClientKey,
-			Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
-			Egress: opts.SubstrateEgress, TrustBundle: opts.SubstrateTrustBundle,
+		var err error
+		executor, err = sandbox.NewSubstrate(sandbox.SubstrateOptions{
+			Options: substrate.Options{
+				EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
+				ControlTokenFile: opts.SubstrateTokenFile, CAFile: opts.SubstrateCAFile,
+				ClientCertFile: opts.SubstrateClientCert, ClientKeyFile: opts.SubstrateClientKey,
+				Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
+				TrustBundle: opts.SubstrateTrustBundle,
+			},
+			Egress: opts.SubstrateEgress,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("--sandbox substrate: %w", err)
 		}
-		executor = substrate
 	default:
 		return nil, fmt.Errorf("--sandbox must be docker, podman, kubernetes or substrate, got %q", opts.Sandbox)
 	}

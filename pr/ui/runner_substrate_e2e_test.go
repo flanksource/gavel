@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/sandbox/substratetest"
@@ -34,9 +35,9 @@ func substrateDispatcher(t *testing.T, cluster substratetest.Cluster, api *RunsA
 	server := &http.Server{Handler: api.Handler()}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close() })
-	executor, err := sandbox.NewSubstrate(sandbox.SubstrateOptions{
+	executor, err := sandbox.NewSubstrate(sandbox.SubstrateOptions{Options: substrate.Options{
 		EnvAPI: cluster.EnvAPI, Control: cluster.Control, ControlTokenFile: cluster.TokenFile, Template: cluster.Template,
-	})
+	}})
 	require.NoError(t, err)
 	logs := blob.Local(t.TempDir())
 	return &sandbox.Dispatcher{
