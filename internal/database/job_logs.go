@@ -41,8 +41,8 @@ func JobLogKey(jobID int64) string {
 }
 
 // moveInlineJobLogs writes the logs of every job_log_caches row that still holds them inline
-// to the blob store and records their key, so the schema can drop logs_gz without losing
-// any. A failed write fails the migration, leaving the column and its logs in place.
+// to the blob store and records their key, then drops logs_gz, which the schema no longer
+// drops on its own. A failed write fails the migration, leaving the column and its logs in place.
 func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 	pool, err := commonsdb.NewDB(dsn)
 	if err != nil {
@@ -97,8 +97,14 @@ func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return fmt.Errorf("list inline job logs: %w", err)
 	}
-	if len(jobs) == 0 {
+	dropInline := func() error {
+		if _, err := pool.ExecContext(ctx, `ALTER TABLE public.job_log_caches DROP COLUMN logs_gz`); err != nil {
+			return fmt.Errorf("drop job_log_caches.logs_gz: %w", err)
+		}
 		return nil
+	}
+	if len(jobs) == 0 {
+		return dropInline()
 	}
 	store, err := OpenBlobs(ctx)
 	if err != nil {
@@ -118,5 +124,5 @@ func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 			return fmt.Errorf("record moved logs of job %d: %w", j.id, err)
 		}
 	}
-	return nil
+	return dropInline()
 }
