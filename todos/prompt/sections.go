@@ -1,12 +1,14 @@
 package prompt
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -18,16 +20,21 @@ import (
 // this one. rawFixture shows each TODO's verification fixture verbatim instead
 // of as the commands it projects to, which a prompt that must REVIEW or REWRITE
 // the fixture requires.
-func Sections(todoList []*types.TODO, workDir string, rawFixture bool) string {
-	var body strings.Builder
+func Sections(todoList []*types.TODO, workDir string, rawFixture bool) (string, error) {
+	var body []map[string]any
 	for i, todo := range todoList {
 		number := 0
 		if len(todoList) > 1 {
 			number = i + 1
 		}
-		body.WriteString(buildTODOSection(todo, workDir, number, rawFixture))
+		body = append(body, buildTODOSection(todo, workDir, number, rawFixture))
 	}
-	return body.String()
+	dir := workDir
+	if dir == "" {
+		dir = "."
+	}
+	rendered, err := library.Render(context.Background(), library.RenderOptions{Directory: dir, Name: "todos-context", Data: map[string]any{"todos": body}})
+	return rendered.User, err
 }
 
 // buildTODOSection renders one TODO. number, when > 0, prefixes the heading with
@@ -39,7 +46,7 @@ func Sections(todoList []*types.TODO, workDir string, rawFixture bool) string {
 // what it cannot see: the frontmatter, the CEL predicate, and the yaml step
 // structure are exactly what is being assessed, and the command projection
 // discards all three.
-func buildTODOSection(todo *types.TODO, workDir string, number int, rawFixture bool) string {
+func buildTODOSection(todo *types.TODO, workDir string, number int, rawFixture bool) map[string]any {
 	var section string
 
 	if todo.Prompt != "" {
@@ -82,22 +89,16 @@ func buildTODOSection(todo *types.TODO, workDir string, number int, rawFixture b
 	section += buildCommentsSection(todo.ProviderEvents)
 	section += buildReviewCommentsSection(todo.ProviderEvents)
 
+	var reproduction strings.Builder
 	if len(todo.StepsToReproduce) > 0 {
-		section += "## Steps to Reproduce\n\nRun the following to reproduce the failure:\n\n"
 		for _, node := range todo.StepsToReproduce {
 			if node.Test != nil {
-				section += fmt.Sprintf("```bash\n%s\n```\n\n", node.Test.String())
+				fmt.Fprintf(&reproduction, "```bash\n%s\n```\n\n", node.Test.String())
 			}
 		}
 	}
 
-	if todo.Implementation != "" {
-		section += fmt.Sprintf("## Implementation\n\n%s\n\n", todo.Implementation)
-	}
-
-	section += buildVerificationSection(todo, rawFixture)
-
-	return section
+	return map[string]any{"before": section, "reproduction": reproduction.String(), "implementation": todo.Implementation, "rawFixture": rawFixture, "fixture": strings.TrimSpace(todo.VerificationMarkdown), "commands": buildVerificationSection(todo, rawFixture)}
 }
 
 // buildLinkedPRSection renders the PR a TODO is linked to, for every prompt
@@ -161,11 +162,7 @@ func buildCurrentStateSection(todo *types.TODO) string {
 // fixture source when the caller must review it, otherwise the commands to run.
 func buildVerificationSection(todo *types.TODO, rawFixture bool) string {
 	if rawFixture {
-		fixture := strings.TrimSpace(todo.VerificationMarkdown)
-		if fixture == "" {
-			return "## Verification\n\nThis TODO has NO verification fixture — nothing can currently prove it done.\n\n"
-		}
-		return fmt.Sprintf("## Verification\n\nThe current fixture, verbatim:\n\n````markdown\n%s\n````\n\n", fixture)
+		return ""
 	}
 	var commands []string
 	for _, node := range todo.Verification {
@@ -176,7 +173,7 @@ func buildVerificationSection(todo *types.TODO, rawFixture bool) string {
 	if len(commands) == 0 {
 		return ""
 	}
-	return "## Verification\n\nAfter implementing your fix, verify it works by running:\n\n" + strings.Join(commands, "")
+	return strings.Join(commands, "")
 }
 
 // fixtureCommandProjection is the executable face of one fixture node — what

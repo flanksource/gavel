@@ -23,6 +23,9 @@ import (
 	"github.com/flanksource/gavel/traces"
 )
 
+// ErrNoFixtures reports that the runner's paths declared no fixtures.
+var ErrNoFixtures = errors.New("no fixtures found")
+
 // RunnerOptions configures the fixture runner
 type RunnerOptions struct {
 	ProcessRuntime processruntime.Options
@@ -255,7 +258,7 @@ func (r *Runner) prepareFixtureTree() (*FixtureNode, error) {
 	}
 
 	if len(r.fixtures) == 0 {
-		return nil, fmt.Errorf("no fixtures found")
+		return nil, ErrNoFixtures
 	}
 
 	return r.tree, nil

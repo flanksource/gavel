@@ -1,6 +1,8 @@
+import { useEffect, useRef } from 'react';
 import { FilterBar as ClickyFilterBar } from '@flanksource/clicky-ui/components';
 import type { FilterBarFilter, MultiSelectOption } from '@flanksource/clicky-ui/components';
 import { UiFolderGit2, UiUser } from '@flanksource/clicky-ui/icons';
+import { PR_AGE_OPTIONS } from '../prAge';
 
 export type FilterMode = 'include' | 'exclude';
 
@@ -11,6 +13,7 @@ export interface Filters {
   checks: Record<string, FilterMode>;
   repos: Record<string, FilterMode>;
   authors: Record<string, FilterMode>;
+  age: Record<string, FilterMode>;
 }
 
 export const emptyFilters = (): Filters => ({
@@ -18,6 +21,7 @@ export const emptyFilters = (): Filters => ({
   checks: {},
   repos: {},
   authors: {},
+  age: {},
 });
 
 interface Props {
@@ -64,8 +68,12 @@ function authorLabel(author: string): string {
 // `kind:"multi"` filter's `value`/`onChange`, and on to filterPRs / routes /
 // storage unchanged.
 export function FilterBar({ filters, onChange, counts, repos, authors }: Props) {
-  const setFacet = (key: keyof Filters, value: Record<string, FilterMode>) =>
-    onChange({ ...filters, [key]: value });
+  const pendingFilters = useRef(filters);
+  useEffect(() => { pendingFilters.current = filters; }, [filters]);
+  const setFacet = (key: keyof Filters, value: Record<string, FilterMode>) => {
+    pendingFilters.current = { ...pendingFilters.current, [key]: value };
+    onChange(pendingFilters.current);
+  };
 
   const c = counts as Record<string, number>;
   const stateOpts: MultiSelectOption[] = STATE_DEFS
@@ -77,12 +85,13 @@ export function FilterBar({ filters, onChange, counts, repos, authors }: Props) 
   const repoOpts: MultiSelectOption[] = repos.map(r => ({ value: r, label: shortName(r) }));
   const authorOpts: MultiSelectOption[] = authors.map(a => ({ value: a, label: authorLabel(a) }));
 
-  const fb: FilterBarFilter[] = [];
+  const fb: FilterBarFilter[] = [
+    { key: 'age', kind: 'multi', label: 'Age since update', options: PR_AGE_OPTIONS, value: filters.age, onChange: (v) => setFacet('age', v) },
+  ];
   if (stateOpts.length) fb.push({ key: 'state', kind: 'multi', label: 'State', options: stateOpts, value: filters.state, onChange: (v) => setFacet('state', v) });
   if (checkOpts.length) fb.push({ key: 'checks', kind: 'multi', label: 'Checks', options: checkOpts, value: filters.checks, onChange: (v) => setFacet('checks', v) });
   if (repos.length > 1) fb.push({ key: 'repos', kind: 'multi', label: 'Repos', icon: <UiFolderGit2 />, options: repoOpts, value: filters.repos, onChange: (v) => setFacet('repos', v) });
   if (authors.length > 1) fb.push({ key: 'authors', kind: 'multi', label: 'Authors', icon: <UiUser />, options: authorOpts, value: filters.authors, onChange: (v) => setFacet('authors', v) });
 
-  if (fb.length === 0) return null;
   return <ClickyFilterBar overflowMode="wrap" filters={fb} />;
 }

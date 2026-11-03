@@ -2,7 +2,6 @@ package testrunner
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -71,12 +70,10 @@ func (s *selectorContext) importPathOf(pkgPath string) string {
 	return ""
 }
 
-// filterByChangeGraph narrows pkgs to those affected by the given DiffOptions.
-// A nil or all-zero DiffOptions bypasses filtering and returns pkgs unchanged.
-func (s *selectorContext) filterByChangeGraph(pkgs []string, opts changegraph.DiffOptions) ([]string, error) {
-	fs, err := changegraph.ComputeFileSet(s.workDir, opts)
-	if err != nil {
-		return nil, fmt.Errorf("compute change set: %w", err)
+func (s *selectorContext) filterByChangeGraph(pkgs []string, paths []string) ([]string, error) {
+	fs := changegraph.NewFileSet()
+	for _, path := range paths {
+		fs.Add(path)
 	}
 	if fs.Len() == 0 {
 		logger.V(3).Infof("change graph: no changes detected, nothing will run")
@@ -220,34 +217,6 @@ func cachedSuiteResults(hit cacheHit) parsers.TestSuiteResults {
 			Duration:    hit.Entry.Duration(),
 		}},
 	}}
-}
-
-// diffOptionsFromRunOptions translates user-facing flags into the git
-// DiffOptions fed to ComputeFileSet. Changed or Since always imply
-// staged+unstaged+untracked so the working tree is reflected; an explicit
-// ChangedFiles list on its own is taken as given, because the caller naming it
-// already knows what changed and git's view of the tree would only widen it.
-func diffOptionsFromRunOptions(opts RunOptions) changegraph.DiffOptions {
-	diff := changegraph.DiffOptions{Files: opts.ChangedFiles}
-	if opts.Since == "" && !opts.Changed {
-		return diff
-	}
-	diff.IncludeStaged, diff.IncludeUnstaged, diff.IncludeUntracked = true, true, true
-	if opts.Since != "" {
-		diff.Since = opts.Since
-		return diff
-	}
-	diff.Since = changedBaseRef()
-	return diff
-}
-
-// changedBaseRef is the base ref used by `--changed`. Defaults to
-// origin/main but can be overridden via GAVEL_CHANGED_BASE.
-func changedBaseRef() string {
-	if v := os.Getenv("GAVEL_CHANGED_BASE"); v != "" {
-		return v
-	}
-	return "origin/main"
 }
 
 // shortHex returns the first 12 characters of hex, safe for short hashes.

@@ -231,16 +231,19 @@ func todoStatusWithPlan(
 	approval captaindb.PlanApprovalState,
 ) types.Status {
 	projected := todoStatus(status, execution)
-	planReviewable := execution == native.ExecutionIdle || (execution == native.ExecutionFailed && step == native.StepPlan)
-	if (status != native.StatusOpen && status != native.StatusDraft) || !planReviewable {
+	if status != native.StatusOpen && status != native.StatusDraft {
 		return projected
 	}
 	switch approval {
 	case captaindb.PlanApprovalPending, captaindb.PlanApprovalRevisionRequested:
-		return types.StatusReview
+		switch execution {
+		case native.ExecutionIdle, native.ExecutionFailed, native.ExecutionStalled, native.ExecutionVerificationFailed:
+			return types.StatusReview
+		}
 	case captaindb.PlanApprovalRejected, captaindb.PlanApprovalApproved:
-		return types.StatusPending
-	default:
-		return projected
+		if execution == native.ExecutionIdle || (execution == native.ExecutionFailed && step == native.StepPlan) {
+			return types.StatusPending
+		}
 	}
+	return projected
 }

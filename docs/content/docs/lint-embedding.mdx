@@ -1,0 +1,95 @@
+---
+title: Embedding the lint engine
+description: Run your own in-process Go linters through gavel lint's engine, so their findings get failed-only reruns, baselines, ignores, snapshots, the browser UI and the CLI rendering.
+parent: lint-execution
+order: 14
+---
+
+A Go program can run its own checks through the same engine as `gavel lint`, so its findings get `--failed`, `--baseline`, `.gavel.yaml` ignores, snapshots (`.gavel/last.json`), the browser UI and the CLI rendering for free.
+
+- `lint.DefaultRegistry(workDir, configDir)` returns the built-in linters plus the commands `.gavel.yaml` declares. Register your linters on it and pass it as `lint.Options.Registry`. With no `Registry`, `lint.Run`, `lint.Execute` and `lint.DryRun` use `DefaultRegistry`.
+- A linter that implements `linters.InProcess` (`InProcess() bool` returning true) runs inside your process. It needs no executable, is never auto-detected, and runs whenever it is named in `Options.Linters`, whether or not any file matches its `DefaultIncludes`. Its `RunOptions.Files` (received through `SetOptions`) are passed through unscoped, so they may be keys such as an entity id rather than paths on disk. `--failed` narrows them to the keys that had violations, and `--dry-run` shows the linter by name.
+- A linter that implements `linters.ResultLinter` (`RunResult(ctx, task) (*linters.LinterResult, error)`) returns a whole result, not bare violations, so fields only it knows survive: `Sources` (the content and a browse URL for each virtual file), `RawOutput`, counts, and `Cache` (see [cached lint results](/docs/lint-caching)). gavel still sets the name, verdict, command and timing, and applies rule exclusions, scopes and ignores to its violations. When generated sources are excluded, a finding whose file is a `Sources` key is judged by that content rather than read from disk. `.gavel.yaml` command linters keep the `sources` their report carries the same way.
+- `lint.ReportView(results, lint.ReportOptions{Summary, SummaryLimit})` is the value `gavel lint` prints, so your command renders the same way. `lint.Snapshot`, `lint.SaveSnapshot` and `lint.Serve` publish a run.
+- A `testui.Server` that shows your results can rerun your linters from the lint tab: `srv.SetLintRerun([]string{"acme-entities"}, fn)`. A rerun request that names only those linters calls `fn(ctx, linters, files)`, and each result replaces the one with the same linter and work dir; other linters' results are kept. A request mixing your linters with others is refused with a 400.
+
+In-process linters support `runtime.timeout`; environment overrides, niceness, and active CPU or memory limits fail before execution. A filesystem adapter such as the built-in JSON linter can implement `linters.RuntimeValidator` (`ValidateRuntime(processruntime.Options) error`) and call `Options.ValidateInProcess()` to enforce these limits while retaining automatic discovery and file scoping. Validation runs before `SetOptions`. `RequiresExecutable()` controls executable discovery; declared command linters still run subprocesses and support process runtime controls.
+
+## Example
+
+A runnable program (`go run . orders/42 customers/7` inside a git checkout):
+
+```go
+package main
+
+import (
+	"context"
+	"os"
+
+	"github.com/flanksource/clicky"
+	commonsContext "github.com/flanksource/commons/context"
+	"github.com/flanksource/gavel/lint"
+	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/models"
+)
+
+// entityLinter checks entities the embedding program owns, named by key
+// rather than by a path on disk.
+type entityLinter struct{ keys []string }
+
+func (l *entityLinter) Name() string                              { return "acme-entities" }
+func (l *entityLinter) InProcess() bool                           { return true }
+func (l *entityLinter) SetOptions(opts linters.RunOptions)        { l.keys = opts.Files }
+func (l *entityLinter) DefaultIncludes() []string                 { return nil }
+func (l *entityLinter) DefaultExcludes() []string                 { return nil }
+func (l *entityLinter) SupportsJSON() bool                        { return true }
+func (l *entityLinter) JSONArgs() []string                        { return nil }
+func (l *entityLinter) SupportsFix() bool                         { return false }
+func (l *entityLinter) FixArgs() []string                         { return nil }
+func (l *entityLinter) ValidateConfig(*models.LinterConfig) error { return nil }
+
+func (l *entityLinter) Run(commonsContext.Context, *clicky.Task) ([]models.Violation, error) {
+	var found []models.Violation
+	for _, key := range l.keys {
+		message := "entity has no owner"
+		found = append(found, models.Violation{File: key, Line: 1, Severity: models.SeverityWarning, Message: &message})
+	}
+	return found, nil
+}
+
+func main() {
+	workDir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	registry, err := lint.DefaultRegistry(workDir, "")
+	if err != nil {
+		panic(err)
+	}
+	registry.Register(&entityLinter{})
+
+	results, err := lint.Run(context.Background(), lint.Options{
+		WorkDir:  workDir,
+		Registry: registry,
+		Linters:  []string{"acme-entities"},
+		Files:    os.Args[1:], // entity keys, e.g. orders/42
+	})
+	if err != nil {
+		panic(err)
+	}
+	clicky.MustPrint(lint.ReportView(results, lint.ReportOptions{Summary: true}))
+	if linters.HasFailures(results) {
+		os.Exit(1)
+	}
+}
+```
+
+It prints:
+
+```
+Lint summary: 2 violations
+╰── ⚠️ acme-entities (2 violations)
+    ╰── (no rule) (2) — entity has no owner
+        ├── 📄 orders/42:1
+        ╰── 📄 customers/7:1
+```

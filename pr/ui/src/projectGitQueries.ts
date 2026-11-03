@@ -49,8 +49,9 @@ export function useProjectGitSummary({ enabled }: { enabled: boolean }): Project
 // The git stream refetches on every change; a page showing how fresh the state
 // is also re-reads it every refetchIntervalMs, since an unchanged scan advances
 // no generation.
-export function useProjectGit(projectName: string, { refetchIntervalMs }: { refetchIntervalMs?: number } = {}) {
+export function useProjectGit(projectName: string, { refetchIntervalMs, enabled = true }: { refetchIntervalMs?: number; enabled?: boolean } = {}) {
   return useQuery<ProjectGit>({
+    enabled,
     refetchInterval: refetchIntervalMs ?? false,
     queryKey: queryKeys.projectGit(projectName),
     queryFn: async ({ signal }) => parseProjectGit(await fetchJSON<unknown>({
@@ -79,7 +80,8 @@ export function parseProjectGitSummaries(payload: unknown): ProjectGitSummary[] 
     if (!isRecord(entry)
       || typeof entry.name !== 'string'
       || typeof entry.base !== 'string'
-      || !hasNumbers(entry, ['adds', 'dels', 'worktrees', 'branches'])
+      || !hasNumbers(entry, ['adds', 'dels', 'worktrees', 'branches', 'uncommittedBranches'])
+      || !Number.isSafeInteger(entry.uncommittedBranches) || Number(entry.uncommittedBranches) < 0
       || (entry.error !== undefined && typeof entry.error !== 'string')) {
       throw new Error(`Load project git summary: invalid entry ${JSON.stringify(entry)}`);
     }
@@ -94,6 +96,8 @@ export function parseProjectGit(payload: unknown): ProjectGit {
     || typeof payload.base !== 'string'
     || typeof payload.currentBranch !== 'string'
     || typeof payload.baseCheckedOut !== 'boolean'
+    || (payload.upstream !== undefined && typeof payload.upstream !== 'string')
+    || !hasNumbers(payload, ['upstreamAhead', 'upstreamBehind'])
     || !Array.isArray(payload.worktrees)
     || !Array.isArray(payload.branches)
     || typeof payload.computedAt !== 'string'

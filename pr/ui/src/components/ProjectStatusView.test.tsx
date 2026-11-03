@@ -375,7 +375,7 @@ describe('ProjectStatusView', () => {
         return {
           ok: true,
           json: async () => ({
-            schemaVersion: 1,
+            schemaVersion: 2,
             action: 'lint',
             schema: {
               type: 'object',
@@ -415,7 +415,7 @@ describe('ProjectStatusView', () => {
         linters: ['golangci-lint'],
       },
     });
-    expect(localStorage.getItem('gavel.project-action-options.v1')).toContain('golangci-lint');
+    expect(localStorage.getItem('gavel.project-action-options.v2')).toContain('golangci-lint');
 
     fireEvent.click(screen.getByRole('button', { name: 'Lint options: advanced' }));
     expect((await screen.findByTestId('advanced-options')).textContent).toContain('golangci-lint');
@@ -428,7 +428,7 @@ describe('ProjectStatusView', () => {
         return {
           ok: true,
           json: async () => ({
-            schemaVersion: 1,
+            schemaVersion: 2,
             action: 'commit',
             schema: {
               type: 'object',
@@ -464,7 +464,6 @@ describe('ProjectStatusView', () => {
       action: 'commit',
       options: {
         files: ['one.go'],
-        precommit: 'fail',
       },
     });
     expect(await screen.findByRole('region', { name: 'Commit tasks' })).toBeTruthy();

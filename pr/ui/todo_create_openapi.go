@@ -24,9 +24,12 @@ func addTodoNewOpenAPI(document map[string]any) error {
 	properties := requestSchema["properties"].(map[string]any)
 	formProperties := map[string]any{}
 	parameters := []any{}
-	for _, field := range []string{"dir", "title", "body", "priority", "status", "parent", "labels", "autoSave", "step"} {
+	for _, field := range []string{"dir", "title", "body", "priority", "status", "parent", "labels", "autoSave", "step", "spec", "presets"} {
 		formProperties[field] = properties[field]
-		parameters = append(parameters, map[string]any{"name": field, "in": "query", "required": false, "schema": properties[field]})
+		if field == "spec" || field == "presets" {
+			formProperties[field] = map[string]any{"type": "string", "description": "JSON-encoded " + field + " passed to the selected lifecycle step"}
+		}
+		parameters = append(parameters, map[string]any{"name": field, "in": "query", "required": false, "schema": formProperties[field]})
 	}
 	form := map[string]any{"type": "object", "properties": formProperties, "required": []string{"title"}}
 	fileProperties := withEntries(map[string]any{}, formProperties)
@@ -80,6 +83,10 @@ func todoOpenAPISchema(value any, schemas map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return mergeOpenAPISchema(raw, schemas)
+}
+
+func mergeOpenAPISchema(raw []byte, schemas map[string]any) (string, error) {
 	var document struct {
 		Ref  string         `json:"$ref"`
 		Defs map[string]any `json:"$defs"`

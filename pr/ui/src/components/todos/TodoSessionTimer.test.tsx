@@ -188,6 +188,10 @@ describe('CmuxSessionButton', () => {
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/todos/session/focus'))).toBe(true),
     );
+	for (const path of ['/api/todos/session/cmux', '/api/todos/session/focus']) {
+	  const call = fetchMock.mock.calls.find(([url]) => String(url).includes(path));
+	  expect(new URL(String(call?.[0]), 'http://localhost').searchParams.get('sessionId')).toBe('sess-1234');
+	}
   });
 
   it('resumes via the supplied handler and hides Resume without one', async () => {

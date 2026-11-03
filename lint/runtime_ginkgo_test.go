@@ -16,9 +16,9 @@ import (
 	"time"
 )
 
-func TestRuntimeAdapters(t *testing.T) {
+func TestLint(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Linter runtime adapters")
+	RunSpecs(t, "Lint")
 }
 
 func TestMain(m *testing.M) {
@@ -39,6 +39,28 @@ func TestMain(m *testing.M) {
 }
 
 var _ = Describe("Shared linter runtime", func() {
+	DescribeTable("rejects unsupported in-process runtime controls", func(field string) {
+		dir := GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		runtime := processruntime.Options{}
+		switch field {
+		case "env":
+			runtime.Env = map[string]string{"EXAMPLE": "value"}
+		case "nice":
+			value := 5
+			runtime.Nice = &value
+		case "cpu":
+			value := 100.0
+			runtime.CPU = &value
+		case "mem":
+			value := "1B"
+			runtime.Mem = &value
+		}
+		linter, exists := builtinLinterRegistry(dir).Get("json")
+		Expect(exists).To(BeTrue())
+		_, _, err := linters.PrepareCommand(linter, linters.RunOptions{WorkDir: dir, Runtime: runtime})
+		Expect(err).To(MatchError(ContainSubstring("in-process")))
+	}, Entry("environment", "env"), Entry("niceness", "nice"), Entry("CPU", "cpu"), Entry("memory", "mem"))
 	It("retains invocation configuration while executing at the project root", func() {
 		root := GinkgoT().TempDir()
 		pkg := filepath.Join(root, "pkg")
@@ -48,7 +70,7 @@ var _ = Describe("Shared linter runtime", func() {
 		Expect(os.WriteFile(filepath.Join(pkg, ".gavel.yaml"), []byte("runtime: {env: {GAVEL_INVOCATION_TEST: child}}\n"), 0o600)).To(Succeed())
 		executable, err := os.Executable()
 		Expect(err).NotTo(HaveOccurred())
-		linter, exists := buildLinterRegistry(root).Get("golangci-lint")
+		linter, exists := builtinLinterRegistry(root).Get("golangci-lint")
 		Expect(exists).To(BeTrue())
 		var output bytes.Buffer
 		result := linters.RunLinterWithTask(context.Background(), nil, linter, linters.RunOptions{WorkDir: root, ConfigDir: pkg, Executable: executable, Runtime: processruntime.Options{Env: map[string]string{"GAVEL_RUNTIME_LINTER_CHILD": "env"}}, OutputTee: &output})
@@ -60,25 +82,29 @@ var _ = Describe("Shared linter runtime", func() {
 		Expect(os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("runtime: {timeout: 300ms, env: {GAVEL_RUNTIME_LINTER_CHILD: output}}\n"), 0o600)).To(Succeed())
 		executable, err := os.Executable()
 		Expect(err).NotTo(HaveOccurred())
-		linter, exists := buildLinterRegistry(dir).Get("react-doctor")
+		linter, exists := builtinLinterRegistry(dir).Get("react-doctor")
 		Expect(exists).To(BeTrue())
 		linter.(linters.OptionsMixin).SetOptions(linters.RunOptions{WorkDir: dir, Executable: executable})
 		_, err = linter.Run(commonsContext.NewContext(context.Background()), nil)
 		Expect(err).To(MatchError(ContainSubstring("timed out")))
 	})
 	for _, name := range verify.BuiltinLinterNames {
-		It("enforces memory limits for "+name, func() {
+		It("never silently ignores a memory limit for "+name, func() {
 			dir := GinkgoT().TempDir()
 			Expect(os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("runtime:\n  mem: 1B\n  env: {GAVEL_RUNTIME_LINTER_CHILD: '1'}\n"), 0o600)).To(Succeed())
 			Expect(os.MkdirAll(filepath.Join(dir, "node_modules", "typescript"), 0o755)).To(Succeed())
 			Expect(os.WriteFile(filepath.Join(dir, "node_modules", "typescript", "index.js"), []byte("Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000)\n"), 0o600)).To(Succeed())
 			executable, err := os.Executable()
 			Expect(err).NotTo(HaveOccurred())
-			linter, exists := buildLinterRegistry(dir).Get(name)
+			linter, exists := builtinLinterRegistry(dir).Get(name)
 			Expect(exists).To(BeTrue())
 			result := linters.RunLinterWithTask(context.Background(), nil, linter, linters.RunOptions{WorkDir: dir, Executable: executable})
 			Expect(result.Success).To(BeFalse())
-			Expect(result.Error).To(ContainSubstring("resource limit exceeded"))
+			if name == "json" {
+				Expect(result.Error).To(ContainSubstring("in-process linters do not support"))
+			} else {
+				Expect(result.Error).To(ContainSubstring("resource limit exceeded"))
+			}
 		})
 	}
 })

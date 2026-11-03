@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/clicky/sse"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/git/gitstate"
 	"github.com/flanksource/gavel/github/activity"
 	ghcache "github.com/flanksource/gavel/github/cache"
 )
@@ -71,6 +72,7 @@ func (s *Server) handleActivityReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	activity.Shared().Reset()
+	gitstate.ResetMetrics()
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"status":"reset"}`)
 }

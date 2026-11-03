@@ -191,9 +191,13 @@ func (opts Options) templateData(ctx context.Context, todoList []*types.TODO) (m
 	if err != nil {
 		return nil, err
 	}
+	body, err := todoprompt.Sections(todoList, opts.WorkDir, true)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"count": len(todoList),
-		"body":  todoprompt.Sections(todoList, opts.WorkDir, true),
+		"body":  body,
 		"plans": plans,
 	}, nil
 }

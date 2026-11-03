@@ -46,7 +46,6 @@ function renderShell(overrides: Partial<Parameters<typeof MenubarView>[0]> = {})
       sessions={{ data: undefined, error: null } as never}
       sessionId=""
       onSessionChange={vi.fn()}
-      chatEnabled
       {...overrides}
     />,
   );

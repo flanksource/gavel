@@ -377,10 +377,10 @@ func TestApplyPostLintFiltersUsesGroupConfig(t *testing.T) {
 	}
 
 	errcheck := &models.Rule{Method: "errcheck"}
-	makeResults := func(file string) []*linters.LinterResult {
+	makeResults := func(root, file string) []*linters.LinterResult {
 		return []*linters.LinterResult{{
 			Linter:  "golangci-lint",
-			WorkDir: rootA,
+			WorkDir: root,
 			Violations: []models.Violation{{
 				Source: "golangci-lint",
 				File:   file,
@@ -389,15 +389,26 @@ func TestApplyPostLintFiltersUsesGroupConfig(t *testing.T) {
 		}}
 	}
 
-	resultsA := makeResults("pkg/foo.go")
-	applyPostLintFilters(resultsA, rootA, nil)
+	resultsA := makeResults(rootA, "pkg/foo.go")
+	if err := applyPostLintFilters(resultsA, rootA, nil); err != nil {
+		t.Fatal(err)
+	}
 	if len(resultsA[0].Violations) != 0 {
 		t.Fatalf("expected rootA ignore to filter pkg/foo.go, got %v", resultsA[0].Violations)
 	}
 
-	resultsB := makeResults("pkg/foo.go")
-	applyPostLintFilters(resultsB, rootB, nil)
+	resultsB := makeResults(rootB, "pkg/foo.go")
+	if err := applyPostLintFilters(resultsB, rootB, nil); err != nil {
+		t.Fatal(err)
+	}
 	if len(resultsB[0].Violations) != 1 {
 		t.Fatalf("expected rootB config to leave pkg/foo.go alone, got %v", resultsB[0].Violations)
+	}
+	resultsOwnedByA := makeResults(rootA, "pkg/foo.go")
+	if err := applyPostLintFilters(resultsOwnedByA, rootB, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(resultsOwnedByA[0].Violations) != 0 {
+		t.Fatal("expected the result's project config to govern its findings")
 	}
 }

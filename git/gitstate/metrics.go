@@ -71,10 +71,10 @@ var (
 		Name: "gavel_git_scans_in_flight",
 		Help: "Background scans holding a concurrency slot.",
 	})
-	rangesComputed = promauto.NewCounter(prometheus.CounterOpts{
+	rangesComputed = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "gavel_git_ranges_computed_total",
 		Help: "Base/head comparisons computed because no cached git_range_stats row had them.",
-	})
+	}, nil)
 	trackedRepos = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "gavel_git_tracked_repos",
 		Help: "Repositories the tracker keeps current.",
@@ -89,6 +89,29 @@ var (
 		Buckets: prometheus.ExponentialBuckets(0.0005, 2, 15),
 	}, []string{"op"})
 )
+
+// ResetMetrics clears recorded git activity without changing live tracker state.
+func ResetMetrics() {
+	refsScanDuration.Reset()
+	statusScanDuration.Reset()
+	gitCommandDuration.Reset()
+	scanQueueWait.Reset()
+	scansEnqueued.Reset()
+	rangesComputed.Reset()
+	readDuration.Reset()
+	exportRangesComputed()
+}
+
+// exportRangesComputed creates the label-less series so the counter is
+// exported at zero from registration and after a reset, not only once a range
+// has been computed. It is a vector only so ResetMetrics can zero it.
+func exportRangesComputed() {
+	rangesComputed.WithLabelValues()
+}
+
+func init() {
+	exportRangesComputed()
+}
 
 func scanResult(ran, changed bool, err error) string {
 	switch {

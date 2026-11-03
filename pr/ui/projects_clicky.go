@@ -78,6 +78,16 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	document := projectsOpenAPI()
+	if s.launchService != nil {
+		if err := s.launchService.AddOpenAPI(document); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if err := addLifecycleOpenAPI(document); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := addTodoNewOpenAPI(document); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -157,7 +167,7 @@ func projectActionRequestSchema() map[string]any {
 		"properties": map[string]any{
 			"action":  map[string]any{"type": "string", "enum": []string{"lint", "test"}},
 			"files":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"options": map[string]any{"type": "object", "additionalProperties": true},
+			"options": map[string]any{"type": "object", "additionalProperties": true, "description": "Authored overrides validated against the action's v2 schema. Omitted properties inherit project configuration and command defaults."},
 		},
 	}
 }
@@ -169,7 +179,7 @@ func projectCommitQueueRequestSchema() map[string]any {
 		"properties": map[string]any{
 			"action":   map[string]any{"type": "string", "enum": []string{"commit", "open-pr"}},
 			"files":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Files to commit; optional for open-pr, which pushes existing local commits when empty"},
-			"options":  map[string]any{"type": "object", "additionalProperties": true, "description": "Advanced commit options; not supported for open-pr"},
+			"options":  map[string]any{"type": "object", "additionalProperties": true, "description": "Authored overrides validated against the commit v2 schema; omitted properties inherit configuration. Not supported for open-pr."},
 			"worktree": map[string]any{"type": "string", "description": "Absolute path of the project worktree to commit in; defaults to the project directory"},
 		},
 	}
@@ -180,10 +190,10 @@ func projectActionSchemaResponseSchema() map[string]any {
 		"type":     "object",
 		"required": []string{"schemaVersion", "action", "schema", "defaults"},
 		"properties": map[string]any{
-			"schemaVersion": map[string]any{"type": "integer"},
+			"schemaVersion": map[string]any{"type": "integer", "enum": []int{2}},
 			"action":        map[string]any{"type": "string", "enum": []string{"commit", "lint", "test"}},
-			"schema":        map[string]any{"type": "object", "additionalProperties": true},
-			"defaults":      map[string]any{"type": "object", "additionalProperties": true},
+			"schema":        map[string]any{"type": "object", "additionalProperties": true, "description": "Embedded action schema with native Clicky form annotations."},
+			"defaults":      map[string]any{"type": "object", "additionalProperties": true, "description": "Display hints only. Do not merge these into submitted options or saved preferences."},
 		},
 	}
 }

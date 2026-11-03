@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/repomap"
 )
 
@@ -142,7 +143,7 @@ func prettyAge(f FileStatus) api.Text {
 	if f.ModifiedAt.IsZero() {
 		return t.Append(strings.Repeat(" ", colWidth), "")
 	}
-	age := HumanAge(time.Since(f.ModifiedAt))
+	age := utils.HumanAge(time.Since(f.ModifiedAt))
 	if age == "" {
 		return t.Append(strings.Repeat(" ", colWidth), "")
 	}

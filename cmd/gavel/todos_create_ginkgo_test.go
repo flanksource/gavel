@@ -199,8 +199,8 @@ var _ = Describe("TODO create help", func() {
 			"## Acceptance Criteria",
 			"- [ ] The supplied plan is persisted and selected on the TODO.",
 			"gavel fixtures --help",
-			"FLAGS",
-			"GLOBAL FLAGS",
+			"Command flags",
+			"Global flags",
 		} {
 			Expect(plain).To(ContainSubstring(expected))
 		}

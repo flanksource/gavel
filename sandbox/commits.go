@@ -41,7 +41,7 @@ func (s *Sources) RunBranchAt(ctx context.Context, repo Repo, todo uuid.UUID, he
 	if err != nil {
 		return "", err
 	}
-	refs, err := runGit(ctx, nil, "-C", dir, "for-each-ref", "--format=%(objectname) %(refname:strip=2)",
+	refs, err := runGit(ctx, gitOptions{}, "-C", dir, "for-each-ref", "--format=%(objectname) %(refname:strip=2)",
 		"refs/heads/"+RunBranchPrefix+todo.String()[:8]+"-*")
 	if err != nil {
 		return "", fmt.Errorf("list the run branches of todo %s in %s: %w", todo, repo.label(), err)
@@ -65,7 +65,7 @@ func (s *Sources) CommitSubjects(ctx context.Context, repo Repo, base, head stri
 	if err != nil {
 		return nil, err
 	}
-	log, err := runGit(ctx, nil, "-C", dir, "log", "--reverse", "--format=%s", base+".."+head, "--")
+	log, err := runGit(ctx, gitOptions{}, "-C", dir, "log", "--reverse", "--format=%s", base+".."+head, "--")
 	if err != nil {
 		return nil, fmt.Errorf("list the commits %s..%s of %s: %w", base, head, repo.label(), err)
 	}
@@ -82,7 +82,7 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 	if !strings.HasPrefix(branch, RunBranchPrefix) || strings.HasPrefix(branch, "-") {
 		return "", fmt.Errorf("a run's commits go on a %s branch, not %q", RunBranchPrefix, branch)
 	}
-	if _, err := runGit(ctx, nil, "check-ref-format", "refs/heads/"+branch); err != nil {
+	if _, err := runGit(ctx, gitOptions{}, "check-ref-format", "refs/heads/"+branch); err != nil {
 		return "", fmt.Errorf("%q is not a branch name: %w", branch, err)
 	}
 	source, err := s.sourceDir(ctx, repo)
@@ -97,10 +97,10 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 
 	switch repo.Source {
 	case "push":
-		if _, err := runGit(ctx, nil, "-C", source, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		if _, err := runGit(ctx, gitOptions{}, "-C", source, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
 			return "", fmt.Errorf("create branch %s of %s: %w", branch, repo.label(), ErrBranchExists)
 		}
-		if _, err := runGit(ctx, nil, "-C", source, "update-ref", "refs/heads/"+branch, sha, ""); err != nil {
+		if _, err := runGit(ctx, gitOptions{}, "-C", source, "update-ref", "refs/heads/"+branch, sha, ""); err != nil {
 			return "", fmt.Errorf("create branch %s of %s: %w", branch, repo.label(), err)
 		}
 	case "github":
@@ -108,7 +108,7 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 		if err != nil {
 			return "", err
 		}
-		existing, err := runGit(ctx, nil, "-c", header, "ls-remote", s.githubURL(repo), "refs/heads/"+branch)
+		existing, err := runGit(ctx, gitOptions{}, "-c", header, "ls-remote", s.githubURL(repo), "refs/heads/"+branch)
 		if err != nil {
 			return "", fmt.Errorf("look for branch %s of %s on GitHub: %w", branch, repo.label(), err)
 		}
@@ -117,7 +117,7 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 		}
 		// The mirror's origin pushes everything; this pushes the one branch, to its URL. The lease
 		// refuses a branch created since the check above.
-		if _, err := runGit(ctx, nil, "-c", header, "-C", source, "push", "--quiet",
+		if _, err := runGit(ctx, gitOptions{}, "-c", header, "-C", source, "push", "--quiet",
 			"--force-with-lease=refs/heads/"+branch+":", s.githubURL(repo), sha+":refs/heads/"+branch); err != nil {
 			return "", fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), err)
 		}
@@ -130,9 +130,22 @@ func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch st
 // out. Each path must be one the run changed, and at least one changed file must stay. It returns
 // the branch's new tip.
 func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head string, paths []string) (string, error) {
-	for _, arg := range append([]string{branch, base, head}, paths...) {
+	for _, arg := range []string{branch, base, head} {
 		if strings.HasPrefix(arg, "-") {
 			return "", fmt.Errorf("%q can't start with \"-\"", arg)
+		}
+	}
+	for _, commit := range []string{base, head} {
+		if !commitSHA.MatchString(commit) {
+			return "", fmt.Errorf("leave-out commit %q is not a full object ID", commit)
+		}
+	}
+	if len(paths) == 0 {
+		return "", fmt.Errorf("%w: at least one file is required", ErrInvalidLeaveOut)
+	}
+	for _, path := range paths {
+		if !filepath.IsLocal(path) || strings.ContainsRune(path, '\x00') {
+			return "", fmt.Errorf("%w: %q is not a repository-relative file", ErrInvalidLeaveOut, path)
 		}
 	}
 	if repo.Source != "github" {
@@ -142,7 +155,7 @@ func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head st
 	if err != nil {
 		return "", err
 	}
-	diff, err := runGit(ctx, nil, "-C", dir, "diff", "--name-only", "-z", "--no-renames", base, head, "--")
+	diff, err := runGit(ctx, gitOptions{}, "-C", dir, "diff", "--name-only", "-z", "--no-renames", base, head, "--")
 	if err != nil {
 		return "", fmt.Errorf("list the files run %s..%s of %s changed: %w", base, head, repo.label(), err)
 	}
@@ -166,27 +179,32 @@ func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head st
 	// update-index refuses to run without a work tree; an empty one is never read.
 	env := []string{"GIT_INDEX_FILE=" + filepath.Join(index, "index"), "GIT_WORK_TREE=" + index}
 	git := func(args ...string) (string, error) {
-		out, err := runGitEnv(ctx, env, nil, append([]string{"-C", dir}, args...)...)
+		out, err := runGit(ctx, gitOptions{Env: env}, append([]string{"-C", dir}, args...)...)
 		return strings.TrimSpace(out), err
 	}
 	if _, err := git("read-tree", head); err != nil {
 		return "", fmt.Errorf("read the tree of %s: %w", head, err)
 	}
+	baseTree, err := git("ls-tree", "-rz", "--full-tree", base)
+	if err != nil {
+		return "", fmt.Errorf("read the tree of %s: %w", base, err)
+	}
+	entries, err := gitTreeEntries(baseTree)
+	if err != nil {
+		return "", fmt.Errorf("read the tree of %s: %w", base, err)
+	}
+	var input strings.Builder
 	for _, path := range paths {
-		entry, err := git("ls-tree", base, "--", path)
-		if err != nil {
-			return "", fmt.Errorf("read %s at %s: %w", path, base, err)
+		entry, existed := entries[path]
+		if !existed {
+			entry = "0 " + strings.Repeat("0", len(head)) + "\t" + path
 		}
-		if entry == "" {
-			_, err = git("update-index", "--force-remove", "--", path)
-		} else {
-			// "<mode> blob <object>\t<path>"
-			fields := strings.Fields(entry)
-			_, err = git("update-index", "--add", "--cacheinfo", fields[0]+","+fields[2]+","+path)
-		}
-		if err != nil {
-			return "", fmt.Errorf("put %s back as it was at %s: %w", path, base, err)
-		}
+		input.WriteString(entry)
+		input.WriteByte(0)
+	}
+	// Git's index-info protocol treats NUL-delimited names as data, without pathspec expansion.
+	if _, err := runGit(ctx, gitOptions{Env: env, Stdin: strings.NewReader(input.String())}, "-C", dir, "update-index", "-z", "--index-info"); err != nil {
+		return "", fmt.Errorf("restore the left-out files from %s: %w", base, err)
 	}
 	tree, err := git("write-tree")
 	if err != nil {
@@ -202,6 +220,20 @@ func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head st
 		return "", fmt.Errorf("leave out files on branch %s of %s: %w", branch, repo.label(), err)
 	}
 	return tip, nil
+}
+
+func gitTreeEntries(tree string) (map[string]string, error) {
+	entries := map[string]string{}
+	for tree != "" {
+		entry, rest, terminated := strings.Cut(tree, "\x00")
+		metadata, path, separated := strings.Cut(entry, "\t")
+		if !terminated || !separated || path == "" || len(strings.Fields(metadata)) != 3 {
+			return nil, fmt.Errorf("malformed Git tree entry %q", entry)
+		}
+		entries[path] = entry
+		tree = rest
+	}
+	return entries, nil
 }
 
 // ResetRunBranch moves branch, a GitHub repository's run branch at tip, back to head, undoing
@@ -229,7 +261,7 @@ func (s *Sources) moveBranch(ctx context.Context, repo Repo, dir, branch, from, 
 	if err != nil {
 		return err
 	}
-	_, err = runGit(ctx, nil, "-c", header, "-C", dir, "push", "--quiet", "--force-with-lease=refs/heads/"+branch+":"+from,
+	_, err = runGit(ctx, gitOptions{}, "-c", header, "-C", dir, "push", "--quiet", "--force-with-lease=refs/heads/"+branch+":"+from,
 		"--", s.githubURL(repo), to+":refs/heads/"+branch)
 	return err
 }
@@ -241,7 +273,7 @@ var commitSHA = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 // the head the run started its turn at, to the one branch bundle holds. The push fails if the
 // branch has moved since. It returns the branch's new commit.
 func (s *Sources) PushPRHead(ctx context.Context, repo Repo, headURL, branch, base string, bundle io.Reader) (string, error) {
-	if _, err := runGit(ctx, nil, "check-ref-format", "refs/heads/"+branch); err != nil || strings.HasPrefix(branch, "-") {
+	if _, err := runGit(ctx, gitOptions{}, "check-ref-format", "refs/heads/"+branch); err != nil || strings.HasPrefix(branch, "-") {
 		return "", fmt.Errorf("%q is not a branch name: %v", branch, err)
 	}
 	if !commitSHA.MatchString(base) {
@@ -263,7 +295,7 @@ func (s *Sources) PushPRHead(ctx context.Context, repo Repo, headURL, branch, ba
 	if err != nil {
 		return "", err
 	}
-	if _, err := runGit(ctx, nil, "-c", header, "-C", source, "push", "--quiet",
+	if _, err := runGit(ctx, gitOptions{}, "-c", header, "-C", source, "push", "--quiet",
 		"--force-with-lease=refs/heads/"+branch+":"+base, "--", headURL, sha+":refs/heads/"+branch); err != nil {
 		return "", fmt.Errorf("push the PR's source branch %s: %w", branch, err)
 	}
@@ -285,7 +317,7 @@ func receiveCommits(ctx context.Context, source, base string, bundle io.Reader) 
 	if err := file.Close(); err != nil {
 		return "", nil, fmt.Errorf("save the run's commits: %w", err)
 	}
-	heads, err := runGit(ctx, nil, "bundle", "list-heads", file.Name())
+	heads, err := runGit(ctx, gitOptions{}, "bundle", "list-heads", file.Name())
 	if err != nil {
 		return "", nil, fmt.Errorf("read the run's bundle: %w", err)
 	}
@@ -297,11 +329,13 @@ func receiveCommits(ctx context.Context, source, base string, bundle io.Reader) 
 	name := strings.TrimPrefix(ref, "refs/heads/")
 
 	incoming := "refs/gavel/incoming/" + uuid.NewString()
-	if _, err := runGit(ctx, nil, "-C", source, "fetch", "--quiet", file.Name(), ref+":"+incoming); err != nil {
+	if _, err := runGit(ctx, gitOptions{}, "-C", source, "fetch", "--quiet", file.Name(), ref+":"+incoming); err != nil {
 		return "", nil, fmt.Errorf("read the run's commits on %s: %w", name, err)
 	}
-	done := func() { _, _ = runGit(context.WithoutCancel(ctx), nil, "-C", source, "update-ref", "-d", incoming) }
-	if _, err := runGit(ctx, nil, "-C", source, "merge-base", "--is-ancestor", base, sha); err != nil {
+	done := func() {
+		_, _ = runGit(context.WithoutCancel(ctx), gitOptions{}, "-C", source, "update-ref", "-d", incoming)
+	}
+	if _, err := runGit(ctx, gitOptions{}, "-C", source, "merge-base", "--is-ancestor", base, sha); err != nil {
 		done()
 		return "", nil, fmt.Errorf("the run's commits on %s don't continue from %s, the commit it started at", name, base)
 	}

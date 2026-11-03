@@ -75,6 +75,9 @@ export interface Project {
   name: string;
   dir: string;
   repos: string[];
+  // Set when repos were derived from the directory's upstream/origin GitHub
+  // remotes because none were registered.
+  reposInferred?: boolean;
   hasProcfile?: boolean;
   // Hidden projects are returned by /api/projects but left out of every project
   // list and not tracked for git state; only the project picker lists them.

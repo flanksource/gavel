@@ -6,13 +6,14 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/runtimeprofiles"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 // Class is the behaviour class a step runs as: what the commit and verify
 // invariants key on. A verify step grades without an agent turn; a plan or
 // triage envelope is a read-only pass; everything else implements.
-func Class(step Step) types.RunMode {
+func Class(step lifecycle.Step) types.RunMode {
 	return classOf(step)
 }
 
@@ -33,7 +34,7 @@ type StepDefaultResult struct {
 	Warnings       []string
 }
 
-func (h *Host) StepDefaults(ctx context.Context, step Step) (StepDefaultResult, error) {
+func (h *Host) StepDefaults(ctx context.Context, step lifecycle.Step) (StepDefaultResult, error) {
 	layers, err := h.StepLayers(ctx, step)
 	if err != nil {
 		return StepDefaultResult{}, err
@@ -56,7 +57,7 @@ func (h *Host) StepDefaults(ctx context.Context, step Step) (StepDefaultResult, 
 }
 
 // StepLayers returns authored defaults before saved settings and model normalization.
-func (h *Host) StepLayers(ctx context.Context, step Step) (runtimeprofiles.LayerResult, error) {
+func (h *Host) StepLayers(ctx context.Context, step lifecycle.Step) (runtimeprofiles.LayerResult, error) {
 	definition, err := h.promptFor(step)
 	if err != nil {
 		return runtimeprofiles.LayerResult{}, &ConfigurationError{Err: err}

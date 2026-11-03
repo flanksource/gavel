@@ -252,7 +252,7 @@ export function TodoDetail(props: TodoDetailProps) {
                     busy={runBusy || verificationRun.isPending}
                     onRunStep={(name, extras) => runPhase(name, { ...(phaseOptions[name] ?? loadLastTodoRunOptions(name, runContext)), ...extras })}
                     branchChoice={todo.pr ? undefined : reusableBranch}
-                    onReview={() => setTab('overview')}
+                    onReview={() => setTab(todo.status === 'review' ? 'plan' : 'overview')}
                     onOptionsChange={changePhaseOptions}
                     onAdvanced={setAdvancedMode}
                   />
@@ -361,6 +361,9 @@ export function TodoDetail(props: TodoDetailProps) {
         title={`${runContext?.lifecycle.steps.find(step => step.name === advancedMode)?.label ?? advancedMode ?? 'Run'} todo`}
         dir={dir}
         refID={todo.ref}
+        reviewRequired={todo.status === 'review'}
+        onChanged={onChanged}
+        onLaunch={() => setTab('session')}
         branchChoice={todo.pr ? undefined : reusableBranch}
       />
       {archivePrompt && (

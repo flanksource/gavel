@@ -7,10 +7,13 @@ import { StatefulTodoDetail } from './todoDetailTestHarness';
 import type { TodoDetailProps } from './TodoDetail';
 import { queryTestWrapper } from './queryTestWrapper';
 import type { TodoDetailView } from '../../routes';
+import type { ComponentProps } from 'react';
+import type { TodoRunAdvancedDialog } from './TodoRunAdvancedDialog';
 import { readRunChoiceState } from './runChoiceStorage';
 
 const execution = vi.hoisted(() => ({ run: vi.fn(), verify: vi.fn(), reset: vi.fn(), step: 'verify', spec: undefined as Record<string, unknown> | undefined }));
 const session = vi.hoisted(() => ({ stop: vi.fn(), detail: undefined as TodoSessionDetailResponse | undefined }));
+const advanced = vi.hoisted(() => ({ props: undefined as ComponentProps<typeof TodoRunAdvancedDialog> | undefined }));
 const spec = { mode: 'agent', model: 'example-model', effort: 'medium' as const };
 const context: RunContext = {
   modes: [{ id: 'agent', label: 'Agent', provider: 'openai', agent: 'codex', defaultModel: spec.model, driver: 'agent', mechanisms: [], models: [{ id: spec.model, label: 'Example', provider: 'openai', reasoning: true }] }],
@@ -58,17 +61,18 @@ vi.mock('./TodoCompose', () => ({ TodoTitleEditor: () => null, TodoBodyEditor: (
 vi.mock('./planActions', () => ({ TodoReviewBanner: () => null }));
 vi.mock('./TodoPhaseButton', () => ({
   TodoPhaseTicks: () => null,
-  TodoPhaseButton: ({ onAdvanced, onRunStep }: { onAdvanced: (step: string) => void; onRunStep: (step: string) => void }) => (
-    <div>{context.lifecycle.steps.map(({ name }) => <div key={name}>
+  TodoPhaseButton: ({ onAdvanced, onRunStep, onReview }: { onAdvanced: (step: string) => void; onRunStep: (step: string) => void; onReview: () => void }) => (
+    <div><Button onClick={onReview}>Review plan</Button>{context.lifecycle.steps.map(({ name }) => <div key={name}>
       <Button onClick={() => onAdvanced(name)}>Advanced {name}</Button>
       <Button onClick={() => onRunStep(name)}>Start {name}</Button>
     </div>)}</div>
   ),
 }));
 vi.mock('./TodoRunAdvancedDialog', () => ({
-  TodoRunAdvancedDialog: ({ open, initialMode, onRun }: { open: boolean; initialMode: string; onRun: (options: TodoRunOptions) => void }) => open && (
-    <div data-testid="advanced-step">{initialMode}<Button onClick={() => onRun({ step: execution.step, spec: execution.spec ?? spec })}>Dispatch selected step</Button></div>
-  ),
+  TodoRunAdvancedDialog: (props: ComponentProps<typeof TodoRunAdvancedDialog>) => {
+    advanced.props = props;
+    return props.open && <div data-testid="advanced-step">{props.initialMode}<Button onClick={() => props.onRun({ step: execution.step, spec: execution.spec ?? spec })}>Dispatch selected step</Button></div>;
+  },
 }));
 
 const todo: TodoItem = {
@@ -94,6 +98,21 @@ async function openDetail(initialView: TodoDetailView = {}, onViewChange?: TodoD
 }
 
 describe('TodoDetail routed view', () => {
+  it('opens the selected plan from the header and carries approval into the run dialog', async () => {
+    const onViewChange = vi.fn();
+    const onChanged = vi.fn();
+    render(<StatefulTodoDetail todo={{ ...todo, status: 'review', hasPlan: true }} loading={false} dir="/repo" onChanged={onChanged} onDeleted={() => {}} initialView={{ tab: 'session' }} onViewChange={onViewChange} />, { wrapper: queryTestWrapper() });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Review plan' }));
+    expect(onViewChange).toHaveBeenCalledWith({ tab: 'plan' }, undefined);
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced run' }));
+    expect(advanced.props?.reviewRequired).toBe(true);
+    expect(advanced.props?.onChanged).toBe(onChanged);
+    act(() => advanced.props?.onLaunch?.());
+    expect(onViewChange).toHaveBeenLastCalledWith({ tab: 'session' }, undefined);
+    expect(execution.run).not.toHaveBeenCalled();
+  });
+
   it('reports a detail tab click as a pushed view change', async () => {
     const onViewChange = vi.fn();
     await openDetail({}, onViewChange);

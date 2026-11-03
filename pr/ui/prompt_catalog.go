@@ -28,6 +28,7 @@ type promptCatalogEntry struct {
 	Source          string                         `json:"source"` // builtin | inline | file
 	Path            string                         `json:"path,omitempty"`
 	Raw             string                         `json:"raw,omitempty"`
+	DefaultRaw      string                         `json:"defaultRaw,omitempty"`
 	Version         string                         `json:"version,omitempty"`
 	Body            string                         `json:"body,omitempty"`
 	Variables       []string                       `json:"variables,omitempty"`
@@ -44,13 +45,14 @@ type promptCatalogEntry struct {
 // empty for a layer the dashboard cannot write (a target directory that is not
 // a registered project), which is then shown read-only.
 type promptCatalogLayer struct {
-	Origin   string   `json:"origin"`
-	Path     string   `json:"path"`
-	Scope    string   `json:"scope,omitempty"`
-	Editable bool     `json:"editable"`
-	Source   string   `json:"source"` // none | inline | file
-	FilePath string   `json:"filePath,omitempty"`
-	Fields   []string `json:"fields,omitempty"`
+	Origin      string   `json:"origin"`
+	Path        string   `json:"path"`
+	Scope       string   `json:"scope,omitempty"`
+	Editable    bool     `json:"editable"`
+	Source      string   `json:"source"` // none | inline | file
+	FilePath    string   `json:"filePath,omitempty"`
+	Fields      []string `json:"fields,omitempty"`
+	SaveSources []string `json:"saveSources,omitempty"`
 }
 
 // promptCatalogRuntime is the model the prompt resolves to once compact

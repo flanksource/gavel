@@ -50,6 +50,13 @@ function fetchLaunch(payload: unknown) {
 }
 
 describe('usePlanActions request bodies', () => {
+  it.each([false, true])('preserves the advanced run branch choice through approval: %s', async reuseBranch => {
+    const fetchMock = fetchLaunch({ todo: { ref: 'todo-1', title: 'Branch choice', status: 'in_progress', priority: 'medium' } });
+    const { result } = renderHook(() => usePlanActions('/workspace'), { wrapper: queryTestWrapper() });
+    await act(async () => { await result.current.approve('todo-1', { run: true, options: { step: 'run', reuseBranch, spec: {} } }); });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toEqual({ ref: 'todo-1', run: true, options: { step: 'run', reuseBranch, spec: {} } });
+  });
+
   it('sends only step/spec through approve, stripping the driver/runMode the caller carried', async () => {
     const fetchMock = fetchLaunch({ todo: { ref: 'todo-1', title: 'x', status: 'in_progress', priority: 'medium' } });
     const { result } = renderHook(() => usePlanActions('/workspace'), { wrapper: queryTestWrapper() });
@@ -67,7 +74,7 @@ describe('usePlanActions request bodies', () => {
     });
   });
 
-  it('sends the plan step for revise, built from the last remembered plan options', async () => {
+  it('omits options on revise by default, ignoring the last remembered plan options', async () => {
     localStorage.setItem(
       'gavel.pr-ui.todoRunChoices.v3',
       JSON.stringify({
@@ -86,7 +93,23 @@ describe('usePlanActions request bodies', () => {
     expect(JSON.parse(String(request.body))).toEqual({
       ref: 'todo-1',
       feedback: 'Please rework the migration.',
-      options: { step: 'plan', spec: { mode: 'agent', model: 'claude-opus-4-8', effort: 'medium' } },
+    });
+  });
+
+  it('sends the plan step with the picked runtime on revise, stripping driver/runMode', async () => {
+    const fetchMock = fetchLaunch({ todo: { ref: 'todo-1', title: 'x', status: 'review', priority: 'medium' }, status: 'revising' });
+    const { result } = renderHook(() => usePlanActions('/workspace'), { wrapper: queryTestWrapper() });
+    const options: TodoRunOptions = { driver: 'cli', runMode: 'plan', spec: { mode: 'agent', model: 'gpt-5.5', effort: 'medium' } };
+
+    await act(async () => {
+      await result.current.revise('todo-1', 'Please rework the migration.', options);
+    });
+
+    const request = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toEqual({
+      ref: 'todo-1',
+      feedback: 'Please rework the migration.',
+      options: { step: 'plan', spec: { mode: 'agent', model: 'gpt-5.5', effort: 'medium' } },
     });
   });
 

@@ -56,7 +56,7 @@ jobs:
 
       - name: Install site dependencies
         run: npm ci
-        working-directory: site
+        working-directory: docs
 
       # `gavel test` compiles all Go test binaries in a pre-build phase before
       # the timed per-package run, so a cold build cache no longer eats into the

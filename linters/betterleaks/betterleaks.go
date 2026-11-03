@@ -109,7 +109,10 @@ func (b *Betterleaks) DryRunCommand() (string, []string) {
 }
 
 func (b *Betterleaks) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violation, error) {
-	configs := DiscoverConfigs(b.WorkDir)
+	configs, err := DiscoverConfigs(b.WorkDir)
+	if err != nil {
+		return nil, fmt.Errorf("discover betterleaks config: %w", err)
+	}
 	ignoredPaths, err := gitIgnoredScanPaths(b.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve gitignored scan paths: %w", err)
@@ -212,6 +215,7 @@ func (f *Finding) ToViolation(workDir string) models.Violation {
 		WithRuleFromLinter("betterleaks", f.RuleID).
 		Build()
 	v.Severity = models.SeverityError
+	v.EndLine, v.EndColumn = f.EndLine, f.EndColumn
 	return v
 }
 

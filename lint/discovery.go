@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"fmt"
 	"os"
 	"path"
 	"strings"
@@ -12,6 +13,7 @@ import (
 )
 
 var linterDirectConfigPatterns = map[string][]string{
+	"uir": {".uir.yaml"},
 	"betterleaks": {
 		".betterleaks.toml",
 		"betterleaks.toml",
@@ -83,26 +85,38 @@ func isLinterExplicitlyEnabled(cfg verify.GavelConfig, name string) bool {
 	return ok && linterCfg.Enabled != nil && *linterCfg.Enabled
 }
 
-func shouldSelectLinter(workDir string, cfg verify.GavelConfig, linter linters.Linter, cliExplicit bool) (bool, string) {
+func shouldSelectLinter(workDir string, cfg verify.GavelConfig, linter linters.Linter, cliExplicit bool) (bool, string, error) {
+	if linters.IsInProcess(linter) {
+		if !cliExplicit {
+			return false, "in-process linter runs only when named", nil
+		}
+		return true, "", nil
+	}
 	if cliExplicit {
 		if !hasMatchingFiles(workDir, linter.DefaultIncludes(), cfg.Commit.GitIgnore) {
-			return false, "no matching files"
+			return false, "no matching files", nil
 		}
-		return shouldRunLinter(workDir, cfg, linter.Name(), true, false, false)
+		selected, reason := shouldRunLinter(workDir, cfg, linter.Name(), true, false, false)
+		return selected, reason, nil
 	}
 
 	hasConfig := linterHasDirectConfig(workDir, linter)
 	if linter.Name() == "betterleaks" {
-		hasConfig = len(betterleaks.DiscoverConfigs(workDir)) > 0
+		configs, err := betterleaks.DiscoverConfigs(workDir)
+		if err != nil {
+			return false, "", fmt.Errorf("discover betterleaks config: %w", err)
+		}
+		hasConfig = len(configs) > 0
 	}
 	hasDefaultActivation := hasConfig || linterHasDefaultActivation(workDir, linter)
 	hasDirectTrigger := hasDirectMatchingFiles(workDir, linter.DefaultIncludes()) || hasDefaultActivation
 	if !hasDirectTrigger {
-		return false, "no matching files or config in work dir"
+		return false, "no matching files or config in work dir", nil
 	}
 
 	explicitEnabled := isLinterExplicitlyEnabled(cfg, linter.Name())
-	return shouldRunLinter(workDir, cfg, linter.Name(), false, explicitEnabled, hasDefaultActivation)
+	selected, reason := shouldRunLinter(workDir, cfg, linter.Name(), false, explicitEnabled, hasDefaultActivation)
+	return selected, reason, nil
 }
 
 func linterHasDirectConfig(workDir string, linter linters.Linter) bool {

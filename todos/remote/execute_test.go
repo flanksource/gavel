@@ -76,6 +76,7 @@ func TestExecuteReportsTheRunInOrder(t *testing.T) {
 	require.NotNil(t, sent[0].Spec)
 	assert.Equal(t, dir, sent[0].Spec.Cwd(), "the run works in the sandbox's checkout")
 	assert.Contains(t, sent[0].Spec.Setup.Env, commit.EnvIssueID+"=todo-1", "gavel's hooks ran before the start")
+	assert.NotNil(t, sent[0].Workspace, "the start carries the run's workspace for the recorder")
 
 	require.NoError(t, finished.Err)
 	assert.Equal(t, "done", finished.Result.Response.Text, "the result is the caller's to report")

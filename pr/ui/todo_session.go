@@ -392,9 +392,10 @@ func (s *Server) handleTodoSessionFocus(w http.ResponseWriter, r *http.Request) 
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
-	if agent == "" {
-		agent = "claude"
+	agent, err := sessionTerminalAgent(r.Context(), dir, r.URL.Query().Get("sessionId"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
 	}
 	if err := cmuxprov.FocusSession(r.Context(), cmuxprov.NewClient(""), dir, agent); err != nil {
 		writeTodoError(w, http.StatusBadGateway, err)
@@ -426,9 +427,10 @@ func (s *Server) handleTodoSessionCmux(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
-	if agent == "" {
-		agent = "claude"
+	agent, err := sessionTerminalAgent(r.Context(), dir, r.URL.Query().Get("sessionId"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
 	}
 	workspace, surface, err := resolveCmuxSurface(r.Context(), dir, agent)
 	resp := todoSessionCmuxResponse{Found: err == nil}

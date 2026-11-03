@@ -7,15 +7,15 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
-	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
-	"github.com/flanksource/gavel/todos/types"
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-
 	// Registers gavel's fixture engine as captain's `fixture` verifier, which is
 	// what the run step's definition of done dispatches to.
 	_ "github.com/flanksource/gavel/fixtures/verifier"
+	"github.com/flanksource/gavel/lifecycle"
+	"github.com/flanksource/gavel/todos"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/todos/types"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 // scriptedProvider is the streaming provider a step is dispatched through in
@@ -59,7 +59,7 @@ func scriptedTurn(envelope string, success bool) []captainai.Event {
 var _ = Describe("RunStep through a scripted provider", func() {
 	var (
 		provider *fakeProvider
-		host     *lifecycle.Host
+		host     *lifecycle1.Host
 		run      lifecycle.Step
 		ctx      context.Context
 	)
@@ -93,11 +93,11 @@ var _ = Describe("RunStep through a scripted provider", func() {
 		agent := &scriptedProvider{events: scriptedTurn(`{"success":true,"event":"completed","comment":"Built it."}`, true)}
 		todo := hostTodo()
 
-		outcome, err := host.RunStep(ctx, todo, run, lifecycle.RunOptions{Provider: agent})
+		outcome, err := host.RunStep(ctx, todo, run, lifecycle1.RunOptions{Provider: agent})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(outcome.Status).To(Equal("verified"))
-		Expect(outcome.Result.Run.State).To(Equal(lifecycle.RunSucceeded))
+		Expect(outcome.Result.Run.State).To(Equal(lifecycle1.RunSucceeded))
 		Expect(outcome.Result.Run.StopReason).To(Equal("condition-met"))
 		Expect(outcome.Result.Verify).NotTo(BeNil())
 		Expect(outcome.Result.Verify.Ran).To(BeTrue())
@@ -124,11 +124,11 @@ var _ = Describe("RunStep through a scripted provider", func() {
 		agent := &scriptedProvider{events: scriptedTurn(`{"success":true,"event":"completed","comment":"Built it."}`, false)}
 		todo := hostTodo()
 
-		outcome, err := host.RunStep(ctx, todo, run, lifecycle.RunOptions{Provider: agent})
+		outcome, err := host.RunStep(ctx, todo, run, lifecycle1.RunOptions{Provider: agent})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(outcome.Status).To(Equal("failed"))
-		Expect(outcome.Result.Run.State).To(Equal(lifecycle.RunFailed))
+		Expect(outcome.Result.Run.State).To(Equal(lifecycle1.RunFailed))
 		Expect(outcome.Result.Run.Error).NotTo(BeEmpty())
 		Expect(outcome.Execution.Success).To(BeFalse())
 		Expect(outcome.Execution.ErrorMessage).NotTo(BeEmpty())
@@ -147,11 +147,11 @@ var _ = Describe("RunStep through a scripted provider", func() {
 		todo := hostTodo()
 		verifyStep := stepNamed(host.Def, "verify")
 
-		outcome, err := host.RunStep(ctx, todo, verifyStep, lifecycle.RunOptions{Provider: agent})
+		outcome, err := host.RunStep(ctx, todo, verifyStep, lifecycle1.RunOptions{Provider: agent})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(outcome.Status).To(Equal("verified"))
-		Expect(outcome.Result.Run.State).To(Equal(lifecycle.RunSucceeded))
+		Expect(outcome.Result.Run.State).To(Equal(lifecycle1.RunSucceeded))
 		Expect(outcome.Execution.DoD).NotTo(BeNil())
 		Expect(outcome.Execution.DoD.Passed).To(BeTrue())
 		Expect(agent.requests).To(BeEmpty(), "a verify-only step generates nothing")

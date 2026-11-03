@@ -104,7 +104,19 @@ func scanRefs(ctx context.Context, store *Store, repoID uuid.UUID, root string) 
 	if err != nil {
 		return refsResult{}, err
 	}
-	fingerprint := refsFingerprint(base, worktrees, branches)
+	byName := make(map[string]gavelgit.BranchRef, len(branches))
+	for _, branch := range branches {
+		byName[branch.Name] = branch
+	}
+	primary := worktrees[0]
+	var upstream upstreamRef
+	// An unborn or detached primary has no commit to measure against an upstream.
+	if primary.Head != "" && !primary.Detached {
+		if upstream, err = resolveUpstream(ctx, root, byName[primary.Branch].Upstream); err != nil {
+			return refsResult{}, err
+		}
+	}
+	fingerprint := refsFingerprint(base, upstream, worktrees, branches)
 	unchanged, err := store.MarkRefsUnchanged(ctx, repoID, fingerprint)
 	if err != nil {
 		return refsResult{}, err
@@ -114,19 +126,25 @@ func scanRefs(ctx context.Context, store *Store, repoID uuid.UUID, root string) 
 	}
 
 	update := RefsUpdate{
-		Fingerprint: fingerprint, BaseBranch: base, CurrentBranch: worktrees[0].Branch,
-		BaseCheckedOut: worktrees[0].Branch == base, Branches: branches,
-	}
-	byName := make(map[string]gavelgit.BranchRef, len(branches))
-	for _, branch := range branches {
-		byName[branch.Name] = branch
+		Fingerprint: fingerprint, BaseBranch: base, CurrentBranch: primary.Branch,
+		BaseCheckedOut: primary.Branch == base, Branches: branches,
+		Upstream: upstream.Name, UpstreamSHA: upstream.SHA,
 	}
 	baseRef, ok := byName[base]
 	if !ok {
 		return refsResult{}, fmt.Errorf("base branch %q not found in %s", base, root)
 	}
 	update.BaseSHA = baseRef.Head
-	if err := saveMissingRanges(ctx, store, repoID, root, baseRef.Head, branches, base); err != nil {
+	keys := make([]RangeKey, 0, len(branches)+1)
+	for _, branch := range branches {
+		if branch.Name != base {
+			keys = append(keys, RangeKey{Base: baseRef.Head, Head: branch.Head})
+		}
+	}
+	if upstream.SHA != "" {
+		keys = append(keys, RangeKey{Base: upstream.SHA, Head: primary.Head})
+	}
+	if err := saveMissingRanges(ctx, store, repoID, root, keys); err != nil {
 		return refsResult{}, err
 	}
 	for _, wt := range worktrees {
@@ -148,13 +166,7 @@ func scanRefs(ctx context.Context, store *Store, repoID uuid.UUID, root string) 
 	return refsResult{Changed: true, Worktrees: worktrees}, nil
 }
 
-func saveMissingRanges(ctx context.Context, store *Store, repoID uuid.UUID, root, baseSHA string, branches []gavelgit.BranchRef, base string) error {
-	keys := make([]RangeKey, 0, len(branches))
-	for _, branch := range branches {
-		if branch.Name != base {
-			keys = append(keys, RangeKey{Base: baseSHA, Head: branch.Head})
-		}
-	}
+func saveMissingRanges(ctx context.Context, store *Store, repoID uuid.UUID, root string, keys []RangeKey) error {
 	missing, err := store.MissingRanges(ctx, repoID, keys)
 	if err != nil {
 		return err
@@ -166,14 +178,43 @@ func saveMissingRanges(ctx context.Context, store *Store, repoID uuid.UUID, root
 			return err
 		}
 		ranges = append(ranges, Range{RangeKey: key, RangeCompare: compare})
-		rangesComputed.Inc()
+		rangesComputed.WithLabelValues().Inc()
 	}
 	return store.SaveRanges(ctx, repoID, ranges)
 }
 
-func refsFingerprint(base string, worktrees []gavelgit.Worktree, branches []gavelgit.BranchRef) string {
+// upstreamRef is the primary checkout's upstream: its short name (e.g.
+// origin/main) and the commit it points at. Both are empty when the branch
+// tracks nothing or its upstream ref is gone.
+type upstreamRef struct {
+	Name, SHA string
+}
+
+// resolveUpstream resolves the full upstream ref a branch tracks. Remote refs
+// are outside refs/heads, so the fingerprint carries the resolved commit to
+// notice a fetch that moved only the upstream.
+func resolveUpstream(ctx context.Context, root, ref string) (upstreamRef, error) {
+	if ref == "" {
+		return upstreamRef{}, nil
+	}
+	out, err := runGit(ctx, root, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
+	// --quiet exits 1, and only 1, when the ref names no commit: an upstream
+	// deleted on the remote and pruned locally.
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return upstreamRef{}, nil
+	}
+	if err != nil {
+		return upstreamRef{}, err
+	}
+	name := strings.TrimPrefix(strings.TrimPrefix(ref, "refs/remotes/"), "refs/heads/")
+	return upstreamRef{Name: name, SHA: strings.TrimSpace(string(out))}, nil
+}
+
+func refsFingerprint(base string, upstream upstreamRef, worktrees []gavelgit.Worktree, branches []gavelgit.BranchRef) string {
 	hash := sha256.New()
 	fmt.Fprintf(hash, "base %s\n", base)
+	fmt.Fprintf(hash, "upstream %s %s\n", upstream.Name, upstream.SHA)
 	for _, wt := range worktrees {
 		fmt.Fprintf(hash, "worktree %s %s %s %t %t %t\n", wt.Path, wt.Branch, wt.Head, wt.Primary, wt.Detached, wt.Prunable)
 	}

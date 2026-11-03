@@ -164,12 +164,16 @@ type PromptLayerResult struct {
 }
 
 func PromptLayers(workDir string, todoList []*types.TODO, definition todoprompt.Definition) (PromptLayerResult, error) {
-	data := todoprompt.TemplateData(todoList, todoprompt.Options{
-		WorkDir:    workDir,
-		Prompt:     definition.Name,
-		RawFixture: definition.Backlog,
-		Mode:       definition.Class,
+	data, err := todoprompt.TemplateData(todoList, todoprompt.Options{
+		FrontmatterOnly: true,
+		WorkDir:         workDir,
+		Prompt:          definition.Name,
+		RawFixture:      definition.Backlog,
+		Mode:            definition.Class,
 	})
+	if err != nil {
+		return PromptLayerResult{}, err
+	}
 	data["body"] = ""
 
 	var result PromptLayerResult

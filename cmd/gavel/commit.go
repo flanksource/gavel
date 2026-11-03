@@ -36,22 +36,28 @@ type CommitOptions struct {
 	// provider. It replaces a bare --model string, which could not.
 	aiflags.ModelFlags
 
-	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.grouping.model; falls back to --model"`
-	DryRun       bool   `flag:"dry-run" help:"Print the generated message without committing"`
-	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
-	Push         bool   `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
-	AutoMerge    bool   `flag:"auto-merge" help:"With -p, when a new PR is opened, enable GitHub auto-merge so it merges once required checks pass."`
-	MergeType    string `flag:"merge-type" help:"Merge method for --auto-merge: rebase|squash|merge" default:"rebase"`
-	Fixup        string `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
-	NoAutosquash bool   `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
-	Since        string `flag:"since" help:"Review <since>..HEAD and merge commits sharing a Gavel-Issue-Id trailer into one commit (history only; ignores staged files). Accepts a ref (origin/main), sha, or ~N / HEAD~N. Prompts before rewriting; -y to skip. Refuses to rewrite commits already on a remote."`
-	Precommit    string `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
-	Lint         string `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
-	LintSecrets  string `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
-	Tidy         string `flag:"tidy" help:"Run 'go mod tidy' in every Go module whose go.mod is staged before committing and stage any go.mod/go.sum updates: true|false (default: false, or true with -p; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
-	WorkDir      string `flag:"work-dir" help:"Working directory"`
-	Yes          bool   `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
-	AddMetadata  bool   `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`
+	GroupModel         string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.grouping.model; falls back to --model" category:"Model selection"`
+	DryRun             bool   `flag:"dry-run" help:"Print the generated message without committing"`
+	Force              bool   `flag:"force" help:"Skip pre-commit hooks"`
+	Push               string `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR: true (bare -p) pushes commits ahead of the branch's upstream; branch pushes the whole branch and seeds the PR from every commit ahead of the default branch, so an already-pushed branch can get its PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
+	AutoMerge          bool   `flag:"auto-merge" help:"With -p, when a new PR is opened, enable GitHub auto-merge so it merges once required checks pass."`
+	MergeType          string `flag:"merge-type" help:"Merge method for --auto-merge: rebase|squash|merge" default:"rebase"`
+	Fixup              string `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
+	NoAutosquash       bool   `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
+	Since              string `flag:"since" help:"Review <since>..HEAD and merge commits sharing a Gavel-Issue-Id trailer into one commit (history only; ignores staged files). Accepts a ref (origin/main), sha, or ~N / HEAD~N. Prompts before rewriting; -y to skip. Refuses to rewrite commits already on a remote."`
+	Precommit          string `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
+	Lint               string `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
+	LintSecrets        string `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
+	AIFix              string `flag:"ai-fix" help:"Automatically repair commit lint findings: true|false; overrides commit.lint.aiFix"`
+	AIFixMaxIterations int    `flag:"ai-fix-max-iterations" help:"Maximum commit AI repair iterations; overrides commit.lint.aiFixMaxIterations"`
+	Tidy               string `flag:"tidy" help:"Run 'go mod tidy' in every Go module whose go.mod is staged before committing and stage any go.mod/go.sum updates: true|false (default: false, or true with -p; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
+	WorkDir            string `flag:"work-dir" help:"Working directory"`
+	Yes                bool   `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
+	AddMetadata        bool   `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`
+
+	// push and pushMode are Push parsed by runCommit.
+	push     bool
+	pushMode commitpkg.PushMode
 }
 
 func (o CommitOptions) Help() api.Textable {
@@ -81,6 +87,12 @@ Positional file arguments (gavel commit <files>) commit exactly those paths:
 gavel resets the index and stages only the named files or directories, so
 --stage is ignored. Combine with -A to group just those paths into logical
 commits. Not valid with -i, --fixup, or --since.
+
+Explicitly named ignored paths offer Force-add and continue or Cancel commit
+before the index changes. Approval applies only to those paths; ignore rules
+stay unchanged and normal checks still run. Without an interactive terminal
+or dashboard prompt handler, use git add -f -- <paths>, then
+gavel commit --stage staged. --yes alone does not force-add ignored paths.
 
 The -i / -t flags open an interactive tree picker over every changed file
 (staged, unstaged, and untracked) — no need to git add first. Each row
@@ -120,6 +132,11 @@ opened (or pushed to a matching open PR). When neither staged changes nor
 ahead-of-upstream commits exist, gavel exits non-zero with "nothing to
 commit and no local commits ahead of upstream".
 
+--push=branch publishes the whole branch instead: commits are counted from
+the default branch rather than the branch's upstream, and every commit on the
+branch seeds the PR title/body. Use it to open a PR for a branch that is
+already pushed but has no PR yet.
+
 Add --auto-merge to enable GitHub auto-merge on a PR that -p opens (so it
 merges once required checks pass). --merge-type sets the method
 (rebase|squash|merge; default rebase). Auto-merge only applies to PRs this
@@ -151,6 +168,7 @@ Examples:
   gavel commit -p                       # commit (if anything staged) then push / open PR
   gavel commit -p                       # with nothing staged: skip commit, push HEAD, open PR
   gavel commit -p --auto-merge          # open PR and enable auto-merge (rebase) once checks pass
+  gavel commit --push=branch --auto-merge  # open an auto-merge PR for an already-pushed branch
   gavel commit -p --auto-merge --merge-type=squash  # auto-merge with a squash merge
   gavel commit --fixup=<hash>           # squash all staged files into <hash>, then autosquash
   gavel commit --fixup                  # auto-route each file by last-touching commit; leftovers fall through to a normal commit
@@ -161,6 +179,20 @@ Examples:
 
 func init() {
 	registerCommitCommand(rootCmd, runCommit)
+}
+
+// parsePushFlag maps --push (a bare -p is "true") to whether to push and
+// which commits the push publishes.
+func parsePushFlag(value string) (bool, commitpkg.PushMode, error) {
+	switch value {
+	case "", "false":
+		return false, commitpkg.PushModeCommits, nil
+	case "true":
+		return true, commitpkg.PushModeCommits, nil
+	case string(commitpkg.PushModeBranch):
+		return true, commitpkg.PushModeBranch, nil
+	}
+	return false, commitpkg.PushModeCommits, fmt.Errorf("--push must be true, false or branch, got %q", value)
 }
 
 func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConfig, files []string) commitpkg.Options {
@@ -186,7 +218,8 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		Flags:           opts.ModelFlags,
 		GroupModel:      captainapi.Model{Name: opts.GroupModel, Explicit: opts.groupModelFields.Clone()},
 		Message:         opts.Message,
-		Push:            opts.Push,
+		Push:            opts.push,
+		PushMode:        opts.pushMode,
 		AutoMerge:       opts.AutoMerge,
 		MergeType:       opts.MergeType,
 		Fixup:           opts.Fixup,
@@ -229,21 +262,31 @@ func runCommit(opts CommitOptions) (any, error) {
 		return nil, nil
 	}
 
-	if opts.Push && opts.AutoMerge {
+	if opts.push, opts.pushMode, err = parsePushFlag(opts.Push); err != nil {
+		return nil, err
+	}
+	if opts.push && opts.AutoMerge {
 		if _, err := github.MergeMethodFor(opts.MergeType); err != nil {
 			return nil, err
 		}
 	}
 
-	cfg, err := verify.LoadGavelConfig(workDir)
+	cfg, err := verify.LoadGavelConfig(baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("load commit configuration: %w", err)
+	}
+	repair, err := commitRepairConfig(opts, cfg.Commit.Lint)
+	if err != nil {
+		return nil, err
 	}
 	runOptions := buildCommitOptions(opts, workDir, cfg, files)
 	if err := runOptions.LoadAIConfig(); err != nil {
 		return nil, err
 	}
 	result, err := commitpkg.Run(context.Background(), runOptions)
+	if result != nil && result.Lint != nil {
+		result.Lint.Repair, result.Lint.ConfigDir = repair, baseDir
+	}
 
 	if err != nil {
 		if errors.Is(err, commitpkg.ErrNothingStaged) {
@@ -380,13 +423,19 @@ func handleCommitLintFindings(workDir string, result *commitpkg.Result, assumeYe
 	}
 	fmt.Fprintf(os.Stderr, "\ncommit blocked: %d lint violation(s)\n", result.Lint.Violations)
 
-	if assumeYes {
-		return runCommitAIFix(workDir, result, true)
+	if result.Lint.Repair.AIFix != nil && !*result.Lint.Repair.AIFix && assumeYes {
+		return lintFindingsBlocked
+	}
+	if assumeYes || result.Lint.Repair.AIFix != nil && *result.Lint.Repair.AIFix {
+		return runCommitAIFix(workDir, result)
 	}
 
 	switch promptLintFindingsAction() {
 	case lintActionAIFix:
-		return runCommitAIFix(workDir, result, false)
+		if result.Lint.Repair.AIFix != nil && !*result.Lint.Repair.AIFix {
+			return lintFindingsBlocked
+		}
+		return runCommitAIFix(workDir, result)
 	case lintActionContinueOnce:
 		return lintFindingsContinueOnce
 	case lintActionCancel:

@@ -6,13 +6,31 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/prompts/library"
 )
 
 // resolveAIStepSpec resolves the grader runtime of an acceptance-criteria
 // checklist step.
 func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, schema *checklistResponse) (api.ResolvedSpec, ai.AgentConfig, error) {
+	var source string
+	switch {
+	case fixture.AI != nil && fixture.AI.Spec != nil:
+		source = fixture.AI.Spec.Prompt.Metadata[library.ChecklistTemplateKey]
+	case opts.Spec != nil:
+		source = opts.Spec.Prompt.Metadata[library.ChecklistTemplateKey]
+	case opts.Runtime != nil:
+		for _, layer := range opts.Runtime.Layers {
+			if value := layer.Spec.Prompt.Metadata[library.ChecklistTemplateKey]; value != "" {
+				source = value
+			}
+		}
+	}
+	body, err := buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture), opts.Changed, opts.PreviousResults, source)
+	if err != nil {
+		return api.ResolvedSpec{}, ai.AgentConfig{}, err
+	}
 	return resolveAISpec(fixture, opts, "fixture.checklist", api.Prompt{
-		User:   buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture), opts.Changed, opts.PreviousResults),
+		User:   body,
 		Source: "fixtures.ai-step", Schema: schema,
 	})
 }

@@ -1,7 +1,10 @@
 package snapshots
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -9,6 +12,7 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/traces"
 )
 
 // run start times, distinct seconds so SavePerRun lands them in separate files.
@@ -66,7 +70,7 @@ func TestListRunsClassifiesAndCountsNewestFirst(t *testing.T) {
 	workDir := t.TempDir()
 	seedRuns(t, workDir)
 
-	runs, err := ListRuns(workDir, time.Time{})
+	runs, err := ListRuns(workDir, ListRunsOptions{})
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -107,7 +111,7 @@ func TestListRunsSinceWatermarkSkipsOlderOrEqual(t *testing.T) {
 	workDir := t.TempDir()
 	seedRuns(t, workDir)
 
-	runs, err := ListRuns(workDir, tTest)
+	runs, err := ListRuns(workDir, ListRunsOptions{Since: tTest})
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
@@ -149,7 +153,7 @@ func TestListRunsSkipsOlderRunsWithoutReadingThem(t *testing.T) {
 		t.Fatalf("set run file mtime: %v", err)
 	}
 
-	runs, err := ListRuns(workDir, tTest)
+	runs, err := ListRuns(workDir, ListRunsOptions{Since: tTest})
 	if err != nil {
 		t.Fatalf("ListRuns opened a run at or before the watermark: %v", err)
 	}
@@ -159,13 +163,196 @@ func TestListRunsSkipsOlderRunsWithoutReadingThem(t *testing.T) {
 
 	// Without this the assertion above would also pass if the corrupt file were
 	// simply being ignored rather than skipped by start time.
-	if _, err := ListRuns(workDir, time.Time{}); err == nil {
+	if _, err := ListRuns(workDir, ListRunsOptions{}); err == nil {
 		t.Fatal("a full scan must still fail on the corrupt run file")
 	}
 }
 
+// A failed package or suite carries the failure of the test under it; only the
+// test itself counts.
+func TestListRunsCountsLeafTestsOnly(t *testing.T) {
+	workDir := t.TempDir()
+	writeRun(t, workDir, testui.Snapshot{Tests: []parsers.Test{{
+		Name: "pkg/", Failed: true,
+		Children: []parsers.Test{{Name: "Suite", Failed: true, Children: leafTests()}},
+	}}}, tTest)
+
+	runs, err := ListRuns(workDir, ListRunsOptions{})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if got := runs[0]; got.Total != 3 || got.Failed != 1 || got.Passed != 1 || got.Skipped != 1 {
+		t.Errorf("counts = total %d failed %d passed %d skipped %d, want 3/1/1/1", got.Total, got.Failed, got.Passed, got.Skipped)
+	}
+}
+
+// A listed run's summary is kept in .gavel/runs-index.json, so a run is decoded
+// once: run files are immutable and some hold gigabytes of test output.
+func TestListRunsReadsSummariesFromTheIndex(t *testing.T) {
+	workDir := t.TempDir()
+	seedRuns(t, workDir)
+	first, err := ListRuns(workDir, ListRunsOptions{})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+
+	// Same size and mtime, unreadable content: only the index can answer.
+	path := filepath.Join(workDir, Dir, traces.RunID(tTest)+".json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat run: %v", err)
+	}
+	garbage := make([]byte, info.Size())
+	if err := os.WriteFile(path, garbage, 0o600); err != nil {
+		t.Fatalf("overwrite run: %v", err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatalf("restore mtime: %v", err)
+	}
+
+	second, err := ListRuns(workDir, ListRunsOptions{})
+	if err != nil {
+		t.Fatalf("ListRuns re-decoded an indexed run: %v", err)
+	}
+	if !slices.EqualFunc(first, second, func(a, b RunInfo) bool { return a.RunID == b.RunID && a.Failed == b.Failed && a.Kind == b.Kind }) {
+		t.Errorf("indexed listing = %+v, want %+v", second, first)
+	}
+
+	// A run whose size changed is not the one indexed, so it is read again.
+	if err := os.WriteFile(path, []byte("{ not valid json"), 0o600); err != nil {
+		t.Fatalf("rewrite run: %v", err)
+	}
+	if _, err := ListRuns(workDir, ListRunsOptions{}); err == nil {
+		t.Fatal("a run that changed since it was indexed must be read again")
+	}
+}
+
+// An index written for another indexVersion holds summaries derived another
+// way, so its runs are summarized again.
+func TestListRunsRecomputesAnIndexOfAnotherVersion(t *testing.T) {
+	workDir := t.TempDir()
+	seedRuns(t, workDir)
+	if _, err := ListRuns(workDir, ListRunsOptions{}); err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	indexPath := filepath.Join(workDir, Dir, IndexName)
+	var file indexFile
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatalf("decode index: %v", err)
+	}
+	const staleFailed = 99
+	for name, entry := range file.Runs {
+		entry.Info.Failed = staleFailed
+		file.Runs[name] = entry
+	}
+	file.Version = indexVersion - 1
+	if data, err = json.Marshal(file); err != nil {
+		t.Fatalf("encode index: %v", err)
+	}
+	if err := os.WriteFile(indexPath, data, 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+
+	runs, err := ListRuns(workDir, ListRunsOptions{})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	for _, run := range runs {
+		if run.Failed == staleFailed {
+			t.Errorf("run %s served a summary from an index of another version", run.RunID)
+		}
+	}
+}
+
+// Paging walks newest-first by RunID: Limit caps a page, Before resumes after
+// the oldest RunID of the previous page.
+func TestListRunsPagesNewestFirstByRunID(t *testing.T) {
+	workDir := t.TempDir()
+	seedRuns(t, workDir)
+
+	first, err := ListRuns(workDir, ListRunsOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("ListRuns page 1: %v", err)
+	}
+	second, err := ListRuns(workDir, ListRunsOptions{Limit: 2, Before: traces.RunID(tLint)})
+	if err != nil {
+		t.Fatalf("ListRuns page 2: %v", err)
+	}
+	ids := func(runs []RunInfo) []string {
+		var out []string
+		for _, r := range runs {
+			out = append(out, r.RunID)
+		}
+		return out
+	}
+	if want := []string{traces.RunID(tTestLint), traces.RunID(tLint)}; !slices.Equal(ids(first), want) {
+		t.Errorf("page 1 = %v, want %v", ids(first), want)
+	}
+	if want := []string{traces.RunID(tTest)}; !slices.Equal(ids(second), want) {
+		t.Errorf("page 2 = %v, want %v", ids(second), want)
+	}
+}
+
+func TestLatestRunsCombinedRunCoversTestAndLint(t *testing.T) {
+	workDir := t.TempDir()
+	seedRuns(t, workDir)
+
+	paths, err := LatestRuns(workDir)
+	if err != nil {
+		t.Fatalf("LatestRuns: %v", err)
+	}
+	want := filepath.Join(workDir, Dir, traces.RunID(tTestLint)+".json")
+	if len(paths) != 1 || paths[0] != want {
+		t.Fatalf("LatestRuns = %v, want [%s]", paths, want)
+	}
+}
+
+// The newest test run and the newest lint run are separate files; older runs
+// past both must not be opened, since .gavel holds hundreds of multi-MB runs.
+func TestLatestRunsStopsOnceTestAndLintFound(t *testing.T) {
+	workDir := t.TempDir()
+	tOlder := tTest.Add(-time.Hour)
+	corrupt, err := SavePerRun(workDir, &testui.Snapshot{}, tOlder, "")
+	if err != nil {
+		t.Fatalf("SavePerRun: %v", err)
+	}
+	if err := os.WriteFile(corrupt, []byte("{ not valid json"), 0o600); err != nil {
+		t.Fatalf("corrupt run file: %v", err)
+	}
+	writeRun(t, workDir, testui.Snapshot{Tests: leafTests()}, tTest)
+	writeRun(t, workDir, testui.Snapshot{Status: testui.SnapshotStatus{LintRun: true}, Lint: lintResults(1)}, tLint)
+	// An empty run (aborted before any test or linter ran) is neither.
+	writeRun(t, workDir, testui.Snapshot{}, tTestLint)
+
+	paths, err := LatestRuns(workDir)
+	if err != nil {
+		t.Fatalf("LatestRuns opened a run older than the latest test and lint runs: %v", err)
+	}
+	want := []string{
+		filepath.Join(workDir, Dir, traces.RunID(tLint)+".json"),
+		filepath.Join(workDir, Dir, traces.RunID(tTest)+".json"),
+	}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("LatestRuns = %v, want %v", paths, want)
+	}
+}
+
+func TestLatestRunsMissingGavelDirIsEmpty(t *testing.T) {
+	paths, err := LatestRuns(t.TempDir())
+	if err != nil {
+		t.Fatalf("LatestRuns on empty workdir: %v", err)
+	}
+	if paths != nil {
+		t.Errorf("want nil paths for missing .gavel, got %v", paths)
+	}
+}
+
 func TestListRunsMissingGavelDirIsEmpty(t *testing.T) {
-	runs, err := ListRuns(t.TempDir(), time.Time{})
+	runs, err := ListRuns(t.TempDir(), ListRunsOptions{})
 	if err != nil {
 		t.Fatalf("ListRuns on empty workdir: %v", err)
 	}

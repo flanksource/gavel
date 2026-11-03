@@ -13,15 +13,17 @@ import (
 
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/testrunner"
+	"github.com/flanksource/gavel/workspace"
 )
 
 var _ = Describe("a gavel test run's trace store", func() {
 	It("is copied to the configured storage when the run closes it", func() {
 		home, bucket, workDir := GinkgoT().TempDir(), GinkgoT().TempDir(), GinkgoT().TempDir()
+		invocation := GinkgoT().TempDir()
 		GinkgoT().Setenv("HOME", home)
 		Expect(os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("storage:\n  path: "+bucket+"\n"), 0o644)).To(Succeed())
 
-		trace, err := startRunTrace(testrunner.RunOptions{WorkDir: workDir, Fixtures: true}, time.Now())
+		trace, err := startRunTrace(testrunner.RunOptions{WorkDir: invocation, Dirs: workspace.Dirs{Invocation: invocation, StateRoot: workDir}, Fixtures: true}, time.Now())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(trace.close(workDir)).To(Succeed())
 
@@ -37,7 +39,7 @@ var _ = Describe("a gavel test run's trace store", func() {
 		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		workDir := GinkgoT().TempDir()
 
-		trace, err := startRunTrace(testrunner.RunOptions{WorkDir: workDir, Fixtures: true}, time.Now())
+		trace, err := startRunTrace(testrunner.RunOptions{WorkDir: workDir, Dirs: workspace.Dirs{Invocation: workDir, StateRoot: workDir}, Fixtures: true}, time.Now())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(trace.archive).To(BeNil())
 		Expect(trace.close(workDir)).To(Succeed())

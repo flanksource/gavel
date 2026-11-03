@@ -24,7 +24,7 @@ type historyKey struct {
 // vitest. Returns the number of recorded runs; a missing .gavel history is
 // not an error because the outline is primarily static.
 func joinHistory(report *Report, opts Options) (int, error) {
-	hist, err := history.Load(history.Options{WorkDir: opts.WorkDir, Paths: opts.Paths})
+	hist, err := history.Load(history.Options{WorkDir: opts.WorkDir, StateRoot: opts.StateRoot, Paths: opts.Paths})
 	if err != nil {
 		if errors.Is(err, history.ErrNoHistory) {
 			return 0, nil

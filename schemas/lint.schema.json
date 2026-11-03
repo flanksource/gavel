@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gavel:project-action:lint:v2",
+  "title": "Lint options",
+  "description": "Run non-mutating lint checks. Unset options inherit project configuration and command defaults.",
+  "type": "object",
+  "additionalProperties": false,
+  "x-columns": "auto",
+  "x-column-min-width": "18rem",
+  "x-order": ["files", "linters", "changed", "since", "changed-files", "ignore", "exclude", "tags", "generated", "baseline", "failed", "pr", "schema", "timeout", "no-lint-cache", "summary", "summary-limit", "dry-run"],
+  "x-on-load": [{"when": {"properties": {"summary": {"const": true}}}, "show": ["summary-limit"]}, {"when": {"required": ["summary-limit"]}, "show": ["summary-limit"]}],
+  "properties": {
+    "files": {"type": "array", "title": "Files and directories", "description": "Optional project-relative paths. Leave empty to discover the project scope.", "items": {"type": "string", "minLength": 1}, "x-hidden": false, "x-col-span": "full", "x-clicky-order": 10},
+    "linters": {"type": "array", "title": "Linters", "description": "An empty selection runs all detected linters.", "items": {"type": "string", "enum": ["golangci-lint", "ruff", "eslint", "oxlint", "react-doctor", "pyright", "tsc", "markdownlint", "vale", "jscpd", "betterleaks", "uir", "json"]}, "x-array-display": "filter-pills", "x-hidden": false, "x-col-span": "full", "x-clicky-order": 20},
+    "changed": {"type": "boolean", "default": false, "title": "Only local changes", "description": "Select staged, unstaged, and untracked changes, or the runner changeset in CI.", "x-clicky-order": 30},
+    "since": {"type": "string", "title": "Changes since ref", "description": "Compare against a ref's merge-base plus local changes. HEAD selects local changes; staged selects the index.", "x-clicky-order": 40},
+    "changed-files": {"type": "array", "title": "Explicit changed files", "items": {"type": "string"}, "description": "Union these project-relative paths with the selected change scope.", "x-clicky-order": 50, "x-help-display": "hover"},
+    "ignore": {"type": "array", "title": "Ignore file globs", "items": {"type": "string"}, "description": "Exclude matching paths from this invocation.", "x-clicky-order": 60},
+    "exclude": {"type": "array", "title": "Exclude rules", "items": {"type": "string"}, "description": "Rule IDs or patterns, optionally prefixed with a linter name. Does not save suppression configuration.", "x-clicky-order": 70},
+    "tags": {"type": "array", "title": "Go build tags", "items": {"type": "string"}, "x-clicky-order": 80, "x-help-display": "hover"},
+    "generated": {"type": "boolean", "default": true, "title": "Include generated files", "description": "Include generated source files. Leave untouched to inherit configured behavior.", "x-clicky-order": 90},
+    "baseline": {"type": "string", "title": "Baseline results", "description": "Previous results JSON used to report only new violations.", "x-clicky-order": 100},
+    "failed": {"type": "string", "title": "Previous failing run", "description": "Previous results JSON used to rerun failing linters and files.", "x-clicky-order": 110},
+    "pr": {"type": "string", "title": "Failed PR checks", "description": "PR number, repository reference, or URL whose Gavel artifacts select failing linters and files.", "x-clicky-order": 120, "x-help-display": "hover"},
+    "schema": {"type": "string", "title": "JSON Schema override", "description": "Schema path or HTTP(S) URL for the JSON linter. Leave unset to use document declarations.", "x-clicky-order": 130, "x-help-display": "hover"},
+    "timeout": {"type": "string", "format": "duration", "title": "Per-linter timeout", "description": "Duration such as 5m. Leave unset to inherit runtime.timeout, otherwise five minutes.", "x-clicky-order": 140},
+    "no-lint-cache": {"type": "boolean", "default": false, "title": "Bypass lint cache", "x-clicky-order": 150},
+    "summary": {"type": "boolean", "default": false, "title": "Summarize repeated findings", "description": "Group findings by linter and rule. Disabling clears the example limit override.", "x-clicky-order": 160, "x-on-change": [{"when": {"const": false}, "reset": ["summary-limit"]}]},
+    "summary-limit": {"type": "integer", "minimum": 1, "multipleOf": 1, "title": "Examples per rule", "description": "Leave unset for the command default of five examples.", "x-hidden": true, "x-input-suffix": "locations", "x-clicky-order": 170},
+    "dry-run": {"type": "boolean", "default": false, "title": "Preview linter commands", "description": "Show the commands without running linters.", "x-clicky-order": 180}
+  }
+}
