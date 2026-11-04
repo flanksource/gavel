@@ -33,7 +33,6 @@ import (
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/serve"
 	"github.com/flanksource/gavel/tenant"
-	"github.com/flanksource/gavel/todos/remote"
 	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -175,9 +174,6 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime())
 		}
 	}
-	// An agent run's sandbox job sends its messages to the run API, which the relay hands to the
-	// run waiting for them.
-	relay := &remote.Relay{}
 
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
 		cfg, err := ui.LoadOrgSearchConfig(ctx, db, scope.OrgID)
@@ -196,7 +192,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		srv.SetFixtureSchemaProvider(func() (any, error) { return fixturesSchemaDocument() })
 		if dispatcher != nil {
 			srv.SetAgentRuns(ui.AgentRuns{
-				Dispatcher: dispatcher, Relay: relay, Substrate: substrateBackend, Sources: sources,
+				Dispatcher: dispatcher, Substrate: substrateBackend, Sources: sources,
 				Transcripts: ui.RunTranscripts{DB: db, DataDir: sources.DataDir},
 			})
 		}
@@ -232,7 +228,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		Cache: cache,
 	}
 	// Sandbox jobs authenticate with their run token.
-	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources, Relay: relay}
+	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
 	if app != nil {
 		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
 			return ui.OrganizationPRs(store.TokenSource(org), cache.ForOrg(org))(ctx, url)

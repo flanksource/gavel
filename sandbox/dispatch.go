@@ -34,8 +34,6 @@ type RunSpec struct {
 	SHA    string     `json:"sha,omitempty"`
 	TodoID *uuid.UUID `json:"todoId,omitempty"`
 	Step   string     `json:"step,omitempty"`
-	// Agent is an agent run's job: the step's prompt run, as todos/remote encodes it.
-	Agent json.RawMessage `json:"agent,omitempty"`
 	// PR is the URL of the PR an agent run works on, the one PR serve acts on for it.
 	PR string `json:"pr,omitempty"`
 }

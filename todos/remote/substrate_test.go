@@ -29,6 +29,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// exitingExecutor runs nothing: each job exits with exitCode, and a cancelled job is recorded.
+type exitingExecutor struct {
+	exitCode  int
+	submitted []sandbox.Job
+	cancelled int
+}
+
+func (e *exitingExecutor) Name() string { return "exiting" }
+func (e *exitingExecutor) Submit(_ context.Context, job sandbox.Job) (sandbox.Handle, error) {
+	e.submitted = append(e.submitted, job)
+	return exitingHandle{executor: e}, nil
+}
+
+type exitingHandle struct{ executor *exitingExecutor }
+
+func (h exitingHandle) Logs(context.Context) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (h exitingHandle) Wait(context.Context) (sandbox.Result, error) {
+	return sandbox.Result{ExitCode: h.executor.exitCode}, nil
+}
+func (h exitingHandle) Cancel(context.Context) error {
+	h.executor.cancelled++
+	return nil
+}
+func (h exitingHandle) Ref() string { return "exiting" }
+
 // environment stands in for captain's substrate sandbox: it keeps the selection and input it was
 // handed, writes the environment's output, sends a transcript, and commits on the branch the
 // selection names in the run's repository, as the sandbox brings a run's commits back.

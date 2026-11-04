@@ -1,7 +1,8 @@
 # Sandboxed runs on a container host
 
-Hosted `gavel serve` runs tests, lint and push checks in sandbox jobs. On a single host, those jobs
-are docker (or rootful podman) containers. Each job runs:
+Hosted `gavel serve` runs tests, lint and push checks in sandbox jobs, and agent runs on
+agent-substrate (see [agent-substrate](#agent-substrate)). On a single host, those jobs are docker
+(or rootful podman) containers. Each job runs:
 
 - read-only, as uid 1000, with every capability dropped and `no-new-privileges`;
 - with a pids limit, its CPU and memory limits, and tmpfs for `/tmp`, `/workspace` and
@@ -93,6 +94,18 @@ NetworkPolicy with the same egress rules.
 created from the runner image, whose one process is the job. The environment is deleted once the
 job exits or is cancelled.
 
+- **Agent runs.** A hosted todo's steps need `--sandbox substrate`; under docker, podman or
+  kubernetes they're refused. Each runs whole in its own environment, `gavel-run-<run id>`,
+  through captain's substrate sandbox: serve hands captain the step, the environment checks the
+  todo's commit (or its PR's head) out of serve's copy of the repository, and runs
+  `gavel runner run-task`, which rebuilds the step's hooks there and runs it. Its events, tool
+  calls and approvals come back to serve over the environment's stdout and stdin; its log is the
+  run's log, its transcripts are ingested as it works, and its commits come back on its own
+  branch, `gavel/<todo>-<run>`, which goes to GitHub for a GitHub repository. A step on a linked
+  PR pushes to it through serve's run API with the run's token.
+- **Cleanup.** Every ten minutes serve deletes `gavel-run-` environments older than a run can
+  live (its timeout plus 15 minutes), left behind when serve stopped mid-run. Substrate's access
+  policy must let serve's identity list the atespace's actors for this.
 - **Image.** Substrate runs images pinned by digest, so `--sandbox-image` must be
   `repo@sha256:<digest>`. Environments derive from `--substrate-template` (env's
   `default-template` when empty), which sets their CPU, memory and volumes.

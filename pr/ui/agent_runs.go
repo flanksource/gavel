@@ -23,8 +23,6 @@ import (
 // AgentRuns runs hosted todos' steps on substrate, and their test and lint runs in sandbox jobs.
 type AgentRuns struct {
 	Dispatcher *sandbox.Dispatcher
-	// Relay hands each job's messages to the run waiting for them; the run API delivers them.
-	Relay *remote.Relay
 	// Substrate is the substrate backend agent runs execute on through captain's substrate
 	// sandbox, as its options spell it; nil refuses agent runs.
 	Substrate map[string]any

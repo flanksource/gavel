@@ -6,7 +6,6 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -277,9 +276,8 @@ func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
 	dispatcher, _, _, org := newDispatcher(t, executor)
 	dispatcher.SecretEnv = map[string]string{"ANTHROPIC_API_KEY": "model-key", "GAVEL_RUN_TOKEN": "forged"}
 	id, todo := uuid.New(), uuid.New()
-	job := json.RawMessage(`{"root":"/srv/repo"}`)
 
-	run, err := dispatcher.StartRun(context.Background(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run", Agent: job}, nil)
+	run, err := dispatcher.StartRun(context.Background(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, id, run.ID)
 	require.Len(t, executor.submitted, 1)
@@ -288,7 +286,6 @@ func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
 
 	record, err := LoadRun(context.Background(), dispatcher.DB, id)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(job), string(record.Spec.Agent))
 	assert.Equal(t, "run", record.Spec.Step)
 
 	require.NoError(t, run.Cancel(context.Background()))
