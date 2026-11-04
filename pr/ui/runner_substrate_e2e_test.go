@@ -41,7 +41,7 @@ func substrateDispatcher(t *testing.T, cluster substratetest.Cluster, api *RunsA
 	require.NoError(t, err)
 	logs := blob.Local(t.TempDir())
 	return &sandbox.Dispatcher{
-		DB: api.DB, Image: cluster.Image, Server: cluster.ServeURL, TokenKey: api.TokenKey,
+		DB: api.DB, Server: cluster.ServeURL, TokenKey: api.TokenKey,
 		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: 10 * time.Minute},
 		Executor: executor,
 	}

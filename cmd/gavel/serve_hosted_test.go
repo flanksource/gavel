@@ -337,7 +337,7 @@ func TestHostedDashboardServesTheCredentialFetchWithoutClerk(t *testing.T) {
 		return resp.StatusCode, string(body)
 	}
 	substrate := newHostedFixture(t, func(o *DashboardOptions) {
-		o.Sandbox, o.SandboxImage = "substrate", "runner@sha256:"+strings.Repeat("a", 64)
+		o.Sandbox, o.SubstrateTemplate = "substrate", "gavel-runner"
 		o.SubstrateEnvAPI, o.SubstrateControl = "ate-env-api.example:443", "substrate-api.example:443"
 		o.SubstrateGavelName, o.credentialProviderToken = "beta", "provider-token"
 	})

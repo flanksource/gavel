@@ -60,13 +60,12 @@ githubApp:
 sandbox:
   # Run push checks and agent runs as agent-substrate environments.
   enabled: false
-  # Runner image pinned by digest, as repo@sha256:<digest> (see sandbox/runner.Dockerfile).
-  image: ""
   substrate:
     envAPI: ate-env-api.ate-env.svc.cluster.local:7777
     control: api.ate-system.svc.cluster.local:443
     atespace: ate-env
-    # ActorTemplate environments derive from; empty is env's default-template.
+    # Image template environments are created from, which sets the runner image they run (see
+    # sandbox/runner.Dockerfile): register it with `ate-env manifest template --rootfs-image`.
     template: ""
     # Hosts environments may reach besides gavel serve, the Go, npm and Python registries and GitHub.
     egress: []

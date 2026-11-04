@@ -1,5 +1,6 @@
 // Package substratetest reads the live Substrate cluster the substrate e2e tests run against: its
-// API addresses, gavel's token, the runner image, and where jobs reach the test's stand-in for serve.
+// API addresses, gavel's token, the runner's image template, and where jobs reach the test's
+// stand-in for serve.
 package substratetest
 
 import (
@@ -15,9 +16,9 @@ type Cluster struct {
 	EnvAPI    string
 	Control   string
 	TokenFile string
-	Template  string
-	// Image is the runner image, pinned by digest, in a registry the cluster pulls from.
-	Image string
+	// Template is the runner's image template, registered with ate-env manifest template
+	// --rootfs-image.
+	Template string
 	// Listen is the host address a test serves on; ServeURL is how jobs in the cluster reach it.
 	Listen   string
 	ServeURL string
@@ -49,7 +50,6 @@ func FromEnv(t testing.TB) Cluster {
 		Control:            setting("GAVEL_SUBSTRATE_CONTROL", "localhost:8443"),
 		TokenFile:          setting("GAVEL_SUBSTRATE_TOKEN_FILE", ""),
 		Template:           setting("GAVEL_SUBSTRATE_TEMPLATE", "gavel-runner"),
-		Image:              setting("GAVEL_SUBSTRATE_IMAGE", ""),
 		Listen:             setting("GAVEL_SUBSTRATE_SERVE_LISTEN", "172.18.0.1:18080"),
 		ServeURL:           setting("GAVEL_SUBSTRATE_SERVE_URL", "http://gavel-host.default.svc.cluster.local:18080"),
 		Credential:         setting("GAVEL_SUBSTRATE_CREDENTIAL", "gavel-e2e-injected-credential"),

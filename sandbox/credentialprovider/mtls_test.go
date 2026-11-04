@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flanksource/gavel/sandbox/internal/substrate/credproviderpb"
+	credproviderpb "github.com/flanksource/gavel/sandbox/internal/substrate/credprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"

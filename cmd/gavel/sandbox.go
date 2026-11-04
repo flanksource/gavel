@@ -134,7 +134,7 @@ func substrateAgentBackend(opts DashboardOptions) (map[string]any, error) {
 	for key, value := range map[string]string{
 		"envAPI": opts.SubstrateEnvAPI, "control": opts.SubstrateControl, "tokenFile": opts.SubstrateTokenFile,
 		"caFile": opts.SubstrateCAFile, "clientCert": opts.SubstrateClientCert, "clientKey": opts.SubstrateClientKey,
-		"atespace": opts.SubstrateAtespace, "template": opts.SubstrateTemplate, "image": opts.SandboxImage,
+		"atespace": opts.SubstrateAtespace, "template": opts.SubstrateTemplate,
 		"trustBundle": opts.SubstrateTrustBundle,
 	} {
 		if value != "" {

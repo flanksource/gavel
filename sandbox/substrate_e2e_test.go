@@ -43,7 +43,6 @@ func TestSubstrateExecutorAgainstACluster(t *testing.T) {
 	defer cancel()
 	handle, err := executor.Submit(ctx, Job{
 		RunID: uuid.New(),
-		Image: cluster.Image,
 		Command: []string{"sh", "-c", `echo hi
 echo "token=$GAVEL_RUN_TOKEN"
 echo "key=$E2E_MODEL_KEY"

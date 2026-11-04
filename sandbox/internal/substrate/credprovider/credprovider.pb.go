@@ -16,9 +16,9 @@
 // versions:
 // 	protoc-gen-go v1.36.11-devel
 // 	protoc        v4.25.3
-// source: credprovider.proto
+// source: api/credprovider/v1/credprovider.proto
 
-package credproviderpb
+package credprovider
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -51,7 +51,7 @@ type FetchSecretRequest struct {
 
 func (x *FetchSecretRequest) Reset() {
 	*x = FetchSecretRequest{}
-	mi := &file_credprovider_proto_msgTypes[0]
+	mi := &file_api_credprovider_v1_credprovider_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -63,7 +63,7 @@ func (x *FetchSecretRequest) String() string {
 func (*FetchSecretRequest) ProtoMessage() {}
 
 func (x *FetchSecretRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_credprovider_proto_msgTypes[0]
+	mi := &file_api_credprovider_v1_credprovider_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -76,7 +76,7 @@ func (x *FetchSecretRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchSecretRequest.ProtoReflect.Descriptor instead.
 func (*FetchSecretRequest) Descriptor() ([]byte, []int) {
-	return file_credprovider_proto_rawDescGZIP(), []int{0}
+	return file_api_credprovider_v1_credprovider_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *FetchSecretRequest) GetUri() string {
@@ -104,7 +104,7 @@ type FetchSecretResponse struct {
 
 func (x *FetchSecretResponse) Reset() {
 	*x = FetchSecretResponse{}
-	mi := &file_credprovider_proto_msgTypes[1]
+	mi := &file_api_credprovider_v1_credprovider_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -116,7 +116,7 @@ func (x *FetchSecretResponse) String() string {
 func (*FetchSecretResponse) ProtoMessage() {}
 
 func (x *FetchSecretResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_credprovider_proto_msgTypes[1]
+	mi := &file_api_credprovider_v1_credprovider_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -129,7 +129,7 @@ func (x *FetchSecretResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchSecretResponse.ProtoReflect.Descriptor instead.
 func (*FetchSecretResponse) Descriptor() ([]byte, []int) {
-	return file_credprovider_proto_rawDescGZIP(), []int{1}
+	return file_api_credprovider_v1_credprovider_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *FetchSecretResponse) GetOpaqueBytes() []byte {
@@ -139,39 +139,39 @@ func (x *FetchSecretResponse) GetOpaqueBytes() []byte {
 	return nil
 }
 
-var File_credprovider_proto protoreflect.FileDescriptor
+var File_api_credprovider_v1_credprovider_proto protoreflect.FileDescriptor
 
-const file_credprovider_proto_rawDesc = "" +
+const file_api_credprovider_v1_credprovider_proto_rawDesc = "" +
 	"\n" +
-	"\x12credprovider.proto\x12\fcredprovider\"N\n" +
+	"&api/credprovider/v1/credprovider.proto\x12\x19substrate.credprovider.v1\"N\n" +
 	"\x12FetchSecretRequest\x12\x10\n" +
 	"\x03uri\x18\x01 \x01(\tR\x03uri\x12&\n" +
 	"\x0factor_spiffe_id\x18\x02 \x01(\tR\ractorSpiffeId\"=\n" +
 	"\x13FetchSecretResponse\x12&\n" +
-	"\fopaque_bytes\x18\x01 \x01(\fB\x03\x80\x01\x01R\vopaqueBytes2j\n" +
-	"\x12CredentialProvider\x12T\n" +
-	"\vFetchSecret\x12 .credprovider.FetchSecretRequest\x1a!.credprovider.FetchSecretResponse\"\x00B/Z-go.ate.dev/substrate/pkg/proto/credproviderpbb\x06proto3"
+	"\fopaque_bytes\x18\x01 \x01(\fB\x03\x80\x01\x01R\vopaqueBytes2\x84\x01\n" +
+	"\x12CredentialProvider\x12n\n" +
+	"\vFetchSecret\x12-.substrate.credprovider.v1.FetchSecretRequest\x1a..substrate.credprovider.v1.FetchSecretResponse\"\x00B7Z5go.ate.dev/substrate/api/credprovider/v1;credproviderb\x06proto3"
 
 var (
-	file_credprovider_proto_rawDescOnce sync.Once
-	file_credprovider_proto_rawDescData []byte
+	file_api_credprovider_v1_credprovider_proto_rawDescOnce sync.Once
+	file_api_credprovider_v1_credprovider_proto_rawDescData []byte
 )
 
-func file_credprovider_proto_rawDescGZIP() []byte {
-	file_credprovider_proto_rawDescOnce.Do(func() {
-		file_credprovider_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_credprovider_proto_rawDesc), len(file_credprovider_proto_rawDesc)))
+func file_api_credprovider_v1_credprovider_proto_rawDescGZIP() []byte {
+	file_api_credprovider_v1_credprovider_proto_rawDescOnce.Do(func() {
+		file_api_credprovider_v1_credprovider_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_credprovider_v1_credprovider_proto_rawDesc), len(file_api_credprovider_v1_credprovider_proto_rawDesc)))
 	})
-	return file_credprovider_proto_rawDescData
+	return file_api_credprovider_v1_credprovider_proto_rawDescData
 }
 
-var file_credprovider_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_credprovider_proto_goTypes = []any{
-	(*FetchSecretRequest)(nil),  // 0: credprovider.FetchSecretRequest
-	(*FetchSecretResponse)(nil), // 1: credprovider.FetchSecretResponse
+var file_api_credprovider_v1_credprovider_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_api_credprovider_v1_credprovider_proto_goTypes = []any{
+	(*FetchSecretRequest)(nil),  // 0: substrate.credprovider.v1.FetchSecretRequest
+	(*FetchSecretResponse)(nil), // 1: substrate.credprovider.v1.FetchSecretResponse
 }
-var file_credprovider_proto_depIdxs = []int32{
-	0, // 0: credprovider.CredentialProvider.FetchSecret:input_type -> credprovider.FetchSecretRequest
-	1, // 1: credprovider.CredentialProvider.FetchSecret:output_type -> credprovider.FetchSecretResponse
+var file_api_credprovider_v1_credprovider_proto_depIdxs = []int32{
+	0, // 0: substrate.credprovider.v1.CredentialProvider.FetchSecret:input_type -> substrate.credprovider.v1.FetchSecretRequest
+	1, // 1: substrate.credprovider.v1.CredentialProvider.FetchSecret:output_type -> substrate.credprovider.v1.FetchSecretResponse
 	1, // [1:2] is the sub-list for method output_type
 	0, // [0:1] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -179,26 +179,26 @@ var file_credprovider_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_credprovider_proto_init() }
-func file_credprovider_proto_init() {
-	if File_credprovider_proto != nil {
+func init() { file_api_credprovider_v1_credprovider_proto_init() }
+func file_api_credprovider_v1_credprovider_proto_init() {
+	if File_api_credprovider_v1_credprovider_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_credprovider_proto_rawDesc), len(file_credprovider_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_credprovider_v1_credprovider_proto_rawDesc), len(file_api_credprovider_v1_credprovider_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_credprovider_proto_goTypes,
-		DependencyIndexes: file_credprovider_proto_depIdxs,
-		MessageInfos:      file_credprovider_proto_msgTypes,
+		GoTypes:           file_api_credprovider_v1_credprovider_proto_goTypes,
+		DependencyIndexes: file_api_credprovider_v1_credprovider_proto_depIdxs,
+		MessageInfos:      file_api_credprovider_v1_credprovider_proto_msgTypes,
 	}.Build()
-	File_credprovider_proto = out.File
-	file_credprovider_proto_goTypes = nil
-	file_credprovider_proto_depIdxs = nil
+	File_api_credprovider_v1_credprovider_proto = out.File
+	file_api_credprovider_v1_credprovider_proto_goTypes = nil
+	file_api_credprovider_v1_credprovider_proto_depIdxs = nil
 }

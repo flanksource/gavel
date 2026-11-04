@@ -14,9 +14,9 @@
 
 syntax = "proto3";
 
-package credprovider;
+package substrate.credprovider.v1;
 
-option go_package = "go.ate.dev/substrate/pkg/proto/credproviderpb";
+option go_package = "go.ate.dev/substrate/api/credprovider/v1;credprovider";
 
 // CredentialProvider is the plugin API a secret backend implements so Substrate
 // infrastructure (e.g. the egress gateway's credential injector) can fetch an

@@ -24,7 +24,7 @@ func TestHostedTodoRunsOnSubstrate(t *testing.T) {
 	useModelKeyKeeper(t)
 	h := serveHostedRuns(t, map[string]any{
 		"envAPI": cluster.EnvAPI, "control": cluster.Control, "tokenFile": cluster.TokenFile,
-		"template": cluster.Template, "image": cluster.Image, "trustBundle": substratetest.TrustBundle,
+		"template": cluster.Template, "trustBundle": substratetest.TrustBundle,
 		"egress": sandbox.SubstrateAgentEgress(nil),
 	}, func(d *sandbox.Dispatcher) {
 		d.Keys = modelkeys.Store{DB: d.DB}

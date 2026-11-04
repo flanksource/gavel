@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/sandbox/internal/substrate/credproviderpb"
+	credproviderpb "github.com/flanksource/gavel/sandbox/internal/substrate/credprovider"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
