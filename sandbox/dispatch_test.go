@@ -296,3 +296,47 @@ func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
 	_, err = run.Wait(context.Background())
 	require.NoError(t, err)
 }
+
+func TestDispatcherRecordsARunThatExecutesElsewhere(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, _, logs, org := newDispatcher(t, executor)
+	withModelKeys(t, dispatcher)
+	require.NoError(t, dispatcher.Keys.Set(t.Context(), org, nil, "anthropic-api-key", "sk-ant-api03-dispatch-test"))
+	id, todo := uuid.New(), uuid.New()
+
+	run, err := dispatcher.RecordRun(t.Context(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run"})
+	require.NoError(t, err)
+	assert.Empty(t, executor.submitted, "the run executes elsewhere than a job of the dispatcher's")
+	tokenRun, tokenOrg, err := VerifyRunToken(dispatcher.TokenKey, run.Token, time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{id, org}, []uuid.UUID{tokenRun, tokenOrg}, "the token is the run's")
+	assert.Equal(t, []substrate.Credential{{
+		Host: "api.anthropic.com", Header: "x-api-key", Env: "ANTHROPIC_API_KEY",
+		URI: "ate-secret://gavel/beta/" + id.String() + "/anthropic",
+	}}, run.Credentials)
+	record, err := LoadRun(t.Context(), dispatcher.DB, id)
+	require.NoError(t, err)
+	assert.Equal(t, "running", record.Status)
+
+	_, err = io.WriteString(run.Log, "the environment's output\n")
+	require.NoError(t, err)
+	run.Finish(false)
+
+	record, err = LoadRun(t.Context(), dispatcher.DB, id)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", record.Status)
+	stored, err := logs.Read(t.Context(), "orgs/"+org.String()+"/runs/"+id.String()+"/log.txt")
+	require.NoError(t, err)
+	defer stored.Close()
+	data, err := io.ReadAll(stored)
+	require.NoError(t, err)
+	assert.Equal(t, "the environment's output\n", string(data))
+}
+
+func TestDispatcherRecordsNoAgentRunWithoutAModelKey(t *testing.T) {
+	dispatcher, _, _, org := newDispatcher(t, &memoryExecutor{})
+	withModelKeys(t, dispatcher)
+
+	_, err := dispatcher.RecordRun(t.Context(), uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
+	require.ErrorIs(t, err, ErrNoModelKey)
+}
