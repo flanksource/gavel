@@ -725,7 +725,12 @@ func (s *Server) Handler() http.Handler {
 	// gavel's own prompts (prompts/library) resolve by bare name for every
 	// Captain prompt operation, alongside Captain's configured sources.
 	prompts := captaincli.PromptSources{FS: []captaincli.PromptFS{{Label: promptlibrary.Label, FS: promptlibrary.FS}}}
-	var served http.Handler = mux
+	var served http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/comments") {
+			r = r.WithContext(withEntityServer(r.Context(), s))
+		}
+		mux.ServeHTTP(w, r)
+	})
 	if s.hosted {
 		// Inside the hub, so a sub can't reach a route hosted mode turns off.
 		served = s.hostedRoutes(mux)

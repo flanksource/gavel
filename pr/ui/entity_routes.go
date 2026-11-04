@@ -11,6 +11,8 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/rpc"
+	"github.com/flanksource/gavel/comments"
+	commentapi "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +22,9 @@ import (
 // assistant's tools are all derived from this one tree, so an operation reaches
 // all three or none.
 func entityCommandRoot() (*cobra.Command, error) {
+	if err := RegisterComments(); err != nil {
+		return nil, err
+	}
 	if err := registerTodoEntity(); err != nil {
 		return nil, fmt.Errorf("register the todos entity: %w", err)
 	}
@@ -55,8 +60,12 @@ func (s *Server) registerEntityRoutes(router *route.Router) {
 		Executor:   &rpc.ExecutorConfig{Enabled: true, PathPrefix: "/api/v1"},
 	}, root, nil)
 	server.RegisterExecutionRoutes(router)
+	resolve := func(ctx context.Context) (*comments.Service, error) { return OpenComments(withEntityServer(ctx, s)) }
+	router.Raw("GET /api/v1/comments/events", commentapi.Stream(resolve), route.Meta{Entity: "comments", Verb: "events", ReadOnly: true})
+	router.Raw("POST /api/v1/comments/{id}/attachments", commentapi.Attachments(resolve), route.Meta{Entity: "comments", Verb: "attach", IDParam: "id"})
+	router.Raw("GET /api/v1/comments/{id}/attachments/{attachment}", commentapi.Attachments(resolve), route.Meta{Entity: "comments", Verb: "download", IDParam: "id", ReadOnly: true})
 	router.MountGenerated("GET /api/entities", http.HandlerFunc(server.HandleEntities))
-	router.MountGenerated("GET /api/v1/openapi.json", http.HandlerFunc(server.HandleOpenAPIJSON))
+	router.MountGenerated("GET /api/v1/openapi.json", commentapi.OpenAPI(http.HandlerFunc(server.HandleOpenAPIJSON), "/api/v1"))
 	chat := &lazyChatHandler{root: root, workDir: s.todoWorkDir()}
 	router.MountGenerated("/api/chat", chat)
 	router.MountGenerated("/api/chat/", chat)

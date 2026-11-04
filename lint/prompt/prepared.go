@@ -88,3 +88,15 @@ func (p *Prepared) Run(ctx context.Context, publisher Publisher) []*linters.Lint
 	}
 	return runReviews(ctx, p.input)
 }
+
+func (p *Prepared) Preview() ([]captaincli.PromptRenderResult, error) {
+	out := make([]captaincli.PromptRenderResult, 0, len(p.input.Reviews))
+	for _, review := range p.input.Reviews {
+		view, err := review.Prepared.Preview()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, view)
+	}
+	return out, nil
+}
