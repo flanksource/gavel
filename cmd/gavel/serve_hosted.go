@@ -170,6 +170,11 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	if err != nil {
 		return hostedStack{}, err
 	}
+	if dispatcher != nil {
+		if sweeper, ok := dispatcher.Executor.(sandbox.Sweeper); ok {
+			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime())
+		}
+	}
 	// An agent run's sandbox job sends its messages to the run API, which the relay hands to the
 	// run waiting for them.
 	relay := &remote.Relay{}

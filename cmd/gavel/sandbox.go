@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/commons/logger"
@@ -90,6 +91,36 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		}
 	}
 	return dispatcher, nil
+}
+
+// sandboxSweepInterval is how often serve sweeps what runs left behind.
+const sandboxSweepInterval = 10 * time.Minute
+
+// sweepSandboxEvery sweeps what runs older than lifetime left behind, every sandboxSweepInterval
+// until ctx ends.
+func sweepSandboxEvery(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration) {
+	ticker := time.NewTicker(sandboxSweepInterval)
+	defer ticker.Stop()
+	for {
+		sweepSandbox(ctx, sweeper, lifetime)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// sweepSandbox deletes the environments runs older than lifetime left behind, logging what it
+// deleted. A sweep that fails is a warning; the next one tries again.
+func sweepSandbox(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration) {
+	swept, err := sweeper.Sweep(ctx, lifetime)
+	if len(swept) > 0 {
+		logger.Infof("deleted %d sandbox environments that runs older than %s left behind: %s", len(swept), lifetime, strings.Join(swept, ", "))
+	}
+	if err != nil && ctx.Err() == nil {
+		logger.Warnf("sweep the sandbox environments runs left behind: %v", err)
+	}
 }
 
 // substrateAgentBackend is the substrate backend hosted agent runs execute on through captain's

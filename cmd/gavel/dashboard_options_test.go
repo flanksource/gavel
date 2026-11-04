@@ -3,9 +3,12 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/flanksource/gavel/internal/logtest"
 	"github.com/google/uuid"
@@ -250,4 +253,29 @@ func TestSubstrateAgentBackendIsTheJobsSubstrateAsCaptainTakesIt(t *testing.T) {
 	none, err := substrateAgentBackend(DashboardOptions{Sandbox: "docker"})
 	require.NoError(t, err)
 	assert.Nil(t, none, "agent runs execute through captain's substrate sandbox alone")
+}
+
+// fakeSweeper sweeps the names it was given once, and fails with err.
+type fakeSweeper struct {
+	names     []string
+	err       error
+	lifetimes []time.Duration
+}
+
+func (s *fakeSweeper) Sweep(_ context.Context, lifetime time.Duration) ([]string, error) {
+	s.lifetimes = append(s.lifetimes, lifetime)
+	return s.names, s.err
+}
+
+func TestSweepingSaysWhatRunsLeftBehind(t *testing.T) {
+	logged := logtest.Capture(t)
+	sweeper := &fakeSweeper{names: []string{"gavel-run-1", "gavel-run-2"}}
+
+	sweepSandbox(context.Background(), sweeper, 75*time.Minute)
+	assert.Equal(t, []time.Duration{75 * time.Minute}, sweeper.lifetimes)
+	assert.Contains(t, logged.String(), "deleted 2 sandbox environments that runs older than 1h15m0s left behind: gavel-run-1, gavel-run-2")
+
+	sweeper.names, sweeper.err = nil, errors.New("permission denied")
+	sweepSandbox(context.Background(), sweeper, time.Hour)
+	assert.Contains(t, logged.String(), "sweep the sandbox environments runs left behind: permission denied")
 }
