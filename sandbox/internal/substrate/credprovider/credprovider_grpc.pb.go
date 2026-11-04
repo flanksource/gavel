@@ -16,9 +16,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: credprovider.proto
+// source: api/credprovider/v1/credprovider.proto
 
-package credproviderpb
+package credprovider
 
 import (
 	context "context"
@@ -33,7 +33,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CredentialProvider_FetchSecret_FullMethodName = "/credprovider.CredentialProvider/FetchSecret"
+	CredentialProvider_FetchSecret_FullMethodName = "/substrate.credprovider.v1.CredentialProvider/FetchSecret"
 )
 
 // CredentialProviderClient is the client API for CredentialProvider service.
@@ -136,7 +136,7 @@ func _CredentialProvider_FetchSecret_Handler(srv interface{}, ctx context.Contex
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var CredentialProvider_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "credprovider.CredentialProvider",
+	ServiceName: "substrate.credprovider.v1.CredentialProvider",
 	HandlerType: (*CredentialProviderServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -145,5 +145,5 @@ var CredentialProvider_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "credprovider.proto",
+	Metadata: "api/credprovider/v1/credprovider.proto",
 }

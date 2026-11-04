@@ -60,7 +60,6 @@ func TestSubstrateProcessRunsTheJobWithItsRunTokenOnly(t *testing.T) {
 	run := uuid.New()
 	job := Job{
 		RunID:       run,
-		Image:       "ghcr.io/flanksource/gavel-runner@sha256:" + strings64("a"),
 		Command:     []string{"gavel", "runner", "exec", "--run", run.String()},
 		Env:         map[string]string{"GAVEL_SERVER": "http://gavel.gavel.svc.cluster.local:8080", "CI": "1"},
 		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": "run-token"},
@@ -81,14 +80,6 @@ func TestSubstrateProcessRunsTheJobWithItsRunTokenOnly(t *testing.T) {
 	assert.NotContains(t, err.Error(), "sk-ant-secret")
 }
 
-func strings64(c string) string {
-	out := ""
-	for range 64 {
-		out += c
-	}
-	return out
-}
-
 // startSubstrate serves an in-process Substrate whose processes are real, and an executor on it,
 // with the lines Submit logs captured.
 func startSubstrate(t *testing.T) (*substratetest.Server, Executor, *strings.Builder) {
@@ -105,7 +96,6 @@ func startSubstrate(t *testing.T) (*substratetest.Server, Executor, *strings.Bui
 func testJob(run uuid.UUID, script string) Job {
 	return Job{
 		RunID:       run,
-		Image:       "ghcr.io/flanksource/gavel-runner@sha256:" + strings64("a"),
 		Command:     []string{"sh", "-c", script},
 		Env:         map[string]string{"GAVEL_SERVER": "https://gavel.example.com"},
 		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": "run-token"},
@@ -183,13 +173,8 @@ func TestSubstrateSubmitRemovesAnEnvironmentWhoseJobDoesNotStart(t *testing.T) {
 
 func TestSubstrateSubmitRefusesWhatSubstrateCannotRun(t *testing.T) {
 	server, executor, _ := startSubstrate(t)
-	job := testJob(uuid.New(), "true")
-	job.Image = "ghcr.io/flanksource/gavel-runner:1"
-	_, err := executor.Submit(context.Background(), job)
-	require.EqualError(t, err, `substrate runs images pinned by digest: "ghcr.io/flanksource/gavel-runner:1" must be repo@sha256:<digest>`)
-
 	server.RefusePolicy = errors.New("policy refused")
-	_, err = executor.Submit(context.Background(), testJob(uuid.New(), "true"))
+	_, err := executor.Submit(context.Background(), testJob(uuid.New(), "true"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "set the egress policy of substrate environment ate-env/gavel-run-")
 }
@@ -231,10 +216,9 @@ func TestSubstrateSweepsTheEnvironmentsOfRunsOlderThanTheirLifetime(t *testing.T
 	client, err := substrate.Dial(server.Options())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	image := "ghcr.io/flanksource/gavel-runner@sha256:" + strings64("a")
 	old, recent := uuid.New(), uuid.New()
 	for _, id := range []string{JobName(old), JobName(recent), "captain-run-0123456789ab"} {
-		_, err := client.Create(t.Context(), substrate.Environment{ID: id, Image: image})
+		_, err := client.Create(t.Context(), substrate.Environment{ID: id})
 		require.NoError(t, err)
 	}
 	server.Backdate("ate-env", JobName(old), time.Now().Add(-2*time.Hour))

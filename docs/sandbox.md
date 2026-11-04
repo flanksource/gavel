@@ -70,11 +70,14 @@ been run against a live firewall. To check a host from inside a job, run
 
 ## The runner image
 
-Sandbox jobs start from the image `--sandbox-image` names. `make runner-image` builds it from
+Sandbox jobs start from the runner image: the one `--sandbox-image` names for docker, podman and
+kubernetes, and for substrate the one `--substrate-template`'s image template runs. `make runner-image` builds it from
 `sandbox/runner.Dockerfile` (set `RUNNER_IMAGE` to tag it). It holds gavel, Go, Node with pnpm,
 Python, git, yq and the Claude Code and Codex CLIs, all at pinned versions, and runs as uid 1000
-with `GAVEL_DB=off`. Each release publishes it as `ghcr.io/flanksource/gavel-runner:<tag>`, and the
-release's Helm chart (`chart/`) pins it by digest as `sandbox.image`.
+with `GAVEL_DB=off`. Each release publishes it as `ghcr.io/flanksource/gavel-runner:<tag>`; on substrate, register it
+by digest as an image template (`ate-env manifest template --rootfs-image
+ghcr.io/flanksource/gavel-runner@sha256:<digest>`) and name that template in the Helm chart's
+`sandbox.substrate.template`.
 
 ## Podman
 
@@ -109,9 +112,11 @@ job exits or is cancelled.
   ten minutes serve deletes `gavel-run-` environments older than a run can live (its timeout
   plus 15 minutes), left behind when serve stopped mid-run. Substrate's access
   policy must let serve's identity list the atespace's actors for this.
-- **Image.** Substrate runs images pinned by digest, so `--sandbox-image` must be
-  `repo@sha256:<digest>`. Environments derive from `--substrate-template` (env's
-  `default-template` when empty), which sets their CPU, memory and volumes.
+- **Image.** Environments are created from `--substrate-template`, which is required: an image
+  template an operator registered with `ate-env manifest template --rootfs-image
+  <image@sha256:…>`, which sets the image they run and their CPU, memory and volumes.
+  `--sandbox-image` is refused, since env creates no environment from an image of its own.
+- **Versions.** gavel speaks Substrate 1.0.0-rc.2 and env `56424de` or later.
 - **Egress.** Substrate denies every destination an actor's egress policy doesn't allow. gavel
   gives each environment a policy that allows gavel serve (`--public-url`, which must be a DNS
   name), proxy.golang.org, sum.golang.org, registry.npmjs.org, pypi.org, files.pythonhosted.org,
@@ -186,13 +191,12 @@ cluster with Substrate installed (`ate-setup deploy ate-system`):
 Then run:
 
 ```sh
-GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_IMAGE=localhost:5001/gavel-runner@sha256:<digest> \
-  GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui \
+GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui \
   -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate|TestHostedTodoRunsOnSubstrate'
 ```
 
 `TestHostedTodoRunsOnSubstrate` runs a hosted todo's plan step whole in an environment against the
-real model, so the runner image must hold this tree's gavel; on failure it logs the environment's
+real model, so the `gavel-runner` template's image must hold this tree's gavel; on failure it logs the environment's
 output and the tool calls that failed. After the kind node restarts, recreate env's worker pods
 (`kubectl delete pods -n ate-env -l pod-template-hash=<hash>`): Substrate keeps their old
 addresses, and an environment then starts but never answers.

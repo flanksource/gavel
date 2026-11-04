@@ -62,7 +62,7 @@ func (e *substrateExecutor) Submit(ctx context.Context, job Job) (Handle, error)
 	if err != nil {
 		return nil, err
 	}
-	env, err := e.client.Create(ctx, substrate.Environment{ID: JobName(job.RunID), Image: job.Image, Egress: egress})
+	env, err := e.client.Create(ctx, substrate.Environment{ID: JobName(job.RunID), Egress: egress})
 	if err != nil {
 		return nil, err
 	}

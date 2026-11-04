@@ -62,17 +62,20 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		}, nil},
 		{"kubernetes sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "kubernetes", "runner:1" }, nil},
 		{"substrate sandbox", func(o *DashboardOptions) {
-			o.Sandbox, o.SandboxImage, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "runner@sha256:1", "beta", "provider-token"
+			o.Sandbox, o.SubstrateTemplate, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "gavel-runner", "beta", "provider-token"
 		}, nil},
-		{"substrate sandbox without an image", func(o *DashboardOptions) {
+		{"substrate sandbox without a template", func(o *DashboardOptions) {
 			o.Sandbox, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "beta", "provider-token"
-		}, []string{"--sandbox requires --sandbox-image"}},
-		{"substrate sandbox without a gavel name or provider token", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "substrate", "runner@sha256:1" }, []string{
+		}, []string{"--sandbox substrate requires --substrate-template, the image template its environments are created from (ate-env manifest template --rootfs-image)"}},
+		{"substrate sandbox with an image", func(o *DashboardOptions) {
+			o.Sandbox, o.SubstrateTemplate, o.SandboxImage, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "gavel-runner", "runner@sha256:1", "beta", "provider-token"
+		}, []string{"--sandbox substrate takes its image from --substrate-template; --sandbox-image is for docker, podman and kubernetes"}},
+		{"substrate sandbox without a gavel name or provider token", func(o *DashboardOptions) { o.Sandbox, o.SubstrateTemplate = "substrate", "gavel-runner" }, []string{
 			"--sandbox substrate requires --substrate-gavel-name, the name substrate's credential provider knows this gavel by",
 			"--sandbox substrate requires the GAVEL_CREDENTIAL_PROVIDER_TOKEN environment variable, the token substrate's credential provider fetches model keys with",
 		}},
 		{"substrate gavel name that isn't a DNS label", func(o *DashboardOptions) {
-			o.Sandbox, o.SandboxImage, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "runner@sha256:1", "Beta/1", "provider-token"
+			o.Sandbox, o.SubstrateTemplate, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "gavel-runner", "Beta/1", "provider-token"
 		}, []string{`--substrate-gavel-name must be a DNS label like beta, got "Beta/1"`}},
 		{"unknown sandbox", func(o *DashboardOptions) { o.Sandbox, o.SandboxImage = "firecracker", "runner:1" }, []string{
 			`--sandbox must be docker, podman, kubernetes or substrate, got "firecracker"`,
@@ -231,7 +234,7 @@ func TestContainerAndKubernetesSandboxesWarnTheyUseServesKeys(t *testing.T) {
 
 func TestSubstrateAgentBackendIsTheJobsSubstrateAsCaptainTakesIt(t *testing.T) {
 	opts := DashboardOptions{
-		Sandbox: "substrate", PublicURL: "http://gavel.gavel.svc:8080/", SandboxImage: "ghcr.io/flanksource/gavel-runner@sha256:abc",
+		Sandbox: "substrate", PublicURL: "http://gavel.gavel.svc:8080/",
 		SubstrateEnvAPI: "ate-env-api.ate-env.svc:7777", SubstrateControl: "api.ate-system.svc:443",
 		SubstrateTokenFile: "/var/run/secrets/ate/token", SubstrateAtespace: "ate-env", SubstrateTemplate: "gavel-runner",
 		SubstrateTrustBundle: "/run/ate/trust-bundle.pem", SubstrateEgress: []string{"goproxy.example.com"},
@@ -243,7 +246,7 @@ func TestSubstrateAgentBackendIsTheJobsSubstrateAsCaptainTakesIt(t *testing.T) {
 	assert.Equal(t, "/var/run/secrets/ate/token", backend["tokenFile"])
 	assert.Equal(t, "ate-env", backend["atespace"])
 	assert.Equal(t, "gavel-runner", backend["template"])
-	assert.Equal(t, "ghcr.io/flanksource/gavel-runner@sha256:abc", backend["image"])
+	assert.NotContains(t, backend, "image", "the template sets the image")
 	assert.Equal(t, "/run/ate/trust-bundle.pem", backend["trustBundle"])
 	egress := backend["egress"].([]string)
 	assert.NotContains(t, egress, "http://gavel.gavel.svc:8080", "an agent run asks serve over its own channel")
