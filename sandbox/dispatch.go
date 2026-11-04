@@ -233,7 +233,7 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 	}
 	logKey := "runs/" + id.String() + "/log.txt"
 	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
-		jobName(id), logKey, id).Error; err != nil {
+		JobName(id), logKey, id).Error; err != nil {
 		logger.Warnf("record sandbox run %s as running: %v", id, err)
 	}
 	reader, writer := io.Pipe()

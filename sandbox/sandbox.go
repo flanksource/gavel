@@ -78,15 +78,15 @@ type Executor interface {
 	Name() string
 }
 
-// jobName is the backend name of run's job.
-func jobName(run uuid.UUID) string {
+// JobName is the backend name of run's job, and of the environment an agent run runs in on substrate.
+func JobName(run uuid.UUID) string {
 	return "gavel-run-" + run.String()
 }
 
 // SubstrateActor is the SPIFFE ID substrate's egress gateway reports for run's environment in
 // atespace, the actor named after the run.
 func SubstrateActor(atespace string, run uuid.UUID) string {
-	return substrate.Actor(atespace, jobName(run))
+	return substrate.Actor(atespace, JobName(run))
 }
 
 // sortedEnv lists env as KEY=VALUE, sorted, rejecting a name that would split differently.

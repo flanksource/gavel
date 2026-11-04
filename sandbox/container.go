@@ -38,7 +38,7 @@ func containerRunArgs(job Job, network, envFile string) ([]string, error) {
 		return nil, err
 	}
 	args := []string{
-		"run", "-d", "--name", jobName(job.RunID),
+		"run", "-d", "--name", JobName(job.RunID),
 		"--network", network,
 		"--user", "1000:1000", "--read-only",
 		// The job runs the repository's code: go test builds into /tmp and installed tools run
@@ -95,7 +95,7 @@ func (e *containerExecutor) Submit(ctx context.Context, job Job) (Handle, error)
 	if err != nil {
 		return nil, err
 	}
-	name := jobName(job.RunID)
+	name := JobName(job.RunID)
 	if _, err := e.run(ctx, args...); err != nil {
 		return nil, fmt.Errorf("start sandbox job %s: %w", name, err)
 	}
