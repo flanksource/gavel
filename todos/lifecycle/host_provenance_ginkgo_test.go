@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/commons-db/shell"
@@ -73,7 +72,8 @@ var _ = g.Describe("lifecycle admission", func() {
 		)))
 		o.Expect(input.input.Record).To(o.BeIdenticalTo(provider.admission.Record))
 		o.Expect(todos.PromptRunFromContext(exec)).To(o.Equal(identity.PromptRunID))
-		o.Expect(hookNames(input.input.Hooks)).To(o.Equal([]string{"gavel-run-env", "gavel-run-labels", "gavel-run-admitted", "setup"}))
+		o.Expect(hookNames(input.input.Hooks)).To(o.Equal([]string{"gavel-run-env", "gavel-run-labels", "setup"}))
+		o.Expect(input.input.Record.Admitted).NotTo(o.BeNil(), "Captain tells gavel of the admission wherever the run executes")
 	})
 
 	g.It("tells the runtime and the dashboard of the run only once Captain has admitted it", func() {
@@ -84,8 +84,7 @@ var _ = g.Describe("lifecycle admission", func() {
 		o.Expect(err).NotTo(o.HaveOccurred())
 		o.Expect([]int{len(provider.admitted), len(notified)}).To(o.Equal([]int{0, 0}))
 
-		admitted := input.input.Hooks[len(input.input.Hooks)-1].(agent.PreRun)
-		o.Expect(admitted.PreRun(&agent.HookContext{})).To(o.Succeed())
+		o.Expect(input.input.Record.Admitted()).To(o.Succeed())
 
 		o.Expect(provider.admitted).To(o.Equal([]todos.RunPreparationResult{identity}))
 		o.Expect(notified).To(o.Equal([]todos.RunPreparationResult{identity}))
