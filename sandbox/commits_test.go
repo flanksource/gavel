@@ -229,3 +229,49 @@ func TestLeaveOutPutsFilesBackAsTheRunFoundThem(t *testing.T) {
 	require.NoError(t, sources.ResetRunBranch(context.Background(), github, "gavel/todo-run", tip, head))
 	assert.Equal(t, head, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"), "back at the run's head")
 }
+
+func TestPublishRunBranchPutsARunsBranchOnGitHub(t *testing.T) {
+	dataDir, remotes := t.TempDir(), t.TempDir()
+	org, repo := uuid.New(), uuid.New()
+	work := newWork(t)
+	base := commitFile(t, work, "README.md", "first")
+	remote := filepath.Join(remotes, "acme", "app.git")
+	git(t, work, "clone", "-q", "--bare", work, remote)
+	sources := &Sources{
+		DataDir:   dataDir,
+		GitHubURL: "file://" + remotes,
+		Token:     func(context.Context, int64) (string, error) { return "installation-token", nil },
+	}
+	github := Repo{ID: repo, Org: org, Source: "github", Name: "acme/app", GitHubRepoID: 42, InstallationID: 7}
+	mirror, err := sources.GitDir(context.Background(), github)
+	require.NoError(t, err)
+	bundle, tip := runCommits(t, remote, base, "worktree-run")
+	bundlePath := filepath.Join(t.TempDir(), "run.bundle")
+	require.NoError(t, os.WriteFile(bundlePath, bundle, 0o644))
+	// The run's commits came back to the mirror on the run's branch, as captain's substrate
+	// sandbox brings them back.
+	git(t, mirror, "fetch", "-q", bundlePath, "worktree-run:refs/heads/gavel/todo-run")
+
+	// A refresh of the mirror by another run prunes the branch GitHub doesn't have yet; its commits
+	// stay.
+	git(t, mirror, "update-ref", "-d", "refs/heads/gavel/todo-run")
+
+	require.NoError(t, sources.PublishRunBranch(context.Background(), github, "gavel/todo-run", tip))
+	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"), "the branch is on GitHub")
+
+	err = sources.PublishRunBranch(context.Background(), github, "gavel/todo-run", tip)
+	require.ErrorIs(t, err, ErrBranchExists, "a branch already on GitHub is never moved")
+}
+
+func TestPublishRunBranchPutsAPushedRepositorysBranchAtTheRunsHead(t *testing.T) {
+	sources := &Sources{DataDir: t.TempDir()}
+	pushed := Repo{ID: uuid.New(), Org: uuid.New(), Source: "push", Name: "app"}
+	dir, err := sources.GitDir(context.Background(), pushed)
+	require.NoError(t, err)
+	work := newWork(t)
+	tip := commitFile(t, work, "README.md", "first")
+	git(t, work, "clone", "-q", "--bare", work, dir)
+
+	require.NoError(t, sources.PublishRunBranch(context.Background(), pushed, "gavel/todo-run", tip))
+	assert.Equal(t, tip, git(t, dir, "rev-parse", "refs/heads/gavel/todo-run"))
+}

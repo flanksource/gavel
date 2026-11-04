@@ -69,7 +69,7 @@ func (s *Sources) updateMirror(ctx context.Context, repo Repo) (string, error) {
 	if s.Token == nil {
 		return "", fmt.Errorf("no GitHub token source for %s", repo.Name)
 	}
-	dir := filepath.Join(s.DataDir, "mirrors", repo.Org.String(), strconv.FormatInt(repo.GitHubRepoID, 10)+".git")
+	dir := s.mirrorDir(repo)
 	lock, _ := s.mirrors.LoadOrStore(dir, &sync.Mutex{})
 	lock.(*sync.Mutex).Lock()
 	defer lock.(*sync.Mutex).Unlock()
@@ -91,6 +91,11 @@ func (s *Sources) updateMirror(ctx context.Context, repo Repo) (string, error) {
 		return "", fmt.Errorf("fetch %s: %w", repo.Name, err)
 	}
 	return dir, nil
+}
+
+// mirrorDir is where repo's GitHub mirror is.
+func (s *Sources) mirrorDir(repo Repo) string {
+	return filepath.Join(s.DataDir, "mirrors", repo.Org.String(), strconv.FormatInt(repo.GitHubRepoID, 10)+".git")
 }
 
 // githubURL is where repo is cloned from and pushed to.
