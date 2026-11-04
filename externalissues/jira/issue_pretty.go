@@ -2,9 +2,13 @@ package jira
 
 import (
 	"fmt"
+	"net/url"
+	"path/filepath"
+	"strings"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/clicky/markdown"
 )
 
 type RenderOptions struct {
@@ -17,8 +21,57 @@ func (i Issue) FormatView(options clicky.FormatOptions) (any, error) {
 	case "json", "ndjson", "yaml", "csv", "toon":
 		return i.Issue, nil
 	default:
+		if i.Full && i.savedPath != "" {
+			return i.savedView(options)
+		}
 		return i.Render(RenderOptions{Full: i.Full})
 	}
+}
+
+func (i Issue) savedView(options clicky.FormatOptions) (any, error) {
+	doc, err := markdown.ParseString(i.savedMarkdown, markdown.WithFrontmatter(false))
+	if err != nil {
+		return nil, err
+	}
+	base := ""
+	if options.Output != "" {
+		base, err = filepath.Abs(filepath.Dir(options.Output))
+		if err != nil {
+			return nil, err
+		}
+	}
+	var visit func(*markdown.Node) error
+	visit = func(node *markdown.Node) error {
+		if node.Kind == "link" || node.Kind == "image" {
+			address, err := url.Parse(node.Href)
+			if err != nil {
+				return err
+			}
+			if address.Scheme == "" && address.Host == "" && address.Path != "" && !strings.HasPrefix(address.Path, "/") {
+				address.Path = filepath.Join(filepath.Dir(i.savedPath), filepath.FromSlash(address.Path))
+				if base != "" {
+					address.Path, err = filepath.Rel(base, address.Path)
+					if err != nil {
+						return err
+					}
+				}
+				address.Path = filepath.ToSlash(address.Path)
+				node.Href = address.String()
+			}
+		}
+		for _, children := range [][]markdown.Node{node.Children, node.Items} {
+			for index := range children {
+				if err := visit(&children[index]); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := visit(&doc.Root); err != nil {
+		return nil, err
+	}
+	return doc, nil
 }
 
 func (i Issue) PrettyShort() api.Textable {

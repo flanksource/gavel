@@ -18,7 +18,7 @@ var _ = Describe("Jira sync inline media", func() {
 		client := testClient(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.URL.Path == "/rest/api/3/issue/EXAMPLE-1":
-				fmt.Fprint(w, `{"id":"1","key":"EXAMPLE-1","fields":{"summary":"Inline images","project":{"id":"10001"},"description":{"type":"doc","version":1,"content":[{"type":"mediaSingle","content":[{"type":"media","attrs":{"id":"description-uuid","type":"file","alt":"description.png"}}]}]},"attachment":[{"id":"20001","filename":"description.png","mimeType":"image/png","content":"https://example.test/description.png"},{"id":"20002","filename":"comment.png","mimeType":"image/png","content":"https://example.test/comment.png"}]}}`)
+				fmt.Fprint(w, `{"id":"1","key":"EXAMPLE-1","fields":{"summary":"Inline images","project":{"id":"10001","key":"EXAMPLE"},"description":{"type":"doc","version":1,"content":[{"type":"mediaSingle","content":[{"type":"media","attrs":{"id":"description-uuid","type":"file","alt":"description.png"}}]}]},"attachment":[{"id":"20001","filename":"description.png","mimeType":"image/png","content":"https://example.test/description.png"},{"id":"20002","filename":"comment.png","mimeType":"image/png","content":"https://example.test/comment.png"}]}}`)
 			case r.URL.Path == "/rest/api/3/myself":
 				fmt.Fprint(w, `{"accountId":"account"}`)
 			case r.URL.Path == "/rest/api/3/field", strings.HasSuffix(r.URL.Path, "/remotelink"):

@@ -81,10 +81,10 @@ var _ = Describe("Jira filesystem sync", func() {
 		Expect(issueReads).To(Equal([]string{"EXAMPLE-1", "EXAMPLE-2"}))
 	})
 
-	It("writes a full issue under its project ID without downloading attachments by default", func() {
+	It("writes a full issue under its domain and project code without downloading attachments by default", func() {
 		result, err := client.Sync(context.Background(), SyncOptions{Keys: []string{"EXAMPLE-1"}, Dir: root, Store: CatalogStore{Dir: root}})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(SyncResults{{Key: "EXAMPLE-1", Path: filepath.Join(root, "10001", "EXAMPLE-1.md")}}))
+		Expect(result).To(Equal(SyncResults{{Key: "EXAMPLE-1", Path: filepath.Join(root, syncTestDomain(), "EXAMPLE", "EXAMPLE-1.md")}}))
 		data, err := os.ReadFile(result[0].Path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(data)).To(SatisfyAll(ContainSubstring("Complete description"), ContainSubstring("Complete comment"), ContainSubstring(`[report \#1.pdf](https://example.test/report.pdf)`)))
@@ -95,7 +95,7 @@ var _ = Describe("Jira filesystem sync", func() {
 		options := SyncOptions{Keys: []string{"EXAMPLE-1"}, Dir: root, Attachments: true, Store: CatalogStore{Dir: root}}
 		result, err := client.Sync(context.Background(), options)
 		Expect(err).NotTo(HaveOccurred())
-		attachment := filepath.Join(root, "10001", "EXAMPLE-1.attachments", "20001", filename)
+		attachment := filepath.Join(root, syncTestDomain(), "EXAMPLE", "EXAMPLE-1.attachments", "20001", filename)
 		Expect(result[0].Attachments).To(Equal([]string{attachment}))
 		data, err := os.ReadFile(attachment)
 		Expect(err).NotTo(HaveOccurred())
@@ -193,13 +193,14 @@ var _ = Describe("Jira filesystem sync", func() {
 
 	It("refuses to follow project or attachment directories outside the sync root", func() {
 		outside := GinkgoT().TempDir()
-		Expect(os.Symlink(outside, filepath.Join(root, "10001"))).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, syncTestDomain()), 0700)).To(Succeed())
+		Expect(os.Symlink(outside, filepath.Join(root, syncTestDomain(), "EXAMPLE"))).To(Succeed())
 		options := SyncOptions{Keys: []string{"EXAMPLE-1"}, Dir: root, Attachments: true, Store: CatalogStore{Dir: root}}
 		_, err := client.Sync(context.Background(), options)
 		Expect(err).To(HaveOccurred())
-		Expect(os.Remove(filepath.Join(root, "10001"))).To(Succeed())
-		Expect(os.Mkdir(filepath.Join(root, "10001"), 0o700)).To(Succeed())
-		Expect(os.Symlink(outside, filepath.Join(root, "10001", "EXAMPLE-1.attachments"))).To(Succeed())
+		Expect(os.Remove(filepath.Join(root, syncTestDomain(), "EXAMPLE"))).To(Succeed())
+		Expect(os.Mkdir(filepath.Join(root, syncTestDomain(), "EXAMPLE"), 0o700)).To(Succeed())
+		Expect(os.Symlink(outside, filepath.Join(root, syncTestDomain(), "EXAMPLE", "EXAMPLE-1.attachments"))).To(Succeed())
 		_, err = client.Sync(context.Background(), options)
 		Expect(err).To(HaveOccurred())
 		entries, err := os.ReadDir(outside)

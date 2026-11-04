@@ -66,8 +66,8 @@ func describeIgnoreFieldResync(run func(string, []string)) {
 		func(from bool) {
 			By("saving two issues before extending the ignore list")
 			run(workDir, []string{"sync", "EXAMPLE-1", "EXAMPLE-2", "--sync-dir", syncDir, "--extract"})
-			path := filepath.Join(syncDir, "10001", "EXAMPLE-1.md")
-			unselected := filepath.Join(syncDir, "10001", "EXAMPLE-2.md")
+			path := filepath.Join(syncDir, syncTestDomain(), "EXAMPLE", "EXAMPLE-1.md")
+			unselected := filepath.Join(syncDir, syncTestDomain(), "EXAMPLE", "EXAMPLE-2.md")
 			untouched, err := os.ReadFile(unselected)
 			Expect(err).NotTo(HaveOccurred())
 			root, err := os.OpenRoot(filepath.Dir(path))

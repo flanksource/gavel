@@ -30,7 +30,7 @@ var _ = Describe("Jira sync attachment cache", func() {
 				for id, name := range files {
 					attachments = append(attachments, map[string]string{"id": id, "filename": name})
 				}
-				Expect(json.NewEncoder(w).Encode(map[string]any{"id": "10001", "key": "EXAMPLE-1", "fields": map[string]any{"summary": "All original types", "project": map[string]string{"id": "10001"}, "attachment": attachments}})).To(Succeed())
+				Expect(json.NewEncoder(w).Encode(map[string]any{"id": "10001", "key": "EXAMPLE-1", "fields": map[string]any{"summary": "All original types", "project": map[string]string{"id": "10001", "key": "EXAMPLE"}, "attachment": attachments}})).To(Succeed())
 			case strings.HasPrefix(r.URL.Path, "/rest/api/3/attachment/content/"):
 				id := filepath.Base(r.URL.Path)
 				contentRequests = append(contentRequests, id)
@@ -51,14 +51,14 @@ var _ = Describe("Jira sync attachment cache", func() {
 		data, err := os.ReadFile(results[0].Path)
 		Expect(err).NotTo(HaveOccurred())
 		for id, name := range files {
-			path := filepath.Join(dir, "10001", "EXAMPLE-1.attachments", id, name)
+			path := filepath.Join(dir, syncTestDomain(), "EXAMPLE", "EXAMPLE-1.attachments", id, name)
 			original, err := os.ReadFile(path)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(original)).To(Equal(name))
 			Expect(string(data)).To(ContainSubstring("[" + name + "](EXAMPLE-1.attachments/" + id + "/" + name + ")"))
 		}
 		moved := filepath.Join(dir, "moved")
-		Expect(os.Rename(filepath.Join(dir, "10001"), moved)).To(Succeed())
+		Expect(os.Rename(filepath.Join(dir, syncTestDomain(), "EXAMPLE"), moved)).To(Succeed())
 		path := filepath.Join(moved, "renamed.md")
 		Expect(os.Rename(filepath.Join(moved, "EXAMPLE-1.md"), path)).To(Succeed())
 		contentRequests = nil

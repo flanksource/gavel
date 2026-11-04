@@ -11,6 +11,9 @@ import (
 type Issue struct {
 	externalissues.Issue
 	Full               bool `json:"-"`
+	cachedIgnoreFields []string
+	savedPath          string
+	savedMarkdown      string
 	attachmentsIgnored bool
 }
 

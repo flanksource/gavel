@@ -21,7 +21,7 @@ var _ = Describe("Jira command field exclusions", func() {
 		config := "externalIssues:\n  jira:\n    ignoreFields: [Internal*, description, comment, attachment, remoteLinks]\n"
 		Expect(os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte(config), 0o600)).To(Succeed())
 		commandServer(func(w http.ResponseWriter, r *http.Request) {
-			const issue = `{"id":"1","key":"EXAMPLE-1","fields":{"summary":"Visible title","project":{"id":"10001"},"description":"Hidden description","customfield_1":"Hidden value","customfield_2":"Visible value","attachment":[{"id":"2","filename":"hidden.pdf"}]}}`
+			const issue = `{"id":"1","key":"EXAMPLE-1","fields":{"summary":"Visible title","project":{"id":"10001","key":"EXAMPLE"},"description":"Hidden description","customfield_1":"Hidden value","customfield_2":"Visible value","attachment":[{"id":"2","filename":"hidden.pdf"}]}}`
 			switch r.URL.Path {
 			case "/rest/api/3/issue/EXAMPLE-1":
 				fmt.Fprint(w, issue)
@@ -62,7 +62,7 @@ var _ = Describe("Jira command field exclusions", func() {
 			root.SetArgs(append(append([]string{"external-issues", "jira"}, args...), "--format", "json="+output))
 			Expect(root.Execute()).To(Succeed())
 			if args[0] == "sync" {
-				output = filepath.Join(workDir, "issues", "10001", "EXAMPLE-1.md")
+				output = filepath.Join(workDir, "issues", syncTestDomain(), "EXAMPLE", "EXAMPLE-1.md")
 			}
 			data, err := os.ReadFile(output)
 			Expect(err).NotTo(HaveOccurred())

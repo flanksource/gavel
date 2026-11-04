@@ -53,7 +53,7 @@ var _ = Describe("Jira attachment cache", func() {
 			switch {
 			case r.URL.Path == "/rest/api/3/issue/EXAMPLE-1":
 				Expect(json.NewEncoder(w).Encode(map[string]any{"id": "1", "key": "EXAMPLE-1", "fields": map[string]any{
-					"summary": title, "project": map[string]string{"id": "10001"},
+					"summary": title, "project": map[string]string{"id": "10001", "key": "EXAMPLE"},
 					"attachment": []map[string]any{{"id": id, "filename": name, "size": remoteSize, "content": "https://example.test/original"}},
 				}})).To(Succeed())
 			case r.URL.Path == "/rest/api/3/myself":

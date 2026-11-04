@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -28,9 +29,16 @@ func testClient(handler http.HandlerFunc) *Client {
 		handler(w, r)
 	}))
 	DeferCleanup(server.Close)
+	GinkgoT().Setenv("GAVEL_TEST_JIRA_SITE", server.URL)
 	client, err := NewClient(context.Background(), ClientOptions{Site: server.URL, Credentials: Credentials{Username: "api@example.test", APIToken: "test-api-token"}})
 	Expect(err).NotTo(HaveOccurred())
 	return client
+}
+
+func syncTestDomain() string {
+	domain, err := siteDomain(os.Getenv("GAVEL_TEST_JIRA_SITE"))
+	Expect(err).NotTo(HaveOccurred())
+	return domain
 }
 
 var _ = Describe("direct Jira HTTP client", func() {
@@ -57,7 +65,7 @@ var _ = Describe("direct Jira HTTP client", func() {
 				http.Error(w, "unexpected path", http.StatusNotFound)
 			}
 		})
-		issue, err := client.Get(context.Background(), GetOptions{Key: "EXAMPLE-1", Store: CatalogStore{Dir: GinkgoT().TempDir()}})
+		issue, err := client.fetchIssue(context.Background(), GetOptions{Key: "EXAMPLE-1", Store: CatalogStore{Dir: GinkgoT().TempDir()}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(issue.Fields["customfield_1"].Name).To(Equal("Read-only field"))
 		Expect(string(issue.Fields["remoteLinks"].Value)).To(ContainSubstring("Runbook"))
@@ -73,7 +81,7 @@ var _ = Describe("direct Jira HTTP client", func() {
 		client := testClient(func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "denied test-api-token", http.StatusForbidden)
 		})
-		_, err := client.Get(context.Background(), GetOptions{Key: "EXAMPLE-1"})
+		_, err := client.fetchIssue(context.Background(), GetOptions{Key: "EXAMPLE-1"})
 		Expect(err).To(MatchError(SatisfyAll(ContainSubstring("HTTP 403"), ContainSubstring("/issue/EXAMPLE-1"), Not(ContainSubstring("test-api-token")))))
 	})
 

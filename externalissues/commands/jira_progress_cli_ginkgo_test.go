@@ -23,7 +23,7 @@ var _ = Describe("Jira CLI task progress", func() {
 		commandServer(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/rest/api/3/issue/EXAMPLE-1":
-				fmt.Fprint(w, `{"key":"EXAMPLE-1","fields":{"summary":"Example","project":{"id":"10001"}}}`)
+				fmt.Fprint(w, `{"key":"EXAMPLE-1","fields":{"summary":"Example","project":{"id":"10001","key":"EXAMPLE"}}}`)
 			case "/rest/api/3/myself":
 				fmt.Fprint(w, `{"accountId":"account"}`)
 			case "/rest/api/3/field", "/rest/api/3/issue/EXAMPLE-1/remotelink":
@@ -54,7 +54,7 @@ var _ = Describe("Jira CLI task progress", func() {
 			}
 			Expect(json.Unmarshal(stdout.Bytes(), &results)).To(Succeed(), stdout.String())
 			Expect(results).To(HaveLen(1))
-			Expect(results[0].Path).To(Equal(filepath.Join(dir, "10001", "EXAMPLE-1.md")))
+			Expect(results[0].Path).To(Equal(filepath.Join(dir, syncTestDomain(), "EXAMPLE", "EXAMPLE-1.md")))
 			Expect(stderr.String()).To(ContainSubstring("Sync Jira issues"))
 			Expect(stderr.String()).To(ContainSubstring("Sync EXAMPLE-1"))
 			Expect(strings.Contains(stdout.String(), "Sync Jira issues")).To(BeFalse())

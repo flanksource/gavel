@@ -84,7 +84,7 @@ var _ = Describe("Jira task progress", func() {
 			requested = append(requested, r.URL.Path)
 			switch r.URL.Path {
 			case "/rest/api/3/issue/EXAMPLE-1":
-				fmt.Fprint(w, `{"key":"EXAMPLE-1","fields":{"summary":"Example","project":{"id":"10001"}}}`)
+				fmt.Fprint(w, `{"key":"EXAMPLE-1","fields":{"summary":"Example","project":{"id":"10001","key":"EXAMPLE"}}}`)
 			case "/rest/api/3/myself":
 				fmt.Fprint(w, `{"accountId":"account"}`)
 			case "/rest/api/3/field", "/rest/api/3/issue/EXAMPLE-1/remotelink":

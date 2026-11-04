@@ -37,7 +37,7 @@ func issueCommandOutput(options issueOutputOptions) (string, error) {
 }
 
 var _ = Describe("Jira output boundary", func() {
-	const unsupported = `{"key":"EXAMPLE-1","fields":{"summary":"Future document","description":{"type":"doc","version":1,"content":[{"type":"unknown"}]}}}`
+	const unsupported = `{"key":"EXAMPLE-1","fields":{"project":{"id":"10001","key":"EXAMPLE"},"summary":"Future document","description":{"type":"doc","version":1,"content":[{"type":"unknown"}]}}}`
 	DescribeTable("keeps description exports independent of rich rendering", func(format string) {
 		output, err := issueCommandOutput(issueOutputOptions{Response: unsupported, Args: []string{"get", "EXAMPLE-1", "--full"}, Format: format})
 		Expect(err).NotTo(HaveOccurred())
@@ -54,7 +54,7 @@ var _ = Describe("Jira output boundary", func() {
 		Expect(warnings.String()).To(SatisfyAll(ContainSubstring("WRN"), ContainSubstring("EXAMPLE-1"), ContainSubstring("description"), ContainSubstring("unsupported node")))
 	})
 	It("exports custom-field documents as Markdown strings even without catalog metadata", func() {
-		response := `{"key":"EXAMPLE-1","fields":{"summary":"Instructions","customfield_unknown":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Read this"}]}]}}}`
+		response := `{"key":"EXAMPLE-1","fields":{"project":{"id":"10001","key":"EXAMPLE"},"summary":"Instructions","customfield_unknown":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Read this"}]}]}}}`
 		output, err := issueCommandOutput(issueOutputOptions{Response: response, Args: []string{"get", "EXAMPLE-1", "--no-cache"}, Format: "json"})
 		Expect(err).NotTo(HaveOccurred())
 		var result struct {
@@ -66,8 +66,8 @@ var _ = Describe("Jira output boundary", func() {
 		Expect(result.Fields.Unknown).To(Equal("Read this"))
 	})
 	It("writes a compact Markdown document through the output sink", func() {
-		response := `{"key":"EXAMPLE-42","fields":{"summary":"Retry imports","project":{"name":"Platform"},"status":{"name":"In Progress"},"assignee":{"displayName":"Alex"},"priority":{"name":"High"},"labels":["imports"],"description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Retry transient failures."}]}]},"attachment":[]}}`
-		output, err := issueCommandOutput(issueOutputOptions{Response: response, Args: []string{"get", "EXAMPLE-42"}, Format: "markdown"})
+		response := `{"key":"EXAMPLE-42","fields":{"summary":"Retry imports","project":{"id":"10001","key":"EXAMPLE","name":"Platform"},"status":{"name":"In Progress"},"assignee":{"displayName":"Alex"},"priority":{"name":"High"},"labels":["imports"],"description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Retry transient failures."}]}]},"attachment":[]}}`
+		output, err := issueCommandOutput(issueOutputOptions{Response: response, Args: []string{"get", "EXAMPLE-42", "--full=false"}, Format: "markdown"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(output).To(SatisfyAll(ContainSubstring("EXAMPLE-42 — Retry imports"), ContainSubstring("In Progress · High · Alex · Platform"), ContainSubstring("Retry transient failures."), ContainSubstring("0 comments · 0 attachments")))
 	})

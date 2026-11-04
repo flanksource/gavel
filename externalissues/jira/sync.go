@@ -19,8 +19,6 @@ import (
 	"github.com/flanksource/gavel/internal/safefs"
 )
 
-const DefaultSyncDir = ".gavel/jira"
-
 type SyncOptions struct {
 	CloudID     string
 	From        string
@@ -86,10 +84,16 @@ func (c *Client) Sync(ctx context.Context, options SyncOptions) (SyncResults, er
 	if err := options.Validate(); err != nil {
 		return nil, err
 	}
-	if options.Dir == "" {
-		options.Dir = DefaultSyncDir
+	var err error
+	options.Dir, err = SyncDir(options.Dir)
+	if err != nil {
+		return nil, err
 	}
-	indexDir := options.Dir
+	domain, err := siteDomain(c.Site)
+	if err != nil {
+		return nil, err
+	}
+	indexDir := filepath.Join(options.Dir, domain)
 	if options.Output != "" {
 		indexDir = filepath.Dir(options.Output)
 	}
@@ -128,7 +132,7 @@ func (c *Client) syncIssue(ctx context.Context, options syncIssueOptions) (resul
 	return runJiraTask(ctx, "Sync "+options.Key, func(ctx context.Context, progress *task.Task) (result SyncResult, returnErr error) {
 		progress.SetProgress(0, 3)
 		progress.SetDescription("Loading issue, fields and comments")
-		issue, err := c.Get(ctx, GetOptions{Key: options.Key, Full: true, NoCache: options.NoCache, Store: options.Store})
+		issue, err := c.fetchIssue(ctx, GetOptions{Key: options.Key, Full: true, NoCache: options.NoCache, Store: options.Store})
 		if err != nil {
 			return result, err
 		}
@@ -136,10 +140,11 @@ func (c *Client) syncIssue(ctx context.Context, options syncIssueOptions) (resul
 			return result, err
 		}
 		progress.SetProgress(1, 3)
-		if options.Dir == "" {
-			options.Dir = DefaultSyncDir
+		domain, err := siteDomain(issue.Site)
+		if err != nil {
+			return result, err
 		}
-		projectDir := issue.Project.ID
+		projectDir := filepath.Join(domain, issue.Project.Key)
 		filename := issue.Key + ".md"
 		if options.Output != "" {
 			options.Dir = filepath.Dir(options.Output)
@@ -180,6 +185,11 @@ func (c *Client) syncIssue(ctx context.Context, options syncIssueOptions) (resul
 			return result, err
 		}
 		doc.Metadata.Source.CloudID = c.credentials.CloudID
+		snapshotPath, err := saveSnapshot(issue, c.ignoreFields, stage, doc)
+		if err != nil {
+			return result, err
+		}
+		result.artifacts = append(result.artifacts, filepath.Join(dir, snapshotPath))
 		var extracted string
 		if !issue.attachmentsIgnored && (options.Attachments || options.Extract) {
 			progress.SetDescription(fmt.Sprintf("Processing %d attachments", len(issue.Attachments)))
@@ -213,14 +223,15 @@ func (c *Client) syncIssue(ctx context.Context, options syncIssueOptions) (resul
 			return SyncResult{}, err
 		}
 		progress.SetProgress(3, 3)
+		result.artifacts = nil
 		progress.SetDescription("Saved " + result.Path)
 		return result, nil
 	})
 }
 
 func validateSyncIssue(issue Issue) error {
-	if issue.Project == nil || !syncComponent(issue.Project.ID) || !syncComponent(issue.Key) {
-		return fmt.Errorf("Jira sync requires a safe issue key and project ID for %q", issue.Key)
+	if issue.Project == nil || !syncComponent(issue.Project.Key) || !syncComponent(issue.Project.ID) || !syncComponent(issue.Key) {
+		return fmt.Errorf("Jira sync requires a safe issue key, project code and project ID for %q", issue.Key)
 	}
 	ids := make(map[string]bool)
 	for _, attachment := range issue.Attachments {

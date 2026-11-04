@@ -36,12 +36,16 @@ gavel external-issues jira get EXAMPLE-42 --site example --profile work --markdo
 
 ## Compact and full documents
 
-The default view shows the issue link and title, status, priority, assignee, project, a description preview of up to 240 characters, labels, populated extension fields in a Field/Value table, a filename link for every attachment, and known comment and attachment counts. Unknown fields use their native IDs; duplicate table labels include the field ID. Nulls and empty arrays are omitted recursively from both compact and full human-readable output. Zero and false remain visible. JSON and YAML retain the complete field values. Unloaded collections are not reported as empty. Thread bodies are omitted from this view.
+`get` defaults to the complete document, including description and comment bodies. Use `--full=false` for a compact view: issue link and title, status, priority, assignee, project, a description preview of up to 240 characters, labels, populated extension fields, attachment links and known counts. Unknown fields use their native IDs; duplicate labels include the field ID. Nulls and empty arrays are omitted recursively from human-readable output; zero and false remain visible. JSON and YAML retain complete values regardless of `--full`.
+
+`get` reuses synced issues for 24 hours after their last successful sync. Missing or expired issues sync first, then read from disk. Fresh reads require no Jira requests or credentials. Use `--ttl 1h` to change the duration or `--ttl=0` to always sync; negative durations fail. Refresh failures return an error and preserve the saved document. Changed `ignoreFields` settings also trigger refresh. Existing attachment/extraction settings apply on refresh; new issues use sync defaults without downloading attachments.
 
 ```bash
 gavel external-issues jira get EXAMPLE-42
 gavel external-issues jira get EXAMPLE-42 --format markdown
 gavel external-issues jira get EXAMPLE-42 --full --format markdown=issue.md
+gavel external-issues jira get EXAMPLE-42 --full=false
+gavel external-issues jira get EXAMPLE-42 --ttl=0
 ```
 
 Named field objects show their display name in compact output, with a link when available. Jira status categories and statuses with category metadata render as colored HTML badges in both compact and full views, including Markdown exports. Creator and other Jira user fields show an avatar capped at 24 × 24 pixels and a name rather than account metadata. Jira option objects show their value, such as `Not Received`, in both views; cascading options show `Region / East`. Their IDs and API URLs remain available in JSON and YAML.
@@ -91,7 +95,7 @@ Ignoring `comment` omits comments and their count and skips comment requests. Ig
 
 ## Sync to local Markdown
 
-`sync` writes a complete issue, including its fields, attachments and all comments, to `.gavel/jira/<project-id>/<issue-key>.md`. The project directory uses Jira's native project ID. Pass `--sync-dir` to choose a different root directory:
+`get` and `sync` share `$XDG_CACHE_HOME/.gavel/jira/<domain>/<project-code>/<issue-key>.md`, for example `$XDG_CACHE_HOME/.gavel/jira/example.atlassian.net/EXAMPLE/EXAMPLE-42.md`. When XDG_CACHE_HOME is unset, Gavel uses the platform user cache directory; a configured XDG path must be absolute. Domain is the Jira site host, and project code comes from Jira's project key rather than its numeric ID. Native IDs remain in metadata. For either command, `--sync-dir` replaces the base before the domain and project directories. Existing files are not moved automatically; `sync --from` continues refreshing them in place.
 
 ```bash
 gavel external-issues jira sync EXAMPLE-42
@@ -167,15 +171,15 @@ gavel external-issues jira sync '@issues.txt'
 
 ### Sync progress and attachments
 
-During sync, parent, linked and epic references prefer existing issue Markdown files under the selected sync directory, including other project directories. For example, an issue in `10001` can link to `../10002/EXAMPLE-43.md`. Same-site Jira links inside descriptions, comments and rich fields use the same lookup. Missing local files link to Jira; references are not fetched or synced recursively. The index includes existing files and is updated as issues are saved, so a target written later in the batch becomes available on the next sync. Duplicate local files for the same issue key produce an error. Standalone `get` and `list` output uses Jira links.
+During sync, parent, linked and epic references prefer existing Markdown files within the same domain, including other project-code directories. Missing files link to Jira; targets are not fetched recursively. The index updates as issues are saved, so a target written later in the batch becomes available on the next sync. Duplicate issue files produce an error. Full `get` output reuses saved Markdown, including extraction, and resolves local links to cached files; compact `get` and `list` output uses Jira links.
 
 Issues sync in input order using one Jira client. `--no-cache` refreshes field metadata once for the batch. ADF parsing and rendering warnings do not stop sync. Other errors stop sync and report the failed issue and its position; files already written remain available.
 
 Sync displays a task group with the current issue and a saved/total issue count. Its steps show field catalog loading, comment pagination, attachment downloads, document conversion, image extraction, and Markdown publication. Downloads show received bytes and a percentage when Jira supplies a content length. An issue counts as saved after its files have been published; a failed batch retains the completed count and identifies the issue where it stopped. Standalone `get`, `list`, comment listing, and attachment downloads also expose task status. Task output goes to stderr, leaving JSON and Markdown results on stdout. Use `--no-progress` for plain task output without the live display.
 
-`--attachments` downloads the originals into `<project-id>/<issue-key>.attachments/<attachment-id>/<filename>`. Filename links in the issue Markdown point to these relative local paths. Attachment IDs keep duplicate filenames separate. Without this flag, links continue to point to Jira. Running sync again refreshes the issue and reuses verified originals, downloading new or damaged files as needed; it does not delete older local files.
+`--attachments` downloads the originals into `<domain>/<project-code>/<issue-key>.attachments/<attachment-id>/<filename>`. Filename links in the issue Markdown point to these relative local paths. Attachment IDs keep duplicate filenames separate. Without this flag, links continue to point to Jira. Running sync again refreshes the issue and reuses verified originals, downloading new or damaged files as needed; it does not delete older local files.
 
-`--extract` implies `--attachments` and appends extracted PDF and DOCX content to the issue Markdown. Images use Markdown image syntax pointing to `attachments/cas/<sha256>.<extension>`, relative to the issue file. Image files live under `<project-id>/attachments/cas`, and repeated image content shares the same file. Keep this folder alongside the issue Markdown when moving or sharing it. Other attachment types are downloaded without document extraction.
+`--extract` implies `--attachments` and appends extracted PDF and DOCX content to the issue Markdown. Images use Markdown image syntax pointing to `attachments/cas/<sha256>.<extension>`, relative to the issue file. Image files live under `<domain>/<project-code>/attachments/cas`, and repeated image content shares the same file. Keep this folder alongside the issue Markdown when moving or sharing it. Other attachment types are downloaded without document extraction.
 
 Extraction requires [`uvx`, provided by uv](https://docs.astral.sh/uv/getting-started/installation/). Gavel runs an adapter around `docx2md==1.0.5` for DOCX files and PyMuPDF 2.0 through `uvx` for PDFs; uv downloads the Python dependencies on first use. DOCX files containing EMF or WMF images additionally require Node.js and npm. Gavel runs `npm exec --yes --package=emf-converter@4.24.0` to convert those images to SVG; npm downloads the pinned converter on first use. SVGs preserve vector elements and text, with embedded bitmaps where present in the source. Fonts available on the machine affect text appearance. Conversion runs locally. Unsupported images, invalid documents, missing tools and download failures return an error. The previous issue Markdown is replaced only after every requested download and extraction succeeds.
 
@@ -184,6 +188,8 @@ Extraction requires [`uvx`, provided by uv](https://docs.astral.sh/uv/getting-st
 ### Saved metadata and resync
 
 Every synced document starts with YAML frontmatter under `gavel`, with schema `version: 1`. It records the Jira site, cloud and issue identities, project, source update time, effective sync settings, and successful sync time. Attachment records are keyed by native attachment ID and retain original URLs separately from local paths. Download and extraction records include SHA-256 hashes, converter versions, pipeline fingerprints, timestamps, and associated image paths. Credentials are never stored.
+
+`gavel.snapshot` references a versioned structured issue snapshot in the project's `issues/cas` directory with a SHA-256 integrity check. It preserves native field IDs, names, schemas, rich documents and comments for local exports and compact rendering. Keep this directory alongside moved documents. Older documents gain snapshots on their next sync; corrupt snapshots fail explicitly.
 
 #### Issue fields
 
@@ -232,7 +238,7 @@ gavel external-issues jira sync --from ./issues/EXAMPLE-42.md --force
 
 Resync always loads current Jira issue data and its attachment inventory. Originals are matched by Jira site, issue and attachment ID. Gavel reuses a local original when its saved SHA-256 verifies and its byte count matches any positive size reported by Jira, without requesting attachment content or requiring an ETag. New attachments, missing files, missing or mismatched hashes, and size changes trigger a download. Local hashes verify local integrity; use `--force` to fetch fresh bytes for an existing attachment ID even when its size is unchanged. Filesystem permission and unsafe-path errors stop sync.
 
-`--extract` ensures every attachment has a local original, including images, spreadsheets and other types without an extractor. Only supported PDF/DOCX files enter document conversion. Extraction is reused when the source hash, pipeline fingerprint, cached Markdown, and images all verify. Missing or stale extraction artifacts regenerate from the verified original without downloading it again. Extracted Markdown is stored in `attachments/extracted`, with image links relative to its own location. `--force` refreshes downloads and extraction; `--no-cache` only refreshes the field catalog.
+`--extract` ensures every attachment has a local original, including images, spreadsheets and other types without an extractor. Only supported PDF/DOCX files enter document conversion. Extraction is reused when the source hash, pipeline fingerprint, cached Markdown, and images all verify. Missing or stale extraction artifacts regenerate from the verified original without downloading it again. Extracted Markdown is stored in `attachments/extracted`, with image links relative to its own location. `--force` refreshes downloads and extraction; `--no-cache` refreshes the field catalog and bypasses issue reuse in `get`, without forcing attachment downloads.
 
 Custom frontmatter and attachment `enrichments` records survive resync. Each enrichment can contain `source_sha256`, an inline `result`, artifact references with `path` and `sha256`, and tool-specific fields. Gavel marks unverified, changed-source, and removed-attachment enrichments `stale: true` while retaining their results. It does not run enrichment jobs or preserve edits to the generated Markdown body. Legacy files gain metadata on their next sync by issue key; `--from` requires valid metadata. Malformed metadata, source mismatches, or edits made during a sync stop publication.
 

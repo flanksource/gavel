@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +22,7 @@ import (
 func TestCommands(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "External Jira Commands") }
 
 func commandServer(handler http.HandlerFunc) *httptest.Server {
+	GinkgoT().Setenv("XDG_CACHE_HOME", GinkgoT().TempDir())
 	for _, key := range []string{"JIRA_OAUTH_ACCESS_TOKEN", "JIRA_CLOUD_ID", "ATLASSIAN_CLOUD_ID"} {
 		GinkgoT().Setenv(key, "")
 	}
@@ -38,6 +40,12 @@ func commandServer(handler http.HandlerFunc) *httptest.Server {
 	GinkgoT().Setenv("JIRA_API_TOKEN", "command-token")
 	GinkgoT().Setenv("GAVEL_JIRA_CACHE_DIR", GinkgoT().TempDir())
 	return server
+}
+
+func syncTestDomain() string {
+	site, err := url.Parse(os.Getenv("JIRA_URL"))
+	Expect(err).NotTo(HaveOccurred())
+	return site.Host
 }
 
 func commandRoot() *cobra.Command {

@@ -50,7 +50,7 @@ var _ = Describe("Jira client ignored fields", func() {
 	})
 
 	It("copies client patterns and skips excluded comments and remote links", func() {
-		issue, err := client.Get(context.Background(), GetOptions{Key: "EXAMPLE-1", Full: true, Store: store})
+		issue, err := client.fetchIssue(context.Background(), GetOptions{Key: "EXAMPLE-1", Full: true, Store: store})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(issue.Fields).To(HaveLen(1))
 		Expect(issue.Fields).To(HaveKey("customfield_2"))

@@ -92,6 +92,7 @@ type Issue struct {
 	Fields         map[string]any                `yaml:"fields,omitempty"`
 }
 type Metadata struct {
+	Snapshot    *Artifact              `yaml:"snapshot,omitempty"`
 	Version     int                    `yaml:"version"`
 	Source      Source                 `yaml:"source"`
 	Issue       *Issue                 `yaml:"issue,omitempty"`
@@ -104,6 +105,20 @@ type Document struct {
 	Metadata Metadata             `yaml:"gavel"`
 	Extra    map[string]yaml.Node `yaml:",inline"`
 	Original []byte               `yaml:"-"`
+}
+
+func (d *Document) Body() string {
+	text := strings.ReplaceAll(string(d.Original), "\r\n", "\n")
+	if !strings.HasPrefix(text, "---\n") {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for index := 1; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) == "---" || strings.TrimSpace(lines[index]) == "..." {
+			return strings.TrimSpace(strings.Join(lines[index+1:], "\n"))
+		}
+	}
+	return ""
 }
 
 func Read(root *os.Root, path string) (*Document, error) {

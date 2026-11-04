@@ -17,7 +17,7 @@ var _ = Describe("live Jira issue rendering", func() {
 		Expect(id).NotTo(BeEmpty(), "GAVEL_JIRA_LIVE_ISSUE is required")
 		client, err := NewClient(context.Background(), ClientOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		issue, err := client.Get(context.Background(), GetOptions{Key: id, Full: true, NoCache: true, Store: CatalogStore{Dir: GinkgoT().TempDir()}})
+		issue, err := client.fetchIssue(context.Background(), GetOptions{Key: id, Full: true, NoCache: true, Store: CatalogStore{Dir: GinkgoT().TempDir()}})
 		Expect(err).NotTo(HaveOccurred())
 		data, err := json.Marshal(issue)
 		Expect(err).NotTo(HaveOccurred())

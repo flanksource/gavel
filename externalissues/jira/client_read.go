@@ -26,7 +26,7 @@ type SearchOptions struct {
 	Store   CatalogStore
 }
 
-func (c *Client) Get(ctx context.Context, options GetOptions) (Issue, error) {
+func (c *Client) fetchIssue(ctx context.Context, options GetOptions) (Issue, error) {
 	return runJiraTask(ctx, "Get Jira issue "+options.Key, func(ctx context.Context, progress *task.Task) (Issue, error) {
 		if strings.TrimSpace(options.Key) == "" {
 			return Issue{}, fmt.Errorf("Jira issue key is required")

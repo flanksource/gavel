@@ -15,8 +15,6 @@ import (
 var _ = Describe("Jira sync local links", func() {
 	It("links existing cross-project issues and issues already published in the batch without fetching targets", func() {
 		root := GinkgoT().TempDir()
-		Expect(os.MkdirAll(filepath.Join(root, "10002"), 0o700)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(root, "10002", "EXAMPLE-2.md"), []byte("Existing"), 0o600)).To(Succeed())
 		var reads []string
 		client := testClient(func(w http.ResponseWriter, r *http.Request) {
 			switch {
@@ -33,15 +31,17 @@ var _ = Describe("Jira sync local links", func() {
 				if key == "EXAMPLE-4" {
 					target = "EXAMPLE-1"
 				}
-				fmt.Fprintf(w, `{"key":%q,"fields":{"summary":"References","project":{"id":"10001"},"parent":{"key":%q}}}`, key, target)
+				fmt.Fprintf(w, `{"key":%q,"fields":{"summary":"References","project":{"id":"10001","key":"EXAMPLE"},"parent":{"key":%q}}}`, key, target)
 			default:
 				Fail("unexpected Jira request: " + r.URL.Path)
 			}
 		})
+		Expect(os.MkdirAll(filepath.Join(root, syncTestDomain(), "OTHER"), 0o700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, syncTestDomain(), "OTHER", "EXAMPLE-2.md"), []byte("Existing"), 0o600)).To(Succeed())
 		results, err := client.Sync(context.Background(), SyncOptions{Keys: []string{"EXAMPLE-1", "EXAMPLE-4"}, Dir: root, Store: CatalogStore{Dir: filepath.Join(root, "catalog")}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(reads).To(Equal([]string{"EXAMPLE-1", "EXAMPLE-4"}))
-		for index, target := range []string{"../10002/EXAMPLE-2.md", "EXAMPLE-1.md"} {
+		for index, target := range []string{"../OTHER/EXAMPLE-2.md", "EXAMPLE-1.md"} {
 			body, err := os.ReadFile(results[index].Path)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(body)).To(ContainSubstring("](" + target + ")"))

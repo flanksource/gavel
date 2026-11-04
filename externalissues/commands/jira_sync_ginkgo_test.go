@@ -40,14 +40,14 @@ var _ = Describe("Jira sync command", func() {
 			case strings.HasSuffix(r.URL.Path, "/comment"):
 				fmt.Fprint(w, `{"total":0,"comments":[]}`)
 			default:
-				fmt.Fprint(w, `{"id":"10001","key":"EXAMPLE-1","fields":{"summary":"Metadata sync","project":{"id":"10001"}}}`)
+				fmt.Fprint(w, `{"id":"10001","key":"EXAMPLE-1","fields":{"summary":"Metadata sync","project":{"id":"10001","key":"EXAMPLE"}}}`)
 			}
 		})
 		dir := GinkgoT().TempDir()
 		_, err := commandOutput([]string{"sync", "EXAMPLE-1", "--sync-dir", dir, "--extract"}, "json")
 		Expect(err).NotTo(HaveOccurred())
-		path := filepath.Join(dir, "10001", "renamed.md")
-		Expect(os.Rename(filepath.Join(dir, "10001", "EXAMPLE-1.md"), path)).To(Succeed())
+		path := filepath.Join(dir, syncTestDomain(), "EXAMPLE", "renamed.md")
+		Expect(os.Rename(filepath.Join(dir, syncTestDomain(), "EXAMPLE", "EXAMPLE-1.md"), path)).To(Succeed())
 		output, err := commandOutput([]string{"sync", "--from", path, "--attachments=false", "--extract=false"}, "json")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(output).To(ContainSubstring("renamed.md"))
@@ -88,7 +88,7 @@ var _ = Describe("Jira sync command", func() {
 				case r.URL.Path == "/rest/api/3/issue/EXAMPLE-1" || r.URL.Path == "/rest/api/3/issue/EXAMPLE-2":
 					key := strings.TrimPrefix(r.URL.Path, "/rest/api/3/issue/")
 					keys = append(keys, key)
-					fmt.Fprintf(w, `{"key":%q,"fields":{"summary":"Batch sync","project":{"id":"10001"}}}`, key)
+					fmt.Fprintf(w, `{"key":%q,"fields":{"summary":"Batch sync","project":{"id":"10001","key":"EXAMPLE"}}}`, key)
 				default:
 					http.NotFound(w, r)
 				}
@@ -116,7 +116,7 @@ var _ = Describe("Jira sync command", func() {
 			Expect(catalogs).To(Equal(1))
 			Expect(identities).To(Equal(1))
 			for _, result := range results {
-				Expect(result.Path).To(Equal(filepath.Join(dir, "10001", result.Key+".md")))
+				Expect(result.Path).To(Equal(filepath.Join(dir, syncTestDomain(), "EXAMPLE", result.Key+".md")))
 				Expect(result.Path).To(BeAnExistingFile())
 			}
 		}
@@ -135,7 +135,7 @@ var _ = Describe("Jira sync command", func() {
 		commandServer(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/rest/api/3/issue/EXAMPLE-1":
-				fmt.Fprint(w, `{"key":"EXAMPLE-1","fields":{"summary":"Sync example","project":{"id":"10001"},"attachment":[{"id":"20001","filename":"notes.txt","content":"https://example.test/notes.txt"}]}}`)
+				fmt.Fprint(w, `{"key":"EXAMPLE-1","fields":{"summary":"Sync example","project":{"id":"10001","key":"EXAMPLE"},"attachment":[{"id":"20001","filename":"notes.txt","content":"https://example.test/notes.txt"}]}}`)
 			case "/rest/api/3/myself":
 				fmt.Fprint(w, `{"accountId":"account"}`)
 			case "/rest/api/3/field", "/rest/api/3/issue/EXAMPLE-1/remotelink":
@@ -157,7 +157,7 @@ var _ = Describe("Jira sync command", func() {
 			}
 			Expect(json.Unmarshal([]byte(output), &result)).To(Succeed())
 			Expect(result).To(HaveLen(1))
-			Expect(result[0].Path).To(Equal(filepath.Join(dir, "10001", "EXAMPLE-1.md")))
+			Expect(result[0].Path).To(Equal(filepath.Join(dir, syncTestDomain(), "EXAMPLE", "EXAMPLE-1.md")))
 			data, err := os.ReadFile(result[0].Path)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(data)).To(ContainSubstring("[notes.txt](EXAMPLE-1.attachments/20001/notes.txt)"))

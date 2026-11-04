@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/formatters/excel"
@@ -32,14 +33,16 @@ type externalIssueList struct {
 
 type externalIssueGet struct {
 	externalIssueRef
-	Full bool `flag:"full" help:"Render the complete description, attachments and comments"`
+	Full    bool   `flag:"full" default:"true" help:"Render the complete description, attachments and comments"`
+	TTL     string `flag:"ttl" default:"24h" help:"Reuse synced issues for this duration; zero always syncs"`
+	SyncDir string `flag:"sync-dir" help:"Cache base directory containing domain/project-code folders"`
 }
 
 type externalIssueSync struct {
 	IDs         []string `args:"true" clicky:"cli-file-read" help:"Jira issue keys or IDs, or @issues.xlsx:[Sheet!]Column / @issues.csv:Column"`
 	From        string   `flag:"from" help:"Resync a saved Markdown file in place using its frontmatter"`
 	Force       bool     `flag:"force" help:"Refresh downloads and extraction without reusing cached artifacts"`
-	SyncDir     string   `flag:"sync-dir" help:"Root directory for <project-id>/<issue-key>.md files (default .gavel/jira)"`
+	SyncDir     string   `flag:"sync-dir" help:"Cache base directory (default XDG_CACHE_HOME/.gavel/jira)"`
 	Attachments *bool    `flag:"attachments" help:"Download attachments and link to local files"`
 	Extract     *bool    `flag:"extract" help:"Download attachments and include PDF/DOCX Markdown with images in attachments/cas (requires uvx)"`
 }
@@ -130,11 +133,15 @@ func Register(rootCmd *cobra.Command) {
 		if err != nil {
 			return jira.Issue{}, err
 		}
-		c, err := client(ctx)
+		ttl, err := time.ParseDuration(opts.TTL)
+		if err != nil {
+			return jira.Issue{}, fmt.Errorf("invalid --ttl %q: %w", opts.TTL, err)
+		}
+		options, err := jiraClientOptions(ctx, jira.ClientOptions{Site: site, Profile: profile})
 		if err != nil {
 			return jira.Issue{}, err
 		}
-		return c.Get(ctx, jira.GetOptions{Key: id, Full: opts.Full, NoCache: noCache, Store: store()})
+		return jira.Read(ctx, jira.ReadOptions{Key: id, Full: opts.Full, TTL: ttl, Dir: opts.SyncDir, NoCache: noCache, Store: store(), Client: options})
 	})
 	clicky.AddNamedCommandWithContext("list", provider, externalIssueList{}, func(ctx context.Context, opts externalIssueList) ([]jira.Issue, error) {
 		c, err := client(ctx)

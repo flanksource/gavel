@@ -23,7 +23,7 @@ var _ = Describe("Jira CLI configured exclusions", func() {
 		config := "externalIssues: {jira: {ignoreFields: [Internal*, comment, remoteLinks, attachment]}}\n"
 		Expect(os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte(config), 0o600)).To(Succeed())
 		commandServer(func(w http.ResponseWriter, r *http.Request) {
-			const issue = `{"key":"EXAMPLE-1","fields":{"summary":"Visible title","project":{"id":"10001"},"customfield_1":"Hidden value","customfield_2":"Visible value"}}`
+			const issue = `{"key":"EXAMPLE-1","fields":{"summary":"Visible title","project":{"id":"10001","key":"EXAMPLE"},"customfield_1":"Hidden value","customfield_2":"Visible value"}}`
 			switch r.URL.Path {
 			case "/rest/api/3/issue/EXAMPLE-1":
 				fmt.Fprint(w, issue)
@@ -50,7 +50,7 @@ var _ = Describe("Jira CLI configured exclusions", func() {
 			Expect(command.Run()).To(Succeed(), stderr.String())
 			output := stdout.String()
 			if operation[0] == "sync" {
-				data, err := os.ReadFile(filepath.Join(workDir, "issues", "10001", "EXAMPLE-1.md"))
+				data, err := os.ReadFile(filepath.Join(workDir, "issues", syncTestDomain(), "EXAMPLE", "EXAMPLE-1.md"))
 				Expect(err).NotTo(HaveOccurred())
 				output = string(data)
 			}
