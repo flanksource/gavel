@@ -153,7 +153,7 @@ job exits or is cancelled.
   in `sandbox/internal/substrate`, refreshed by its `sync.sh`, rather than depending on Substrate's
   Go modules.
 
-- **User.** env's guest starts the job as root, whatever user the image names; gVisor is what
+- **User.** A job runs as the user its image names, uid 1000 in the runner image; gVisor is what
   isolates it.
 
 ### Running the substrate e2e
@@ -164,28 +164,40 @@ the host and exits with the check's verdict. `TestSubstrateExecutorAgainstAClust
 (`sandbox/substrate_e2e_test.go`) runs a job directly. It checks the job's output and exit code, that it reaches serve and proxy.golang.org but
 can't resolve example.com, that it holds only a placeholder for its model key while
 httpbin.org receives the real one, and that its environment is deleted afterwards. On a kind
-cluster with Substrate installed (`ate-setup deploy ate-system`):
+cluster running Substrate 1.0.0-rc.2 and env `56424de`:
 
-1. Deploy env (`ate-env manifest --worker-image <ateworker-gvisor@sha256:…> --api-image
-   <ate-env-api@sha256:…> | kubectl apply -f -`), and make its ServiceAccount
-   `system:serviceaccount:ate-env:default` a global `owner` in Substrate's access policy so it
-   can create its atespace.
-2. Register `default-template` (`ate-env manifest template`), then a `gavel-runner` template:
-   the same, plus a `systemInfo` volume holding the `egress-mitm.ate.dev` trust bundle as
-   `trust-bundle.pem`, mounted on the guest container at `/run/ate/egress-trust-bundle`. A
-   Substrate that no longer has `ActorTemplate.sandboxConfig` (removed in agent-substrate#2780)
-   rejects the field `ate-env manifest template` writes; delete it from the manifest.
-3. Create a Secret `model` with key `key` (value `gavel-e2e-injected-credential`) in namespace
+1. From a Substrate `v1.0.0-rc.2` checkout, create the cluster
+   (`KIND_CLUSTER_NAME=gavel-substrate-rc2 hack/create-kind-cluster.sh`) and install the release's
+   images, letting env's API through the router:
+   `ATE_INSTALL_KIND=true go run ./cmd/ate-setup deploy ate-system --rollout-timeout 5m
+   --image-repo ghcr.io/agent-substrate/substrate --image-tag v1.0.0-rc.2 --sandbox-classes=gvisor
+   --credential-provider='{"name":"k8s.io"}'
+   --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client,spiffe://cluster.local/ns/ate-env/sa/default`.
+2. From an env `56424de` checkout, build `ate-env-api` and `ate-env-guest` into the cluster's
+   registry (`KO_DOCKER_REPO=localhost:5001/<name> ko build --bare ./cmd/<name>`), deploy env with
+   the release's worker (`go run ./cmd/ate-env manifest --api-image <ate-env-api@sha256:…>
+   --worker-image ghcr.io/agent-substrate/substrate/ateworker-gvisor@sha256:<v1.0.0-rc.2's> |
+   kubectl apply -f -`), make `system:serviceaccount:ate-env:default` a global `owner`
+   (`kubectl ate create access-policy --global`) so it can create its atespace, and restart
+   `ate-env-api`.
+3. Register the image templates with `go run ./cmd/ate-env manifest template --guest-image
+   <ate-env-guest@sha256:…> --snapshots-bucket gs://ate-snapshots/ate-env/ | kubectl ate create
+   actor-template -f -`: `default-template` as it is, and `gavel-runner` with `--template
+   gavel-runner --rootfs-image localhost:5001/gavel-runner@sha256:<digest>`, plus a `systemInfo`
+   volume holding the `trustBundle` named `egress-mitm.ate.dev` as `trust-bundle.pem`, mounted on
+   the guest container at `/run/ate/egress-trust-bundle`. rc.2 refuses a template's own
+   `snapshotConfig.storageLocation`, which `ate-env manifest template` writes: delete it.
+4. Create a Secret `model` with key `key` (value `gavel-e2e-injected-credential`) in namespace
    `gavel-e2e`, and, for the hosted agent run, a Secret `claude-oauth` with key `key` holding a
    Claude Code OAuth token. Allow atespace `ate-env` that namespace in the
    `k8s-credential-provider-namespace-policy` ConfigMap (restart the provider).
-4. Create ServiceAccount `gavel-e2e/gavel`, make it an `editor` of atespace `ate-env`, and mint its
-   token: `kubectl -n gavel-e2e create token gavel --audience api.ate-system.svc > gavel.token`.
-5. Point a Service at the host so jobs reach the test's stand-in for serve: Service
+5. Create ServiceAccount `gavel-e2e/gavel`, make it an `editor` of atespace `ate-env`
+   (`kubectl ate create access-policy -a ate-env`), and mint its token:
+   `kubectl -n gavel-e2e create token gavel --audience api.ate-system.svc > gavel.token`.
+6. Point a Service at the host so jobs reach the test's stand-in for serve: Service
    `default/gavel-host` on port 18080 with an EndpointSlice holding the kind network's gateway
    (`172.18.0.1`).
-6. Push a runner image to the cluster's registry and port-forward the APIs:
-   `kubectl port-forward -n ate-env svc/ate-env-api 7777:7777` and
+7. Port-forward the APIs: `kubectl port-forward -n ate-env svc/ate-env-api 7777:7777` and
    `kubectl port-forward -n ate-system svc/api 8443:443`.
 
 Then run:
