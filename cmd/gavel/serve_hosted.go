@@ -166,6 +166,10 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	if err != nil {
 		return hostedStack{}, err
 	}
+	substrateBackend, err := substrateAgentBackend(opts)
+	if err != nil {
+		return hostedStack{}, err
+	}
 	// An agent run's sandbox job sends its messages to the run API, which the relay hands to the
 	// run waiting for them.
 	relay := &remote.Relay{}
@@ -186,7 +190,10 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		srv.SetHostedWorkspaces(ui.HostedWorkspaces{DB: db, Sources: sources})
 		srv.SetFixtureSchemaProvider(func() (any, error) { return fixturesSchemaDocument() })
 		if dispatcher != nil {
-			srv.SetAgentRuns(ui.AgentRuns{Dispatcher: dispatcher, Relay: relay})
+			srv.SetAgentRuns(ui.AgentRuns{
+				Dispatcher: dispatcher, Relay: relay, Substrate: substrateBackend, Sources: sources,
+				Transcripts: ui.RunTranscripts{DB: db, DataDir: sources.DataDir},
+			})
 		}
 		srv.SetAuthConfig(authConfig)
 		if app != nil {
