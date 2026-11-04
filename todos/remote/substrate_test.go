@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/sandbox"
+	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/google/uuid"
@@ -64,6 +66,7 @@ type environment struct {
 	selection api.SandboxConfig
 	in        promptrun.Input
 	fail      error
+	prStatus  []byte
 }
 
 func (e *environment) Kind() api.SandboxKind { return api.SandboxSubstrate }
@@ -79,6 +82,12 @@ func (e *environment) RunRemote(_ context.Context, in promptrun.Input, started f
 	_, err := io.WriteString(in.EnvironmentOutput, "the environment's output\n")
 	require.NoError(e.t, err)
 	in.OnTranscript("claude", "-tmp-captain-run-src/session-1.jsonl", []byte(`{"type":"user"}`+"\n"))
+	// The step's PR hook reads its PR through the caller, as gavel's program does.
+	status, err := runclient.OverHostCall(func(name string, data json.RawMessage) (json.RawMessage, error) {
+		return in.HostCalls[name](context.Background(), data)
+	}).Do(context.Background(), "GET", "pr/status?number=7", nil)
+	require.NoError(e.t, err)
+	e.prStatus, _ = io.ReadAll(status.Body)
 	if e.fail != nil {
 		return promptrun.Result{}, e.fail
 	}
@@ -146,6 +155,7 @@ func newHostedRun(t *testing.T, env *environment) *hostedRun {
 		Sources: sources,
 		Backend: map[string]any{"envAPI": "env.example:443", "control": "control.example:443", "image": "ghcr.io/flanksource/gavel-runner@sha256:" + strings.Repeat("0", 64)},
 		Scope:   tenant.Scope{OrgID: org}, Repo: repo, SHA: hosted.base, TodoID: hosted.todo,
+		RunAPI: runAPIFor(t, []byte(strings.Repeat("k", 32))),
 		Transcripts: func(_ context.Context, run sandbox.RunRecord, source, name string, data io.Reader) error {
 			content, err := io.ReadAll(data)
 			require.NoError(t, err)
@@ -197,11 +207,9 @@ func TestSubstrateRunnerRunsAHostedStepOnSubstrate(t *testing.T) {
 	assert.Equal(t, []string{"gavel", "runner", "run-task"}, options["command"])
 	assert.Equal(t, "env.example:443", options["envAPI"], "the backend's own options stay")
 	runEnv := options["env"].(map[string]string)
-	assert.Equal(t, "http://gavel.gavel.svc:8080", runEnv["GAVEL_SERVER"])
-	assert.Equal(t, id.String(), runEnv["GAVEL_RUN_ID"])
-	tokenRun, _, err := sandbox.VerifyRunToken(hosted.runner.Dispatcher.TokenKey, runEnv["GAVEL_RUN_TOKEN"], time.Now())
-	require.NoError(t, err)
-	assert.Equal(t, id, tokenRun)
+	assert.NotContains(t, runEnv, "GAVEL_RUN_TOKEN", "the environment holds no token: the caller acts on the run's PR for it")
+	assert.NotContains(t, runEnv, "GAVEL_SERVER")
+	assert.Equal(t, `{"run":"`+id.String()+`"}`, string(env.prStatus), "the PR call went to serve's run API, as the run")
 
 	assert.Equal(t, hosted.gitDir, env.in.Repo, "the run starts from serve's git directory of the repository")
 	assert.Equal(t, &api.SandboxRef{Mode: api.SandboxSubstrate}, env.in.Resolved.Spec.Sandbox)
@@ -226,4 +234,17 @@ func TestSubstrateRunnerRecordsAFailedRun(t *testing.T) {
 	var status string
 	require.NoError(t, hosted.runner.Dispatcher.DB.Raw(`SELECT status FROM sandbox_runs WHERE org_id = ?`, hosted.org).Scan(&status).Error)
 	assert.Equal(t, "failed", status)
+}
+
+// runAPIFor stands in for serve's run API: it answers a run's PR status with the run its token is
+// for.
+func runAPIFor(t *testing.T, key []byte) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/runs/{id}/pr/status", func(w http.ResponseWriter, r *http.Request) {
+		run, _, err := sandbox.VerifyRunToken(key, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), time.Now())
+		require.NoError(t, err)
+		assert.Equal(t, r.PathValue("id"), run.String())
+		_, _ = w.Write([]byte(`{"run":"` + run.String() + `"}`))
+	})
+	return mux
 }

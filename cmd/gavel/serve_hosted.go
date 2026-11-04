@@ -175,6 +175,15 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 	}
 
+	// Sandbox jobs authenticate with their run token; agent runs on substrate reach it through
+	// serve, as their run.
+	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
+	if app != nil {
+		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
+			return ui.OrganizationPRs(store.TokenSource(org), cache.ForOrg(org))(ctx, url)
+		}
+	}
+
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
 		cfg, err := ui.LoadOrgSearchConfig(ctx, db, scope.OrgID)
 		if err != nil {
@@ -193,7 +202,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		if dispatcher != nil {
 			srv.SetAgentRuns(ui.AgentRuns{
 				Dispatcher: dispatcher, Substrate: substrateBackend, Sources: sources,
-				Transcripts: ui.RunTranscripts{DB: db, DataDir: sources.DataDir},
+				Transcripts: ui.RunTranscripts{DB: db, DataDir: sources.DataDir}, RunAPI: runs.Handler(),
 			})
 		}
 		srv.SetAuthConfig(authConfig)
@@ -226,13 +235,6 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		DB:    db,
 		OIDC:  api.GitHubOIDCVerifier{Audience: opts.PublicURL, JWKS: api.NewJWKSCache(api.GitHubOIDCJWKSURL, &http.Client{Timeout: 10 * time.Second}, 10*time.Minute)},
 		Cache: cache,
-	}
-	// Sandbox jobs authenticate with their run token.
-	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
-	if app != nil {
-		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
-			return ui.OrganizationPRs(store.TokenSource(org), cache.ForOrg(org))(ctx, url)
-		}
 	}
 	root := http.NewServeMux()
 	root.Handle("/api/ci/", ciResults.Handler())
