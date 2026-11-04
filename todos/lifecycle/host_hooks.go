@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -87,6 +88,26 @@ func (h *Host) runHooks(todo *types.TODO, req captainai.Request, opts HookOption
 		}
 	}
 	return hooks
+}
+
+// In is r for a run whose checkout moved from root to dir, as a sandbox's does: the linked PR's
+// checkout is at the same place under dir. A path outside root moves to dir itself.
+func (r RunHooks) In(root, dir string) RunHooks {
+	if r.PR != nil {
+		pr := *r.PR
+		pr.WorkDir = underRoot(root, dir, pr.WorkDir)
+		r.PR = &pr
+	}
+	return r
+}
+
+// underRoot moves path from under root to under dir. A path outside root moves to dir itself.
+func underRoot(root, dir, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return dir
+	}
+	return filepath.Join(dir, rel)
 }
 
 // Build makes the hooks, in the order Hooks documents, and the tools that must run beside them
