@@ -1,4 +1,4 @@
-// Runs sandbox jobs on agent-substrate: each job is an environment created from the runner image,
+// Runs sandbox jobs on agent-substrate: each job is an environment from the runner's image template,
 // whose one process is the job, with egress limited to an allowlist and model keys injected outside.
 package sandbox
 
