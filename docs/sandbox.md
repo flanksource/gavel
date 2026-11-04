@@ -105,8 +105,9 @@ job exits or is cancelled.
   PR reads, pushes to and resolves threads on it by asking serve over that same channel, which
   serve answers with its run API as the run; the environment holds no run token and can't reach
   serve, so an agent run's egress is the jobs' list below without serve.
-- **Cleanup.** Every ten minutes serve deletes `gavel-run-` environments older than a run can
-  live (its timeout plus 15 minutes), left behind when serve stopped mid-run. Substrate's access
+- **Cleanup.** A run works at most its timeout, an hour, whatever its step's own budget. Every
+  ten minutes serve deletes `gavel-run-` environments older than a run can live (its timeout
+  plus 15 minutes), left behind when serve stopped mid-run. Substrate's access
   policy must let serve's identity list the atespace's actors for this.
 - **Image.** Substrate runs images pinned by digest, so `--sandbox-image` must be
   `repo@sha256:<digest>`. Environments derive from `--substrate-template` (env's

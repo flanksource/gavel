@@ -87,10 +87,15 @@ func (d *Dispatcher) credentials(ctx context.Context, run, org uuid.UUID, kind s
 	return credentials, nil
 }
 
+// RunTimeout is the longest a run may work.
+func (d *Dispatcher) RunTimeout() time.Duration {
+	return d.Limits.withDefaults().Timeout
+}
+
 // RunLifetime is how long a run's token, and so the run, may last: its timeout plus 15 minutes
 // to report how it ended.
 func (d *Dispatcher) RunLifetime() time.Duration {
-	return d.Limits.withDefaults().Timeout + 15*time.Minute
+	return d.RunTimeout() + 15*time.Minute
 }
 
 // Run is a dispatched run.

@@ -67,6 +67,8 @@ type environment struct {
 	in        promptrun.Input
 	fail      error
 	prStatus  []byte
+	// deadline is when the run's context ends, as the sandbox was handed it.
+	deadline time.Time
 }
 
 func (e *environment) Kind() api.SandboxKind { return api.SandboxSubstrate }
@@ -76,8 +78,9 @@ func (e *environment) Prepare(context.Context, *api.Spec) (*api.SandboxSession, 
 func (e *environment) Close() error              { return nil }
 func (e *environment) IsolatesWorkspace() bool   { return true }
 func (e *environment) ProvidesEgressProxy() bool { return true }
-func (e *environment) RunRemote(_ context.Context, in promptrun.Input, started func(api.Spec) error) (promptrun.Result, error) {
+func (e *environment) RunRemote(ctx context.Context, in promptrun.Input, started func(api.Spec) error) (promptrun.Result, error) {
 	e.in = in
+	e.deadline, _ = ctx.Deadline()
 	require.NoError(e.t, started(in.Resolved.Spec))
 	_, err := io.WriteString(in.EnvironmentOutput, "the environment's output\n")
 	require.NoError(e.t, err)
@@ -223,6 +226,20 @@ func TestSubstrateRunnerRunsAHostedStepOnSubstrate(t *testing.T) {
 
 	branch := sandbox.RunBranch(hosted.todo, id)
 	assert.Equal(t, result.Response.Workspace.Worktree.Head, gitRun(t, hosted.gitDir, "rev-parse", "refs/heads/"+branch), "the run's branch is the repository's")
+}
+
+func TestSubstrateRunnerBoundsARunByTheDispatchersTimeout(t *testing.T) {
+	env := &environment{t: t}
+	hosted := newHostedRun(t, env)
+	hosted.runner.Dispatcher.Limits.Timeout = 10 * time.Minute
+	run := step()
+	run.Input.Timeout = 30 * time.Minute
+
+	_, err := hosted.runner.Run(t.Context(), run)
+	require.NoError(t, err)
+	require.False(t, env.deadline.IsZero(), "the run has a deadline")
+	assert.LessOrEqual(t, time.Until(env.deadline), 10*time.Minute, "the run ends within the dispatcher's timeout, not its step's longer budget")
+	assert.Equal(t, hosted.runner.Dispatcher.RunLifetime().String(), env.selection.Options["maxLifetime"], "its environment outlives it")
 }
 
 func TestSubstrateRunnerRecordsAFailedRun(t *testing.T) {
