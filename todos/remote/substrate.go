@@ -80,7 +80,11 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 			logger.Warnf("keep transcript %s of agent run %s: %v", name, id, err)
 		}
 	}
-	result, err := promptrun.Run(ctx, in)
+	// The dispatcher's timeout bounds every run, whatever its step's own budget, so the run ends
+	// within its environment's lifetime.
+	runCtx, cancel := context.WithTimeout(ctx, r.Dispatcher.RunTimeout())
+	defer cancel()
+	result, err := promptrun.Run(runCtx, in)
 	if err != nil {
 		return result, err
 	}
