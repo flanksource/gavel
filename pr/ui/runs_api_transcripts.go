@@ -4,17 +4,14 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/monitor"
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/sandbox"
 	"gorm.io/gorm"
 )
@@ -22,28 +19,6 @@ import (
 // TranscriptsDir is where serve keeps the transcripts agent runs upload, under dataDir.
 func TranscriptsDir(dataDir string) string {
 	return filepath.Join(dataDir, "transcripts")
-}
-
-// maxTranscriptBytes bounds one uploaded transcript file.
-const maxTranscriptBytes = 256 << 20
-
-// handleTranscript stores the uploaded transcript file and ingests it, as RunTranscripts.Keep does.
-func (a *RunsAPI) handleTranscript(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) {
-	if run.Spec.Kind != "agent" {
-		writeCIError(w, http.StatusBadRequest, fmt.Sprintf("run %s is a %s run; only agent runs upload transcripts", run.ID, run.Spec.Kind))
-		return
-	}
-	transcripts := RunTranscripts{DB: a.DB, DataDir: a.Sources.DataDir}
-	err := transcripts.Keep(r.Context(), run, r.URL.Query().Get("source"), r.URL.Query().Get("name"), http.MaxBytesReader(w, r.Body, maxTranscriptBytes))
-	switch {
-	case errors.As(err, new(*TranscriptRefusedError)):
-		writeCIError(w, http.StatusBadRequest, err.Error())
-	case err != nil:
-		logger.Warnf("keep a transcript of sandbox run %s: %v", run.ID, err)
-		writeCIError(w, http.StatusInternalServerError, "could not keep the transcript")
-	default:
-		w.WriteHeader(http.StatusAccepted)
-	}
 }
 
 // TranscriptRefusedError is a transcript that isn't one: an unknown source, a name outside the

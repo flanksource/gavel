@@ -27,7 +27,6 @@ import (
 	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/todos/lifecycle"
-	"github.com/flanksource/gavel/todos/remote"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -149,15 +148,11 @@ func (r *substrateRun) RunRemote(ctx context.Context, in promptrun.Input, starte
 	})
 }
 
-// inProcessExecutor runs each job's sandbox side in this process: the job's checkout of the
-// pushed repository, then an agent job's messages sent to the relay as JSON, as the run API
-// receives them.
+// inProcessExecutor runs each test or lint job's sandbox side in this process: the job's checkout
+// of the pushed repository.
 type inProcessExecutor struct {
-	db      *gorm.DB
-	relay   *remote.Relay
-	bareDir func(repo uuid.UUID) string
-	// agent answers the run's turns; nil is planAgent.
-	agent    captainai.Provider
+	db       *gorm.DB
+	bareDir  func(repo uuid.UUID) string
 	mu       sync.Mutex
 	canceled int
 }
@@ -199,34 +194,7 @@ func (e *inProcessExecutor) run(ctx context.Context, id uuid.UUID) error {
 		return errors.New(string(out))
 	}
 	// A test or lint job's work is the runner's, which these tests don't run; it ends checked out.
-	if record.Spec.Kind != "agent" {
-		return nil
-	}
-	var job remote.Job
-	if err := json.Unmarshal(record.Spec.Agent, &job); err != nil {
-		return err
-	}
-	send := func(message remote.Message) error {
-		data, err := json.Marshal(message)
-		if err != nil {
-			return err
-		}
-		var received remote.Message
-		if err := json.Unmarshal(data, &received); err != nil {
-			return err
-		}
-		return e.relay.Deliver(ctx, id, received)
-	}
-	var agent captainai.Provider = planAgent{}
-	if e.agent != nil {
-		agent = e.agent
-	}
-	call := func(message remote.Message) (remote.Reply, error) { return e.relay.Call(ctx, id, message) }
-	finished, err := remote.Execute(ctx, job, dir, agent, remote.Serve{Send: send, Call: call})
-	if err != nil {
-		return err
-	}
-	return send(remote.ResultMessage(finished.Result, finished.Err))
+	return nil
 }
 
 func (h *inProcessHandle) Logs(context.Context) (io.ReadCloser, error) {
@@ -268,10 +236,9 @@ func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
 	}
 	dataDir := t.TempDir()
 	h.workspace = "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
-	relay := &remote.Relay{}
 	logs := blob.Local(t.TempDir())
 	h.logs = logs
-	h.executor = &inProcessExecutor{db: db, relay: relay, agent: agent, bareDir: func(id uuid.UUID) string {
+	h.executor = &inProcessExecutor{db: db, bareDir: func(id uuid.UUID) string {
 		return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
 	}}
 	dispatcher := &sandbox.Dispatcher{
@@ -287,7 +254,7 @@ func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
 	t.Cleanup(func() { api.RegisterSandbox(api.SandboxSubstrate, substraterun.Substrate) })
 	sources := &sandbox.Sources{DataDir: dataDir}
 	srv.SetAgentRuns(AgentRuns{
-		Dispatcher: dispatcher, Relay: relay, Sources: sources, Transcripts: RunTranscripts{DB: db, DataDir: dataDir},
+		Dispatcher: dispatcher, Sources: sources, Transcripts: RunTranscripts{DB: db, DataDir: dataDir},
 		Substrate: map[string]any{"envAPI": "env.example:443", "control": "control.example:443", "image": "runner@sha256:" + strings.Repeat("0", 64)},
 	})
 	h.base = serveActingAs(t, srv, org)
@@ -370,7 +337,7 @@ func TestEveryHostedRunGoesToASandbox(t *testing.T) {
 	continuation := run.Continuation{Dir: hosted.Dir, Todo: todo, Step: "run", Override: override}
 
 	withSandbox := &Server{}
-	withSandbox.SetAgentRuns(AgentRuns{Dispatcher: &sandbox.Dispatcher{}, Relay: &remote.Relay{}, Substrate: map[string]any{}})
+	withSandbox.SetAgentRuns(AgentRuns{Dispatcher: &sandbox.Dispatcher{}, Substrate: map[string]any{}})
 	req, err := withSandbox.continuationRequest(context.Background(), hosted, continuation)
 	require.NoError(t, err)
 	assert.NotNil(t, req.Remote, "a hosted continuation runs in a sandbox")

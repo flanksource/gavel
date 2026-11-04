@@ -455,7 +455,7 @@ func (h *Host) dispatch(exec *todos.ExecutorContext, todo *types.TODO, step Step
 	var out promptrun.Result
 	var err error
 	if h.Remote != nil {
-		out, err = h.Remote.Run(runCtx, RemoteRun{Input: input.input, Hooks: input.runHooks, Admitted: input.admitted})
+		out, err = h.Remote.Run(runCtx, RemoteRun{Input: input.input, Hooks: input.runHooks})
 	} else {
 		out, err = promptrun.Run(runCtx, input.input)
 	}

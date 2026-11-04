@@ -75,42 +75,6 @@ func (s *Sources) CommitSubjects(ctx context.Context, repo Repo, base, head stri
 	return strings.Split(strings.TrimSpace(log), "\n"), nil
 }
 
-// PushRunCommits creates branch, which must start with RunBranchPrefix and not exist yet, at the
-// one branch bundle holds, after checking it continues from base, the commit the run started at.
-// It returns the branch's commit.
-func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch string, bundle io.Reader) (string, error) {
-	if !strings.HasPrefix(branch, RunBranchPrefix) || strings.HasPrefix(branch, "-") {
-		return "", fmt.Errorf("a run's commits go on a %s branch, not %q", RunBranchPrefix, branch)
-	}
-	if _, err := runGit(ctx, nil, "check-ref-format", "refs/heads/"+branch); err != nil {
-		return "", fmt.Errorf("%q is not a branch name: %w", branch, err)
-	}
-	source, err := s.sourceDir(ctx, repo)
-	if err != nil {
-		return "", err
-	}
-	sha, done, err := receiveCommits(ctx, source, base, bundle)
-	if err != nil {
-		return "", err
-	}
-	defer done()
-
-	switch repo.Source {
-	case "push":
-		if _, err := runGit(ctx, nil, "-C", source, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
-			return "", fmt.Errorf("create branch %s of %s: %w", branch, repo.label(), ErrBranchExists)
-		}
-		if _, err := runGit(ctx, nil, "-C", source, "update-ref", "refs/heads/"+branch, sha, ""); err != nil {
-			return "", fmt.Errorf("create branch %s of %s: %w", branch, repo.label(), err)
-		}
-	case "github":
-		if err := s.pushNewBranch(ctx, repo, source, branch, sha); err != nil {
-			return "", err
-		}
-	}
-	return sha, nil
-}
-
 // PublishRunBranch makes branch, a run's branch whose commits, up to sha, came back to repo's git
 // directory, the repository's own: a pushed repository's bare repository has it at sha, and a
 // GitHub repository's goes to GitHub, which mustn't have it yet. The mirror isn't refreshed
