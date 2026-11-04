@@ -32,13 +32,17 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
   const [state, setState] = useState<PromptRunState>({ status: 'idle' });
   // Callers pass fresh callbacks per render; the stream must not reopen for them.
   const callbacks = useRef({ onSuccess, onSettled, label });
-  callbacks.current = { onSuccess, onSettled, label };
+  useEffect(() => {
+    callbacks.current = { onSuccess, onSettled, label };
+  });
   const runId = state.status === 'running' ? state.runId : '';
 
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream, which drops its listeners
   useEffect(() => {
     if (!runId) return;
     const settle = () => callbacks.current.onSettled?.();
     const stream = openEventStream(`/api/captain/prompt/runs/${encodeURIComponent(runId)}/stream`);
+    let closed = false;
     stream.addEventListener('run', event => {
       const { sessionId } = parseFrame<PromptRunFrame>(event);
       if (sessionId) setState(current => current.status === 'running' ? { ...current, sessionId } : current);
@@ -62,7 +66,7 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
       const data = (event as MessageEvent<string>).data;
       if (!data) {
         void fetch(`/api/captain/prompt/runs/${encodeURIComponent(runId)}`).then(response => {
-          if (response.status !== 404) return;
+          if (closed || response.status !== 404) return;
           stream.close();
           setState({ status: 'failed', runId, error: `Captain no longer knows this ${callbacks.current.label}; check its result before retrying.` });
           settle();
@@ -74,7 +78,10 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
       setState({ status: 'failed', runId, sessionId: summary.sessionId, error: summary.error || `The ${callbacks.current.label} failed.` });
       settle();
     });
-    return () => stream.close();
+    return () => {
+      closed = true;
+      stream.close();
+    };
   }, [runId]);
 
   const start = async (variables: Record<string, unknown>) => {

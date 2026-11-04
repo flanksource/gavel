@@ -91,6 +91,7 @@ function CopilotComment({ comment }: Props) {
     <div className="text-xs">
       {parts.map((part, i) =>
         part.type === 'suggestion' ? (
+          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- parts are parsed from a fixed comment body and never reorder
           <div key={i} className="my-1.5">
             <div className="text-[10px] text-green-700 font-medium mb-0.5 flex items-center gap-1">
               <UiLightbulb />
@@ -101,6 +102,7 @@ function CopilotComment({ comment }: Props) {
             </pre>
           </div>
         ) : (
+          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- parts are parsed from a fixed comment body and never reorder
           <Markdown key={i} text={part.content.trim()} className="text-xs text-gray-700" />
         )
       )}
@@ -111,6 +113,8 @@ function CopilotComment({ comment }: Props) {
 // --- CodeRabbit ---
 
 function CodeRabbitComment({ comment }: Props) {
+  const [showFull, setShowFull] = useState(false);
+
   if (comment.severity === 'nitpick' || comment.path) {
     return <Markdown text={comment.body} className="text-xs text-gray-700" />;
   }
@@ -118,7 +122,6 @@ function CodeRabbitComment({ comment }: Props) {
   const actionableMatch = comment.body.match(/\*\*Actionable comments posted:\s*(\d+)\*\*/);
   const actionableCount = actionableMatch ? parseInt(actionableMatch[1], 10) : null;
 
-  const [showFull, setShowFull] = useState(false);
   const ChevronIcon = showFull ? UiChevronDown : UiChevronRight;
 
   return (

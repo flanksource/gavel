@@ -15,6 +15,8 @@ export default function WaitlistForm({ className }: { className?: string }) {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const submitting = status === "submitting";
+    if (submitting) return;
     setError(null);
 
     if (!EMAIL_RE.test(email)) {

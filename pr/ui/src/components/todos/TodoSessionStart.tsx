@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { Markdown } from '@flanksource/clicky-ui/data';
 import { UiHubot, UiRobotAi, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { TodoItem, TodoRunOptions, TodoRunPreviewResponse } from '../../types';
@@ -29,8 +29,16 @@ function useRunPromptPreview(dir: string, ref: string, options: TodoRunOptions |
   const [resolution, setResolution] = useState<{ key: string; data: TodoRunPreviewResponse }>();
   const requestKey = JSON.stringify({ dir, ref, options });
   const previewMutation = useTodoRunPreview(dir);
+  // The preview refires only when requestKey (the serialized ref and options)
+  // changes, not when the options object is merely recreated; the effect reads
+  // the values that key was built from through this ref.
+  const latest = useRef({ ref, options });
+  useEffect(() => {
+    latest.current = { ref, options };
+  });
 
   useEffect(() => {
+    const { ref, options } = latest.current;
     if (!ref || !options) return;
     let cancelled = false;
     const controller = new AbortController();

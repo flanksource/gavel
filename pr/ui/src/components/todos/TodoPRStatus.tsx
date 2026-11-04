@@ -48,7 +48,7 @@ export function TodoPRStatus({ pr, disabled }: { pr: NonNullable<TodoItem['pr']>
         </div>
         {info.mergeReadiness?.reasons?.map(reason => <p key={reason} className="text-muted-foreground">{reason}</p>)}
         <div className="flex flex-wrap gap-2">
-          {info.statusCheckRollup?.map((check, index) => <a key={index} href={check.detailsUrl || pr.url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+          {info.statusCheckRollup?.map(check => <a key={`${check.workflowName ?? ''}/${check.name}/${check.detailsUrl ?? ''}`} href={check.detailsUrl || pr.url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
             {check.name}: {check.conclusion || check.status}
           </a>)}
           {!info.statusCheckRollup?.length && <span className="text-muted-foreground">No checks reported</span>}

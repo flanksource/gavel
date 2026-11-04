@@ -101,6 +101,7 @@ export function DiffLineComposer({ onSave, onCancel }: {
       await onSave(trimmed);
     } catch (reason) {
       setError(errorMessage(reason));
+    } finally {
       setBusy(false);
     }
   }
@@ -111,6 +112,7 @@ export function DiffLineComposer({ onSave, onCancel }: {
         className={`${inputClass} h-20 resize-y`}
         value={text}
         disabled={busy}
+        // react-doctor-disable-next-line react-doctor/no-autofocus -- focus the inline composer the user just opened with the line's "+" button
         autoFocus
         onChange={event => setText(event.currentTarget.value)}
         onKeyDown={event => {

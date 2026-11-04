@@ -117,6 +117,7 @@ export function TodoLabelsMenu({
   return (
     <div className="w-64 p-1.5">
       <input
+        // react-doctor-disable-next-line react-doctor/no-autofocus -- focus the filter when the user opens the labels menu
         autoFocus
         value={query}
         onChange={event => setQuery(event.target.value)}

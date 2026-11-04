@@ -119,6 +119,7 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
             className={inputClass}
             value={title}
             placeholder="What needs doing?"
+            aria-label="Title"
             onChange={e => setTitle(e.currentTarget.value)}
             autoFocus
           />

@@ -295,6 +295,7 @@ export function PRActions({
             className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm h-20 resize-none"
             value={comment}
             placeholder="Optional approval comment"
+            aria-label="Approval comment"
             onChange={e => setComment(e.currentTarget.value)}
             autoFocus
           />
@@ -375,11 +376,11 @@ export function PRActions({
         </>
       )}
 
-      {extras.map((x, i) => {
+      {extras.map((x) => {
         const Icon = x.icon;
         return (
           <Button
-            key={i}
+            key={x.label}
             variant="outline"
             size="sm"
             className="h-7 shrink-0 gap-1 px-2 text-xs"

@@ -84,6 +84,7 @@ export function TagPicker({
       className="absolute left-0 top-full z-30 mt-1 w-64 rounded-md border border-border bg-background p-1.5 shadow-lg"
     >
       <input
+        // react-doctor-disable-next-line react-doctor/no-autofocus -- focus the filter when the user opens the tag picker popover
         autoFocus
         role="combobox"
         aria-expanded
@@ -112,6 +113,7 @@ export function TagPicker({
             key={def.name}
             role="option"
             aria-selected={false}
+            tabIndex={-1}
             onClick={() => commit(def.name)}
             title={def.description}
             className="flex w-full cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-muted"

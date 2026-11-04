@@ -116,10 +116,10 @@ function GavelBadges({ g }: { g: GavelResultsSummary }) {
   if (items.length === 0) return null;
   return (
     <span className="inline-flex items-center gap-1" aria-label="gavel results">
-      {items.map((it, i) => {
+      {items.map((it) => {
         const Icon = it.icon;
         return (
-          <span key={i} className={`inline-flex items-center ${it.color} tabular-nums leading-none`} title={it.title}>
+          <span key={it.title} className={`inline-flex items-center ${it.color} tabular-nums leading-none`} title={it.title}>
             <Icon className="text-[12px]" />
             <span className="text-[11px] font-medium">{it.count}</span>
           </span>

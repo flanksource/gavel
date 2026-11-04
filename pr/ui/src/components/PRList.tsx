@@ -115,6 +115,7 @@ function RepoSection({ group, selected, onSelect, unread, syncStatus, gavelResul
           target="_blank"
           rel="noopener"
           className="inline-flex shrink-0"
+          aria-label={`Open ${group.repo} on GitHub`}
           onClick={(e) => e.stopPropagation()}
         >
           <RepoIcon repo={group.repo} homepageUrl={group.repoHomepageUrl} size={20} />

@@ -64,6 +64,7 @@ function LinkPRForm({ dir, todoRef, onClose }: { dir: string; todoRef: string; o
               placeholder="Title, repo or number"
               aria-label="Search pull requests"
               onChange={event => setSearch(event.currentTarget.value)}
+              // react-doctor-disable-next-line react-doctor/no-autofocus -- focus the first field when the dialog opens
               autoFocus
             />
           </div>

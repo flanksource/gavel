@@ -27,6 +27,7 @@ export default function IconOrbit({
             const angle = i * step;
             return (
               <span
+                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- static icon ring; position is the identity and icons may repeat
                 key={i}
                 className="absolute left-1/2 top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm motion-safe:[animation:orbit_30s_linear_infinite_reverse]"
                 style={{

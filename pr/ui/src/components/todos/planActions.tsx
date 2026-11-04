@@ -160,10 +160,17 @@ export function usePlanActions(dir: string) {
   const busy = mutations.some(mutation => mutation.isPending);
   const mutationError = mutations.find(mutation => mutation.error)?.error;
   const error = validationError || (mutationError instanceof Error ? mutationError.message : '');
+  const { reset: resetApprove } = approveMutation;
+  const { reset: resetAnswer } = answerMutation;
+  const { reset: resetReject } = rejectMutation;
+  const { reset: resetRevise } = reviseMutation;
   const reset = useCallback(() => {
     setValidationError('');
-    for (const mutation of mutations) mutation.reset();
-  }, [approveMutation.reset, answerMutation.reset, rejectMutation.reset, reviseMutation.reset]);
+    resetApprove();
+    resetAnswer();
+    resetReject();
+    resetRevise();
+  }, [resetApprove, resetAnswer, resetReject, resetRevise]);
 
   const approve = useCallback(async (ref: string, opts: { run?: boolean; options?: TodoRunOptions } = {}) => {
     const cleaned = ref.trim();
@@ -308,6 +315,7 @@ export function QuestionsPanel({
   return (
     <ul className="flex flex-col gap-2">
       {questions.map((q, i) => (
+        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- questions have no id; the index is their identity (selections are keyed by question index) and the list never reorders
         <li key={i} className="rounded-md border border-purple-500/30 bg-purple-500/5 p-2 text-sm">
           <div className="flex items-start gap-1.5">
             <UiQuestion className="mt-0.5 shrink-0 text-purple-600" />

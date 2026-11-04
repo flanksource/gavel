@@ -135,7 +135,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   const ref = current?.ref ?? '';
   const sessionId = current?.sessionId ?? '';
   const status = current?.status;
-  const questions = current?.questions ?? [];
+  const questions = useMemo(() => current?.questions ?? [], [current?.questions]);
 
   const onApprove = useCallback(
     async (run: boolean, options?: TodoRunOptions) => {
@@ -185,6 +185,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   // honoured from within a field, to blur it.
   useEffect(() => {
     if (!review.active) return;
+    let focusTimer: ReturnType<typeof setTimeout> | undefined;
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const editable = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
@@ -243,13 +244,17 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
             e.preventDefault();
             setShowChanges(true);
             // Focus after the box mounts.
-            setTimeout(() => changesRef.current?.focus(), 0);
+            clearTimeout(focusTimer);
+            focusTimer = setTimeout(() => changesRef.current?.focus(), 0);
           }
           break;
       }
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      clearTimeout(focusTimer);
+    };
   }, [review, status, onApprove, onReject]);
 
   if (!review.active) return null;
