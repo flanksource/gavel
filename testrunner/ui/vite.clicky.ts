@@ -26,9 +26,16 @@ export function localClicky(gavelRoot: string, command: string, label: string): 
   }
   console.log(`[${label}] dev: resolving @flanksource/clicky-ui from local source (${src})`);
 
-  const exports: Record<string, string | { import?: string }> = JSON.parse(
-    readFileSync(resolve(pkgDir, 'package.json'), 'utf8'),
-  ).exports;
+  let exports: Record<string, string | { import?: string }>;
+  try {
+    const pkg: unknown = JSON.parse(readFileSync(resolve(pkgDir, 'package.json'), 'utf8'));
+    const pkgExports = pkg && typeof pkg === 'object' ? (pkg as { exports?: unknown }).exports : undefined;
+    if (!pkgExports || typeof pkgExports !== 'object') throw new Error('package.json has no exports map');
+    exports = pkgExports as Record<string, string | { import?: string }>;
+  } catch (err) {
+    console.warn(`[${label}] dev: cannot read local clicky-ui exports, using installed package: ${(err as Error).message}`);
+    return { enabled: false, aliases: [], server: {} };
+  }
   const aliases: Alias[] = [];
   for (const [subpath, target] of Object.entries(exports)) {
     const file = typeof target === 'string' ? target : target.import;

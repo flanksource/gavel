@@ -159,7 +159,7 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
       </tr>
       {processControl.error && (
         <tr>
-          <td colSpan={7} role="alert" className="px-2 py-1 text-[10px] text-red-600">{processControl.error}</td>
+          <td colSpan={7} className="px-2 py-1 text-[10px] text-red-600"><div role="alert">{processControl.error}</div></td>
         </tr>
       )}
       {open && (

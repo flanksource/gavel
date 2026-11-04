@@ -52,7 +52,10 @@ export function TodoRunLandActions({ dir, todoRef, todoTitle, latest }: TodoRunL
   const land = useTodoLandMutation(dir, todoRef);
   const landing = latest.attempt.landing ?? land.data?.landing;
   const hosted = !hostControlsVisible(currentAuthMode());
-  const [title, setTitle] = useState(todoTitle);
+  // The edited PR title belongs to one todo; until edited (or after switching
+  // todos) the title follows the todo's current title.
+  const [titleEdit, setTitleEdit] = useState<{ todoRef: string; value: string } | null>(null);
+  const title = titleEdit?.todoRef === todoRef ? titleEdit.value : todoTitle;
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
   const worktree = latest.workspace.worktree;
   const range = { base: worktree?.setup ?? '', hash: worktree?.head ?? '' };
@@ -102,7 +105,7 @@ export function TodoRunLandActions({ dir, todoRef, todoTitle, latest }: TodoRunL
               placeholder="PR title"
               value={title}
               disabled={land.isPending}
-              onChange={setTitle}
+              onChange={value => setTitleEdit({ todoRef, value })}
               className="h-8 w-64 text-xs"
             />
           )}

@@ -69,6 +69,7 @@ export function useProjectCatalog({ configured, hiddenDirs, selectedName, enable
     void queryClient.cancelQueries({ queryKey: queryKeys.testRuns(), exact: true });
   }, [queryClient, queryEnabled]);
 
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream, which drops its listeners
   useEffect(() => {
     if (!queryEnabled) return;
     const apply = (payload: unknown) => {

@@ -80,14 +80,16 @@ export function TodoVerification({
   const runMutation = useTodoVerificationRun(dir, todo.ref);
   const busy = fixtureMutation.isPending;
   const runBusy = runMutation.isPending;
+  const { reset: resetFixture } = fixtureMutation;
+  const { reset: resetRun } = runMutation;
 
   // Adopt the server's saved fixture whenever a different todo is shown, or
   // after this todo's own save round-trips back through props.
   useEffect(() => {
     setFixture(saved);
-    fixtureMutation.reset();
-    runMutation.reset();
-  }, [todo.ref, saved]);
+    resetFixture();
+    resetRun();
+  }, [todo.ref, saved, resetFixture, resetRun]);
 
   const dirty = fixture !== saved;
 

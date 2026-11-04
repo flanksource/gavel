@@ -18,6 +18,7 @@ vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => {
   Button,
   SplitButton: ({ label, onClick, title, disabled, items }: { label: ReactNode; onClick?: () => void; title?: string; disabled?: boolean; items?: Array<{ label: ReactNode; onSelect?: () => void }> }) => (
     <div><Button onClick={onClick} title={title} disabled={disabled}>{label}</Button>
+      {/* react-doctor-disable-next-line react-doctor/no-array-index-as-key -- test stub renders a fixed menu list */}
       {items?.map((item, index) => <Button key={index} onClick={item.onSelect} disabled={disabled}>{item.label}</Button>)}
     </div>
   ),

@@ -37,6 +37,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     <div>
       <button type="button" onClick={onClick} disabled={disabled}>{label}</button>
       {items.map((item, index) => (
+        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- test stub renders a fixed menu list
         <button key={index} type="button" aria-label={`${title}: advanced`} onClick={item.onSelect} disabled={disabled}>
           {item.label}
         </button>

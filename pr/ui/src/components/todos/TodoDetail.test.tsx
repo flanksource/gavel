@@ -81,7 +81,12 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
       </button>
       {items.map((item, index) => (
         // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky SplitButton itself.
-        <button key={index} type="button" onClick={item.onSelect}>
+        <button
+          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- test mock renders a static items prop with no ids
+          key={index}
+          type="button"
+          onClick={item.onSelect}
+        >
           {item.label}
         </button>
       ))}

@@ -48,6 +48,7 @@ export function useGitStream({ enabled }: { enabled: boolean }): { error: string
   const seen = useRef<Generations | null>(null);
   const [error, setError] = useState('');
 
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream, which drops its listeners
   useEffect(() => {
     if (!enabled) return;
     const stream = openEventStream('/api/git/stream');

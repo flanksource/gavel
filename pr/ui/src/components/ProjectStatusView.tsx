@@ -186,6 +186,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   }, [filters.scopes, status]);
   const selectedFiles = useMemo(() => [...selected].sort(), [selected]);
 
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- queueing only starts a background run; ProjectCommitTasks refreshes project data via onComplete when it finishes
   const queueCommitMutation = useMutation({
     mutationFn: async ({ action, options, files }: {
       action: ProjectCommitAction;
@@ -234,6 +235,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     },
   });
 
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess invalidates the project status and diff queries via refreshProjectData
   const ignoreMutation = useMutation({
     mutationFn: ({ path, directory }: { path: string; directory: boolean }) => mutationJSON({
       url: projectApiUrl({ projectName: project.name, resource: 'ignore', worktree }),

@@ -123,6 +123,32 @@ function deriveStatusText(snap: Snapshot): string {
   return 'Running tests...';
 }
 
+/** Polls `${base}/api/tests` until the run is no longer running; the returned function stops polling. */
+function pollSnapshots(base: string, pollMs: number, onSnapshot: (snap: Snapshot) => void, onError: () => void): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = async () => {
+    try {
+      const res = await fetch(`${base}/api/tests`, { headers: { Accept: 'application/json' } });
+      if (stopped) return;
+      if (res.ok) {
+        const snap = (await res.json()) as Snapshot;
+        if (stopped) return;
+        onSnapshot(snap);
+        if (!snap.status?.running) return; // terminal: stop polling
+      }
+    } catch {
+      if (!stopped) onError();
+    }
+    if (!stopped) timer = setTimeout(tick, pollMs);
+  };
+  void tick();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
+}
+
 export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
   const {
     baseUrl,
@@ -148,7 +174,9 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
   // `createEventSource` function passed by the host doesn't cause the
   // subscription effect below to tear down and re-open on every render.
   const createEventSourceRef = useRef(createEventSource ?? defaultCreateEventSource);
-  createEventSourceRef.current = createEventSource ?? defaultCreateEventSource;
+  useEffect(() => {
+    createEventSourceRef.current = createEventSource ?? defaultCreateEventSource;
+  }, [createEventSource]);
 
   const apply = useCallback((snap: Snapshot) => {
     const running = !!(snap.status && snap.status.running);
@@ -164,6 +192,7 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
     }
   }, []);
 
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- both branches return a cleanup: polling stops its timer, SSE closes the EventSource, which drops its listeners
   useEffect(() => {
     if (!enabled) return;
     doneRef.current = false;
@@ -171,32 +200,21 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
 
     // Polling fallback transport.
     if (forcePoll || !hasEventSource()) {
-      let stopped = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const tick = async () => {
-        try {
-          const res = await fetch(`${base}/api/tests`, { headers: { Accept: 'application/json' } });
-          if (res.ok) {
-            const snap = (await res.json()) as Snapshot;
-            apply(snap);
-            if (!snap.status?.running) return; // terminal: stop polling
-          }
-        } catch {
-          if (!doneRef.current) setError('Connection lost — retrying...');
-        }
-        if (!stopped) timer = setTimeout(tick, pollMs);
-      };
-      void tick();
-      return () => {
-        stopped = true;
-        if (timer) clearTimeout(timer);
-      };
+      return pollSnapshots(base, pollMs, apply, () => {
+        if (!doneRef.current) setError('Connection lost — retrying...');
+      });
     }
 
     // SSE transport (default): seed once via /api/tests then follow the stream.
+    let closed = false;
     fetch(`${base}/api/tests`, { headers: { Accept: 'application/json' } })
-      .then((r) => r.json())
-      .then((snap: Snapshot) => apply(snap))
+      .then((r) => {
+        if (!r.ok) throw new Error(`GET /api/tests: ${r.status}`);
+        return r.json();
+      })
+      .then((snap: Snapshot) => {
+        if (!closed) apply(snap);
+      })
       .catch(() => {});
 
     const es = createEventSourceRef.current(`${base}/api/tests/stream`);
@@ -214,7 +232,10 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
     es.onerror = () => {
       if (!doneRef.current) setError('Connection lost — retrying...');
     };
-    return () => es.close();
+    return () => {
+      closed = true;
+      es.close();
+    };
   }, [base, enabled, pollMs, forcePoll, streamToken, apply]);
 
   const rerun = useCallback(

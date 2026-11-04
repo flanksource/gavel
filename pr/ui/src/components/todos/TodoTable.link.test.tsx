@@ -16,12 +16,12 @@ vi.mock('@flanksource/clicky-ui/data', async (importOriginal) => {
       onRowClick?: (row: unknown) => void;
     }) => {
       renderedTable.onRowClick = onRowClick;
-      return data.map((row, index) => {
-        const title = (row as { todo: TodoItem }).todo.title;
+      return data.map(row => {
+        const { title, ref } = (row as { todo: TodoItem }).todo;
         const href = getRowHref?.(row);
         return href
-          ? <a key={index} href={href}>{title}</a>
-          : <span key={index}>{title}</span>;
+          ? <a key={ref} href={href}>{title}</a>
+          : <span key={ref}>{title}</span>;
       });
     },
   };

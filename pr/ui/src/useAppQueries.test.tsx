@@ -62,6 +62,7 @@ class FakeEventSource {
 
 function Probe({ name, enabled, hostData = true, onRender }: { name: string; enabled: boolean; hostData?: boolean; onRender?: () => void }) {
   const state = useAppQueries({ enabled, hostData, initialConfig: { repos: [] } });
+  // react-doctor-disable-next-line react-doctor/no-prop-callback-in-render -- test probe deliberately counts renders
   onRender?.();
   return (
     <div data-testid={name} data-error={state.processError} data-project-error={state.projectError} data-pr-error={state.snapshot.error ?? ''}>

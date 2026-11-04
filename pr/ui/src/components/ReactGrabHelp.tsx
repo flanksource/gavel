@@ -51,6 +51,7 @@ export function ReactGrabHelp() {
               {/* React blocks `javascript:` in the href prop, so set it on the
                   DOM node directly — the browser still reads it when the link is
                   dragged to the bookmarks bar. */}
+              {/* react-doctor-disable-next-line react-doctor/anchor-is-valid -- the javascript: href is set on the DOM node by the ref above */}
               <a
                 ref={node => node?.setAttribute('href', bookmarklet)}
                 draggable

@@ -74,6 +74,7 @@ export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: b
     void queryClient.cancelQueries({ queryKey: queryKeys.processStatuses(), exact: true });
   }, [enabled, queryClient]);
 
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream, which drops its listeners
   useEffect(() => {
     if (!enabled) return;
     const stream = openEventStream('/api/prs/stream');
@@ -97,6 +98,7 @@ export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: b
     return () => stream.close();
   }, [enabled, initialSnapshot, queryClient]);
 
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream, which drops its listeners
   useEffect(() => {
     if (!hostEnabled) return;
     const stream = openEventStream('/api/proc/status/stream');

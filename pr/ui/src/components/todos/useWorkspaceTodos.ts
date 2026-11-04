@@ -103,8 +103,11 @@ async function fetchWorkspaceTodoBatch(dirs: string[], signal: AbortSignal): Pro
     body: JSON.stringify({ dirs }),
     signal,
   });
+  if (!response.ok) {
+    const errorPayload: unknown = await response.json().catch(() => null);
+    throw new Error(responseError(errorPayload, response.status));
+  }
   const payload = await response.json().catch(() => null) as WorkspaceTodoBatchResponse | null;
-  if (!response.ok) throw new Error(responseError(payload, response.status));
   if (!payload) throw new Error('Todo batch response was not valid JSON');
   return workspaceTodoBatchState(dirs, payload);
 }
@@ -208,12 +211,10 @@ export function useWorkspaceTodos(
   // un-hide it. The FilterBar's own chips drive the full tri-state through
   // setFilters.
   const toggleStatus = useCallback((status: TodoStatus) => {
-    setFiltersState(prev => {
-      const next = { ...prev, statuses: toggleStatusFilter(prev.statuses, status) };
-      saveTodoFilters(next);
-      return next;
-    });
-  }, []);
+    const next = { ...filters, statuses: toggleStatusFilter(filters.statuses, status) };
+    setFiltersState(next);
+    saveTodoFilters(next);
+  }, [filters]);
 
   const setDensity = useCallback((next: TodoDensity) => {
     setDensityState(next);

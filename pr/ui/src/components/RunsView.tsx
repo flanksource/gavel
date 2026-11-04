@@ -41,15 +41,17 @@ export function runStatus(run: SandboxRun): string {
 
 async function fetchRunLog(id: string, signal: AbortSignal): Promise<string> {
   const response = await fetch(`/api/sandbox-runs/${encodeURIComponent(id)}/log`, { signal });
-  const body = await response.text();
-  if (response.ok) return body;
-  let payload: unknown = body;
-  try {
-    payload = JSON.parse(body);
-  } catch {
-    // Not JSON: responseError reports the status.
+  if (!response.ok) {
+    const body = await response.text();
+    let payload: unknown = body;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      // Not JSON: responseError reports the status.
+    }
+    throw new Error(responseError(payload, response.status));
   }
-  throw new Error(responseError(payload, response.status));
+  return response.text();
 }
 
 // useSandboxRuns loads the organization's runs, refreshing while any is queued or running.
@@ -91,6 +93,12 @@ export function RunsView({ selectedId, onSelect }: { selectedId: string; onSelec
               <tr
                 key={run.id}
                 onClick={() => onSelect(run.id)}
+                onKeyDown={e => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return;
+                  e.preventDefault();
+                  onSelect(run.id);
+                }}
+                tabIndex={0}
                 aria-selected={run.id === selectedId}
                 className={`cursor-pointer border-b border-border hover:bg-muted ${run.id === selectedId ? 'bg-primary/10' : ''}`}
               >
