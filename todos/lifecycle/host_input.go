@@ -12,6 +12,8 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	gavelai "github.com/flanksource/gavel/ai"
+	"github.com/flanksource/gavel/pr/provider"
+	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
@@ -96,6 +98,13 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 	}
 	state.input.Config.Tools = defs
 	state.input.Config.SandboxSelection = selection
+	if pr := prepared.pr; pr != nil && pr.target != nil {
+		// A run executing whole elsewhere has no credentials for the step's PR, so it asks this
+		// host, which answers with the step's own PR client and git.
+		state.input.HostCalls = map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
+			runclient.HostCallName: runclient.AnswerHostCall(provider.LocalRunAPI(pr.client, pr.number, *pr.target, pr.workDir), "local", ""),
+		}
+	}
 	switch {
 	case opts.OnApproval != nil && opts.Approvals:
 		return nil, fmt.Errorf("run options set both OnApproval and Approvals; a run has one approval broker")
