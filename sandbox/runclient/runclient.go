@@ -1,5 +1,5 @@
-// Package runclient calls gavel serve's run API from inside a sandbox job, authenticated with the
-// job's run token for its own run.
+// Package runclient calls a run's run API from where the run executes: gavel serve's, over HTTP
+// from a sandbox job with the job's run token, or the run's caller's, over a host call.
 package runclient
 
 import (
@@ -48,13 +48,19 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 	if resp.StatusCode/100 != 2 {
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		var failure struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(data, &failure) == nil && failure.Error != "" {
-			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, failure.Error)
-		}
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, failed(resp.StatusCode, data)
 	}
 	return resp, nil
+}
+
+// failed is the error of a response that isn't 2xx: its status, and the run API's reason when
+// its body gives one.
+func failed(status int, body []byte) error {
+	var failure struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &failure) == nil && failure.Error != "" {
+		return fmt.Errorf("HTTP %d: %s", status, failure.Error)
+	}
+	return fmt.Errorf("HTTP %d", status)
 }
