@@ -432,5 +432,5 @@ func TestHostedDashboardServesTodosInTheOrgsRepositories(t *testing.T) {
 
 	status, body = do(http.MethodPost, "/api/todos/run", `{"dir":"`+workspace+`","ref":"`+created.ID+`","step":"plan"}`)
 	assert.Equal(t, http.StatusNotImplemented, status)
-	assert.Contains(t, body, "agent runs need a sandbox: start gavel serve with --sandbox")
+	assert.Contains(t, body, "agent runs need a substrate sandbox: start gavel serve with --sandbox substrate")
 }

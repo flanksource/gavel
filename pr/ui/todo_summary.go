@@ -294,7 +294,7 @@ func todoErrorStatus(fallback int, err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, native.ErrForbidden):
 		return http.StatusForbidden
-	case errors.Is(err, errAgentRunsNeedSandbox):
+	case errors.Is(err, errAgentRunsNeedSubstrate):
 		return http.StatusNotImplemented
 	case errors.Is(err, native.ErrInvalidInput), errors.Is(err, native.ErrInvalidParent):
 		return http.StatusBadRequest
