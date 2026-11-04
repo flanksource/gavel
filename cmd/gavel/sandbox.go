@@ -125,16 +125,12 @@ func sweepSandbox(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Du
 
 // substrateAgentBackend is the substrate backend hosted agent runs execute on through captain's
 // substrate sandbox, as its options spell it, from the --substrate-* flags jobs use too, reaching
-// what jobs reach; nil without --sandbox substrate, since agent runs need it.
+// what jobs reach but serve; nil without --sandbox substrate, since agent runs need it.
 func substrateAgentBackend(opts DashboardOptions) (map[string]any, error) {
 	if opts.Sandbox != "substrate" {
 		return nil, nil
 	}
-	egress, err := sandbox.SubstrateEgressOptions(opts.SubstrateEgress, strings.TrimRight(opts.PublicURL, "/"))
-	if err != nil {
-		return nil, fmt.Errorf("--sandbox substrate: %w", err)
-	}
-	backend := map[string]any{"egress": egress}
+	backend := map[string]any{"egress": sandbox.SubstrateAgentEgress(opts.SubstrateEgress)}
 	for key, value := range map[string]string{
 		"envAPI": opts.SubstrateEnvAPI, "control": opts.SubstrateControl, "tokenFile": opts.SubstrateTokenFile,
 		"caFile": opts.SubstrateCAFile, "clientCert": opts.SubstrateClientCert, "clientKey": opts.SubstrateClientKey,

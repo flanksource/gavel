@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/flanksource/gavel/github/cache"
@@ -31,6 +32,8 @@ type AgentRuns struct {
 	Sources *sandbox.Sources
 	// Transcripts keeps the transcripts agent runs send.
 	Transcripts RunTranscripts
+	// RunAPI is serve's run API, which answers what an agent run asks of its PR.
+	RunAPI http.Handler
 }
 
 // SetAgentRuns runs the organization's todo steps in sandbox jobs. Call it before serving.
@@ -136,6 +139,6 @@ func (s *Server) remoteRunner(ctx context.Context, workspace HostedWorkspace, to
 	return &remote.SubstrateRunner{
 		Dispatcher: s.agentRuns.Dispatcher, Sources: s.agentRuns.Sources, Backend: s.agentRuns.Substrate,
 		Scope: tenant.FromContext(ctx), Repo: workspace.Repo, SHA: workspace.SHA, TodoID: id,
-		Transcripts: s.agentRuns.Transcripts.Keep,
+		Transcripts: s.agentRuns.Transcripts.Keep, RunAPI: s.agentRuns.RunAPI,
 	}, nil
 }

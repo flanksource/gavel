@@ -112,22 +112,15 @@ func (e *substrateExecutor) Sweep(ctx context.Context, lifetime time.Duration) (
 	return e.client.Sweep(ctx, jobPrefix, time.Now().Add(-lifetime))
 }
 
-// SubstrateEgressOptions is what a job may reach, as substrateEgress allows it, spelled as captain's
-// substrate sandbox takes egress: host:port over TLS, passed through, and http://host:port in
-// cleartext. Agent runs executing through captain's sandbox reach the same as jobs.
-func SubstrateEgressOptions(hosts []string, server string) ([]string, error) {
-	egress, err := substrateEgress(hosts, server, nil)
-	if err != nil {
-		return nil, err
+// SubstrateAgentEgress is what an agent run may reach besides its model APIs, spelled as captain's
+// substrate sandbox takes egress: DefaultSubstrateEgress and hosts, over TLS on 443, passed
+// through. Unlike a job, an agent run doesn't reach serve: it asks serve over its own channel.
+func SubstrateAgentEgress(hosts []string) []string {
+	egress := make([]string, 0, len(DefaultSubstrateEgress)+len(hosts))
+	for _, host := range append(append([]string{}, DefaultSubstrateEgress...), hosts...) {
+		egress = append(egress, net.JoinHostPort(host, "443"))
 	}
-	var options []string
-	for _, host := range egress.HTTP {
-		options = append(options, "http://"+net.JoinHostPort(host.Host, strconv.Itoa(host.Port)))
-	}
-	for _, host := range egress.Passthrough {
-		options = append(options, net.JoinHostPort(host.Host, strconv.Itoa(host.Port)))
-	}
-	return options, nil
+	return egress
 }
 
 func substrateEgress(hosts []string, server string, credentials []substrate.Credential) (substrate.Egress, error) {

@@ -102,7 +102,9 @@ job exits or is cancelled.
   calls and approvals come back to serve over the environment's stdout and stdin; its log is the
   run's log, its transcripts are ingested as it works, and its commits come back on its own
   branch, `gavel/<todo>-<run>`, which goes to GitHub for a GitHub repository. A step on a linked
-  PR pushes to it through serve's run API with the run's token.
+  PR reads, pushes to and resolves threads on it by asking serve over that same channel, which
+  serve answers with its run API as the run; the environment holds no run token and can't reach
+  serve, so an agent run's egress is the jobs' list below without serve.
 - **Cleanup.** Every ten minutes serve deletes `gavel-run-` environments older than a run can
   live (its timeout plus 15 minutes), left behind when serve stopped mid-run. Substrate's access
   policy must let serve's identity list the atespace's actors for this.

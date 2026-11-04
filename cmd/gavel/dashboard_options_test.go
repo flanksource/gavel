@@ -246,7 +246,7 @@ func TestSubstrateAgentBackendIsTheJobsSubstrateAsCaptainTakesIt(t *testing.T) {
 	assert.Equal(t, "ghcr.io/flanksource/gavel-runner@sha256:abc", backend["image"])
 	assert.Equal(t, "/run/ate/trust-bundle.pem", backend["trustBundle"])
 	egress := backend["egress"].([]string)
-	assert.Equal(t, "http://gavel.gavel.svc:8080", egress[0], "runs reach serve's run API")
+	assert.NotContains(t, egress, "http://gavel.gavel.svc:8080", "an agent run asks serve over its own channel")
 	assert.Contains(t, egress, "goproxy.example.com:443")
 	assert.NotContains(t, backend, "clientCert", "an option the flags leave empty is left out")
 
