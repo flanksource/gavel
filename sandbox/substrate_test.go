@@ -213,3 +213,24 @@ func TestSubstrateActorIsTheSPIFFEIDOfTheRunsEnvironment(t *testing.T) {
 	run := uuid.MustParse("6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f")
 	assert.Equal(t, "spiffe://substrate-actor.local/actor/ate-env/gavel-run-6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f", SubstrateActor("ate-env", run))
 }
+
+func TestSubstrateEgressOptionsAreTheJobsEgressAsCaptainSpellsIt(t *testing.T) {
+	cleartext, err := SubstrateEgressOptions([]string{"goproxy.example.com"}, "http://gavel.gavel.svc.cluster.local:8080")
+	require.NoError(t, err)
+	assert.Equal(t, append(append([]string{"http://gavel.gavel.svc.cluster.local:8080"}, prefixed(DefaultSubstrateEgress, ":443")...), "goproxy.example.com:443"), cleartext)
+
+	tls, err := SubstrateEgressOptions(nil, "https://gavel.example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "gavel.example.com:443", tls[0])
+
+	_, err = SubstrateEgressOptions(nil, "http://10.0.0.5:8080")
+	require.Error(t, err, "serve must be named by DNS name, as for jobs")
+}
+
+func prefixed(hosts []string, suffix string) []string {
+	out := make([]string, len(hosts))
+	for i, host := range hosts {
+		out[i] = host + suffix
+	}
+	return out
+}

@@ -225,3 +225,29 @@ func TestContainerAndKubernetesSandboxesWarnTheyUseServesKeys(t *testing.T) {
 	require.Error(t, err, "the network doesn't exist")
 	assert.Contains(t, logged.String(), "--sandbox docker: runs get no model keys", "logged at startup, before the executor is checked")
 }
+
+func TestSubstrateAgentBackendIsTheJobsSubstrateAsCaptainTakesIt(t *testing.T) {
+	opts := DashboardOptions{
+		Sandbox: "substrate", PublicURL: "http://gavel.gavel.svc:8080/", SandboxImage: "ghcr.io/flanksource/gavel-runner@sha256:abc",
+		SubstrateEnvAPI: "ate-env-api.ate-env.svc:7777", SubstrateControl: "api.ate-system.svc:443",
+		SubstrateTokenFile: "/var/run/secrets/ate/token", SubstrateAtespace: "ate-env", SubstrateTemplate: "gavel-runner",
+		SubstrateTrustBundle: "/run/ate/trust-bundle.pem", SubstrateEgress: []string{"goproxy.example.com"},
+	}
+	backend, err := substrateAgentBackend(opts)
+	require.NoError(t, err)
+	assert.Equal(t, "ate-env-api.ate-env.svc:7777", backend["envAPI"])
+	assert.Equal(t, "api.ate-system.svc:443", backend["control"])
+	assert.Equal(t, "/var/run/secrets/ate/token", backend["tokenFile"])
+	assert.Equal(t, "ate-env", backend["atespace"])
+	assert.Equal(t, "gavel-runner", backend["template"])
+	assert.Equal(t, "ghcr.io/flanksource/gavel-runner@sha256:abc", backend["image"])
+	assert.Equal(t, "/run/ate/trust-bundle.pem", backend["trustBundle"])
+	egress := backend["egress"].([]string)
+	assert.Equal(t, "http://gavel.gavel.svc:8080", egress[0], "runs reach serve's run API")
+	assert.Contains(t, egress, "goproxy.example.com:443")
+	assert.NotContains(t, backend, "clientCert", "an option the flags leave empty is left out")
+
+	none, err := substrateAgentBackend(DashboardOptions{Sandbox: "docker"})
+	require.NoError(t, err)
+	assert.Nil(t, none, "agent runs execute through captain's substrate sandbox alone")
+}
