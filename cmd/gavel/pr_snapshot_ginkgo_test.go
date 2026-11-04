@@ -33,23 +33,20 @@ var _ = Describe("PR reference parsing", func() {
 	)
 
 	DescribeTable("pr status targets",
-		func(args []string, want statusTarget, wantSelector string) {
+		func(args []string, want statusTarget) {
 			target, err := parseStatusTarget(args)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(target).To(Equal(want))
-			if wantSelector != "" {
-				Expect(target.actionSelector()).To(Equal(wantSelector))
-			}
 		},
 		Entry("actions job URL", []string{"https://github.com/acme/widgets/actions/runs/101/job/7"},
-			statusTarget{Repo: "acme/widgets", RunID: 101, JobID: 7}, "7"),
+			statusTarget{Repo: "acme/widgets", RunID: 101, JobID: 7}),
 		Entry("actions run URL", []string{"https://github.com/acme/widgets/actions/runs/101"},
-			statusTarget{Repo: "acme/widgets", RunID: 101}, "101"),
+			statusTarget{Repo: "acme/widgets", RunID: 101}),
 		Entry("pull request URL", []string{"https://github.com/acme/widgets/pull/12"},
-			statusTarget{Repo: "acme/widgets", PR: 12}, ""),
+			statusTarget{Repo: "acme/widgets", PR: 12}),
 		Entry("repo and number", []string{"acme/widgets", "12"},
-			statusTarget{Repo: "acme/widgets", PR: 12}, ""),
-		Entry("no arguments", []string{}, statusTarget{}, ""),
+			statusTarget{Repo: "acme/widgets", PR: 12}),
+		Entry("no arguments", []string{}, statusTarget{}),
 	)
 
 	It("rejects a malformed actions URL", func() {

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -12,9 +13,12 @@ import (
 )
 
 type PRInfo struct {
-	Provider       string          `json:"provider,omitempty"`
-	MergeReadiness *MergeReadiness `json:"mergeReadiness,omitempty"`
-	Number         int             `json:"number"`
+	MergeRules       []json.RawMessage     `json:"mergeRules,omitempty"`
+	AutoMerge        *AutoMergeInfo        `json:"autoMerge,omitempty"`
+	BranchProtection *BranchProtectionInfo `json:"branchProtection,omitempty"`
+	Provider         string                `json:"provider,omitempty"`
+	MergeReadiness   *MergeReadiness       `json:"mergeReadiness,omitempty"`
+	Number           int                   `json:"number"`
 	// NodeID is the GraphQL global node ID, required to merge/approve/enable
 	// auto-merge on this PR. Empty when the PR was loaded from a source that
 	// doesn't request it (e.g. the REST search path).

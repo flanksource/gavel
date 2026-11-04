@@ -75,8 +75,11 @@ func (f resultFilters) apply(result *PRWatchResult) {
 // registering check runs. A selector that matched nothing at all is caught by
 // noActionMatch/noCommentMatch and is an error, not a completion.
 func (f resultFilters) isComplete(result *PRWatchResult) bool {
-	if result == nil || result.PR == nil {
+	if result == nil {
 		return false
+	}
+	if result.PR == nil {
+		return actionsComplete(result)
 	}
 	if !f.hasActionFilters() && !f.hasCommentFilters() {
 		return result.PR.StatusCheckRollup.AllComplete()
@@ -148,7 +151,7 @@ func (f resultFilters) filterActions(result *PRWatchResult) {
 		if jobs := matchingJobs(run.Jobs, f.actions); len(jobs) > 0 {
 			pruned := *run
 			pruned.Jobs = jobs
-			if result.PR != nil && result.PR.Provider == "azuredevops" {
+			if result.PR == nil || result.PR.Provider == "azuredevops" {
 				pruned.Status, pruned.Conclusion = scopedPipelineState(jobs)
 			}
 			filteredRuns[key] = &pruned
@@ -172,14 +175,14 @@ func (f resultFilters) filterActions(result *PRWatchResult) {
 func scopedPipelineState(jobs []model.Job) (string, string) {
 	status, conclusion := "COMPLETED", "SUCCESS"
 	for _, job := range jobs {
-		if job.Status != "COMPLETED" {
+		if !strings.EqualFold(job.Status, "COMPLETED") {
 			status = "IN_PROGRESS"
 		}
-		if model.IsFailureConclusion(job.Conclusion) {
+		if actionsConclusionFailed(job.Conclusion) {
 			conclusion = "FAILURE"
-		} else if conclusion != "FAILURE" && job.Conclusion == "CANCELLED" {
+		} else if conclusion != "FAILURE" && strings.EqualFold(job.Conclusion, "CANCELLED") {
 			conclusion = "CANCELLED"
-		} else if conclusion == "SUCCESS" && job.Conclusion == "PARTIAL_SUCCESS" {
+		} else if conclusion == "SUCCESS" && strings.EqualFold(job.Conclusion, "PARTIAL_SUCCESS") {
 			conclusion = "PARTIAL_SUCCESS"
 		}
 	}

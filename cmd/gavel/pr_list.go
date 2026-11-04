@@ -65,6 +65,7 @@ Defaults to your open PRs (--author @me) updated in the last --since window (7d)
 Optional positional args restrict to specific repos. Add check status with
 --status, widen to the whole org with --all, or open a live browser dashboard
 with --ui. --ci switches to default-branch CI health across the org's repos.
+With positional repositories, --ci queries only those repositories.
 
 Examples:
   gavel pr list                    # your open PRs from the last 7 days
@@ -72,6 +73,7 @@ Examples:
   gavel pr list --all --org acme   # every open PR across the org
   gavel pr list --state all --any  # all states, all authors
   gavel pr list --ui               # live browser dashboard (port 9092)
+  gavel pr list --ci acme/widgets  # default-branch checks for one repository
   gavel pr list --ci --failed-only # org repos whose default branch is red`)
 }
 
@@ -239,6 +241,9 @@ func runOrgBranchStatus(opts PRListOptions) (any, error) {
 			return nil, err
 		}
 	}
+	if len(opts.Repos) > 0 {
+		return runRepoBranchStatus(opts, since)
+	}
 
 	ghOpts := github.Options{}
 	org := opts.Org
@@ -257,6 +262,27 @@ func runOrgBranchStatus(opts PRListOptions) (any, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	return results, nil
+}
+
+func runRepoBranchStatus(opts PRListOptions, since time.Time) (any, error) {
+	results := github.OrgBranchStatusResults{Org: opts.Org}
+	for _, arg := range opts.Repos {
+		repo, err := resolveRepoArg(arg)
+		if err != nil {
+			return nil, err
+		}
+		status, err := github.FetchDefaultBranchStatus(github.Options{Repo: repo})
+		if err != nil {
+			return nil, err
+		}
+		if !since.IsZero() && status.PushedAt.Before(since) {
+			continue
+		}
+		if !opts.FailedOnly || status.CheckStatus != nil && status.CheckStatus.Failed > 0 {
+			results.Repos = append(results.Repos, status)
+		}
 	}
 	return results, nil
 }
@@ -337,7 +363,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		return fixturesSchemaDocument()
 	})
 	srv.SetProjectActionOptionsProvider(projectActionCommandProvider{})
-	launchService, err := newLaunchService(ctx, opts.LaunchRoot, opts.LaunchStore, opts.LaunchLocalRoots)
+	launchService, err := newLaunchService(ctx, opts.LaunchRoot, opts.LaunchStore, opts.LaunchLocalRoots, 30*time.Second)
 	if err != nil {
 		return err
 	}
