@@ -23,10 +23,11 @@ import (
 )
 
 type WorkspacePolicy struct {
-	Root       string
-	AllowLocal bool
-	LocalRoots []string
-	Context    func(context.Context) dbcontext.Context
+	Root             string
+	AllowLocal       bool
+	LocalRoots       []string
+	WatchIdleTimeout time.Duration
+	Context          func(context.Context) dbcontext.Context
 }
 
 type PreparedWorkspace struct {

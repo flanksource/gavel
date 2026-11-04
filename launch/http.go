@@ -18,6 +18,7 @@ import (
 
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("/api/workspace/", s.files.Handler())
 	for _, kind := range []string{"", "test", "lint"} {
 		path := "/api/launch"
 		if kind != "" {

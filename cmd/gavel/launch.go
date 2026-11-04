@@ -18,12 +18,13 @@ func init() {
 	command := &cobra.Command{Use: "launch", Short: "Launch structured test and lint executions"}
 	var root, backend, address string
 	var roots []string
+	var watchIdleTimeout time.Duration
 	serve := &cobra.Command{Use: "serve", Short: "Serve the launch API", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) (result error) {
 		ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 		sessions := captaincli.StartSessionHost(ctx)
 		defer sessions()
-		service, err := newLaunchService(ctx, root, backend, roots)
+		service, err := newLaunchService(ctx, root, backend, roots, watchIdleTimeout)
 		if err != nil {
 			return err
 		}
@@ -49,6 +50,7 @@ func init() {
 	serve.Flags().StringVar(&backend, "store", "json", "Result adapter: json or sqlite")
 	serve.Flags().StringVar(&address, "addr", "127.0.0.1:9330", "Listen address")
 	serve.Flags().StringSliceVar(&roots, "local-root", nil, "Enable local workspaces under these roots")
+	serve.Flags().DurationVar(&watchIdleTimeout, "file-watch-idle-timeout", 30*time.Second, "Release open-file watches after this much user inactivity")
 	command.AddCommand(serve)
 	command.AddCommand(launchImportCommand())
 	rootCmd.AddCommand(command)

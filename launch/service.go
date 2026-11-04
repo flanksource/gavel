@@ -17,6 +17,7 @@ import (
 
 	"github.com/flanksource/gavel/resultstore"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/flanksource/gavel/workspacefiles"
 	"github.com/google/uuid"
 )
 
@@ -40,6 +41,7 @@ type Service struct {
 	secret  []byte
 	mu      sync.Mutex
 	active  map[string]*activeExecution
+	files   *workspacefiles.Service
 }
 
 func NewService(options ServiceOptions) (*Service, error) {
@@ -50,7 +52,11 @@ func NewService(options ServiceOptions) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{options: options, secret: secret, active: map[string]*activeExecution{}}, nil
+	files, err := workspacefiles.New(workspacefiles.Options{Roots: options.Workspaces.policy.LocalRoots, Authorize: options.Workspaces.allowed, IdleTimeout: options.Workspaces.policy.WatchIdleTimeout})
+	if err != nil {
+		return nil, err
+	}
+	return &Service{options: options, secret: secret, active: map[string]*activeExecution{}, files: files}, nil
 }
 
 func loadSecret(root string) (_ []byte, result error) {
@@ -343,5 +349,5 @@ func (s *Service) Close() error {
 	for _, run := range active {
 		<-run.done
 	}
-	return errors.Join(s.options.Workspaces.Close(), s.options.Store.Close())
+	return errors.Join(s.files.Close(), s.options.Workspaces.Close(), s.options.Store.Close())
 }
