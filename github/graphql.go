@@ -45,9 +45,16 @@ const prFragment = `fragment prFields on PullRequest {
   reviewDecision
   mergeable
   mergeStateStatus
+  autoMergeRequest { mergeMethod enabledAt }
   headRefOid
   headRepository { url }
-  baseRef { target { oid } branchProtectionRule { requiredStatusCheckContexts } }
+  baseRef {
+    target { oid }
+    branchProtectionRule {
+      requiredStatusCheckContexts requiredApprovingReviewCount requiresApprovingReviews
+      requiresConversationResolution requiresCommitSignatures requiresStrictStatusChecks
+    }
+  }
   url
   additions
   deletions
@@ -168,19 +175,20 @@ type graphQLPRConnection struct {
 }
 
 type graphQLPR struct {
-	ID             string        `json:"id"`
-	Number         int           `json:"number"`
-	Title          string        `json:"title"`
-	Body           string        `json:"body"`
-	Author         graphQLAuthor `json:"author"`
-	HeadRefName    string        `json:"headRefName"`
-	BaseRefName    string        `json:"baseRefName"`
-	State          string        `json:"state"`
-	IsDraft        bool          `json:"isDraft"`
-	ReviewDecision string        `json:"reviewDecision"`
-	Mergeable      string        `json:"mergeable"`
-	MergeState     string        `json:"mergeStateStatus"`
-	HeadRefOid     string        `json:"headRefOid"`
+	AutoMerge      *model.AutoMergeInfo `json:"autoMergeRequest"`
+	ID             string               `json:"id"`
+	Number         int                  `json:"number"`
+	Title          string               `json:"title"`
+	Body           string               `json:"body"`
+	Author         graphQLAuthor        `json:"author"`
+	HeadRefName    string               `json:"headRefName"`
+	BaseRefName    string               `json:"baseRefName"`
+	State          string               `json:"state"`
+	IsDraft        bool                 `json:"isDraft"`
+	ReviewDecision string               `json:"reviewDecision"`
+	Mergeable      string               `json:"mergeable"`
+	MergeState     string               `json:"mergeStateStatus"`
+	HeadRefOid     string               `json:"headRefOid"`
 	HeadRepository struct {
 		URL string `json:"url"`
 	} `json:"headRepository"`
@@ -201,10 +209,8 @@ type graphQLPR struct {
 // merging against it reports a clean merge for a PR GitHub calls CONFLICTING.
 // `baseRef.target.oid` is the live tip and the commit GitHub actually merges into.
 type graphQLRef struct {
-	Protection *struct {
-		RequiredContexts []string `json:"requiredStatusCheckContexts"`
-	} `json:"branchProtectionRule"`
-	Target struct {
+	Protection *model.BranchProtectionInfo `json:"branchProtectionRule"`
+	Target     struct {
 		OID string `json:"oid"`
 	} `json:"target"`
 }
@@ -328,6 +334,7 @@ type graphQLWorkflow struct {
 
 func (pr graphQLPR) toPRInfo() *model.PRInfo {
 	info := &model.PRInfo{
+		AutoMerge:         pr.AutoMerge,
 		NodeID:            pr.ID,
 		Number:            pr.Number,
 		Title:             pr.Title,
@@ -352,6 +359,7 @@ func (pr graphQLPR) toPRInfo() *model.PRInfo {
 	// undefined rather than clean — an empty OID is what conflict detection
 	// reports as unavailable.
 	if pr.BaseRef != nil {
+		info.BranchProtection = pr.BaseRef.Protection
 		info.BaseRefOID = pr.BaseRef.Target.OID
 	}
 

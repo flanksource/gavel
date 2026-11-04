@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/activity"
+	"github.com/flanksource/gavel/pr/model"
 )
 
 // orgDefaultBranchStatusQuery fetches a page of an org's repositories ordered by
@@ -22,25 +23,26 @@ const orgDefaultBranchStatusQuery = `query($org: String!, $first: Int!, $after: 
     repositories(first: $first, after: $after, orderBy: {field: PUSHED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        nameWithOwner
-        isPrivate
-        isArchived
-        url
-        pushedAt
-        defaultBranchRef {
-          name
-          target {
-            ... on Commit {
-              statusCheckRollup {
-                state
-                contexts(first: 100) {
-                  nodes {
-                    __typename
-                    ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
-                    ... on StatusContext { context state targetUrl }
-                  }
-                }
-              }
+        ...BranchStatus
+      }
+    }
+  }
+}` + branchStatusFragment
+
+const branchStatusFragment = `fragment BranchStatus on Repository {
+  nameWithOwner isPrivate isArchived url pushedAt
+  defaultBranchRef {
+    name
+    target {
+      ... on Commit {
+        oid
+        statusCheckRollup {
+          state
+          contexts(first: 100) {
+            nodes {
+              __typename
+              ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
+              ... on StatusContext { context state targetUrl }
             }
           }
         }
@@ -68,12 +70,14 @@ type OrgStatusOptions struct {
 
 // RepoBranchStatus is one repo's default-branch CI status.
 type RepoBranchStatus struct {
-	Repo          string        `json:"repo"`
-	Private       bool          `json:"private"`
-	DefaultBranch string        `json:"defaultBranch"`
-	URL           string        `json:"url"`
-	PushedAt      time.Time     `json:"pushedAt"`
-	CheckStatus   *CheckSummary `json:"checkStatus,omitempty"`
+	HeadSHA       string             `json:"headSha,omitempty"`
+	Checks        model.StatusChecks `json:"checks,omitempty"`
+	Repo          string             `json:"repo"`
+	Private       bool               `json:"private"`
+	DefaultBranch string             `json:"defaultBranch"`
+	URL           string             `json:"url"`
+	PushedAt      time.Time          `json:"pushedAt"`
+	CheckStatus   *CheckSummary      `json:"checkStatus,omitempty"`
 }
 
 // OrgBranchStatusResults is a renderable list of per-repo default-branch status.
@@ -105,6 +109,7 @@ type orgRepoNode struct {
 	DefaultBranchRef *struct {
 		Name   string `json:"name"`
 		Target struct {
+			OID               string                    `json:"oid"`
 			StatusCheckRollup *graphQLStatusCheckRollup `json:"statusCheckRollup"`
 		} `json:"target"`
 	} `json:"defaultBranchRef"`
@@ -190,7 +195,15 @@ func (n orgRepoNode) toRepoBranchStatus() (RepoBranchStatus, bool) {
 	if n.IsArchived || n.DefaultBranchRef == nil {
 		return RepoBranchStatus{}, false
 	}
+	var checks model.StatusChecks
+	if rollup := n.DefaultBranchRef.Target.StatusCheckRollup; rollup != nil {
+		for _, check := range rollup.Contexts.Nodes {
+			checks = append(checks, check.toStatusCheck())
+		}
+	}
 	return RepoBranchStatus{
+		HeadSHA:       n.DefaultBranchRef.Target.OID,
+		Checks:        checks,
 		Repo:          n.NameWithOwner,
 		Private:       n.IsPrivate,
 		DefaultBranch: n.DefaultBranchRef.Name,

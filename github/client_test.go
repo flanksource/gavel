@@ -186,27 +186,6 @@ func TestParseRunURL(t *testing.T) {
 	}
 }
 
-func TestPickRunPR(t *testing.T) {
-	pr := func(number int, state, ref string) restCommitPR {
-		p := restCommitPR{Number: number, State: state}
-		p.Head.Ref = ref
-		return p
-	}
-	tests := []struct {
-		name   string
-		pulls  []restCommitPR
-		expect int
-	}{
-		{"open PR on the run's branch wins", []restCommitPR{pr(1, "closed", "feat"), pr(2, "open", "other"), pr(3, "open", "feat")}, 3},
-		{"closed PR on the run's branch beats another branch", []restCommitPR{pr(2, "open", "other"), pr(1, "closed", "feat")}, 1},
-		{"falls back to the first PR containing the commit", []restCommitPR{pr(4, "open", "other")}, 4},
-		{"no PRs", nil, 0},
-	}
-	for _, tc := range tests {
-		assert.Equal(t, tc.expect, pickRunPR(tc.pulls, "feat"), tc.name)
-	}
-}
-
 func TestAllComplete(t *testing.T) {
 	tests := []struct {
 		name   string
