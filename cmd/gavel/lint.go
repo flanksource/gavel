@@ -143,16 +143,7 @@ func runLint(opts LintOptions) (any, error) {
 	if uiServer != nil {
 		uiServer.SetLintResults(allResults)
 		uiServer.MarkDone()
-		var violations int
-		for _, lr := range allResults {
-			if lr.Skipped {
-				continue
-			}
-			violations += len(lr.Violations)
-		}
-		if violations > 0 {
-			exitCode = 1
-		}
+		exitCode = lintExitCode(allResults)
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
@@ -182,6 +173,8 @@ func runLint(opts LintOptions) (any, error) {
 		}
 	}
 
+	exitCode = lintExitCode(allResults)
+
 	snap := &testui.Snapshot{
 		Metadata: &testui.SnapshotMetadata{
 			Version: version,
@@ -210,6 +203,17 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	return lintRunReturnValue(snap, opts), nil
+}
+
+// lintExitCode is 1 when a linter that ran reported violations or failed to
+// run (including timeouts), so CI fails on lint whether or not --ui is set.
+func lintExitCode(results []*linters.LinterResult) int {
+	for _, lr := range results {
+		if lr != nil && !lr.Skipped && (!lr.Success || len(lr.Violations) > 0) {
+			return 1
+		}
+	}
+	return 0
 }
 
 func lintRunReturnValue(snap *testui.Snapshot, opts LintOptions) any {

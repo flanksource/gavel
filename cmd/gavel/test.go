@@ -336,6 +336,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 
 	if lintErr != nil {
 		logger.Warnf("Linting failed: %v", lintErr)
+		exitCode = 1
 	}
 
 	// Apply baseline filtering to lint results when --baseline is set.
@@ -347,15 +348,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		baseline.FilterNewViolations(lintResults, baseline.ExtractViolationKeys(baselineSnap.Lint))
 	}
 
-	// Count lint violations
-	var lintViolations int
-	for _, lr := range lintResults {
-		if lr.Skipped {
-			continue
-		}
-		lintViolations += len(lr.Violations)
-	}
-	if lintViolations > 0 {
+	if lintExitCode(lintResults) != 0 {
 		exitCode = 1
 	}
 
