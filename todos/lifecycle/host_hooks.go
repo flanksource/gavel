@@ -265,14 +265,6 @@ func runLabelsFor(todo *types.TODO, meta todos.RunStartMetadata, workDir string)
 // gavel code a recorded run executes after it — and before setup relocates the
 // tree: the dashboard learns the run's identity, and the runtime starts
 // driving it.
-type admittedHook struct {
-	admitted func() error
-}
-
-func (h *admittedHook) Name() string { return "gavel-run-admitted" }
-
-func (h *admittedHook) PreRun(*agent.HookContext) error { return h.admitted() }
-
 func firstNonEmpty(a, b string) string {
 	if a != "" {
 		return a

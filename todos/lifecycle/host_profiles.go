@@ -31,7 +31,9 @@ func (h *Host) resolveProfileLayers(ctx context.Context, in LayerInput) (runtime
 	if err != nil {
 		return runtimeprofiles.ResolveResult{}, err
 	}
-	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{Layers: assembled.Layers, Saved: h.savedDefaults(), RequireModel: in.RequireModel})
+	resolved, err := api.ResolveSpecLayers(api.ResolveSpecOptions{
+		Layers: assembled.Layers, Saved: h.savedDefaults(), RequireModel: in.RequireModel, Normalize: h.normalizeSandbox,
+	})
 	resolved.Warnings = mergeRuntimeWarnings(resolved.Warnings, assembled.Warnings)
 	return runtimeprofiles.ResolveResult{
 		Presets: assembled.Presets, Profile: assembled.Profile, Warnings: assembled.Warnings, Resolved: resolved,
