@@ -105,6 +105,24 @@ func substrateProcess(job Job) (substrate.Process, error) {
 
 // substrateEgress allows a job to reach gavel serve at server, the hosts it needs, and the model
 // APIs of its credentials, which the gateway injects. Everything else is denied.
+// SubstrateEgressOptions is what a job may reach, as substrateEgress allows it, spelled as captain's
+// substrate sandbox takes egress: host:port over TLS, passed through, and http://host:port in
+// cleartext. Agent runs executing through captain's sandbox reach the same as jobs.
+func SubstrateEgressOptions(hosts []string, server string) ([]string, error) {
+	egress, err := substrateEgress(hosts, server, nil)
+	if err != nil {
+		return nil, err
+	}
+	var options []string
+	for _, host := range egress.HTTP {
+		options = append(options, "http://"+net.JoinHostPort(host.Host, strconv.Itoa(host.Port)))
+	}
+	for _, host := range egress.Passthrough {
+		options = append(options, net.JoinHostPort(host.Host, strconv.Itoa(host.Port)))
+	}
+	return options, nil
+}
+
 func substrateEgress(hosts []string, server string, credentials []substrate.Credential) (substrate.Egress, error) {
 	serve, err := url.Parse(server)
 	if err != nil || serve.Hostname() == "" {

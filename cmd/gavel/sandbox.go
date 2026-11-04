@@ -92,6 +92,31 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 	return dispatcher, nil
 }
 
+// substrateAgentBackend is the substrate backend hosted agent runs execute on through captain's
+// substrate sandbox, as its options spell it, from the --substrate-* flags jobs use too, reaching
+// what jobs reach; nil without --sandbox substrate, since agent runs need it.
+func substrateAgentBackend(opts DashboardOptions) (map[string]any, error) {
+	if opts.Sandbox != "substrate" {
+		return nil, nil
+	}
+	egress, err := sandbox.SubstrateEgressOptions(opts.SubstrateEgress, strings.TrimRight(opts.PublicURL, "/"))
+	if err != nil {
+		return nil, fmt.Errorf("--sandbox substrate: %w", err)
+	}
+	backend := map[string]any{"egress": egress}
+	for key, value := range map[string]string{
+		"envAPI": opts.SubstrateEnvAPI, "control": opts.SubstrateControl, "tokenFile": opts.SubstrateTokenFile,
+		"caFile": opts.SubstrateCAFile, "clientCert": opts.SubstrateClientCert, "clientKey": opts.SubstrateClientKey,
+		"atespace": opts.SubstrateAtespace, "template": opts.SubstrateTemplate, "image": opts.SandboxImage,
+		"trustBundle": opts.SubstrateTrustBundle,
+	} {
+		if value != "" {
+			backend[key] = value
+		}
+	}
+	return backend, nil
+}
+
 // sandboxKeysWarning says which model keys a container or Kubernetes sandbox's runs use: serve's
 // --sandbox-secret-env keys, the same for every organization, since organization keys need
 // substrate's egress gateway. Those sandboxes are for development.
