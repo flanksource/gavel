@@ -24,6 +24,9 @@ type Cluster struct {
 	// Credential is the value of the Secret CredentialURI names, which the gateway injects.
 	Credential    string
 	CredentialURI string
+	// AgentCredentialURI names the Secret holding a Claude Code OAuth token, which the gateway
+	// injects into an agent run's requests to the model API.
+	AgentCredentialURI string
 }
 
 // FromEnv skips t unless GAVEL_SANDBOX_SUBSTRATE_TEST=1, and returns the cluster's settings.
@@ -42,14 +45,15 @@ func FromEnv(t testing.TB) Cluster {
 		return fallback
 	}
 	return Cluster{
-		EnvAPI:        setting("GAVEL_SUBSTRATE_ENV_API", "localhost:7777"),
-		Control:       setting("GAVEL_SUBSTRATE_CONTROL", "localhost:8443"),
-		TokenFile:     setting("GAVEL_SUBSTRATE_TOKEN_FILE", ""),
-		Template:      setting("GAVEL_SUBSTRATE_TEMPLATE", "gavel-runner"),
-		Image:         setting("GAVEL_SUBSTRATE_IMAGE", ""),
-		Listen:        setting("GAVEL_SUBSTRATE_SERVE_LISTEN", "172.18.0.1:18080"),
-		ServeURL:      setting("GAVEL_SUBSTRATE_SERVE_URL", "http://gavel-host.default.svc.cluster.local:18080"),
-		Credential:    setting("GAVEL_SUBSTRATE_CREDENTIAL", "gavel-e2e-injected-credential"),
-		CredentialURI: setting("GAVEL_SUBSTRATE_CREDENTIAL_URI", "ate-secret://k8s.io/default/gavel-e2e/model/key"),
+		EnvAPI:             setting("GAVEL_SUBSTRATE_ENV_API", "localhost:7777"),
+		Control:            setting("GAVEL_SUBSTRATE_CONTROL", "localhost:8443"),
+		TokenFile:          setting("GAVEL_SUBSTRATE_TOKEN_FILE", ""),
+		Template:           setting("GAVEL_SUBSTRATE_TEMPLATE", "gavel-runner"),
+		Image:              setting("GAVEL_SUBSTRATE_IMAGE", ""),
+		Listen:             setting("GAVEL_SUBSTRATE_SERVE_LISTEN", "172.18.0.1:18080"),
+		ServeURL:           setting("GAVEL_SUBSTRATE_SERVE_URL", "http://gavel-host.default.svc.cluster.local:18080"),
+		Credential:         setting("GAVEL_SUBSTRATE_CREDENTIAL", "gavel-e2e-injected-credential"),
+		CredentialURI:      setting("GAVEL_SUBSTRATE_CREDENTIAL_URI", "ate-secret://k8s.io/default/gavel-e2e/model/key"),
+		AgentCredentialURI: setting("GAVEL_SUBSTRATE_AGENT_CREDENTIAL_URI", "ate-secret://k8s.io/default/gavel-e2e/claude-oauth/key"),
 	}
 }

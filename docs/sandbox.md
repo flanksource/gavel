@@ -171,7 +171,8 @@ cluster with Substrate installed (`ate-setup deploy ate-system`):
    Substrate that no longer has `ActorTemplate.sandboxConfig` (removed in agent-substrate#2780)
    rejects the field `ate-env manifest template` writes; delete it from the manifest.
 3. Create a Secret `model` with key `key` (value `gavel-e2e-injected-credential`) in namespace
-   `gavel-e2e`, and allow atespace `ate-env` that namespace in the
+   `gavel-e2e`, and, for the hosted agent run, a Secret `claude-oauth` with key `key` holding a
+   Claude Code OAuth token. Allow atespace `ate-env` that namespace in the
    `k8s-credential-provider-namespace-policy` ConfigMap (restart the provider).
 4. Create ServiceAccount `gavel-e2e/gavel`, make it an `editor` of atespace `ate-env`, and mint its
    token: `kubectl -n gavel-e2e create token gavel --audience api.ate-system.svc > gavel.token`.
@@ -186,9 +187,17 @@ Then run:
 
 ```sh
 GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_IMAGE=localhost:5001/gavel-runner@sha256:<digest> \
-  GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate'
+  GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui \
+  -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate|TestHostedTodoRunsOnSubstrate'
 ```
 
+`TestHostedTodoRunsOnSubstrate` runs a hosted todo's plan step whole in an environment against the
+real model, so the runner image must hold this tree's gavel; on failure it logs the environment's
+output and the tool calls that failed. After the kind node restarts, recreate env's worker pods
+(`kubectl delete pods -n ate-env -l pod-template-hash=<hash>`): Substrate keeps their old
+addresses, and an environment then starts but never answers.
+
 `GAVEL_SUBSTRATE_ENV_API`, `GAVEL_SUBSTRATE_CONTROL`, `GAVEL_SUBSTRATE_TEMPLATE`,
-`GAVEL_SUBSTRATE_SERVE_LISTEN`, `GAVEL_SUBSTRATE_SERVE_URL`, `GAVEL_SUBSTRATE_CREDENTIAL` and
-`GAVEL_SUBSTRATE_CREDENTIAL_URI` override the defaults the steps above set up.
+`GAVEL_SUBSTRATE_SERVE_LISTEN`, `GAVEL_SUBSTRATE_SERVE_URL`, `GAVEL_SUBSTRATE_CREDENTIAL`,
+`GAVEL_SUBSTRATE_CREDENTIAL_URI` and `GAVEL_SUBSTRATE_AGENT_CREDENTIAL_URI` override the defaults
+the steps above set up.

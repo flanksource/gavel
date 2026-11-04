@@ -223,10 +223,24 @@ type hostedRuns struct {
 	substrate       *inProcessSubstrate
 	// logs is the store the dispatcher keeps the organization's run logs in.
 	logs blob.Store
+	// dataDir is serve's data directory, which keeps the runs' transcripts.
+	dataDir string
 }
 
 // newHostedRuns serves a hosted dashboard whose runs' turns agent answers; nil is planAgent.
 func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
+	t.Helper()
+	substrate := &inProcessSubstrate{agent: agent}
+	api.RegisterSandbox(api.SandboxSubstrate, substrate.selected)
+	t.Cleanup(func() { api.RegisterSandbox(api.SandboxSubstrate, substraterun.Substrate) })
+	h := serveHostedRuns(t, map[string]any{"envAPI": "env.example:443", "control": "control.example:443", "image": "runner@sha256:" + strings.Repeat("0", 64)}, nil)
+	h.substrate = substrate
+	return h
+}
+
+// serveHostedRuns serves a hosted dashboard whose agent runs execute on the substrate backend, as
+// its options spell it; configure, when set, adjusts the dispatcher before serving.
+func serveHostedRuns(t *testing.T, backend map[string]any, configure func(*sandbox.Dispatcher)) hostedRuns {
 	t.Helper()
 	db, _, org := openOrgDB(t)
 	t.Setenv("HOME", t.TempDir())
@@ -235,6 +249,7 @@ func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
 		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
 	}
 	dataDir := t.TempDir()
+	h.dataDir = dataDir
 	h.workspace = "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
 	logs := blob.Local(t.TempDir())
 	h.logs = logs
@@ -245,27 +260,34 @@ func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
 		DB: db, Image: "runner", Server: "https://gavel.example", TokenKey: []byte(strings.Repeat("k", 32)),
 		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: time.Minute}, Executor: h.executor,
 	}
+	if configure != nil {
+		configure(dispatcher)
+	}
 	srv := &Server{}
 	srv.SetOrg(org, db)
 	srv.SetHostedMode(true)
 	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
-	h.substrate = &inProcessSubstrate{agent: agent}
-	api.RegisterSandbox(api.SandboxSubstrate, h.substrate.selected)
-	t.Cleanup(func() { api.RegisterSandbox(api.SandboxSubstrate, substraterun.Substrate) })
 	sources := &sandbox.Sources{DataDir: dataDir}
 	srv.SetAgentRuns(AgentRuns{
 		Dispatcher: dispatcher, Sources: sources, Transcripts: RunTranscripts{DB: db, DataDir: dataDir},
-		Substrate: map[string]any{"envAPI": "env.example:443", "control": "control.example:443", "image": "runner@sha256:" + strings.Repeat("0", 64)},
+		Substrate: backend,
 	})
 	h.base = serveActingAs(t, srv, org)
 	return h
 }
 
 func TestHostedTodoRunsInASandboxJob(t *testing.T) {
-	h := newHostedRuns(t, nil)
+	runsPlanStep(t, newHostedRuns(t, nil), "Fix the build", 30*time.Second)
+}
+
+// runsPlanStep runs the plan step of a new todo titled title on h, as its creator, and checks
+// within wait that its sandbox run and Captain's run succeeded and that the plan was accepted as
+// the todo's outcome.
+func runsPlanStep(t *testing.T, h hostedRuns, title string, wait time.Duration) {
+	t.Helper()
 	db, base, workspace, creator := h.db, h.base, h.workspace, h.ada
 
-	status, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Fix the build"})
+	status, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": title})
 	require.Equal(t, http.StatusCreated, status, created)
 	todo := created["id"].(string)
 
@@ -280,26 +302,33 @@ func TestHostedTodoRunsInASandboxJob(t *testing.T) {
 		UserID uuid.UUID
 		SHA    string
 	}
-	require.Eventually(t, func() bool {
+	if !assert.Eventually(t, func() bool {
 		require.NoError(t, db.Raw(`SELECT status, kind, user_id, sha FROM sandbox_runs WHERE todo_id = ?`, todo).Scan(&run).Error)
-		return run.Status == "succeeded"
-	}, 30*time.Second, 50*time.Millisecond, "the sandbox job ran: %+v", run)
+		var finished bool
+		require.NoError(t, db.Raw(`SELECT count(*) > 0 FROM captain_prompt_runs WHERE id = ? AND state IN ('failed', 'cancelled', 'waiting')`, started["promptRunId"]).Scan(&finished).Error)
+		return run.Status == "succeeded" || run.Status == "failed" || finished
+	}, wait, 50*time.Millisecond, "the sandbox job ran") || run.Status != "succeeded" {
+		var captain string
+		require.NoError(t, db.Raw(`SELECT row_to_json(r)::text FROM captain_prompt_runs r WHERE id = ?`, started["promptRunId"]).Scan(&captain).Error)
+		t.Fatalf("the sandbox job didn't succeed: %+v; Captain's run: %s", run, captain)
+	}
 	assert.Equal(t, "agent", run.Kind)
 	assert.Equal(t, creator, run.UserID)
 	assert.NotEmpty(t, run.SHA)
 
-	var promptRun struct{ State string }
+	var promptRun struct{ State, Error string }
 	require.Eventually(t, func() bool {
-		require.NoError(t, db.Raw(`SELECT state FROM captain_prompt_runs WHERE id = ?`, started["promptRunId"]).Scan(&promptRun).Error)
-		return promptRun.State == "succeeded"
-	}, 30*time.Second, 50*time.Millisecond, "Captain recorded the run's outcome: %+v", promptRun)
+		require.NoError(t, db.Raw(`SELECT state, coalesce(error, '') AS error FROM captain_prompt_runs WHERE id = ?`, started["promptRunId"]).Scan(&promptRun).Error)
+		return promptRun.State == "succeeded" || promptRun.State == "failed" || promptRun.State == "cancelled"
+	}, wait, 50*time.Millisecond, "Captain recorded the run's outcome")
+	require.Equal(t, "succeeded", promptRun.State, "Captain's run: %s", promptRun.Error)
 
 	// The outcome event is the run's last write: once it is there, the todo has its outcome.
 	var outcomes int64
 	require.Eventually(t, func() bool {
 		require.NoError(t, db.Raw(`SELECT count(*) FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcomes).Error)
 		return outcomes == 1
-	}, 30*time.Second, 50*time.Millisecond, "the run's outcome reached the todo")
+	}, wait, 50*time.Millisecond, "the run's outcome reached the todo")
 	var outcome struct {
 		RunState string
 		Success  bool
