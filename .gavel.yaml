@@ -17,6 +17,13 @@ lint:
   - file: testrunner/ui/pnpm-lock.yaml
     rule: '*-country-short-codes'
     source: betterleaks
+  # TODO(https://github.com/flanksource/gavel/issues/150): temporary. These
+  # rules are turned off only to get lint passing again after #148 made
+  # gavel lint fail on violations. Fixing their ~350 findings
+  # now would mean restructuring much of pr/ui, so #149 fixed only the
+  # mechanical findings (types, cleanups, keys, labels) and deferred these.
+  # Come back to them in smaller PRs and remove each entry once its rule is clean.
+  #
   # Structure, style and micro-performance rules: they flag working code and
   # fixing them means restructuring components rather than correcting bugs.
   - rule: react-doctor/only-export-components
