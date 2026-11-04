@@ -234,3 +234,22 @@ func prefixed(hosts []string, suffix string) []string {
 	}
 	return out
 }
+
+func TestSubstrateSweepsTheEnvironmentsOfRunsOlderThanTheirLifetime(t *testing.T) {
+	server, executor, _ := startSubstrate(t)
+	client, err := substrate.Dial(server.Options())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	image := "ghcr.io/flanksource/gavel-runner@sha256:" + strings64("a")
+	old, recent := uuid.New(), uuid.New()
+	for _, id := range []string{JobName(old), JobName(recent), "captain-run-0123456789ab"} {
+		_, err := client.Create(t.Context(), substrate.Environment{ID: id, Image: image})
+		require.NoError(t, err)
+	}
+	server.Backdate("ate-env", JobName(old), time.Now().Add(-2*time.Hour))
+	server.Backdate("ate-env", "captain-run-0123456789ab", time.Now().Add(-2*time.Hour))
+
+	swept, err := executor.(Sweeper).Sweep(t.Context(), time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, []string{JobName(old)}, swept, "only a run's environment, and only past the run's lifetime")
+}

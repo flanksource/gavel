@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/commons/logger"
@@ -105,6 +106,12 @@ func substrateProcess(job Job) (substrate.Process, error) {
 
 // substrateEgress allows a job to reach gavel serve at server, the hosts it needs, and the model
 // APIs of its credentials, which the gateway injects. Everything else is denied.
+// Sweep deletes the environments of runs, gavel-run-<run>, created more than lifetime ago: what
+// jobs and agent runs left behind when serve died before their end.
+func (e *substrateExecutor) Sweep(ctx context.Context, lifetime time.Duration) ([]string, error) {
+	return e.client.Sweep(ctx, jobPrefix, time.Now().Add(-lifetime))
+}
+
 // SubstrateEgressOptions is what a job may reach, as substrateEgress allows it, spelled as captain's
 // substrate sandbox takes egress: host:port over TLS, passed through, and http://host:port in
 // cleartext. Agent runs executing through captain's sandbox reach the same as jobs.
