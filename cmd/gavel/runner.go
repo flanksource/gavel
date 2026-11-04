@@ -50,6 +50,22 @@ func init() {
 	execCmd.Flags().StringVar(&run, "run", "", "The sandbox run's ID")
 	execCmd.Flags().StringVar(&workspace, "workspace", "/workspace", "Scratch directory for the source")
 	runnerCmd.AddCommand(execCmd)
+	var taskDir string
+	runTaskCmd := &cobra.Command{
+		Use:    "run-task",
+		Short:  "Run a step's whole run in a substrate environment, relaying it on stdout",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Stdout is the run's channel to its caller, so everything else goes to stderr, the
+			// environment's log.
+			channel := os.Stdout
+			os.Stdout = os.Stderr
+			return runnerRunTask(cmd.Context(), runTaskOptions{Dir: taskDir}, channel, os.Stdin)
+		},
+	}
+	runTaskCmd.Flags().StringVar(&taskDir, "dir", ".", "The run's directory, holding its task and workspace bundle")
+	runnerCmd.AddCommand(runTaskCmd)
 	rootCmd.AddCommand(runnerCmd)
 }
 
