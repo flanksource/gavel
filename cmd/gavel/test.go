@@ -21,6 +21,7 @@ import (
 	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/fixtures"
 	_ "github.com/flanksource/gavel/fixtures/kinds/all"
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
@@ -339,7 +340,11 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer os.RemoveAll(coverDir)
+		defer func() {
+			if err := safefs.SafeRemove(coverDir, safefs.RemoveContext{AllowedRoot: os.TempDir()}); err != nil {
+				logger.Warnf("remove %s: %v", coverDir, err)
+			}
+		}()
 		runOpts.CoverDir, runOpts.ResultsOut = coverDir, &uirTests
 	}
 	result, err := testrunner.Run(runOpts)
