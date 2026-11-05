@@ -21,12 +21,14 @@ import (
 	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/fixtures"
 	_ "github.com/flanksource/gavel/fixtures/kinds/all"
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/testrunner/uirexport"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
@@ -46,6 +48,9 @@ var (
 func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	if opts.Dev && !opts.UI {
 		return nil, fmt.Errorf("--dev serves the --ui dashboard from Vite; it needs --ui")
+	}
+	if opts.UIRTestCoverage && opts.UIRExport == "" {
+		return nil, fmt.Errorf("--uir-test-coverage adds per-test coverage to the --uir-export file; it needs --uir-export")
 	}
 	diagnostics := newRunDiagnosticsReporter(runDiagnosticsOptions{Output: logger.GetOutput()})
 	runCtx, cancelRun := newMonitoredStopContext(opts.Context, monitoredStopOptions{
@@ -321,7 +326,29 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	var fullSummary parsers.TestSummary
 	opts.SummaryOut = &fullSummary
 
-	result, err := testrunner.Run(opts)
+	// The export's coverage and flat results go only to this run, not to UI reruns.
+	runOpts := opts
+	var uirTests []parsers.Test
+	var uirInputs string
+	if opts.UIRExport != "" {
+		// Digest the inputs before the tests run, so files they write do not change it.
+		var err error
+		if uirInputs, err = uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport); err != nil {
+			return nil, fmt.Errorf("--uir-export: %w", err)
+		}
+		coverDir, err := os.MkdirTemp("", "gavel-uir-cover-")
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err := safefs.SafeRemove(coverDir, safefs.RemoveContext{AllowedRoot: os.TempDir()}); err != nil {
+				logger.Warnf("remove %s: %v", coverDir, err)
+			}
+		}()
+		runOpts.CoverDir, runOpts.ResultsOut = coverDir, &uirTests
+	}
+	result, err := testrunner.Run(runOpts)
+	testsFinished := time.Now().UTC()
 
 	// Post-hooks run after tests, regardless of pass/fail. A failing post
 	// hook does NOT mask the main exit code — it's logged as a warning.
@@ -333,6 +360,17 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 
 	// Wait for lint to finish
 	wg.Wait()
+
+	if opts.UIRExport != "" && len(uirTests) == 0 {
+		logger.Warnf("--uir-export: no tests ran; %s not written", opts.UIRExport)
+	} else if opts.UIRExport != "" {
+		if exportErr := writeUIRExport(runOpts, uirTests, uirInputs, runStarted, testsFinished); exportErr != nil {
+			if err == nil {
+				return nil, fmt.Errorf("--uir-export: %w", exportErr)
+			}
+			logger.Warnf("--uir-export: %v", exportErr)
+		}
+	}
 
 	if lintErr != nil {
 		logger.Warnf("Linting failed: %v", lintErr)
@@ -496,6 +534,33 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		return testRunReturnValue(snapshot), nil
 	}
 	return result, nil
+}
+
+// writeUIRExport writes the run's flat results, with the coverage its go test batches profiled into
+// opts.CoverDir, as the `uir tests import` file --uir-export names.
+func writeUIRExport(opts testrunner.RunOptions, tests []parsers.Test, inputsDigest string, started, finished time.Time) error {
+	profiles, err := filepath.Glob(filepath.Join(opts.CoverDir, "batch-*.out"))
+	if err != nil {
+		return err
+	}
+	options := uirexport.Options{
+		WorkDir: opts.WorkDir, InputsDigest: inputsDigest,
+		StartedAt: started, FinishedAt: finished, CoverProfiles: profiles, CoverDir: opts.CoverDir,
+	}
+	if opts.UIRTestCoverage {
+		options.CoverTest = func(test parsers.Test, profile string) error {
+			return testrunner.CoverTest(opts, test, profile)
+		}
+	}
+	imported, err := uirexport.Build(tests, options)
+	if err != nil {
+		return err
+	}
+	if err := uirexport.Write(opts.UIRExport, imported); err != nil {
+		return err
+	}
+	logger.Infof("Wrote %d tests for `uir tests import` to %s", len(imported.Runs[0].Tests), opts.UIRExport)
+	return nil
 }
 
 // printDryRunHooks renders each hook as a `sh -c` invocation using the
