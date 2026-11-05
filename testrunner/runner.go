@@ -687,6 +687,15 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 		opts.FixtureRunner.TraceHost = opts.TraceHost
 		opts.FixtureRunner.ProcessTrace = opts.ProcessTrace
 		opts.FixtureRunner.ProcessRuntime = opts.FixtureRunner.ProcessRuntime.Merge(opts.fixtureRuntime())
+		if opts.FixtureRunner.ExecutablePath == "" {
+			// A runtime cap (test.testTimeout, --cpu, --mem) isolates the run in a
+			// worker spawned from this binary, exactly as fixture discovery does.
+			execPath, err := os.Executable()
+			if err != nil {
+				return nil, fmt.Errorf("resolve fixture worker executable: %w", err)
+			}
+			opts.FixtureRunner.ExecutablePath = execPath
+		}
 		fixtureTests, err := t.runFixtureRunner(*opts.FixtureRunner, opts.runtimeWorkDir())
 		if err != nil {
 			fixtureErr = err
