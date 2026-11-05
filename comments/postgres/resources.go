@@ -3,6 +3,7 @@ package postgres
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -36,7 +37,7 @@ func (s *Store) ReadMarkers(ctx context.Context, p comments.Principal, ids []str
 func (s *Store) Page(ctx context.Context, p comments.Principal, f comments.Filter) (comments.Page, error) {
 	page := comments.Page{Items: []comments.Comment{}, Read: []comments.ReadMarker{}, Limit: f.Limit, Offset: f.Offset}
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		q := tx.Table("comments c").Joins("LEFT JOIN comment_reads r ON r.tenant_id=c.tenant_id AND r.comment_id=c.id AND r.actor_kind=? AND r.actor_id=?", p.Actor.Kind, p.Actor.ID).Where("c.tenant_id=? AND c.scope_uri=?", p.TenantID, f.ScopeURI)
+		q := tx.Table("comments c").Joins("LEFT JOIN comment_reads r ON r.tenant_id=c.tenant_id AND r.comment_id=c.id AND r.actor_kind=? AND r.actor_id=?", p.Actor.Kind, p.Actor.ID).Where("c.tenant_id=? AND c.scope_uri=? AND c.payload->>'deletedAt' IS NULL", p.TenantID, f.ScopeURI)
 		if f.TargetURI != "" {
 			q = q.Where("c.target_uri=?", f.TargetURI)
 		}
@@ -59,13 +60,17 @@ func (s *Store) Page(ctx context.Context, p comments.Principal, f comments.Filte
 			if err := json.Unmarshal(row.Payload, &c); err != nil {
 				return err
 			}
+			c, err := get(ctx, tx, p.TenantID, c.ID, false)
+			if err != nil {
+				return err
+			}
 			page.Items = append(page.Items, c)
 			ids = append(ids, c.ID)
 		}
 		var err error
 		page.Read, err = (&Store{db: tx}).ReadMarkers(ctx, p, ids)
 		return err
-	})
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	return page, err
 }
 func (s *Store) Put(ctx context.Context, tenant, id string, data []byte) error {

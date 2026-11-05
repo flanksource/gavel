@@ -50,4 +50,26 @@ var _ = Describe("launch schema projections", func() {
 		_, err = Decode(request(map[string]any{"lint": map[string]any{"linters": entries}}), "lint", schemaFixture{})
 		Expect(err).To(MatchError(ContainSubstring("duplicate")))
 	})
+	DescribeTable("prompt spec overrides", func(spec map[string]any, valid bool) {
+		options := map[string]any{"prompt": "spec-public-high", "promptVersion": "v1", "spec": spec}
+		body := request(map[string]any{"lint": map[string]any{"linters": []any{
+			map[string]any{"id": "review", "linter": "prompt", "options": options},
+		}}})
+		for _, kind := range []string{"", "lint"} {
+			decoded, err := Decode(body, kind, schemaFixture{})
+			if valid {
+				Expect(err).NotTo(HaveOccurred(), kind)
+				Expect(decoded.Config.Lint.Linters[0].Options).To(Equal(options))
+			} else {
+				Expect(err).To(HaveOccurred(), kind)
+			}
+		}
+	},
+		Entry("accepts runtime settings without an inline prompt", map[string]any{"model": "example-model", "mode": "cli", "effort": "low"}, true),
+		Entry("accepts overrides without repeating the saved model", map[string]any{"effort": "low"}, true),
+		Entry("accepts empty overrides", map[string]any{}, true),
+		Entry("rejects unknown override fields", map[string]any{"unknown": true}, false),
+		Entry("rejects invalid runtime types", map[string]any{"model": true}, false),
+		Entry("validates nested override fields", map[string]any{"budget": map[string]any{"maxTokens": "many"}}, false),
+	)
 })

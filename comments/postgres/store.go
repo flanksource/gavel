@@ -22,6 +22,10 @@ func New(db *gorm.DB) (*Store, error) {
 
 var _ comments.Store = (*Store)(nil)
 
+func (s *Store) Transaction(ctx context.Context, fn func(comments.Store) error) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return fn(&Store{db: tx}) })
+}
+
 type record struct {
 	ID       string
 	TenantID string
@@ -165,12 +169,26 @@ func (s *Store) Mutate(ctx context.Context, tenant, id string, expected int64, f
 		if err != nil {
 			return err
 		}
-		result := tx.Exec("UPDATE comments SET phase = ?, version = ?, payload = ?::jsonb WHERE tenant_id = ? AND id = ? AND version = ?", out.Phase, out.Version, string(data), tenant, id, expected)
+		result := tx.Exec("UPDATE comments SET scope_uri = ?, target_uri = ?, phase = ?, version = ?, payload = ?::jsonb WHERE tenant_id = ? AND id = ? AND version = ?", out.Target.ScopeURI, out.Target.URI, out.Phase, out.Version, string(data), tenant, id, expected)
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return comments.ErrConflict
+		}
+		if change.EditMessage != nil {
+			data, err := json.Marshal(change.EditMessage)
+			if err != nil {
+				return err
+			}
+			if err = tx.Exec("UPDATE comment_messages SET payload=?::jsonb WHERE tenant_id=? AND comment_id=? AND id=?", string(data), tenant, id, change.EditMessage.ID).Error; err != nil {
+				return err
+			}
+		}
+		if change.DeleteMessageID != "" {
+			if err = tx.Exec("DELETE FROM comment_messages WHERE tenant_id=? AND comment_id=? AND id=?", tenant, id, change.DeleteMessageID).Error; err != nil {
+				return err
+			}
 		}
 		if change.Message != nil {
 			m := *change.Message
@@ -198,7 +216,7 @@ func (s *Store) Mutate(ctx context.Context, tenant, id string, expected int64, f
 	return out, err
 }
 func (s *Store) List(ctx context.Context, tenant string, f comments.Filter) ([]comments.Comment, error) {
-	q := s.db.WithContext(ctx).Table("comments").Select("payload").Where("tenant_id = ? AND scope_uri = ?", tenant, f.ScopeURI)
+	q := s.db.WithContext(ctx).Table("comments").Select("payload").Where("tenant_id = ? AND scope_uri = ? AND payload->>'deletedAt' IS NULL", tenant, f.ScopeURI)
 	if f.TargetURI != "" {
 		q = q.Where("target_uri = ?", f.TargetURI)
 	}

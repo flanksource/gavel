@@ -20,7 +20,10 @@ func object(properties map[string]any, required ...string) map[string]any {
 }
 
 func reflected(value any) (map[string]any, error) {
-	schema := (&jsonschema.Reflector{}).Reflect(value)
+	return schemaMap((&jsonschema.Reflector{}).Reflect(value))
+}
+
+func schemaMap(schema *jsonschema.Schema) (map[string]any, error) {
 	raw, err := json.Marshal(schema)
 	if err != nil {
 		return nil, err
@@ -73,7 +76,12 @@ func lintSchema(provider SchemaProvider) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	prompt, err := reflected(PromptConfig{})
+	promptSchema := (&jsonschema.Reflector{}).Reflect(PromptConfig{})
+	overrides := *promptSchema.Definitions["Spec"]
+	// Only this spec is merged with the saved prompt; nested specs remain complete.
+	overrides.Required = nil
+	promptSchema.Definitions["PromptConfig"].Properties.Set("spec", &overrides)
+	prompt, err := schemaMap(promptSchema)
 	if err != nil {
 		return nil, err
 	}

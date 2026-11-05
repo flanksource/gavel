@@ -16,13 +16,15 @@ import (
 )
 
 type actionFlags struct {
-	Version  int64           `flag:"expectedVersion" required:"true" help:"Required current comment version"`
-	Body     string          `flag:"bodyMarkdown" help:"Reply or updated Markdown"`
-	Summary  string          `flag:"summary" help:"Resolution or closure summary"`
-	ParentID string          `flag:"parentId" help:"Local parent reply identity"`
-	Assignee *comments.Actor `flag:"assignee" help:"Assignee as JSON; null clears it"`
-	Evidence []string        `flag:"evidence" help:"Outcome evidence URIs"`
-	Content  json.RawMessage `flag:"content" help:"Structured reply content as JSON"`
+	Version   int64            `flag:"expectedVersion" required:"true" help:"Required current comment version"`
+	Body      string           `flag:"bodyMarkdown" help:"Reply or updated Markdown"`
+	Summary   string           `flag:"summary" help:"Resolution or closure summary"`
+	ParentID  string           `flag:"parentId" help:"Local parent reply identity"`
+	Assignee  *comments.Actor  `flag:"assignee" help:"Assignee as JSON; null clears it"`
+	Evidence  []string         `flag:"evidence" help:"Outcome evidence URIs"`
+	Content   json.RawMessage  `flag:"content" help:"Structured reply content as JSON"`
+	Target    *comments.Target `flag:"target" help:"Replacement target within the same scope"`
+	MessageID string           `flag:"messageId" help:"Reply to edit or delete"`
 }
 
 func (actionFlags) ClickyActionFlags() {}
@@ -49,6 +51,13 @@ type listItem struct {
 func Register(resolve Resolver) error {
 	if resolve == nil {
 		return fmt.Errorf("comments service is required")
+	}
+	fallback := resolve
+	resolve = func(ctx context.Context) (*comments.Service, error) {
+		if host, ok := ctx.Value(resolverKey{}).(Resolver); ok {
+			return host(ctx)
+		}
+		return fallback(ctx)
 	}
 	builder := framework.NewEntity[listItem, comments.Filter, comments.Comment]("comments").
 		ListPagedWithContext(func(ctx context.Context, f comments.Filter) (entity.PagedResult[listItem], error) {
@@ -89,13 +98,13 @@ func Register(resolve Resolver) error {
 		v, err := service.Create(ctx, req)
 		return v, StatusError(err)
 	}).WithOptionalID().WithMethod("POST").WithPath("comments"))
-	for _, action := range []string{"reply", "assign", "acknowledge", "edit", "resolve", "close", "reopen"} {
+	for _, action := range []string{"reply", "assign", "acknowledge", "edit", "resolve", "close", "reopen", "metadata", "retarget", "delete", "restore", "edit-reply", "delete-reply"} {
 		builder = builder.WithAction(entity.TypedActionWithContext(action, actionFlags{}, func(ctx context.Context, id string, flags actionFlags) (comments.Comment, error) {
 			service, err := resolve(ctx)
 			if err != nil {
 				return comments.Comment{}, StatusError(err)
 			}
-			req := comments.ActionRequest{ID: id, Action: action, ExpectedVersion: flags.Version, Body: flags.Body, Summary: flags.Summary, Assignee: flags.Assignee, ParentID: flags.ParentID, Evidence: flags.Evidence, Content: flags.Content}
+			req := comments.ActionRequest{ID: id, Action: action, ExpectedVersion: flags.Version, Body: flags.Body, Summary: flags.Summary, Assignee: flags.Assignee, ParentID: flags.ParentID, Evidence: flags.Evidence, Content: flags.Content, Target: flags.Target, MessageID: flags.MessageID}
 			if _, ok := rpc.RequestFromContext(ctx); ok {
 				if err := decode(ctx, nil, &req); err != nil {
 					return comments.Comment{}, StatusError(err)

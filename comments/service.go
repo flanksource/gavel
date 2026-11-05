@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -54,7 +55,7 @@ func New(options Options) (*Service, error) {
 			}
 		}
 		for action, t := range w.Actions {
-			if action == "reply" || action == "assign" || action == "update" || len(t.From) == 0 {
+			if slices.Contains([]string{"reply", "assign", "update", "metadata", "retarget", "delete", "restore", "edit-reply", "delete-reply"}, action) || len(t.From) == 0 {
 				return nil, fmt.Errorf("%w: invalid workflow action %s", ErrInvalid, action)
 			}
 			for _, from := range t.From {
@@ -138,7 +139,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Comment, error
 	hash := sha256.Sum256(data)
 	now := time.Now().UTC()
 	c := Comment{ID: uuid.NewString(), TenantID: p.TenantID, Target: target, Body: req.Body, Author: p.Actor, WorkflowID: w.ID, Status: w.Initial, Phase: Active, Content: req.Content, Links: req.Links, Version: 1, CreatedAt: now, UpdatedAt: now}
-	return s.store.Create(ctx, c, req.RequestID, hex.EncodeToString(hash[:]), Event{CommentID: c.ID, Kind: "created", Actor: p.Actor, At: now})
+	created, err := s.store.Create(ctx, c, req.RequestID, hex.EncodeToString(hash[:]), Event{CommentID: c.ID, Kind: "created", Actor: p.Actor, At: now})
+	if err == nil && created.DeletedAt != nil {
+		return Comment{}, ErrConflict
+	}
+	return created, err
 }
 func (s *Service) Get(ctx context.Context, id string) (Comment, error) {
 	p, err := s.principal(ctx)
@@ -148,6 +153,9 @@ func (s *Service) Get(ctx context.Context, id string) (Comment, error) {
 	c, err := s.store.Get(ctx, p.TenantID, id)
 	if err != nil {
 		return c, err
+	}
+	if c.DeletedAt != nil {
+		return Comment{}, ErrNotFound
 	}
 	return c, s.access.Authorize(ctx, p, "read", c.Target)
 }

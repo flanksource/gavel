@@ -34,7 +34,13 @@ func (s *Service) Capabilities(ctx context.Context, id string) (Capabilities, er
 			return out, err
 		}
 	}
-	candidates := []string{"reply", "assign", "update"}
+	candidates := []string{"reply", "assign", "update", "metadata"}
+	if p.Actor.Kind == "user" {
+		candidates = append(candidates, "delete", "retarget")
+	}
+	if c.Phase != Final && len(c.Messages) > 0 {
+		candidates = append(candidates, "edit-reply", "delete-reply")
+	}
 	if len(s.providers) > 0 && len(out.Bindings) == 0 && c.Phase != Final {
 		candidates = append(candidates, "publish")
 	}

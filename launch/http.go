@@ -18,6 +18,10 @@ import (
 
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if s.options.Comments != nil {
+		mux.Handle("/api/v1/comments", s.options.Comments)
+		mux.Handle("/api/v1/comments/", s.options.Comments)
+	}
 	mux.Handle("/api/workspace/", s.files.Handler())
 	for _, kind := range []string{"", "test", "lint"} {
 		path := "/api/launch"
@@ -36,6 +40,9 @@ func (s *Service) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, document)
 	})
 	mux.HandleFunc("GET /api/launch/prompts", s.handlePrompts)
+	mux.HandleFunc("GET /api/launch/linters", s.handleLinters)
+	mux.HandleFunc("POST /api/launch/lint/filter", s.handleLintFilter)
+	mux.HandleFunc("POST /api/launch/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("GET /api/runs", s.handleRuns)
 	mux.HandleFunc("GET /api/runs/{executionId}", s.handleRun)
 	mux.HandleFunc("GET /api/runs/{executionId}/stream", s.handleStream)

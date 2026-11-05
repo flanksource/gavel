@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -26,6 +27,7 @@ type ServiceOptions struct {
 	Store      resultstore.Store
 	Schemas    SchemaProvider
 	Executor   Executor
+	Comments   http.Handler
 }
 
 type activeExecution struct {

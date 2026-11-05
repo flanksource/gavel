@@ -61,7 +61,11 @@ func newLaunchService(ctx context.Context, root, backend string, localRoots []st
 	if err != nil {
 		return nil, errors.Join(err, workspaces.Close())
 	}
-	service, err := launch.NewService(launch.ServiceOptions{Workspaces: workspaces, Store: store, Schemas: launchCommandSchemas{}, Executor: launch.NativeExecutor{Schemas: launchCommandSchemas{}}})
+	comments, err := launch.CommentsHandler(db.Gorm(), root)
+	if err != nil {
+		return nil, errors.Join(err, store.Close(), workspaces.Close())
+	}
+	service, err := launch.NewService(launch.ServiceOptions{Workspaces: workspaces, Store: store, Schemas: launchCommandSchemas{}, Executor: launch.NativeExecutor{Schemas: launchCommandSchemas{}}, Comments: comments})
 	if err != nil {
 		return nil, errors.Join(err, store.Close(), workspaces.Close())
 	}

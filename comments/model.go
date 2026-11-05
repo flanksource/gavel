@@ -62,6 +62,7 @@ type Comment struct {
 	Version     int64           `json:"version"`
 	CreatedAt   time.Time       `json:"createdAt"`
 	UpdatedAt   time.Time       `json:"updatedAt"`
+	DeletedAt   *time.Time      `json:"deletedAt,omitempty"`
 	Messages    []Message       `json:"messages,omitempty"`
 	Attachments []Attachment    `json:"attachments,omitempty"`
 }
@@ -86,10 +87,15 @@ type Filter struct {
 	Unread    bool   `json:"unread,omitempty" flag:"unread"`
 }
 type Change struct {
-	Comment    Comment
-	Message    *Message
-	Attachment *Attachment
-	Event      Event
+	Comment         Comment
+	Message         *Message
+	Attachment      *Attachment
+	EditMessage     *Message
+	DeleteMessageID string
+	Event           Event
+}
+type TransactionStore interface {
+	Transaction(context.Context, func(Store) error) error
 }
 type Store interface {
 	Create(context.Context, Comment, string, string, Event) (Comment, error)

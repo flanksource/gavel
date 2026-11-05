@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
-	"slices"
 
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/utils"
@@ -60,19 +58,11 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repoCfg, err := verify.LoadSingleGavelConfig(filepath.Join(root, ".gavel.yaml"))
-	if err != nil && !os.IsNotExist(err) {
-		http.Error(w, fmt.Sprintf("load .gavel.yaml: %v", err), http.StatusInternalServerError)
-		return
-	}
-
 	newRule := verify.LintIgnoreRule{Source: req.Source, Rule: req.Rule, File: req.File, Line: req.Line, Fingerprint: req.Fingerprint}
-	if !slices.Contains(repoCfg.Lint.Ignore, newRule) {
-		repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRule)
-		if err := verify.SaveGavelConfig(root, repoCfg); err != nil {
-			http.Error(w, fmt.Sprintf("save .gavel.yaml: %v", err), http.StatusInternalServerError)
-			return
-		}
+	count, err := verify.SaveLintIgnore(root, newRule)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("save .gavel.yaml: %v", err), http.StatusInternalServerError)
+		return
 	}
 
 	s.mu.Lock()
@@ -81,7 +71,7 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 	s.notify()
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(IgnoreResponse{RuleCount: len(repoCfg.Lint.Ignore), Filtered: filtered})
+	_ = json.NewEncoder(w).Encode(IgnoreResponse{RuleCount: count, Filtered: filtered})
 }
 
 func (s *Server) resolveGitRootLocked(workDir string) string {

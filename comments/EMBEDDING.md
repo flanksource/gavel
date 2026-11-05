@@ -15,7 +15,7 @@ Import `github.com/flanksource/gavel/comments` for the core, `comments/postgres`
 
 `CodeSelector` validates version 1, relative paths, inclusive line ranges, code revisions, and both diff commits plus the selected side. Other selector kinds are host-defined JSON. Structured root/reply content and capture metadata round-trip without a Gavel-specific presentation schema.
 
-Provision only empty comments tables with `postgres.Provision(ctx, dsn)`. Existing-data conversion, backfill, filesystem import, xero-cli refactoring and existing playground storage cutover are excluded.
+Provision only empty comments tables with `postgres.Provision(ctx, dsn)`. Existing-data conversion, backfill, filesystem import and xero-cli refactoring are excluded. The playground consumes the comments API through its host projection without importing old JSON comments.
 
 ## Gavel host
 

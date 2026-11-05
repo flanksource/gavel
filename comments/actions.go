@@ -20,6 +20,8 @@ type ActionRequest struct {
 	Evidence        []string        `json:"evidence,omitempty"`
 	Content         json.RawMessage `json:"content,omitempty"`
 	Assignee        *Actor          `json:"assignee,omitempty"`
+	Target          *Target         `json:"target,omitempty"`
+	MessageID       string          `json:"messageId,omitempty"`
 }
 
 func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
@@ -34,7 +36,10 @@ func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
 		if err := s.access.Authorize(ctx, p, req.Action, c.Target); err != nil {
 			return Change{}, err
 		}
-		if req.Action == "update" || req.Action == "resolve" || req.Action == "close" || req.Action == "reopen" {
+		if c.DeletedAt != nil && req.Action != "restore" {
+			return Change{}, ErrNotFound
+		}
+		if req.Action != "reply" && req.Action != "assign" && req.Action != "acknowledge" && req.Action != "metadata" {
 			if store, ok := s.store.(ProviderStore); ok {
 				bindings, err := store.Bindings(ctx, p.TenantID, c.ID)
 				if err != nil {
@@ -51,68 +56,92 @@ func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
 			Status     string
 			Outcome    *Outcome
 			Resolution *Outcome
-		}{c.Status, c.Outcome, c.Resolution}
+			Target     Target
+			Body       string
+			Content    json.RawMessage
+			Assignee   *Actor
+			DeletedAt  *time.Time
+			Message    *Message
+		}{Status: c.Status, Outcome: c.Outcome, Resolution: c.Resolution, Target: c.Target, Body: c.Body, Content: c.Content, Assignee: c.Assignee, DeletedAt: c.DeletedAt}
+		for _, m := range c.Messages {
+			if m.ID == req.MessageID {
+				before.Message = &m
+				break
+			}
+		}
 		now := time.Now().UTC()
 		var msg *Message
-		switch req.Action {
-		case "assign":
-			if p.Actor.Kind != "user" || c.Phase != Active {
-				return Change{}, fmt.Errorf("%w: assigning requires a human and active comment", ErrInvalid)
-			}
-			if req.Assignee != nil && (req.Assignee.ID == "" || (req.Assignee.Kind != "user" && req.Assignee.Kind != "agent")) {
-				return Change{}, ErrInvalid
-			}
-			c.Assignee = req.Assignee
-		case "update":
-			if c.Phase == Final || strings.TrimSpace(req.Body) == "" {
-				return Change{}, ErrInvalid
-			}
-			c.Body = req.Body
-		case "reply":
-			if c.Phase == Final || strings.TrimSpace(req.Body) == "" {
-				return Change{}, fmt.Errorf("%w: reply requires an active comment and body", ErrInvalid)
-			}
-			if req.ParentID != "" {
-				found := false
-				for _, m := range c.Messages {
-					found = found || m.ID == req.ParentID
+		edit, handled, err := s.edit(ctx, p, &c, req, now)
+		if err != nil {
+			return Change{}, err
+		}
+		if !handled {
+			switch req.Action {
+			case "assign":
+				if p.Actor.Kind != "user" || c.Phase != Active {
+					return Change{}, fmt.Errorf("%w: assigning requires a human and active comment", ErrInvalid)
 				}
-				if !found {
-					return Change{}, fmt.Errorf("%w: reply parent belongs to another comment", ErrInvalid)
+				if req.Assignee != nil && (req.Assignee.ID == "" || (req.Assignee.Kind != "user" && req.Assignee.Kind != "agent")) {
+					return Change{}, ErrInvalid
 				}
-			}
-			if len(req.Content) > 0 && !json.Valid(req.Content) {
-				return Change{}, fmt.Errorf("%w: malformed content", ErrInvalid)
-			}
-			msg = &Message{ID: uuid.NewString(), ParentID: req.ParentID, Body: req.Body, Author: p.Actor, Content: req.Content, CreatedAt: now}
-		default:
-			w, ok := s.workflows[c.WorkflowID]
-			if !ok {
-				return Change{}, fmt.Errorf("%w: unknown workflow %s", ErrInvalid, c.WorkflowID)
-			}
-			status, phase, err := w.Apply(c.Status, req.Action, p.Actor)
-			if err != nil {
-				return Change{}, err
-			}
-			if req.Action == "acknowledge" {
-				if c.Assignee != nil && (c.Assignee.ID != p.Actor.ID || c.Assignee.Kind != p.Actor.Kind) && p.Actor.Kind != "user" {
-					return Change{}, ErrConflict
+				c.Assignee = req.Assignee
+				if c.WorkflowID == "human-review" {
+					c.Status = "open"
+					if req.Assignee != nil {
+						c.Status = "in_progress"
+					}
 				}
-				actor := p.Actor
-				c.Assignee = &actor
-			}
-			c.Status, c.Phase = status, phase
-			result := &Outcome{Kind: req.Action, Summary: req.Summary, Evidence: req.Evidence, Actor: p.Actor, At: now}
-			if phase == AwaitingOutcome {
-				c.Resolution = result
-			}
-			if phase == Final {
-				c.Outcome = result
-			}
-			if req.Action == "reopen" {
-				c.Outcome = nil
-				c.Resolution = nil
-				c.Assignee = nil
+			case "update":
+				if c.Phase == Final || strings.TrimSpace(req.Body) == "" {
+					return Change{}, ErrInvalid
+				}
+				c.Body = req.Body
+			case "reply":
+				if c.Phase == Final || strings.TrimSpace(req.Body) == "" {
+					return Change{}, fmt.Errorf("%w: reply requires an active comment and body", ErrInvalid)
+				}
+				if req.ParentID != "" {
+					found := false
+					for _, m := range c.Messages {
+						found = found || m.ID == req.ParentID
+					}
+					if !found {
+						return Change{}, fmt.Errorf("%w: reply parent belongs to another comment", ErrInvalid)
+					}
+				}
+				if len(req.Content) > 0 && !json.Valid(req.Content) {
+					return Change{}, fmt.Errorf("%w: malformed content", ErrInvalid)
+				}
+				msg = &Message{ID: uuid.NewString(), ParentID: req.ParentID, Body: req.Body, Author: p.Actor, Content: req.Content, CreatedAt: now}
+			default:
+				w, ok := s.workflows[c.WorkflowID]
+				if !ok {
+					return Change{}, fmt.Errorf("%w: unknown workflow %s", ErrInvalid, c.WorkflowID)
+				}
+				status, phase, err := w.Apply(c.Status, req.Action, p.Actor)
+				if err != nil {
+					return Change{}, err
+				}
+				if req.Action == "acknowledge" {
+					if c.Assignee != nil && (c.Assignee.ID != p.Actor.ID || c.Assignee.Kind != p.Actor.Kind) && p.Actor.Kind != "user" {
+						return Change{}, ErrConflict
+					}
+					actor := p.Actor
+					c.Assignee = &actor
+				}
+				c.Status, c.Phase = status, phase
+				result := &Outcome{Kind: req.Action, Summary: req.Summary, Evidence: req.Evidence, Actor: p.Actor, At: now}
+				if phase == AwaitingOutcome {
+					c.Resolution = result
+				}
+				if phase == Final {
+					c.Outcome = result
+				}
+				if req.Action == "reopen" {
+					c.Outcome = nil
+					c.Resolution = nil
+					c.Assignee = nil
+				}
 			}
 		}
 		c.UpdatedAt = now
@@ -124,7 +153,7 @@ func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
 		if err != nil {
 			return Change{}, err
 		}
-		return Change{Comment: c, Message: msg, Event: Event{CommentID: c.ID, Kind: req.Action, Actor: p.Actor, At: now, Data: data}}, nil
+		return Change{Comment: c, Message: msg, EditMessage: edit.EditMessage, DeleteMessageID: edit.DeleteMessageID, Event: Event{CommentID: c.ID, Kind: req.Action, Actor: p.Actor, At: now, Data: data}}, nil
 	})
 }
 func (s *Service) Events(ctx context.Context, scope string, after int64, limit int) ([]Event, error) {
@@ -145,8 +174,11 @@ func (s *Service) Events(ctx context.Context, scope string, after int64, limit i
 	}
 	out := make([]Event, 0, len(events))
 	for _, e := range events {
-		c, err := s.Get(ctx, e.CommentID)
+		c, err := s.store.Get(ctx, p.TenantID, e.CommentID)
 		if err != nil {
+			return nil, err
+		}
+		if err = s.access.Authorize(ctx, p, "read", c.Target); err != nil {
 			return nil, err
 		}
 		if c.Target.ScopeURI == scope {

@@ -59,6 +59,9 @@ func (s *Service) AddOpenAPI(document map[string]any) error {
 		}
 		paths["/api/runs/{executionId}"+suffix] = map[string]any{method: map[string]any{"operationId": id, "summary": description, "parameters": []any{apiParameter("executionId", "path", true)}, "responses": map[string]any{code: response, "404": apiResponse("Execution not found for this caller", nil)}}}
 	}
+	if err := lintOpenAPI(paths); err != nil {
+		return err
+	}
 	return workspaceOpenAPI(paths)
 }
 

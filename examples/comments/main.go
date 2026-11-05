@@ -96,6 +96,7 @@ func run() error {
 	router := route.NewRouter(nil)
 	server := rpc.NewSwaggerServer(&rpc.ServeConfig{Executor: &rpc.ExecutorConfig{Enabled: true, PathPrefix: "/api/v1"}}, root, nil)
 	server.RegisterExecutionRoutes(router)
+	router.Raw("POST /api/v1/comments/batch", api.Batch(resolve), route.Meta{Entity: "comments", Verb: "batch"})
 	router.Raw("GET /api/v1/comments/events", api.Stream(resolve), route.Meta{Entity: "comments", Verb: "events", ReadOnly: true})
 	router.Raw("POST /api/v1/comments/{id}/attachments", api.Attachments(resolve), route.Meta{Entity: "comments", Verb: "attach", IDParam: "id"})
 	router.Raw("GET /api/v1/comments/{id}/attachments/{attachment}", api.Attachments(resolve), route.Meta{Entity: "comments", Verb: "download", IDParam: "id", ReadOnly: true})

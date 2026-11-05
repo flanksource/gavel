@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
 
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/resultstore"
+	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -96,6 +98,77 @@ var _ = Describe("launch admission", func() {
 		Expect(paths).To(HaveKey("/api/launch/prepare"))
 		Expect(paths).To(HaveKey("/api/launch/prompts"))
 		Expect(paths).To(HaveKey("/api/runs/{executionId}/stream"))
+	})
+	It("admits a saved prompt with runtime-only spec overrides over HTTP", func() {
+		body, err := json.Marshal(map[string]any{
+			"workspace": map[string]any{"cwd": root},
+			"config": map[string]any{"lint": map[string]any{"linters": []any{
+				map[string]any{"id": "review", "linter": "prompt", "options": map[string]any{
+					"prompt": "spec-public-high", "promptVersion": "v1",
+					"spec": map[string]any{"mode": "cli", "model": "example-model"},
+				}},
+			}}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/launch/lint", bytes.NewReader(body))
+		req.Header.Set("Idempotency-Key", "prompt-runtime-overrides")
+		service.Handler().ServeHTTP(response, req)
+		Expect(response.Code).To(Equal(http.StatusAccepted), response.Body.String())
+	})
+	It("discovers configured linters in the caller's prepared directory", func() {
+		Expect(os.WriteFile(filepath.Join(root, ".gavel.yaml"), []byte("lint:\n  linters:\n    prose-review:\n      command: [echo]\n      includes: ['**/*.md']\n"), 0o600)).To(Succeed())
+		prepared, err := service.options.Workspaces.Prepare(context.Background(), shell.Setup{Cwd: root}, "reviewer")
+		Expect(err).NotTo(HaveOccurred())
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/launch/linters?preparationId="+prepared.ID, nil)
+		req.Header.Set("Authorization", "reviewer")
+		service.Handler().ServeHTTP(response, req)
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		var choices []LinterChoice
+		Expect(json.Unmarshal(response.Body.Bytes(), &choices)).To(Succeed())
+		Expect(choices).To(ContainElement(LinterChoice{Name: "prose-review", Includes: []string{"**/*.md"}}))
+		response = httptest.NewRecorder()
+		req.Header.Set("Authorization", "another-reviewer")
+		service.Handler().ServeHTTP(response, req)
+		Expect(response.Code).To(Equal(http.StatusNotFound))
+	})
+	It("persists scoped ignore rules once and filters findings without mutating executions", func() {
+		Expect(os.WriteFile(filepath.Join(root, "guide.md"), []byte("# Guide\n"), 0o600)).To(Succeed())
+		prepared, err := service.options.Workspaces.Prepare(context.Background(), shell.Setup{Cwd: root}, "")
+		Expect(err).NotTo(HaveOccurred())
+		post := func(path string, input map[string]any) *httptest.ResponseRecorder {
+			input["preparationId"] = prepared.ID
+			body, err := json.Marshal(input)
+			Expect(err).NotTo(HaveOccurred())
+			response := httptest.NewRecorder()
+			service.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body)))
+			return response
+		}
+		for range 2 {
+			response := post("/api/launch/lint/ignore", map[string]any{"source": "vale", "rule": "style", "file": "guide.md", "line": 2})
+			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+			Expect(response.Body.String()).To(ContainSubstring(`"rule_count":1`))
+		}
+		cfg, err := verify.LoadSingleGavelConfig(filepath.Join(root, ".gavel.yaml"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Lint.Ignore).To(HaveLen(1))
+		response := post("/api/launch/lint/filter", map[string]any{"results": []any{map[string]any{
+			"linter": "vale", "work_dir": root, "violations": []any{
+				map[string]any{"source": "vale", "rule": map[string]any{"method": "style"}, "file": "guide.md", "line": 2, "message": "ignored"},
+				map[string]any{"source": "vale", "rule": map[string]any{"method": "style"}, "file": "guide.md", "line": 3, "message": "retained"},
+			},
+		}}})
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		var results []struct {
+			Violations []struct{ Message string }
+			Ignored    []any
+		}
+		Expect(json.Unmarshal(response.Body.Bytes(), &results)).To(Succeed())
+		Expect(results[0].Violations).To(HaveLen(1))
+		Expect(results[0].Violations[0].Message).To(Equal("retained"))
+		Expect(results[0].Ignored).To(HaveLen(1))
+		Expect(post("/api/launch/lint/ignore", map[string]any{"line": 2}).Code).To(Equal(http.StatusUnprocessableEntity))
 	})
 	It("accepts a stop from another dispatcher without replaying the execution", func() {
 		request := Request{Workspace: &shell.Setup{Cwd: root}, Config: Configuration{Lint: &LintConfig{}}}

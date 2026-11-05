@@ -20,6 +20,12 @@ Create requests use `target`, `bodyMarkdown`, `workflowId` and `requestId`. The 
 
 Root create request IDs are tenant-scoped. Reusing one with different input conflicts. Replies and transitions increment the root version and append their event within the same transaction. Event cursors are tenant-local, commit-ordered sequences.
 
+`comments/clicky.Handler(resolve)` provides an isolated HTTP embedding of the registered comments catalog. It includes binary attachments, SSE, OpenAPI and `POST /api/v1/comments/batch`. Each batch is an array of ordinary action requests and commits all actions or none; each step must supply the version produced by the preceding step when mutating the same root twice. PostgreSQL implements the optional `TransactionStore` port required by batches.
+
+The `metadata` action replaces opaque host content; `retarget` changes a target within its existing scope after host authorization. `edit-reply` and `delete-reply` address `messageId`, preserve author/creation metadata, and reject deleting a reply that still has children. `delete` hides a root from listings, detail and attachments without discarding audit history; `restore` reverses that local deletion. Retargeting and root deletion/restoration require a human. Retrying a create request whose result was deleted conflicts.
+
+`gavel launch serve` embeds this API for local workspaces. Its scope is `gavel://workspace/<sha256-of-absolute-root>` and the tenant is the local user. Only loopback callers may use this host; `X-Gavel-Comment-Actor` is a base64url JSON actor assertion from a trusted local UI host. Remote/hosted applications must supply their own authentication and resolver instead. Provision tables explicitly with `gavel comments provision` before using comments.
+
 ## Lint
 
 `comments/lint.Discover`, `Inspect`, `Prepare` and `Run` wrap Gavel's existing Captain-backed prompt lint pipeline. Hosts must authorize the selected directory and file scope before invoking it. `Prepare` validates prompt identity/version and scope without calling a model. `Run` is an explicit model invocation.
