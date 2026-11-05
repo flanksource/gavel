@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/flanksource/clicky/exec"
@@ -24,7 +25,12 @@ type goBatchPlan struct {
 	targets   []string
 	skipEmpty []string
 	framework Framework
+	// coverProfile, when set, is the -coverprofile the batch writes.
+	coverProfile string
 }
+
+// goBatchCount numbers the batches' coverage profiles under CoverDir.
+var goBatchCount atomic.Int64
 
 func (o *TestOrchestrator) unfocusedGoRun(startingPaths []string) bool {
 	return len(startingPaths) == 0 && len(o.Frameworks) == 0 && len(o.Ignore) == 0 &&
@@ -134,6 +140,9 @@ func (o *TestOrchestrator) planUnfocusedGoBatch(base goBatchPlan) []goBatchPlan 
 }
 
 func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan goBatchPlan) (packageResult, error) {
+	if o.CoverDir != "" {
+		plan.coverProfile = filepath.Join(o.CoverDir, fmt.Sprintf("batch-%d.out", goBatchCount.Add(1)))
+	}
 	process, err := o.buildGoBatchCommand(plan)
 	if err != nil {
 		return packageResult{}, err
@@ -398,6 +407,9 @@ func (o *TestOrchestrator) buildGoBatchCommand(plan goBatchPlan) (*exec.Process,
 	}
 	if subTimeout := subprocessTimeoutFor(timeout); subTimeout > 0 {
 		args = append(args, subprocessTimeoutArgs(parsers.GoTest, subTimeout)...)
+	}
+	if plan.coverProfile != "" {
+		args = append(args, "-coverprofile="+plan.coverProfile)
 	}
 	if plan.framework == parsers.Ginkgo {
 		runtimeArgs, err = runners.GinkgoGoTestArgs(runtimeArgs)
