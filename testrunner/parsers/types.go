@@ -77,7 +77,10 @@ type Test struct {
 	EndLine   int           `json:"end_line,omitempty"`
 	Framework Framework     `json:"framework,omitempty"`
 	Duration  time.Duration `json:"duration,omitempty"`
-	Skipped   bool          `json:"skipped,omitempty"`
+	// Started is when a still-running node began, so a UI can show live
+	// elapsed time without the payload carrying a clock-derived value.
+	Started *time.Time `json:"started,omitempty"`
+	Skipped bool       `json:"skipped,omitempty"`
 	// Aborted marks a test that never ran because the run stopped after an earlier failure — distinct from an intentional Skipped.
 	Aborted bool `json:"aborted,omitempty"`
 	Failed  bool `json:"failed,omitempty"`

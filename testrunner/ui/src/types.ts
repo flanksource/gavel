@@ -24,6 +24,7 @@ export interface Test {
   end_line?: number;
   framework?: string;
   duration?: number; // nanoseconds
+  started?: string; // RFC3339; a running task node carries this instead of a duration
   fixture_profile?: FixtureProfile;
   sql_profile?: FixtureSQLProfile;
   fixture?: FixtureExecution;

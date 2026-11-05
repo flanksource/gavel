@@ -14,6 +14,7 @@ import (
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky/api"
 	clickyexec "github.com/flanksource/clicky/exec"
+	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
@@ -44,7 +45,7 @@ type Server struct {
 	replayed  bool
 	metadata  *SnapshotMetadata
 	git       *SnapshotGit
-	updated   chan struct{}
+	updated   sse.Notifier
 	gitRoot   string
 	traceRuns map[string]*servedTraces
 	// processSessions are the running process capture's sessions, nil once
@@ -72,9 +73,7 @@ type Server struct {
 }
 
 func NewServer() *Server {
-	return &Server{
-		updated: make(chan struct{}, 1),
-	}
+	return &Server{}
 }
 
 func (s *Server) BeginRun(kind string) {
@@ -379,10 +378,7 @@ func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) <-chan
 
 func (s *Server) notify() {
 	s.revision.Add(1)
-	select {
-	case s.updated <- struct{}{}:
-	default:
-	}
+	s.updated.Notify()
 }
 
 func (s *Server) Handler() http.Handler {
@@ -664,14 +660,15 @@ func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
 		"status": snap.Status,
 		"type":   snap.Type,
 	}
-	if snap.Status != "running" && snap.Status != "pending" {
-		t.Context.(map[string]any)["duration"] = snap.Duration
+	t.Started = taskStarted(snap)
+	if snap.FinishedAt != "" {
+		t.Duration = snap.Duration()
 	}
 	if details, ok := snap.Details.(clickyexec.ExecTaskDetails); ok && details.PID > 0 && details.Started != nil {
 		t.Command = strings.TrimSpace(details.Command + " " + strings.Join(details.Args, " "))
 		attempt := parsers.TestAttempt{Sequence: 1, PID: details.PID, Started: *details.Started, Command: t.Command}
 		if details.Status != "running" && details.Status != "pending" {
-			attempt.Duration = details.Duration
+			attempt.Duration = details.Duration()
 			attempt.ExitCode = &details.ExitCode
 			attempt.Passed = details.Status == "success"
 			attempt.Failed = !attempt.Passed
@@ -696,6 +693,20 @@ func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
 	return t
 }
 
+// taskStarted is the snapshot's start time, nil before the task starts. A
+// running node carries this rather than an elapsed duration so its payload
+// does not change on every tick.
+func taskStarted(snap clickytask.TaskSnapshot) *time.Time {
+	if snap.StartedAt == "" {
+		return nil
+	}
+	started, err := time.Parse(time.RFC3339Nano, snap.StartedAt)
+	if err != nil {
+		panic(fmt.Sprintf("test UI: task %s has invalid startedAt %q: %v", snap.ID, snap.StartedAt, err))
+	}
+	return &started
+}
+
 // snapshotStreamInterval is the minimum gap between test-tree frames on the
 // SSE stream while a run is in progress.
 const snapshotStreamInterval = time.Second
@@ -710,6 +721,9 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+
+	wake, unsubscribe := s.updated.Subscribe()
+	defer unsubscribe()
 
 	// Send initial snapshot immediately
 	initial, _, err := s.encodedSnapshot()
@@ -726,7 +740,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-s.updated:
+		case <-wake:
 		case <-ticker.C:
 		}
 

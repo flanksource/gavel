@@ -2,7 +2,6 @@ package testui
 
 import (
 	"strings"
-	"time"
 
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -62,20 +61,6 @@ func scopedTaskTest(snapshot task.TaskSnapshot, byID map[string]task.TaskSnapsho
 	node.CanStop = false
 	if snapshot.Error != "" {
 		node.Message = snapshot.Error
-	}
-	if snapshot.StartedAt != "" {
-		started, err := time.Parse(time.RFC3339Nano, snapshot.StartedAt)
-		if err != nil {
-			panic("test UI: invalid task start time: " + err.Error())
-		}
-		ended := time.Now()
-		if snapshot.FinishedAt != "" {
-			ended, err = time.Parse(time.RFC3339Nano, snapshot.FinishedAt)
-			if err != nil {
-				panic("test UI: invalid task finish time: " + err.Error())
-			}
-		}
-		node.Duration = ended.Sub(started)
 	}
 	if snapshot.Error == "" && snapshot.Description != "" {
 		node.Message = snapshot.Description

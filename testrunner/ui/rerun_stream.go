@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/flanksource/clicky/sse"
 )
 
 // OutputLine is a single line of process output captured during a rerun.
@@ -21,7 +23,7 @@ type RerunOutputBuffer struct {
 	lines   []OutputLine
 	status  string // "running", "success", "failed", "canceled"
 	command string
-	updated chan struct{}
+	updated sse.Notifier
 }
 
 // NewRerunOutputBuffer creates a buffer ready to capture rerun output.
@@ -29,15 +31,11 @@ func NewRerunOutputBuffer(command string) *RerunOutputBuffer {
 	return &RerunOutputBuffer{
 		status:  "running",
 		command: command,
-		updated: make(chan struct{}, 1),
 	}
 }
 
 func (b *RerunOutputBuffer) notify() {
-	select {
-	case b.updated <- struct{}{}:
-	default:
-	}
+	b.updated.Notify()
 }
 
 // StdoutWriter returns an io.Writer that appends to the buffer as stdout.
@@ -128,6 +126,9 @@ func (s *Server) handleRerunStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	wake, unsubscribe := buf.updated.Subscribe()
+	defer unsubscribe()
+
 	cursor := 0
 	snap, cursor := buf.snapshot(cursor)
 	if b, err := json.Marshal(snap); err == nil {
@@ -142,7 +143,7 @@ func (s *Server) handleRerunStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-buf.updated:
+		case <-wake:
 		case <-ticker.C:
 		}
 
