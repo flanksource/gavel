@@ -113,11 +113,11 @@ func (a localRunAPI) push(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	base := r.URL.Query().Get("base")
-	if base != pr.HeadRefOID {
-		refuse(w, http.StatusConflict, fmt.Sprintf("the PR's source branch is at %s, not %s", pr.HeadRefOID, base))
+	if asked := r.URL.Query().Get("base"); asked != pr.HeadRefOID {
+		refuse(w, http.StatusConflict, fmt.Sprintf("the PR's source branch is at %s, not %s", pr.HeadRefOID, asked))
 		return
 	}
+	base := pr.HeadRefOID
 	sha, done, err := a.receive(r.Context(), base, http.MaxBytesReader(w, r.Body, maxPushBytes))
 	if err != nil {
 		refuse(w, http.StatusBadRequest, err.Error())
