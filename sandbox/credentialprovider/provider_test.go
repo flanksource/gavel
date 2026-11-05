@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/flanksource/gavel/internal/logtest"
-	credproviderpb "github.com/flanksource/gavel/sandbox/internal/substrate/credprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -76,17 +75,17 @@ func newServer(t *testing.T, g *gavelStandIn) *Server {
 	})
 }
 
-func fetch(s *Server, uri, actor string) (*credproviderpb.FetchSecretResponse, error) {
-	return s.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{Uri: uri, ActorSpiffeId: actor})
+func fetch(s *Server, uri, actor string) ([]byte, error) {
+	return s.FetchSecret(context.Background(), uri, actor)
 }
 
 func TestFetchSecretAsksTheNamedGavelAndCachesTheAnswer(t *testing.T) {
 	g := newGavel(t)
 	s := newServer(t, g)
 
-	resp, err := fetch(s, testURI, testActor)
+	value, err := fetch(s, testURI, testActor)
 	require.NoError(t, err)
-	assert.Equal(t, "sk-ant-oat01-provider-test", string(resp.GetOpaqueBytes()))
+	assert.Equal(t, "sk-ant-oat01-provider-test", string(value))
 	assert.Equal(t, map[string]string{
 		"run": testRun, "provider": "anthropic", "actor": testActor,
 		"authorization": "Bearer beta-token", "path": "/api/credentials/fetch",

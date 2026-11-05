@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	credproviderpb "github.com/flanksource/gavel/sandbox/internal/substrate/credprovider"
+	"github.com/flanksource/captain/pkg/substrate/substratetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -111,7 +111,7 @@ func TestServerCredentialsAdmitOnlyTheEgressGateway(t *testing.T) {
 		})))
 		require.NoError(t, err)
 		defer conn.Close()
-		_, err = credproviderpb.NewCredentialProviderClient(conn).FetchSecret(t.Context(), &credproviderpb.FetchSecretRequest{Uri: testURI, ActorSpiffeId: testActor})
+		_, err = substratetest.FetchSecret(t.Context(), conn, testURI, testActor)
 		return err
 	}
 
