@@ -652,7 +652,12 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	}
 	if opts.ResultsOut != nil {
 		for _, result := range results {
-			*opts.ResultsOut = append(*opts.ResultsOut, result.Tests...)
+			for _, test := range result.Tests {
+				if test.WorkDir == "" {
+					test.WorkDir = opts.WorkDir
+				}
+				*opts.ResultsOut = append(*opts.ResultsOut, test)
+			}
 		}
 	}
 	if err != nil {

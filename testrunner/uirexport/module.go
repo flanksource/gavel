@@ -56,27 +56,22 @@ func (m *module) relative(workDir, file string) string {
 	return filepath.ToSlash(rel)
 }
 
-// importPath is the Go import path of the package directory dir, from the module that holds it.
+// holds reports whether test's package lies in the module itself, not in a nested module gavel ran as
+// a root of its own, whose files uir does not serve for this root.
+func (m *module) holds(test parsers.Test) bool {
+	return m.rootOf(filepath.Join(test.WorkDir, test.PackagePath)) == m.root
+}
+
+// importPath is the Go import path of the package directory dir in the module.
 func (m *module) importPath(dir string) (string, bool) {
-	root := m.rootOf(dir)
-	if root == "" {
-		return "", false
-	}
-	path := m.path
-	if root != m.root {
-		var ok bool
-		if path, ok = parsers.GoModuleName(root); !ok {
-			return "", false
-		}
-	}
-	rel, err := filepath.Rel(root, dir)
+	rel, err := filepath.Rel(m.root, dir)
 	if err != nil || !filepath.IsLocal(rel) {
 		return "", false
 	}
 	if rel == "." {
-		return path, true
+		return m.path, true
 	}
-	return path + "/" + filepath.ToSlash(rel), true
+	return m.path + "/" + filepath.ToSlash(rel), true
 }
 
 // profileFile maps a coverage profile's file name, an import path plus file name, to a module-relative

@@ -15,12 +15,11 @@ import (
 // Options is what an export needs beyond the run's tests.
 type Options struct {
 	// WorkDir is the run's working directory; the export covers the Go module that holds it.
-	WorkDir string
-	// Output is the export file, which is never digested as a test input.
-	Output string
-	// Tags are the run's build tags, which select the embedded files.
-	Tags                  []string
+	WorkDir               string
 	StartedAt, FinishedAt time.Time
+	// InputsDigest is the run's InputsDigest, taken before its tests ran so files they write do not
+	// change it.
+	InputsDigest string
 	// CoverProfiles are the run's go test -coverprofile files, the run's aggregate coverage.
 	CoverProfiles []string
 	// CoverTest, when set, writes to profile the coverage of test run alone (testrunner.CoverTest).
@@ -45,10 +44,13 @@ func Build(tests []parsers.Test, options Options) (Import, error) {
 			if err := walk(test.Children); err != nil {
 				return err
 			}
+			if test.WorkDir == "" {
+				test.WorkDir = options.WorkDir
+			}
 			// A cached test without attempts is gavel's run-cache standing in for a package it did not
 			// run; go test's own cache replays are stamped like fresh results and are kept.
 			if test.Framework != parsers.GoTest && test.Framework != parsers.Ginkgo || test.Cached && len(test.Attempts) == 0 ||
-				test.Skipped && (test.Name == "No test files" || test.Name == "No tests to run") {
+				placeholder(test) || !m.holds(test) {
 				continue
 			}
 			exported, err := m.test(test, options.WorkDir)
@@ -72,6 +74,11 @@ func Build(tests []parsers.Test, options Options) (Import, error) {
 					logger.Warnf("uir export: no coverage of its own for %s: %v", exported.Name, err)
 				} else if exported.Coverage, err = readProfiles([]string{profile}, m); err != nil {
 					return err
+				} else if !executed(exported.Coverage) {
+					// go test writes a profile even when the rerun built nothing or matched no test, so a profile
+					// that covers nothing is no evidence of what the test depends on.
+					logger.Warnf("uir export: the coverage rerun of %s covered no statements; leaving it without coverage of its own", exported.Name)
+					exported.Coverage = nil
 				}
 			}
 			run.Tests = append(run.Tests, exported)
@@ -84,11 +91,7 @@ func Build(tests []parsers.Test, options Options) (Import, error) {
 	if run.Environment, err = environment(m.root, command); err != nil {
 		return Import{}, err
 	}
-	var inputs int
-	if run.InputsDigest, inputs, err = inputsDigest(m, options.Tags, options.Output); err != nil {
-		return Import{}, err
-	}
-	logger.V(1).Infof("uir export: inputs digest %s over %d files", run.InputsDigest, inputs)
+	run.InputsDigest = options.InputsDigest
 	if run.Coverage, err = readProfiles(options.CoverProfiles, m); err != nil {
 		return Import{}, err
 	}
@@ -150,16 +153,37 @@ func outcome(passed, failed, skipped, timedOut, aborted bool) Outcome {
 	switch {
 	case timedOut:
 		return Timeout
+	case failed:
+		// Ginkgo's Abort() sets both failed and aborted; it is a failure.
+		return Fail
 	case aborted:
 		return Aborted
-	case failed:
-		return Fail
 	case skipped:
 		return Skip
 	case passed:
 		return Pass
 	}
 	return Aborted
+}
+
+// placeholder reports the entries gavel adds for a package or suite rather than a test: build and
+// package failures, an empty package, and Ginkgo suite-level setup, teardown and failure nodes.
+func placeholder(test parsers.Test) bool {
+	switch test.Name {
+	case "No test files", "No tests to run", "Build Failed", "Package failed", "Package incomplete", "Go test execution":
+		return test.Framework == parsers.GoTest
+	}
+	return test.Framework == parsers.Ginkgo && strings.HasPrefix(test.Name, "[") && strings.HasSuffix(test.Name, "]")
+}
+
+// executed reports whether any block ran.
+func executed(blocks []Block) bool {
+	for _, block := range blocks {
+		if block.Count > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // failure is a failed attempt's message, or its output when it has none, as for a go test failure

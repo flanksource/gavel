@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/utils"
 )
 
@@ -21,6 +22,20 @@ import (
 var inputExtensions = []string{
 	".sql", ".hcl", ".yaml", ".yml", ".json", ".toml", ".ini", ".conf", ".cfg", ".env", ".properties",
 	".xml", ".csv", ".tmpl", ".tpl", ".gotmpl",
+}
+
+// InputsDigest is the inputs_digest of the Go module holding workDir; see inputsDigest.
+func InputsDigest(workDir string, tags []string, output string) (string, error) {
+	m, err := findModule(workDir)
+	if err != nil {
+		return "", err
+	}
+	digest, inputs, err := inputsDigest(m, tags, output)
+	if err != nil {
+		return "", err
+	}
+	logger.V(1).Infof("uir export: inputs digest %s over %d files", digest, inputs)
+	return digest, nil
 }
 
 // inputsDigest digests the files of the module tests can read that uir does not index, which is only

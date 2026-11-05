@@ -328,7 +328,13 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	// The export's coverage and flat results go only to this run, not to UI reruns.
 	runOpts := opts
 	var uirTests []parsers.Test
+	var uirInputs string
 	if opts.UIRExport != "" {
+		// Digest the inputs before the tests run, so files they write do not change it.
+		var err error
+		if uirInputs, err = uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport); err != nil {
+			return nil, fmt.Errorf("--uir-export: %w", err)
+		}
 		coverDir, err := os.MkdirTemp("", "gavel-uir-cover-")
 		if err != nil {
 			return nil, err
@@ -350,8 +356,10 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	// Wait for lint to finish
 	wg.Wait()
 
-	if opts.UIRExport != "" {
-		if exportErr := writeUIRExport(runOpts, uirTests, runStarted, testsFinished); exportErr != nil {
+	if opts.UIRExport != "" && len(uirTests) == 0 {
+		logger.Warnf("--uir-export: no tests ran; %s not written", opts.UIRExport)
+	} else if opts.UIRExport != "" {
+		if exportErr := writeUIRExport(runOpts, uirTests, uirInputs, runStarted, testsFinished); exportErr != nil {
 			if err == nil {
 				return nil, fmt.Errorf("--uir-export: %w", exportErr)
 			}
@@ -525,13 +533,13 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 
 // writeUIRExport writes the run's flat results, with the coverage its go test batches profiled into
 // opts.CoverDir, as the `uir tests import` file --uir-export names.
-func writeUIRExport(opts testrunner.RunOptions, tests []parsers.Test, started, finished time.Time) error {
+func writeUIRExport(opts testrunner.RunOptions, tests []parsers.Test, inputsDigest string, started, finished time.Time) error {
 	profiles, err := filepath.Glob(filepath.Join(opts.CoverDir, "batch-*.out"))
 	if err != nil {
 		return err
 	}
 	options := uirexport.Options{
-		WorkDir: opts.WorkDir, Output: opts.UIRExport, Tags: opts.Tags,
+		WorkDir: opts.WorkDir, InputsDigest: inputsDigest,
 		StartedAt: started, FinishedAt: finished, CoverProfiles: profiles, CoverDir: opts.CoverDir,
 	}
 	if opts.UIRTestCoverage {

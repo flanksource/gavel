@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/testrunner/runners"
 )
 
 // CoverTest reruns one Go test or Ginkgo spec alone with -coverprofile=profile, built with the run's
@@ -29,13 +30,17 @@ func CoverTest(opts RunOptions, test parsers.Test, profile string) error {
 		for _, segment := range strings.Split(test.Name, "/") {
 			segments = append(segments, "^"+regexp.QuoteMeta(segment)+"$")
 		}
-		plan.args = []string{"-run=" + strings.Join(segments, "/")}
+		// The run's own arguments first, so the rerun builds as the run did; the later -run wins.
+		plan.args = append(append([]string(nil), opts.ExtraArgs...), "-run="+strings.Join(segments, "/"))
 	case parsers.Ginkgo:
 		bootstrap, err := ginkgoBootstrap(filepath.Join(o.WorkDir, target))
 		if err != nil {
 			return err
 		}
-		plan.args = []string{"-run=^" + regexp.QuoteMeta(bootstrap) + "$", "-ginkgo.focus=" + ginkgoFocus(test)}
+		if plan.args, err = runners.GinkgoGoTestArgs(opts.ExtraArgs); err != nil {
+			return err
+		}
+		plan.args = append(plan.args, "-run=^"+regexp.QuoteMeta(bootstrap)+"$", "-ginkgo.focus="+ginkgoFocus(test))
 	default:
 		return fmt.Errorf("per-test coverage needs a go test or ginkgo test, not %s", test.Framework)
 	}
@@ -80,10 +85,18 @@ func ginkgoBootstrap(dir string) (string, error) {
 
 // ginkgoFocus matches exactly the spec's text, which Ginkgo's --focus compares against the suite
 // description, its containers' texts and its own text joined by spaces.
+//
+// A spec outside any container has the suite description as its Suite, which is not a container text
+// unless a container of the same text holds it; the focus accepts both.
 func ginkgoFocus(test parsers.Test) string {
-	text := strings.Join(append(append([]string(nil), test.Suite...), test.Name), " ")
-	if context, ok := test.Context.(parsers.GinkgoContext); ok && context.SuiteDescription != "" {
-		return "^" + regexp.QuoteMeta(context.SuiteDescription+" "+text) + "$"
+	text := regexp.QuoteMeta(strings.Join(append(append([]string(nil), test.Suite...), test.Name), " "))
+	context, ok := test.Context.(parsers.GinkgoContext)
+	if !ok || context.SuiteDescription == "" {
+		return " " + text + "$"
 	}
-	return regexp.QuoteMeta(" "+text) + "$"
+	description := regexp.QuoteMeta(context.SuiteDescription)
+	if len(test.Suite) == 1 && test.Suite[0] == context.SuiteDescription {
+		return "^" + description + " (" + description + " )?" + regexp.QuoteMeta(test.Name) + "$"
+	}
+	return "^" + description + " " + text + "$"
 }
