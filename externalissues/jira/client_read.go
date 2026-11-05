@@ -11,6 +11,7 @@ import (
 )
 
 type GetOptions struct {
+	accept  issuePredicate
 	Key     string
 	Full    bool
 	NoCache bool
@@ -42,6 +43,16 @@ func (c *Client) fetchIssue(ctx context.Context, options GetOptions) (Issue, err
 		fields, err := c.Catalog(ctx, CatalogOptions{NoCache: options.NoCache, Store: options.Store})
 		if err != nil {
 			return Issue{}, err
+		}
+		if options.accept != nil {
+			accepted, err := options.accept(raw, fields)
+			if err != nil {
+				return Issue{}, err
+			}
+			if !accepted {
+				progress.SetDescription("Filtered " + options.Key)
+				return Issue{excluded: true}, nil
+			}
 		}
 		issue, err := c.parseIssue(raw, fields)
 		if err != nil {
@@ -108,20 +119,10 @@ func (c *Client) List(ctx context.Context, options SearchOptions) ([]Issue, erro
 		} else {
 			fields = append(append([]string{}, fields...), "summary", "project", "issuetype")
 		}
-		var response struct {
-			Issues *[]json.RawMessage `json:"issues"`
-		}
-		body := struct {
-			JQL           string   `json:"jql"`
-			Fields        []string `json:"fields"`
-			MaxResults    int      `json:"maxResults,omitempty"`
-			NextPageToken string   `json:"nextPageToken,omitempty"`
-		}{options.JQL, fields, options.Limit, options.After}
-		if err := c.json(ctx, requestOptions{Method: "POST", Path: "/search/jql", Body: body}, &response); err != nil {
+		options.Fields = fields
+		response, err := c.searchPage(ctx, options)
+		if err != nil {
 			return nil, err
-		}
-		if response.Issues == nil {
-			return nil, fmt.Errorf("Jira search response has no issues array")
 		}
 		issues := make([]Issue, 0, len(*response.Issues))
 		progress.SetProgress(0, len(*response.Issues))

@@ -9,6 +9,7 @@ import (
 )
 
 type Issue struct {
+	excluded bool
 	externalissues.Issue
 	Full               bool `json:"-"`
 	cachedIgnoreFields []string

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/flanksource/clicky"
@@ -20,6 +21,9 @@ import (
 )
 
 type SyncOptions struct {
+	Since       string
+	Statuses    []string
+	Filters     []string
 	CloudID     string
 	From        string
 	Output      string
@@ -33,6 +37,7 @@ type SyncOptions struct {
 }
 
 type SyncResult struct {
+	excluded    bool
 	artifacts   []string
 	Key         string   `json:"key"`
 	Path        string   `json:"path"`
@@ -69,8 +74,12 @@ func (options SyncOptions) Validate() error {
 		if strings.TrimSpace(key) == "" {
 			return fmt.Errorf("Jira sync issue keys must not be empty")
 		}
+		if _, err := syncTargetQuery(key); err != nil {
+			return err
+		}
 	}
-	return nil
+	_, err := options.selection(time.Now())
+	return err
 }
 
 func (c *Client) Sync(ctx context.Context, options SyncOptions) (SyncResults, error) {
@@ -84,7 +93,10 @@ func (c *Client) Sync(ctx context.Context, options SyncOptions) (SyncResults, er
 	if err := options.Validate(); err != nil {
 		return nil, err
 	}
-	var err error
+	selection, err := options.selection(time.Now())
+	if err != nil {
+		return nil, err
+	}
 	options.Dir, err = SyncDir(options.Dir)
 	if err != nil {
 		return nil, err
@@ -102,27 +114,51 @@ func (c *Client) Sync(ctx context.Context, options SyncOptions) (SyncResults, er
 		return nil, err
 	}
 	return runJiraTask(ctx, "Sync Jira issues", func(ctx context.Context, progress *task.Task) (SyncResults, error) {
+		progress.SetDescription("Discovering Jira issues")
+		if len(selection.patterns) > 0 {
+			catalog, err := c.Catalog(ctx, CatalogOptions{NoCache: options.NoCache, Store: options.Store})
+			if err != nil {
+				return nil, err
+			}
+			if err := selection.resolve(catalog); err != nil {
+				return nil, err
+			}
+			options.NoCache = false
+		}
+		keys, err := c.syncKeys(ctx, options, selection)
+		if err != nil {
+			return nil, err
+		}
+		options.Keys = keys
+		seen := map[string]bool{}
+		accept := selection.predicate(seen)
 		results := make(SyncResults, 0, len(options.Keys))
 		progress.SetProgress(0, len(options.Keys))
-		for _, key := range options.Keys {
-			progress.SetDescription(fmt.Sprintf("[%d/%d] Syncing %s", len(results)+1, len(options.Keys), key))
-			result, err := c.syncIssue(ctx, syncIssueOptions{SyncOptions: options, Key: strings.TrimSpace(key), Files: files})
+		filtered := 0
+		for index, key := range options.Keys {
+			progress.SetDescription(fmt.Sprintf("[%d/%d] Syncing %s", index+1, len(options.Keys), key))
+			result, err := c.syncIssue(ctx, syncIssueOptions{SyncOptions: options, Key: strings.TrimSpace(key), Files: files, accept: accept})
 			if err != nil {
 				progress.SetDescription(fmt.Sprintf("Stopped at %s; %d/%d issues saved", key, len(results), len(options.Keys)))
-				return results, fmt.Errorf("sync Jira issue %s (%d/%d): %w", key, len(results)+1, len(options.Keys), err)
+				return results, fmt.Errorf("sync Jira issue %s (%d/%d): %w", key, index+1, len(options.Keys), err)
+			}
+			options.NoCache = false
+			progress.SetProgress(index+1, len(options.Keys))
+			if result.excluded {
+				filtered++
+				continue
 			}
 			results = append(results, result)
 			files[result.Key] = result.Path
-			progress.SetProgress(len(results), len(options.Keys))
 			progress.Infof("Saved %s to %s", result.Key, result.Path)
-			options.NoCache = false
 		}
-		progress.SetDescription(fmt.Sprintf("Saved %d issues", len(results)))
+		progress.SetDescription(fmt.Sprintf("Saved %d issues; considered %d, filtered or duplicate %d", len(results), len(keys), filtered))
 		return results, nil
 	})
 }
 
 type syncIssueOptions struct {
+	accept issuePredicate
 	SyncOptions
 	Key   string
 	Files map[string]string
@@ -132,9 +168,13 @@ func (c *Client) syncIssue(ctx context.Context, options syncIssueOptions) (resul
 	return runJiraTask(ctx, "Sync "+options.Key, func(ctx context.Context, progress *task.Task) (result SyncResult, returnErr error) {
 		progress.SetProgress(0, 3)
 		progress.SetDescription("Loading issue, fields and comments")
-		issue, err := c.fetchIssue(ctx, GetOptions{Key: options.Key, Full: true, NoCache: options.NoCache, Store: options.Store})
+		issue, err := c.fetchIssue(ctx, GetOptions{Key: options.Key, Full: true, NoCache: options.NoCache, Store: options.Store, accept: options.accept})
 		if err != nil {
 			return result, err
+		}
+		if issue.excluded {
+			progress.SetDescription("Filtered " + options.Key)
+			return SyncResult{excluded: true}, nil
 		}
 		if err := validateSyncIssue(issue); err != nil {
 			return result, err

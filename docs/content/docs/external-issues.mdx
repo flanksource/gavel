@@ -104,6 +104,26 @@ gavel external-issues jira sync EXAMPLE-42 --sync-dir ./issues --attachments
 gavel external-issues jira sync EXAMPLE-42 --extract
 ```
 
+### Projects, ranges, and filters
+
+Combine project keys, explicit issue keys or native IDs, and inclusive ranges within one project:
+
+```bash
+gavel external-issues jira sync APP OPS APP-10..APP-50
+gavel external-issues jira sync APP --since 7d --status '!Done,!Closed'
+gavel external-issues jira sync APP --filter 'Priority=High*,Critical' --filter 'Countries Impacted=*Kenya*'
+```
+
+Project and range discovery follows every search page and selects existing accessible issues; missing numbers inside a range are allowed. Reversed, cross-project, and open-ended ranges are errors. Targets run in input order, with each project's or range's results ordered by issue key. Overlapping targets and native ID/key aliases save an issue only once. An explicitly requested missing issue still produces an error.
+
+`--since` selects issues whose Jira `updated` timestamp is at or after the cutoff. It accepts positive durations such as `7d`, `24h`, or `now-7d`, ISO dates such as `2026-11-01` (midnight UTC), and RFC3339 timestamps with an explicit offset. Relative cutoffs are fixed for the entire invocation. Without `--since`, no time filter applies.
+
+Repeat `--filter FIELD=PATTERNS` to match issue values by native field ID or a case-insensitive Jira catalog display name. Unknown names fail; ambiguous names report the IDs to use. `--status` matches status names and is shorthand for `--filter status=PATTERNS`. Patterns for the same field are combined with OR; different fields and the time cutoff must all match.
+
+Patterns use commons matching: case-insensitive exact values, `prefix*`, `*suffix`, `*contains*`, comma-separated alternatives, and `!` exclusions that take precedence. These are not regular expressions or general filesystem globs. Quote arguments containing spaces, wildcards, or `!`. For lists, any matching element admits the issue unless an excluded element is present. Objects with readable labels use those labels (for example, an option's value or a user's display name); other objects match their scalar values. Missing/null fields match as an empty string; exclusion-only patterns therefore allow them unless the empty string is excluded.
+
+Filters select issues, rather than fields to save. They apply before configured `ignoreFields` exclusions, so an omitted output field can still select an issue. Rejected issues do not load comments or remote links, download attachments, or replace existing files. Filters also apply to spreadsheet inputs and `--from`; they are invocation settings and are not stored as resync settings. An empty selection succeeds with an empty result array. Progress reports considered, filtered/duplicate, and saved counts on stderr.
+
 ### Sync from Excel columns
 
 Use `@file.xlsx:Column` to read issue keys or IDs from a named column in the first worksheet. `Column` is the header text in the first row, such as `Issue Key`, rather than an Excel column letter such as `A`.

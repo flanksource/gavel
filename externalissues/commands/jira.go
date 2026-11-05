@@ -39,7 +39,10 @@ type externalIssueGet struct {
 }
 
 type externalIssueSync struct {
-	IDs         []string `args:"true" clicky:"cli-file-read" help:"Jira issue keys or IDs, or @issues.xlsx:[Sheet!]Column / @issues.csv:Column"`
+	Since       string   `flag:"since" help:"Sync issues updated since a duration (7d), ISO date, or RFC3339 timestamp"`
+	Statuses    []string `flag:"status" split:"false" help:"Status name patterns, with commons wildcards and ! exclusions"`
+	Filters     []string `flag:"filter" split:"false" help:"Repeatable FIELD=PATTERNS issue filters; field ID or display name"`
+	IDs         []string `args:"true" clicky:"cli-file-read" help:"Project keys, issue keys/IDs, APP-10..APP-50 ranges, or @issues.xlsx:[Sheet!]Column / @issues.csv:Column"`
 	From        string   `flag:"from" help:"Resync a saved Markdown file in place using its frontmatter"`
 	Force       bool     `flag:"force" help:"Refresh downloads and extraction without reusing cached artifacts"`
 	SyncDir     string   `flag:"sync-dir" help:"Cache base directory (default XDG_CACHE_HOME/.gavel/jira)"`
@@ -83,7 +86,7 @@ func Register(rootCmd *cobra.Command) {
 	}
 	store := func() jira.CatalogStore { return jira.CatalogStore{Dir: os.Getenv("GAVEL_JIRA_CACHE_DIR")} }
 	syncCmd := clicky.AddNamedCommandWithContext("sync", provider, externalIssueSync{}, func(ctx context.Context, opts externalIssueSync) (jira.SyncResults, error) {
-		options := jira.SyncOptions{Keys: opts.IDs, Dir: opts.SyncDir, From: opts.From, Force: opts.Force, NoCache: noCache, Store: store()}
+		options := jira.SyncOptions{Keys: opts.IDs, Dir: opts.SyncDir, From: opts.From, Force: opts.Force, NoCache: noCache, Store: store(), Since: opts.Since, Statuses: opts.Statuses, Filters: opts.Filters}
 		resolved, selectedSite, err := jira.ResolveSyncFile(options, site)
 		if err != nil {
 			return nil, err
@@ -107,10 +110,13 @@ func Register(rootCmd *cobra.Command) {
 		}
 		return c.Sync(ctx, options)
 	})
-	syncCmd.Use = "sync <id> [id...]"
+	syncCmd.Use = "sync [project|id|APP-10..APP-50...]"
 	syncCmd.Short = "Sync Jira issues to local Markdown files"
-	syncCmd.Long = "Sync Jira issues to local Markdown files. Read issue keys or IDs from an Excel column with @file.xlsx:Column, @file.xlsx:Sheet!Column, or @file.xlsx:#2!Column. Column is the header text, and worksheet positions start at one. Quote the entire argument when it contains spaces or !. Empty cells are skipped."
-	syncCmd.Example = `  # Read the Issue Key column from the first worksheet
+	syncCmd.Long = "Sync Jira issues to local Markdown files. Combine project keys, issue keys or IDs, and inclusive same-project ranges (APP-10..APP-50). --since selects updated issues; --status and --filter FIELD=PATTERNS select issues using commons matching. Read issue keys or IDs from an Excel column with @file.xlsx:Column, @file.xlsx:Sheet!Column, or @file.xlsx:#2!Column. Column is the header text, and worksheet positions start at one. Quote the entire argument when it contains spaces or !. Empty cells are skipped."
+	syncCmd.Example = `  # Combine projects and inclusive issue ranges with selection filters
+  gavel external-issues jira sync APP OPS APP-10..APP-50 --since 7d --status '!Done,!Closed' --filter 'Priority=High*,Critical'
+
+  # Read the Issue Key column from the first worksheet
   gavel external-issues jira sync '@issues.xlsx:Issue Key'
 
   # Select a named worksheet or the second worksheet
