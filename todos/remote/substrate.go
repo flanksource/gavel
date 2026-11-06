@@ -73,7 +73,7 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 	in.EnvironmentOutput = recorded.Log
 	record := sandbox.RunRecord{ID: id, Org: r.Scope.OrgID, User: r.Scope.UserID, Spec: spec}
 	in.HostCalls = map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
-		runclient.HostCallName: runclient.AnswerHostCall(r.RunAPI, id.String(), recorded.Token),
+		runclient.HostCallName: runclient.AnswerHostCall(r.RunAPI, id.String(), recorded.Token, runclient.PRReach),
 	}
 	in.OnTranscript = func(source, name string, data []byte) {
 		if err := r.Transcripts(context.WithoutCancel(ctx), record, source, name, strings.NewReader(string(data))); err != nil {

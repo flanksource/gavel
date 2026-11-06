@@ -35,7 +35,7 @@ func runAPI(t *testing.T) http.Handler {
 }
 
 func TestTheRunAPIAnswersOverAHostCall(t *testing.T) {
-	answer := AnswerHostCall(runAPI(t), "run-1", "run-token")
+	answer := AnswerHostCall(runAPI(t), "run-1", "run-token", PRReach)
 	client := OverHostCall(func(name string, data json.RawMessage) (json.RawMessage, error) {
 		assert.Equal(t, HostCallName, name)
 		return answer(context.Background(), data)
@@ -52,11 +52,34 @@ func TestTheRunAPIAnswersOverAHostCall(t *testing.T) {
 }
 
 func TestAHostCallReachesOnlyTheRunsPREndpoints(t *testing.T) {
-	answer := AnswerHostCall(runAPI(t), "run-1", "run-token")
+	answer := AnswerHostCall(runAPI(t), "run-1", "run-token", PRReach)
 	for _, path := range []string{"source", "pr/../source", "../run-2/pr/status", "/api/credentials/fetch"} {
 		data, err := json.Marshal(hostRequest{Method: http.MethodGet, Path: path})
 		require.NoError(t, err)
 		_, err = answer(context.Background(), data)
 		assert.EqualError(t, err, `a run's program reaches only its PR's endpoints through its caller, not "`+path+`"`, path)
+	}
+}
+
+func TestAJobsHostCallReachesOnlyItsSpecAndResults(t *testing.T) {
+	var asked []string
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{}`))
+	})
+	answer := AnswerHostCall(handler, "run-1", "run-token", JobReach)
+	for _, path := range []string{"spec", "results"} {
+		data, err := json.Marshal(hostRequest{Method: http.MethodGet, Path: path})
+		require.NoError(t, err)
+		_, err = answer(context.Background(), data)
+		require.NoError(t, err, path)
+	}
+	assert.Equal(t, []string{"GET /api/runs/run-1/spec Bearer run-token", "GET /api/runs/run-1/results Bearer run-token"}, asked, "as the run, with its token")
+
+	for _, path := range []string{"source", "pr/status", "spec/../source", "results/../../run-2/spec", "specs"} {
+		data, err := json.Marshal(hostRequest{Method: http.MethodGet, Path: path})
+		require.NoError(t, err)
+		_, err = answer(context.Background(), data)
+		assert.EqualError(t, err, `a run's program reaches only its spec and results through its caller, not "`+path+`"`, path)
 	}
 }

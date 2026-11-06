@@ -72,7 +72,7 @@ var _ = Describe("a local caller's run API for a run on substrate", func() {
 		head, err := Revision(ctx, work, "HEAD")
 		Expect(err).NotTo(HaveOccurred())
 		target = &RunTarget{RepositoryURL: remote, Branch: "topic", HeadSHA: head}
-		answer := runclient.AnswerHostCall(LocalRunAPI(pr, 7, *target, caller), "run-1", "")
+		answer := runclient.AnswerHostCall(LocalRunAPI(pr, 7, *target, caller), "run-1", "", runclient.PRReach)
 		UseRunAPI(runclient.OverHostCall(func(_ string, data json.RawMessage) (json.RawMessage, error) {
 			return answer(ctx, data)
 		}))
@@ -103,7 +103,7 @@ var _ = Describe("a local caller's run API for a run on substrate", func() {
 
 		stale := &RunTarget{RepositoryURL: pr.remote, Branch: "topic", HeadSHA: strings.Repeat("a", 40)}
 		_, err = runclient.OverHostCall(func(_ string, data json.RawMessage) (json.RawMessage, error) {
-			return runclient.AnswerHostCall(LocalRunAPI(pr, 7, *stale, work), "run-1", "")(ctx, data)
+			return runclient.AnswerHostCall(LocalRunAPI(pr, 7, *stale, work), "run-1", "", runclient.PRReach)(ctx, data)
 		}).Do(ctx, "POST", "pr/push?base="+stale.HeadSHA, strings.NewReader("not a bundle"))
 		Expect(err).To(MatchError("HTTP 409: the PR's source branch is at " + second + ", not " + stale.HeadSHA))
 	})

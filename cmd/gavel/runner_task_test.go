@@ -164,7 +164,7 @@ func TestRunTaskReachesTheStepsPRThroughItsCaller(t *testing.T) {
 		_ = stdoutW.Close()
 	}()
 	in := promptrun.Input{HostCalls: map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
-		runclient.HostCallName: runclient.AnswerHostCall(runAPI, "run-1", "run-token"),
+		runclient.HostCallName: runclient.AnswerHostCall(runAPI, "run-1", "run-token", runclient.PRReach),
 	}}
 	_, err := remoterun.Relay(t.Context(), in, func(api.Spec) error { return nil }, stdoutR, stdinW)
 	_ = stdinW.Close()
