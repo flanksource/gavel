@@ -161,7 +161,15 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	// Organizations' model keys are encrypted with a local key derived from the secret.
 	commonssecret.KMSConnection = modelkeys.KeeperConnection(secret)
 	commonssecret.InvalidateKeeper()
-	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret)
+	// Sandbox jobs authenticate with their run token; runs on substrate reach it through serve,
+	// as their run.
+	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
+	if app != nil {
+		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
+			return ui.OrganizationPRs(store.TokenSource(org), cache.ForOrg(org))(ctx, url)
+		}
+	}
+	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret, sources, runs.Handler())
 	if err != nil {
 		return hostedStack{}, err
 	}
@@ -172,15 +180,6 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	if dispatcher != nil {
 		if sweeper, ok := dispatcher.Executor.(sandbox.Sweeper); ok {
 			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime())
-		}
-	}
-
-	// Sandbox jobs authenticate with their run token; agent runs on substrate reach it through
-	// serve, as their run.
-	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
-	if app != nil {
-		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
-			return ui.OrganizationPRs(store.TokenSource(org), cache.ForOrg(org))(ctx, url)
 		}
 	}
 

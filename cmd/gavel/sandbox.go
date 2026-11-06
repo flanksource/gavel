@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -20,8 +21,10 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// newSandboxDispatcher returns nil when --sandbox is unset.
-func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.DB, cache *ghcache.Store, secret []byte) (*sandbox.Dispatcher, error) {
+// newSandboxDispatcher returns nil when --sandbox is unset. On substrate, jobs run in a checkout of
+// their commit from sources, and runAPI answers what they ask of their runs over each run's
+// channel.
+func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.DB, cache *ghcache.Store, secret []byte, sources *sandbox.Sources, runAPI http.Handler) (*sandbox.Dispatcher, error) {
 	if warning := sandboxKeysWarning(opts); warning != "" {
 		logger.Warnf("%s", warning)
 	}
@@ -56,14 +59,7 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		}
 		var err error
 		executor, err = sandbox.NewSubstrate(sandbox.SubstrateOptions{
-			Options: substrate.Options{
-				EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
-				ControlTokenFile: opts.SubstrateTokenFile, CAFile: opts.SubstrateCAFile,
-				ClientCertFile: opts.SubstrateClientCert, ClientKeyFile: opts.SubstrateClientKey,
-				Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
-				TrustBundle: opts.SubstrateTrustBundle,
-			},
-			Egress: opts.SubstrateEgress,
+			Options: substrateOptions(opts), Egress: opts.SubstrateEgress, RunAPI: runAPI,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("--sandbox substrate: %w", err)
@@ -83,6 +79,7 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		dispatcher.Logs = cache.OrgBlobs
 	}
 	if opts.Sandbox == "substrate" {
+		dispatcher.Sources = sources
 		// Each run's requests carry its organization's keys, which the credential provider in
 		// substrate's cluster fetches from this gavel by the run.
 		dispatcher.Keys = modelkeys.Store{DB: db}
@@ -123,25 +120,26 @@ func sweepSandbox(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Du
 	}
 }
 
+// substrateOptions is how the --substrate-* flags reach the substrate jobs and agent runs execute
+// on.
+func substrateOptions(opts DashboardOptions) substrate.Options {
+	return substrate.Options{
+		EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
+		ControlTokenFile: opts.SubstrateTokenFile, CAFile: opts.SubstrateCAFile,
+		ClientCertFile: opts.SubstrateClientCert, ClientKeyFile: opts.SubstrateClientKey,
+		Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
+		TrustBundle: opts.SubstrateTrustBundle,
+	}
+}
+
 // substrateAgentBackend is the substrate backend hosted agent runs execute on through captain's
 // substrate sandbox, as its options spell it, from the --substrate-* flags jobs use too, reaching
-// what jobs reach but serve; nil without --sandbox substrate, since agent runs need it.
+// what jobs reach; nil without --sandbox substrate, since agent runs need it.
 func substrateAgentBackend(opts DashboardOptions) (map[string]any, error) {
 	if opts.Sandbox != "substrate" {
 		return nil, nil
 	}
-	backend := map[string]any{"egress": sandbox.SubstrateAgentEgress(opts.SubstrateEgress)}
-	for key, value := range map[string]string{
-		"envAPI": opts.SubstrateEnvAPI, "control": opts.SubstrateControl, "tokenFile": opts.SubstrateTokenFile,
-		"caFile": opts.SubstrateCAFile, "clientCert": opts.SubstrateClientCert, "clientKey": opts.SubstrateClientKey,
-		"atespace": opts.SubstrateAtespace, "template": opts.SubstrateTemplate,
-		"trustBundle": opts.SubstrateTrustBundle,
-	} {
-		if value != "" {
-			backend[key] = value
-		}
-	}
-	return backend, nil
+	return sandbox.SubstrateBackend(substrateOptions(opts), opts.SubstrateEgress), nil
 }
 
 // sandboxKeysWarning says which model keys a container or Kubernetes sandbox's runs use: serve's

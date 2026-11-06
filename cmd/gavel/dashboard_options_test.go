@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/flanksource/gavel/internal/logtest"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -196,14 +198,16 @@ func TestSandboxSecretsCopyServesEnvironment(t *testing.T) {
 func TestSubstrateSandboxRefusesSecretsInItsJobs(t *testing.T) {
 	opts := DashboardOptions{Sandbox: "substrate", SandboxSecretEnv: []string{"ANTHROPIC_API_KEY"},
 		SubstrateEnvAPI: "ate-env-api.ate-env.svc:7777", SubstrateControl: "api.ate-system.svc:443"}
-	_, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil)
+	sources := &sandbox.Sources{DataDir: t.TempDir()}
+	_, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil, sources, http.NotFoundHandler())
 	require.EqualError(t, err, "--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env; organizations set their own model keys, which substrate's egress gateway injects")
 
 	opts.SandboxSecretEnv = nil
 	opts.SubstrateGavelName = "beta"
-	dispatcher, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil)
+	dispatcher, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil, sources, http.NotFoundHandler())
 	require.NoError(t, err)
 	assert.Equal(t, "substrate", dispatcher.Executor.Name())
+	assert.Same(t, sources, dispatcher.Sources, "substrate jobs run in a checkout of their commit, which the executor brings in")
 	run := uuid.MustParse("6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f")
 	require.NotNil(t, dispatcher.CredentialURI, "substrate jobs get their organization's keys")
 	assert.Equal(t, "ate-secret://gavel/beta/6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f/anthropic", dispatcher.CredentialURI(run, "anthropic"))
@@ -227,7 +231,7 @@ func TestContainerAndKubernetesSandboxesWarnTheyUseServesKeys(t *testing.T) {
 	_, err := newSandboxDispatcher(t.Context(), DashboardOptions{
 		Sandbox: "docker", SandboxImage: "runner:1", SandboxServeAddr: "10.0.0.5:9092",
 		SandboxNetwork: "gavel-sandbox-missing-" + uuid.NewString()[:8],
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil, nil)
 	require.Error(t, err, "the network doesn't exist")
 	assert.Contains(t, logged.String(), "--sandbox docker: runs get no model keys", "logged at startup, before the executor is checked")
 }
