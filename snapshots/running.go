@@ -206,6 +206,9 @@ func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time, label 
 	if err := putJSON(store, key, snap); err != nil {
 		return "", err
 	}
+	if err := ignoreLocalStore(workDir); err != nil {
+		return "", err
+	}
 	return Location(workDir, key), nil
 }
 

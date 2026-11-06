@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/blob"
-	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -28,12 +27,7 @@ var OpenStore = func(workDir string) (blob.Store, error) {
 		return nil, fmt.Errorf("open the snapshot store: %w", err)
 	}
 	if store == nil {
-		// The local store is gavel output under workDir: create it ignoring itself, so Git never lists it.
-		dir := filepath.Join(workDir, Dir)
-		if err := utils.MkdirOutput(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("open the snapshot store: %w", err)
-		}
-		return blob.Local(dir), nil
+		return blob.Local(filepath.Join(workDir, Dir)), nil
 	}
 	return store, nil
 }
