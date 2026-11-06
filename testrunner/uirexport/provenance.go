@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/utils"
 )
 
@@ -127,7 +128,7 @@ func workingTree(top, exportFile string) (string, error) {
 		return "", err
 	}
 	defer func() {
-		if err := os.RemoveAll(scratch); err != nil {
+		if err := safefs.SafeRemove(scratch, safefs.RemoveContext{AllowedRoot: os.TempDir()}); err != nil {
 			logger.Warnf("remove %s: %v", scratch, err)
 		}
 	}()
