@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/promptrun/remoterun"
@@ -26,14 +24,11 @@ type runTaskOptions struct {
 	Agent captainai.Provider
 }
 
-// runAPISocket is the socket, in the run's directory, the run API is served to the run on.
-const runAPISocket = "run-api.sock"
-
 // runnerRunTask runs the task in opts.Dir with out and in as its channel to the caller: the
 // step's run, with the hooks a local step runs, rebuilt from the run's host data, and the tools
 // that run beside them. The run reaches the caller's run API over a host call: the step's PR this
 // process reaches itself, and what the run starts, such as a job's `gavel runner exec`, reaches
-// it through runAPISocket, which the run's environment names.
+// it through the run API's socket, which the run's environment names.
 func runnerRunTask(ctx context.Context, opts runTaskOptions, out io.Writer, in io.Reader) (err error) {
 	// The step's PR, if it has one, is reached through the run's caller, which has the credentials
 	// the environment never holds.
@@ -42,19 +37,11 @@ func runnerRunTask(ctx context.Context, opts runTaskOptions, out io.Writer, in i
 	defer func() { err = errors.Join(err, stopServing()) }()
 	return substraterun.RunTask(ctx, opts.Dir, out, in, func(job remoterun.Job, src string, call remoterun.HostCall) (remoterun.Host, error) {
 		provider.UseRunAPI(runclient.OverHostCall(call))
-		dir, err := filepath.Abs(opts.Dir)
+		stop, err := runclient.ServeRun(call)
 		if err != nil {
 			return remoterun.Host{}, err
 		}
-		socket := filepath.Join(dir, runAPISocket)
-		stop, err := runclient.ServeOverHostCall(socket, call)
-		if err != nil {
-			return remoterun.Host{}, err
-		}
-		stopServing = func() error { return errors.Join(stop(), os.Unsetenv(runclient.SocketEnv)) }
-		if err := os.Setenv(runclient.SocketEnv, socket); err != nil {
-			return remoterun.Host{}, fmt.Errorf("name the run API's socket for the run: %w", err)
-		}
+		stopServing = stop
 		var hooks lifecycle.RunHooks
 		if len(job.Host) > 0 {
 			if err := json.Unmarshal(job.Host, &hooks); err != nil {
