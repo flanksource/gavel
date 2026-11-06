@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/sandbox/substratetest"
@@ -22,11 +23,10 @@ import (
 func TestHostedTodoRunsOnSubstrate(t *testing.T) {
 	cluster := substratetest.FromEnv(t)
 	useModelKeyKeeper(t)
-	h := serveHostedRuns(t, map[string]any{
-		"envAPI": cluster.EnvAPI, "control": cluster.Control, "tokenFile": cluster.TokenFile,
-		"template": cluster.Template, "trustBundle": substratetest.TrustBundle,
-		"egress": sandbox.SubstrateAgentEgress(nil),
-	}, func(d *sandbox.Dispatcher) {
+	h := serveHostedRuns(t, sandbox.SubstrateBackend(substrate.Options{
+		EnvAPI: cluster.EnvAPI, Control: cluster.Control, ControlTokenFile: cluster.TokenFile,
+		Template: cluster.Template, TrustBundle: substratetest.TrustBundle,
+	}, nil), func(d *sandbox.Dispatcher) {
 		d.Keys = modelkeys.Store{DB: d.DB}
 		d.CredentialURI = func(uuid.UUID, string) string { return cluster.AgentCredentialURI }
 		d.Limits.Timeout = 10 * time.Minute

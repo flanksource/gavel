@@ -102,12 +102,6 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 // model keys, and the run's lifetime.
 func (r *SubstrateRunner) runOptions(recorded *sandbox.RecordedRun, sha, branch string) map[string]any {
 	options := maps.Clone(r.Backend)
-	credentials := make([]any, len(recorded.Credentials))
-	for i, credential := range recorded.Credentials {
-		credentials[i] = map[string]any{
-			"host": credential.Host, "header": credential.Header, "prefix": credential.Prefix, "env": credential.Env, "uri": credential.URI,
-		}
-	}
 	options["environment"] = sandbox.JobName(recorded.ID)
 	options["ref"] = sha
 	options["branch"] = branch
@@ -115,7 +109,7 @@ func (r *SubstrateRunner) runOptions(recorded *sandbox.RecordedRun, sha, branch 
 	// The environment holds no run token: the run's program asks serve, its caller, for what it
 	// can't do itself over the run's own channel.
 	options["env"] = map[string]string{"GAVEL_DB": "off", "CI": "1"}
-	options["credentials"] = credentials
+	options["credentials"] = sandbox.SubstrateCredentialOptions(recorded.Credentials)
 	options["maxLifetime"] = r.Dispatcher.RunLifetime().String()
 	return options
 }

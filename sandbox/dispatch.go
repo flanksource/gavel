@@ -96,10 +96,12 @@ func (d *Dispatcher) RunTimeout() time.Duration {
 	return d.Limits.withDefaults().Timeout
 }
 
-// RunLifetime is how long a run's token, and so the run, may last: its timeout plus 15 minutes
-// to report how it ended.
+// reportTime is how long a run has, past its timeout, to report how it ended.
+const reportTime = 15 * time.Minute
+
+// RunLifetime is how long a run's token, and so the run, may last: its timeout plus reportTime.
 func (d *Dispatcher) RunLifetime() time.Duration {
-	return d.RunTimeout() + 15*time.Minute
+	return d.RunTimeout() + reportTime
 }
 
 // Run is a dispatched run.
