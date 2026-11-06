@@ -102,7 +102,7 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 		// A run executing whole elsewhere has no credentials for the step's PR, so it asks this
 		// host, which answers with the step's own PR client and git.
 		state.input.HostCalls = map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
-			runclient.HostCallName: runclient.AnswerHostCall(provider.LocalRunAPI(pr.client, pr.number, *pr.target, pr.workDir), "local", ""),
+			runclient.HostCallName: runclient.AnswerHostCall(provider.LocalRunAPI(pr.client, pr.number, *pr.target, pr.workDir), "local", "", runclient.PRReach),
 		}
 	}
 	switch {
