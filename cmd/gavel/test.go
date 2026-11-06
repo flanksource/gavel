@@ -330,9 +330,13 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	runOpts := opts
 	var uirTests []parsers.Test
 	var uirInputs string
+	var uirProvenance uirexport.Provenance
 	if opts.UIRExport != "" {
-		// Digest the inputs before the tests run, so files they write do not change it.
+		// Record the code and digest the inputs before the tests run, so files they write do not change them.
 		var err error
+		if uirProvenance, err = uirexport.CaptureProvenance(opts.WorkDir, opts.UIRExport); err != nil {
+			return nil, fmt.Errorf("--uir-export: %w", err)
+		}
 		if uirInputs, err = uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport); err != nil {
 			return nil, fmt.Errorf("--uir-export: %w", err)
 		}
@@ -364,7 +368,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	if opts.UIRExport != "" && len(uirTests) == 0 {
 		logger.Warnf("--uir-export: no tests ran; %s not written", opts.UIRExport)
 	} else if opts.UIRExport != "" {
-		if exportErr := writeUIRExport(runOpts, uirTests, uirInputs, runStarted, testsFinished); exportErr != nil {
+		if exportErr := writeUIRExport(runOpts, uirTests, uirInputs, uirProvenance, runStarted, testsFinished); exportErr != nil {
 			if err == nil {
 				return nil, fmt.Errorf("--uir-export: %w", exportErr)
 			}
@@ -538,13 +542,13 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 
 // writeUIRExport writes the run's flat results, with the coverage its go test batches profiled into
 // opts.CoverDir, as the `uir tests import` file --uir-export names.
-func writeUIRExport(opts testrunner.RunOptions, tests []parsers.Test, inputsDigest string, started, finished time.Time) error {
+func writeUIRExport(opts testrunner.RunOptions, tests []parsers.Test, inputsDigest string, provenance uirexport.Provenance, started, finished time.Time) error {
 	profiles, err := filepath.Glob(filepath.Join(opts.CoverDir, "batch-*.out"))
 	if err != nil {
 		return err
 	}
 	options := uirexport.Options{
-		WorkDir: opts.WorkDir, InputsDigest: inputsDigest,
+		WorkDir: opts.WorkDir, InputsDigest: inputsDigest, Provenance: provenance,
 		StartedAt: started, FinishedAt: finished, CoverProfiles: profiles, CoverDir: opts.CoverDir,
 	}
 	if opts.UIRTestCoverage {

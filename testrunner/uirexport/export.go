@@ -20,6 +20,8 @@ type Options struct {
 	// InputsDigest is the run's InputsDigest, taken before its tests ran so files they write do not
 	// change it.
 	InputsDigest string
+	// Provenance is the code the tests ran on, also taken before they ran (CaptureProvenance).
+	Provenance Provenance
 	// CoverProfiles are the run's go test -coverprofile files, the run's aggregate coverage.
 	CoverProfiles []string
 	// CoverTest, when set, writes to profile the coverage of test run alone (testrunner.CoverTest).
@@ -35,7 +37,9 @@ func Build(tests []parsers.Test, options Options) (Import, error) {
 	if err != nil {
 		return Import{}, err
 	}
-	run := Run{Producer: "gavel", StartedAt: options.StartedAt.UTC(), FinishedAt: options.FinishedAt.UTC(), Tests: []Test{}}
+	run := Run{
+		Producer: "gavel", GitCommit: options.Provenance.GitCommit, Dirty: options.Provenance.Dirty, SnapshotID: options.Provenance.SnapshotID,
+		StartedAt: options.StartedAt.UTC(), FinishedAt: options.FinishedAt.UTC(), Tests: []Test{}}
 	seen := map[string]bool{}
 	command := ""
 	var walk func(tests []parsers.Test) error

@@ -15,9 +15,13 @@ type Import struct {
 }
 
 // Run is one gavel test run. Environment holds what makes two runs comparable: GOOS, GOARCH, go,
-// race, tags and count.
+// race, tags and count. GitCommit, Dirty and SnapshotID name the code the tests ran on (Provenance);
+// uir binds the run to SnapshotID, or for a clean tree without one to a snapshot of GitCommit.
 type Run struct {
 	Producer     string            `json:"producer"`
+	GitCommit    string            `json:"git_commit"`
+	Dirty        bool              `json:"dirty"`
+	SnapshotID   string            `json:"snapshot_id,omitempty"`
 	Environment  map[string]string `json:"environment"`
 	StartedAt    time.Time         `json:"started_at"`
 	FinishedAt   time.Time         `json:"finished_at"`
