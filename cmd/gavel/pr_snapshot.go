@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/utils"
 )
 
 // parsePRRef parses the PR references every gavel command accepts: a bare
@@ -114,7 +114,7 @@ func resolvePRSnapshot(ref, workDir string) (path string, snap *testui.Snapshot,
 	}
 
 	dir := filepath.Join(workDir, snapshots.Dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := utils.MkdirOutput(dir, 0o755); err != nil {
 		return "", nil, fmt.Errorf("create %s: %w", dir, err)
 	}
 	path = filepath.Join(dir, fmt.Sprintf("pr-%d.json", number))

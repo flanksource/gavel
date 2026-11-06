@@ -14,6 +14,7 @@ import (
 	clickyexec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/clicky/process"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/utils"
 )
 
 const benchmarkReportVersion = 1
@@ -302,7 +303,7 @@ func writeBenchmarkReport(workDir string, report *BenchmarkReport) (string, erro
 		return "", fmt.Errorf("resolve fixture benchmark working directory: %w", err)
 	}
 	dir := filepath.Join(root, ".gavel", "benchmarks", "fixtures")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := utils.MkdirOutput(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create fixture benchmark directory: %w", err)
 	}
 	path := filepath.Join(dir, "run-"+report.StartedAt.Format("2006-01-02T15-04-05.000000000Z")+".json")

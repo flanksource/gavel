@@ -15,9 +15,13 @@ type Import struct {
 }
 
 // Run is one gavel test run. Environment holds what makes two runs comparable: GOOS, GOARCH, go,
-// race, tags and count.
+// race, tags and count. GitCommit, Dirty and, for a dirty worktree, GitTree name the code the tests
+// ran on (Provenance).
 type Run struct {
 	Producer     string            `json:"producer"`
+	GitCommit    string            `json:"git_commit"`
+	Dirty        bool              `json:"dirty"`
+	GitTree      string            `json:"git_tree,omitempty"`
 	Environment  map[string]string `json:"environment"`
 	StartedAt    time.Time         `json:"started_at"`
 	FinishedAt   time.Time         `json:"finished_at"`

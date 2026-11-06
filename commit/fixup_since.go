@@ -15,6 +15,7 @@ import (
 	clickyai "github.com/flanksource/gavel/ai"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/utils"
 )
 
 var (
@@ -335,7 +336,7 @@ func runIssueIdSquash(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	scratch := filepath.Join(opts.WorkDir, ".tmp", "gavel-fixup")
-	if err := os.MkdirAll(scratch, 0o755); err != nil {
+	if err := utils.MkdirOutput(scratch, 0o755); err != nil {
 		return nil, fmt.Errorf("create scratch dir: %w", err)
 	}
 
