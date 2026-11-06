@@ -173,3 +173,64 @@ func TestRunTaskReachesTheStepsPRThroughItsCaller(t *testing.T) {
 	assert.Equal(t, []string{"status", "head"}, asked, "the PR hook read its PR through the caller, holding no credentials")
 	assert.False(t, provider.InJob(), "the process's run API is the run's alone")
 }
+
+// runAPIAgent stands for a process the run starts: it asks the run's spec through the run API its
+// environment names, as `gavel runner exec` under the bash model does, and answers with it.
+type runAPIAgent struct{}
+
+func (runAPIAgent) GetModel() string        { return "claude-sonnet-5" }
+func (runAPIAgent) GetRuntime() api.Runtime { return api.RuntimeOf(api.Anthropic, api.ModeAgent) }
+func (runAPIAgent) Execute(context.Context, api.Spec) (*api.Response, error) {
+	return nil, fmt.Errorf("the run API agent only streams")
+}
+func (runAPIAgent) ExecuteStream(ctx context.Context, _ api.Spec) (<-chan captainai.Event, error) {
+	ch := make(chan captainai.Event, 2)
+	defer close(ch)
+	client, err := runclient.FromEnv(os.Getenv)
+	if err != nil {
+		ch <- captainai.Event{Kind: captainai.EventError, Error: err.Error()}
+		return ch, nil
+	}
+	resp, err := client.Do(ctx, http.MethodGet, "spec", nil)
+	if err != nil {
+		ch <- captainai.Event{Kind: captainai.EventError, Error: err.Error()}
+		return ch, nil
+	}
+	defer resp.Body.Close()
+	spec, _ := io.ReadAll(resp.Body)
+	ch <- captainai.Event{Kind: captainai.EventText, Text: string(spec)}
+	ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+	return ch, nil
+}
+
+func TestRunTaskServesTheRunAPIToWhatRunsUnderIt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GAVEL_RUN_ID", "run-1")
+	t.Setenv(runclient.SocketEnv, "")
+	dir := substrateTaskDir(t, lifecycle.RunHooks{})
+	// The caller's run API, as serve answers a job's spec.
+	runAPI := http.NewServeMux()
+	runAPI.HandleFunc("GET /api/runs/run-1/spec", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer run-token", r.Header.Get("Authorization"))
+		_, _ = io.WriteString(w, `{"kind":"test"}`)
+	})
+	stdoutR, stdoutW := io.Pipe()
+	stdinR, stdinW := io.Pipe()
+	ran := make(chan error, 1)
+	go func() {
+		ran <- runnerRunTask(context.Background(), runTaskOptions{Dir: dir, Agent: runAPIAgent{}}, stdoutW, stdinR)
+		_ = stdoutW.Close()
+	}()
+	in := promptrun.Input{HostCalls: map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
+		runclient.HostCallName: runclient.AnswerHostCall(runAPI, "run-1", "run-token", runclient.JobReach),
+	}}
+	result, err := remoterun.Relay(t.Context(), in, func(api.Spec) error { return nil }, stdoutR, stdinW)
+	_ = stdinW.Close()
+	require.NoError(t, err)
+	require.NoError(t, <-ran)
+	assert.JSONEq(t, `{"kind":"test"}`, result.Response.Text, "what the run started reached the caller's run API, holding no token")
+	socket := filepath.Join(dir, runAPISocket)
+	_, err = os.Stat(socket)
+	assert.True(t, os.IsNotExist(err), "the socket is gone once the run ends")
+	assert.Empty(t, os.Getenv(runclient.SocketEnv), "and no longer named")
+}

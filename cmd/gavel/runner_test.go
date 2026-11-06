@@ -204,7 +204,7 @@ func TestRunnerExecRefusesAnUnsafeEnvironment(t *testing.T) {
 		want   string
 	}{
 		"a database":       {func(env map[string]string) { env["GAVEL_DB"] = "" }, run.String(), "gavel runner exec needs GAVEL_DB=off: a sandbox job never reaches a database"},
-		"no token":         {func(env map[string]string) { delete(env, "GAVEL_RUN_TOKEN") }, run.String(), "GAVEL_SERVER, GAVEL_RUN_TOKEN and GAVEL_RUN_ID must be set"},
+		"no token":         {func(env map[string]string) { delete(env, "GAVEL_RUN_TOKEN") }, run.String(), "GAVEL_RUN_ID, and GAVEL_RUN_API_SOCKET or GAVEL_SERVER and GAVEL_RUN_TOKEN, must be set"},
 		"another run's id": {func(map[string]string) {}, uuid.NewString(), "--run "},
 	} {
 		t.Run(name, func(t *testing.T) {
