@@ -4,15 +4,46 @@ package runclient
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/flanksource/gavel/internal/safefs"
 )
 
 // SocketEnv names the socket the environment's program serves the run API on.
 const SocketEnv = "GAVEL_RUN_API_SOCKET"
+
+// ServeRun serves the run API through call on a socket in a directory of its own under the
+// temporary directory, whose path fits in the 108 bytes a socket's may take wherever the run's
+// directory is, and names it in SocketEnv for what the run starts, which inherits this process's
+// environment. It returns a func that stops serving, removes the socket and unnames it.
+func ServeRun(call func(name string, data json.RawMessage) (json.RawMessage, error)) (func() error, error) {
+	dir, err := os.MkdirTemp("", "gavel-run-api-")
+	if err != nil {
+		return nil, fmt.Errorf("make the run API's socket directory: %w", err)
+	}
+	socket := filepath.Join(dir, "run-api.sock")
+	stop, err := ServeOverHostCall(socket, call)
+	if err != nil {
+		return nil, errors.Join(err, removeSocketDir(dir))
+	}
+	stopAll := func() error { return errors.Join(stop(), removeSocketDir(dir), os.Unsetenv(SocketEnv)) }
+	if err := os.Setenv(SocketEnv, socket); err != nil {
+		return nil, errors.Join(fmt.Errorf("name the run API's socket for the run: %w", err), stopAll())
+	}
+	return stopAll, nil
+}
+
+// removeSocketDir removes the directory ServeRun made for the socket.
+func removeSocketDir(dir string) error {
+	return safefs.SafeRemove(dir, safefs.RemoveContext{AllowedRoot: os.TempDir()})
+}
 
 // ServeOverHostCall serves the run API on a unix socket at path, answering each request through
 // call, the run's host call to its caller, which answers it as the run. It returns a func that

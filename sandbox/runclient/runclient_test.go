@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +37,7 @@ func shortSocket(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "run-api-")
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(func() { assert.NoError(t, safefs.SafeRemove(dir, safefs.RemoveContext{AllowedRoot: "/tmp"})) })
 	return filepath.Join(dir, "run-api.sock")
 }
 
