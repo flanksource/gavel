@@ -24,7 +24,7 @@ import (
 
 func init() {
 	runnerCmd := &cobra.Command{Use: "runner", Short: "Runs inside gavel's sandbox jobs", Hidden: true}
-	var run, workspace string
+	var run, workspace, source string
 	execCmd := &cobra.Command{
 		Use:    "exec",
 		Short:  "Run a sandbox job: fetch its spec and source, run it, post its results",
@@ -32,7 +32,7 @@ func init() {
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			code, err := runnerExec(cmd.Context(), runnerOptions{
-				Run: run, Workspace: workspace, Getenv: os.Getenv, Command: runCommandIn, Output: cmd.OutOrStdout(),
+				Run: run, Workspace: workspace, Source: source, Getenv: os.Getenv, Command: runCommandIn, Output: cmd.OutOrStdout(),
 			})
 			if err != nil {
 				return err
@@ -45,6 +45,7 @@ func init() {
 	}
 	execCmd.Flags().StringVar(&run, "run", "", "The sandbox run's ID")
 	execCmd.Flags().StringVar(&workspace, "workspace", "/workspace", "Scratch directory for the source")
+	execCmd.Flags().StringVar(&source, "source", "", "A checkout of the job's commit to clone the source from, instead of downloading it")
 	runnerCmd.AddCommand(execCmd)
 	var taskDir string
 	runTaskCmd := &cobra.Command{
@@ -68,7 +69,9 @@ func init() {
 type runnerOptions struct {
 	Run       string
 	Workspace string
-	Getenv    func(string) string
+	// Source is a checkout of the run's commit to clone the source from; empty downloads it.
+	Source string
+	Getenv func(string) string
 	// Command runs name with args in dir, streaming its output, and returns its exit code.
 	Command func(ctx context.Context, dir, name string, args []string, output io.Writer) (int, error)
 	Output  io.Writer
@@ -92,7 +95,7 @@ func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
 	if err := api.getJSON(ctx, "spec", &spec); err != nil {
 		return 0, err
 	}
-	src, err := checkout(ctx, api, spec, opts.Workspace)
+	src, err := checkout(ctx, api, spec, opts.Workspace, opts.Source)
 	if err != nil {
 		return 0, err
 	}
@@ -124,13 +127,22 @@ func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
 	return code, nil
 }
 
-// checkout fetches the run's source bundle and checks out its commit in <workspace>/src.
-func checkout(ctx context.Context, api runAPI, spec sandbox.RunSpec, workspace string) (string, error) {
+// checkout checks out the run's commit in <workspace>/src: cloned from source, a checkout of it,
+// when there is one, or else from the run's source bundle, fetched first. The job runs in a clone
+// of its own, so what it writes stays out of source.
+func checkout(ctx context.Context, api runAPI, spec sandbox.RunSpec, workspace, source string) (string, error) {
+	src := filepath.Join(workspace, "src")
+	if source != "" {
+		// A clone starts at source's head, the run's commit.
+		if out, err := exec.CommandContext(ctx, "git", "clone", "--quiet", source, src).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("clone the source from %s: %w: %s", source, err, strings.TrimSpace(string(out)))
+		}
+		return src, detach(ctx, src, spec.SHA, spec.SHA)
+	}
 	bundle := filepath.Join(workspace, "src.bundle")
 	if err := api.download(ctx, "source", bundle); err != nil {
 		return "", err
 	}
-	src := filepath.Join(workspace, "src")
 	if out, err := exec.CommandContext(ctx, "git", "clone", "--quiet", bundle, src).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("clone the source bundle: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -143,12 +155,19 @@ func checkout(ctx context.Context, api runAPI, spec sandbox.RunSpec, workspace s
 		}
 		target, name = "FETCH_HEAD", spec.Ref
 	}
-	if target != "" {
-		if out, err := exec.CommandContext(ctx, "git", "-C", src, "checkout", "--quiet", "--detach", target).CombinedOutput(); err != nil {
-			return "", fmt.Errorf("check out %s: %w: %s", name, err, strings.TrimSpace(string(out)))
-		}
+	return src, detach(ctx, src, target, name)
+}
+
+// detach checks target, which name names, out in src, detached; an empty target leaves src as
+// it is.
+func detach(ctx context.Context, src, target, name string) error {
+	if target == "" {
+		return nil
 	}
-	return src, nil
+	if out, err := exec.CommandContext(ctx, "git", "-C", src, "checkout", "--quiet", "--detach", target).CombinedOutput(); err != nil {
+		return fmt.Errorf("check out %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // jobCommand is what the run's kind runs in src.
