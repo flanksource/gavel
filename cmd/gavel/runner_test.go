@@ -118,6 +118,60 @@ func TestRunnerExecRunsTheJobAndPostsItsResults(t *testing.T) {
 	assert.Equal(t, []string{`{"tests":[]}`}, api.results)
 }
 
+// sourceCheckout is a checkout, on a branch of its own, of the first of two commits of README.md,
+// as captain's substrate sandbox checks a job's commit out, and returns it and the commit.
+func sourceCheckout(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("first"), 0o644))
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-q", "-m", "first")
+	first := gitIn(t, dir, "rev-parse", "HEAD")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("second"), 0o644))
+	gitIn(t, dir, "commit", "-q", "-am", "second")
+	gitIn(t, dir, "switch", "-q", "-c", "substrate-run", first)
+	return dir, first
+}
+
+func TestRunnerExecClonesItsSourceFromALocalCheckout(t *testing.T) {
+	for name, spec := range map[string]func(first string) sandbox.RunSpec{
+		"at the spec's commit": func(first string) sandbox.RunSpec {
+			return sandbox.RunSpec{Kind: "test", Ref: "refs/heads/main", SHA: first}
+		},
+		"at the checkout's head without one": func(string) sandbox.RunSpec { return sandbox.RunSpec{Kind: "test", Ref: "refs/heads/main"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			run := uuid.New()
+			source, first := sourceCheckout(t)
+			api := &fakeRunAPI{spec: spec(first), token: "run-token"}
+			handler := api.handler(run)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/source") {
+					t.Errorf("runner exec downloaded its source, which the local checkout has")
+				}
+				handler.ServeHTTP(w, r)
+			}))
+			t.Cleanup(server.Close)
+			workspace := t.TempDir()
+
+			command := func(_ context.Context, dir string, _ string, _ []string, _ io.Writer) (int, error) {
+				assert.Equal(t, filepath.Join(workspace, "src"), dir, "the job runs in a clone of its own, so what it writes stays out of the checkout")
+				readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
+				require.NoError(t, err)
+				assert.Equal(t, "first", string(readme), "the job's commit is checked out")
+				return 0, nil
+			}
+			code, err := runnerExec(context.Background(), runnerOptions{
+				Run: run.String(), Workspace: workspace, Source: source, Getenv: runnerEnv(server.URL, "run-token", run), Command: command, Output: io.Discard,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 0, code)
+			assert.Equal(t, "", gitIn(t, source, "status", "--porcelain"), "the checkout is left as it was")
+		})
+	}
+}
+
 func TestRunnerExecPushCheckRunsTheRepositorysSSHCommand(t *testing.T) {
 	// A clone of the bundle, which has no HEAD, makes a local branch only for the default branch
 	// name git guesses; one other than the ref's leaves the ref only under refs/remotes.
