@@ -94,8 +94,18 @@ NetworkPolicy with the same egress rules.
 `--sandbox substrate` runs each job as an environment of
 [agent-substrate/env](https://github.com/agent-substrate/env) on an
 [agent-substrate](https://github.com/agent-substrate/substrate) cluster: a gVisor sandbox
-created from the runner image, whose one process is the job. The environment is deleted once the
-job exits or is cancelled.
+created from the runner image. The environment is deleted once the job exits or is cancelled.
+
+- **Jobs.** A test, lint or push-check job runs through captain's substrate sandbox as a run of
+  captain's `bash` model, whose prompt is the job's command: serve hands captain the job, the
+  environment checks the job's commit out of serve's copy of the repository, and runs
+  `gavel runner run-task`, which runs `gavel runner exec --run <id> --source .` there. The job
+  clones its source from that checkout, so what it writes stays out of it, asks serve for its spec
+  and posts its results over the environment's stdout and stdin, which serve answers with its run
+  API as the run, and exits with the job's code, which the run reports. `gavel runner run-task`
+  serves the run API on a socket, named in `GAVEL_RUN_API_SOCKET`, to what the run starts; serve
+  answers a job's spec and results only. The job's output, and the environment's, are its log.
+  The environment holds neither the run token nor serve's address, and can't reach serve.
 
 - **Agent runs.** A hosted todo's steps need `--sandbox substrate`; under docker, podman or
   kubernetes they're refused. Each runs whole in its own environment, `gavel-run-<run id>`,
@@ -106,8 +116,8 @@ job exits or is cancelled.
   run's log, its transcripts are ingested as it works, and its commits come back on its own
   branch, `gavel/<todo>-<run>`, which goes to GitHub for a GitHub repository. A step on a linked
   PR reads, pushes to and resolves threads on it by asking serve over that same channel, which
-  serve answers with its run API as the run; the environment holds no run token and can't reach
-  serve, so an agent run's egress is the jobs' list below without serve.
+  serve answers with its run API as the run, for its PR's endpoints only; the environment holds
+  no run token and can't reach serve, as a job's can't.
 - **Cleanup.** A run works at most its timeout, an hour, whatever its step's own budget. Every
   ten minutes serve deletes `gavel-run-` environments older than a run can live (its timeout
   plus 15 minutes), left behind when serve stopped mid-run. Substrate's access
@@ -118,10 +128,10 @@ job exits or is cancelled.
   `--sandbox-image` is refused, since env creates no environment from an image of its own.
 - **Versions.** gavel speaks Substrate 1.0.0-rc.2 and env `56424de` or later.
 - **Egress.** Substrate denies every destination an actor's egress policy doesn't allow. gavel
-  gives each environment a policy that allows gavel serve (`--public-url`, which must be a DNS
-  name), proxy.golang.org, sum.golang.org, registry.npmjs.org, pypi.org, files.pythonhosted.org,
-  github.com, codeload.github.com and objects.githubusercontent.com, plus any
-  `--substrate-egress` hosts.
+  gives each environment, a job's or an agent run's, a policy that allows proxy.golang.org,
+  sum.golang.org, registry.npmjs.org, pypi.org, files.pythonhosted.org, github.com,
+  codeload.github.com and objects.githubusercontent.com, plus any `--substrate-egress` hosts,
+  over TLS on 443, and never gavel serve, which a run asks over its own channel.
 - **Model keys.** Each organization sets its own under Model keys in its settings; they never
   enter the environment, and `--sandbox-secret-env` is refused. Substrate's egress gateway
   injects them into requests instead: each run's policy names, for every key its organization
@@ -158,12 +168,15 @@ job exits or is cancelled.
 
 ### Running the substrate e2e
 
-Two tests run on a live cluster. `TestPushChecksRunOnSubstrate` (`pr/ui`) runs a failing and a
-passing push check through the dispatcher: each job fetches the pushed source from a run API on
-the host and exits with the check's verdict. `TestSubstrateExecutorAgainstACluster`
-(`sandbox/substrate_e2e_test.go`) runs a job directly. It checks the job's output and exit code, that it reaches serve and proxy.golang.org but
-can't resolve example.com, that it holds only a placeholder for its model key while
-httpbin.org receives the real one, and that its environment is deleted afterwards. On a kind
+Two tests run on a live cluster, whose runner image must be this gavel's, since the environment
+runs its `gavel runner run-task`. `TestPushChecksRunOnSubstrate` (`pr/ui`) runs a failing and a
+passing push check through the dispatcher: each job runs in a checkout of the pushed commit, asks
+a run API on the host over its run's channel and exits with the check's verdict.
+`TestSubstrateExecutorAgainstACluster` (`sandbox/substrate_e2e_test.go`) runs a job directly. It
+checks the job's output and exit code, that it runs at its commit and reads its spec over its
+run's channel while holding no run token, that it reaches proxy.golang.org but neither serve's
+address nor example.com, which it can't resolve, that it holds only a placeholder for its model
+key while httpbin.org receives the real one, and that its environment is deleted afterwards. On a kind
 cluster running Substrate 1.0.0-rc.2 and env `56424de`:
 
 1. From a Substrate `v1.0.0-rc.2` checkout, create the cluster
