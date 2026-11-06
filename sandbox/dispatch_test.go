@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,7 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, org, job.Scope.OrgID)
 	assert.Equal(t, "ghcr.io/flanksource/gavel-runner:1", job.Image)
 	assert.Equal(t, []string{"gavel", "runner", "exec", "--run", run.ID.String()}, job.Command)
+	assert.Nil(t, job.Source, "an executor that brings no source in leaves the job to download it")
 	assert.Equal(t, map[string]string{"GAVEL_SERVER": "https://gavel.example", "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"}, job.Env)
 	tokenRun, tokenOrg, err := VerifyRunToken(dispatcher.TokenKey, job.SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(44*time.Minute))
 	require.NoError(t, err, "the token outlives the timeout by 15 minutes")
@@ -161,6 +163,45 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, org, tokenOrg)
 	_, _, err = VerifyRunToken(dispatcher.TokenKey, job.SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(46*time.Minute))
 	assert.Error(t, err, "and no longer")
+}
+
+func TestDispatcherGivesAJobItsSourceForAnExecutorThatBringsItIn(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	dispatcher.Sources = &Sources{DataDir: t.TempDir()}
+	ctx := context.Background()
+	var repoRow struct{ ID uuid.UUID }
+	require.NoError(t, db.Raw(`INSERT INTO repos (org_id, name, source) VALUES (?, 'app', 'push') RETURNING id`, org).Scan(&repoRow).Error)
+	gitDir := filepath.Join(dispatcher.Sources.DataDir, "repos", org.String(), repoRow.ID.String()+".git")
+
+	for name, tc := range map[string]struct {
+		spec   RunSpec
+		commit string
+	}{
+		"at its SHA":         {RunSpec{Kind: "test", RepoID: repoRow.ID, Ref: "refs/heads/main", SHA: "abc123"}, "abc123"},
+		"at its ref without": {RunSpec{Kind: "push-check", RepoID: repoRow.ID, Ref: "refs/heads/main"}, "refs/heads/main"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor.submitted = nil
+			run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, tc.spec, nil)
+			require.NoError(t, err)
+			_, err = run.Wait(ctx)
+			require.NoError(t, err)
+			require.Len(t, executor.submitted, 1)
+			job := executor.submitted[0]
+			assert.Equal(t, &JobSource{GitDir: gitDir, Commit: tc.commit}, job.Source)
+			assert.Equal(t, []string{"gavel", "runner", "exec", "--run", run.ID.String(), "--source", "."}, job.Command,
+				"the job's runner clones the source from the checkout it starts in")
+		})
+	}
+
+	other := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Other')`, other, other.String()).Error)
+	var theirs struct{ ID uuid.UUID }
+	require.NoError(t, db.Raw(`INSERT INTO repos (org_id, name, source) VALUES (?, 'theirs', 'push') RETURNING id`, other).Scan(&theirs).Error)
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "test", RepoID: theirs.ID, SHA: "abc123"}, nil)
+	require.ErrorIs(t, err, ErrRepoNotFound, "another organization's repository is none of the job's")
+	assert.Equal(t, "failed", readRun(t, db, run.ID).Status)
 }
 
 func TestDispatcherRunLifetimeIsTheTimeoutPlusTheRunTokensGrace(t *testing.T) {

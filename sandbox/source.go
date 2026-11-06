@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Repo is the repository a run checks out.
@@ -28,6 +30,23 @@ type Repo struct {
 	Name           string
 	GitHubRepoID   int64
 	InstallationID int64
+}
+
+// ErrRepoNotFound is a repository the organization doesn't have.
+var ErrRepoNotFound = errors.New("repository not found")
+
+// LoadRepo is org's repository id.
+func LoadRepo(ctx context.Context, db *gorm.DB, org, id uuid.UUID) (Repo, error) {
+	var repo Repo
+	result := db.WithContext(ctx).Raw(`SELECT id, org_id AS org, source, name, COALESCE(github_repo_id, 0) AS git_hub_repo_id, COALESCE(installation_id, 0) AS installation_id
+		FROM repos WHERE id = ? AND org_id = ?`, id, org).Scan(&repo)
+	if result.Error != nil {
+		return Repo{}, fmt.Errorf("read repository %s: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return Repo{}, fmt.Errorf("%w: organization %s has no repository %s", ErrRepoNotFound, org, id)
+	}
+	return repo, nil
 }
 
 // Sources bundles repositories for sandbox jobs.

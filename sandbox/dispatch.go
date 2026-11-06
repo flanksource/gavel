@@ -56,6 +56,10 @@ type Dispatcher struct {
 	// run, and an agent run without one is refused.
 	Keys          modelkeys.Store
 	CredentialURI func(run uuid.UUID, provider string) string
+	// Sources, when set, gives each job the repository its commit is in, for an executor that
+	// brings the source into the job, and has the job's runner clone it from the checkout the job
+	// starts in.
+	Sources *Sources
 }
 
 // ErrNoModelKey refuses an agent run whose organization has no model key.
@@ -158,6 +162,15 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 			job.SecretEnv[key] = value
 		}
 	}
+	if d.Sources != nil {
+		source, err := d.jobSource(ctx, scope, spec)
+		if err != nil {
+			d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
+			return run, fmt.Errorf("start sandbox run %s: %w", run.ID, err)
+		}
+		job.Source = source
+		job.Command = append(job.Command, "--source", ".")
+	}
 	handle, err := d.Executor.Submit(ctx, job)
 	if err != nil {
 		d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
@@ -179,6 +192,23 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 		run.result, run.err = typed.GetResult()
 	}()
 	return run, nil
+}
+
+// jobSource is where on serve the commit spec runs is.
+func (d *Dispatcher) jobSource(ctx context.Context, scope tenant.Scope, spec RunSpec) (*JobSource, error) {
+	repo, err := LoadRepo(ctx, d.DB, scope.OrgID, spec.RepoID)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := d.Sources.GitDir(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	commit := spec.SHA
+	if commit == "" {
+		commit = spec.Ref
+	}
+	return &JobSource{GitDir: dir, Commit: commit}, nil
 }
 
 // record files run id as queued, with its organization's credentials, which it returns.
