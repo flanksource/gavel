@@ -38,7 +38,7 @@ func Build(tests []parsers.Test, options Options) (Import, error) {
 		return Import{}, err
 	}
 	run := Run{
-		Producer: "gavel", GitCommit: options.Provenance.GitCommit, Dirty: options.Provenance.Dirty, SnapshotID: options.Provenance.SnapshotID,
+		Producer: "gavel", GitCommit: options.Provenance.GitCommit, Dirty: options.Provenance.Dirty, GitTree: options.Provenance.GitTree,
 		StartedAt: options.StartedAt.UTC(), FinishedAt: options.FinishedAt.UTC(), Tests: []Test{}}
 	seen := map[string]bool{}
 	command := ""

@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/flanksource/gavel/utils"
 )
 
 //go:embed ginkgo_reporter_source.txt
@@ -36,7 +38,7 @@ func BuildGinkgoOverlay(workDir string, packages []string, tags []string) (strin
 	sort.Strings(sorted)
 	digest := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
 	overlayDir := filepath.Join(root, ".tmp", "gavel-ginkgo-overlay")
-	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+	if err := utils.MkdirOutput(overlayDir, 0o755); err != nil {
 		return "", fmt.Errorf("create Ginkgo overlay directory: %w", err)
 	}
 	files := make(map[string]string, len(sorted))

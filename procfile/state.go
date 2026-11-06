@@ -125,7 +125,7 @@ func (s State) Process(name string) (ProcState, bool) {
 // looking at a project's process status does not create directories in it.
 func StateDir(root string) (string, error) {
 	dir := StateDirPath(root)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := utils.MkdirOutput(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create state dir %s: %w", dir, err)
 	}
 	return dir, nil

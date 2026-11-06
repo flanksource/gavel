@@ -12,6 +12,7 @@ import (
 
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/internal/retention"
+	"github.com/flanksource/gavel/utils"
 )
 
 // Retention is how long archived runs are kept: the retention.task_history property, 30 days
@@ -45,7 +46,7 @@ func Write(root string, record Record) error {
 		return err
 	}
 	dir := spoolDir(root)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := utils.MkdirOutput(dir, 0o755); err != nil {
 		return fmt.Errorf("create task history spool %s: %w", dir, err)
 	}
 	data, err := json.Marshal(record)

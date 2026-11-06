@@ -31,6 +31,7 @@ import (
 	"github.com/flanksource/commons-db/tracing/terminal"
 
 	"github.com/flanksource/gavel/internal/httpx"
+	"github.com/flanksource/gavel/utils"
 )
 
 // Dir is where a work dir keeps its runs' trace stores, one directory each.
@@ -76,7 +77,7 @@ func Open(workDir, runID string) (*Host, error) {
 		return nil, fmt.Errorf("open trace store: a work dir and a run id are required (got %q, %q)", workDir, runID)
 	}
 	root := filepath.Join(workDir, Dir)
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := utils.MkdirOutput(root, 0o755); err != nil {
 		return nil, fmt.Errorf("open trace store: %w", err)
 	}
 	dir, name, err := claimRunDir(root, runID)
