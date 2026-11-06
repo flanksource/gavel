@@ -68,8 +68,6 @@ spec:
             {{- with .Values.sandbox.substrate }}
             - --sandbox
             - substrate
-            - --sandbox-image
-            - {{ $.Values.sandbox.image | quote }}
             - --substrate-env-api
             - {{ .envAPI | quote }}
             - --substrate-control
@@ -78,10 +76,8 @@ spec:
             - /var/run/secrets/substrate/token
             - --substrate-atespace
             - {{ .atespace | quote }}
-            {{- if .template }}
             - --substrate-template
             - {{ .template | quote }}
-            {{- end }}
             {{- range .egress }}
             - --substrate-egress
             - {{ . | quote }}

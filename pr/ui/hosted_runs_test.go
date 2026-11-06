@@ -1,5 +1,5 @@
 // Tests hosted agent runs: a run of a hosted todo is admitted and recorded on serve while its
-// prompt runs in a sandbox job, which here runs in this process with a scripted agent.
+// prompt runs whole on substrate, which here runs in this process with a scripted agent.
 package ui
 
 import (
@@ -17,13 +17,16 @@ import (
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	capsetup "github.com/flanksource/captain/pkg/ai/agent/setup"
 	"github.com/flanksource/captain/pkg/ai/approval"
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/promptrun"
+	"github.com/flanksource/captain/pkg/sandbox/substraterun"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/sandbox"
-	"github.com/flanksource/gavel/todos/remote"
+	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -49,15 +52,107 @@ func (planAgent) ExecuteStream(context.Context, api.Spec) (<-chan captainai.Even
 	return ch, nil
 }
 
-// inProcessExecutor runs each job's sandbox side in this process: the job's checkout of the
-// pushed repository, then an agent job's messages sent to the relay as JSON, as the run API
-// receives them.
+// inProcessSubstrate stands in for captain's substrate sandbox: it runs each agent run whole in this
+// process, as gavel's program does in an environment, from the commit and repository the run's
+// selection names, with gavel's hooks rebuilt from the run's host data and the test's agent. The
+// run's tools and approvals are the caller's own, which an environment's program calls back. It
+// keeps each input it was handed, and counts the runs that were stopped.
+type inProcessSubstrate struct {
+	agent captainai.Provider
+	mu    sync.Mutex
+	// options are the selections' options, by environment.
+	options  map[string]map[string]any
+	runs     []promptrun.Input
+	contexts []context.Context
+	canceled int
+}
+
+// selected is the sandbox the selection names: this one, keeping its options for its run.
+func (s *inProcessSubstrate) selected(config api.SandboxConfig) (api.Sandbox, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.options == nil {
+		s.options = map[string]map[string]any{}
+	}
+	s.options[config.Options["environment"].(string)] = config.Options
+	return &substrateRun{substrate: s, options: config.Options}, nil
+}
+
+// handed is the input of the run the substrate was handed last, and the context it runs under,
+// which its tools are called back with, once it was handed one.
+func (s *inProcessSubstrate) handed() (promptrun.Input, context.Context, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.runs) == 0 {
+		return promptrun.Input{}, nil, false
+	}
+	return s.runs[len(s.runs)-1], s.contexts[len(s.contexts)-1], true
+}
+
+type substrateRun struct {
+	substrate *inProcessSubstrate
+	options   map[string]any
+}
+
+func (r *substrateRun) Kind() api.SandboxKind { return api.SandboxSubstrate }
+func (r *substrateRun) Prepare(context.Context, *api.Spec) (*api.SandboxSession, error) {
+	return &api.SandboxSession{}, nil
+}
+func (r *substrateRun) Close() error              { return nil }
+func (r *substrateRun) IsolatesWorkspace() bool   { return true }
+func (r *substrateRun) ProvidesEgressProxy() bool { return true }
+func (r *substrateRun) RunRemote(ctx context.Context, in promptrun.Input, started func(api.Spec) error) (promptrun.Result, error) {
+	s := r.substrate
+	s.mu.Lock()
+	s.runs = append(s.runs, in)
+	s.contexts = append(s.contexts, ctx)
+	s.mu.Unlock()
+	defer func() {
+		if ctx.Err() != nil {
+			s.mu.Lock()
+			s.canceled++
+			s.mu.Unlock()
+		}
+	}()
+	dir := filepath.Join(os.TempDir(), "gavel-hosted-run-"+r.options["environment"].(string))
+	defer safefs.SafeRemove(dir, safefs.RemoveContext{AllowedRoot: os.TempDir()}) //nolint:errcheck
+	if out, err := exec.Command("git", "clone", "-q", in.Repo, dir).CombinedOutput(); err != nil {
+		return promptrun.Result{}, errors.New(string(out))
+	}
+	if out, err := exec.Command("git", "-C", dir, "checkout", "-q", "--detach", r.options["ref"].(string)).CombinedOutput(); err != nil {
+		return promptrun.Result{}, errors.New(string(out))
+	}
+	var hooks lifecycle.RunHooks
+	if err := json.Unmarshal(in.HostData, &hooks); err != nil {
+		return promptrun.Result{}, err
+	}
+	built, local, err := hooks.In(in.Repo, dir).Build()
+	if err != nil {
+		return promptrun.Result{}, err
+	}
+	spec := in.Resolved.Spec
+	spec.SetCwd(dir)
+	spec.Sandbox = &api.SandboxRef{Mode: api.SandboxOff}
+	if err := started(spec); err != nil {
+		return promptrun.Result{}, err
+	}
+	var agent captainai.Provider = planAgent{}
+	if s.agent != nil {
+		agent = s.agent
+	}
+	config := captainai.Config{Model: in.Config.Model, Tools: append(append([]api.ToolDefinition(nil), in.Config.Tools...), local...), OnApproval: in.Config.OnApproval}
+	return promptrun.Run(ctx, promptrun.Input{
+		Resolved: api.ResolvedSpec{Spec: spec}, Config: config, Provider: agent,
+		Hooks: append(built, &capsetup.Plugin{BaseDir: dir}), CallerOwnsCommits: in.CallerOwnsCommits,
+		Verify: in.Verify, Timeout: in.Timeout, Repo: dir, OnEvent: in.OnEvent,
+	})
+}
+
+// inProcessExecutor runs each test or lint job's sandbox side in this process: the job's checkout
+// of the pushed repository.
 type inProcessExecutor struct {
-	db      *gorm.DB
-	relay   *remote.Relay
-	bareDir func(repo uuid.UUID) string
-	// agent answers the run's turns; nil is planAgent.
-	agent    captainai.Provider
+	db       *gorm.DB
+	bareDir  func(repo uuid.UUID) string
 	mu       sync.Mutex
 	canceled int
 }
@@ -99,34 +194,7 @@ func (e *inProcessExecutor) run(ctx context.Context, id uuid.UUID) error {
 		return errors.New(string(out))
 	}
 	// A test or lint job's work is the runner's, which these tests don't run; it ends checked out.
-	if record.Spec.Kind != "agent" {
-		return nil
-	}
-	var job remote.Job
-	if err := json.Unmarshal(record.Spec.Agent, &job); err != nil {
-		return err
-	}
-	send := func(message remote.Message) error {
-		data, err := json.Marshal(message)
-		if err != nil {
-			return err
-		}
-		var received remote.Message
-		if err := json.Unmarshal(data, &received); err != nil {
-			return err
-		}
-		return e.relay.Deliver(ctx, id, received)
-	}
-	var agent captainai.Provider = planAgent{}
-	if e.agent != nil {
-		agent = e.agent
-	}
-	call := func(message remote.Message) (remote.Reply, error) { return e.relay.Call(ctx, id, message) }
-	finished, err := remote.Execute(ctx, job, dir, agent, remote.Serve{Send: send, Call: call})
-	if err != nil {
-		return err
-	}
-	return send(remote.ResultMessage(finished.Result, finished.Err))
+	return nil
 }
 
 func (h *inProcessHandle) Logs(context.Context) (io.ReadCloser, error) {
@@ -152,12 +220,27 @@ type hostedRuns struct {
 	workspace, base string
 	org, ada, grace uuid.UUID
 	executor        *inProcessExecutor
+	substrate       *inProcessSubstrate
 	// logs is the store the dispatcher keeps the organization's run logs in.
 	logs blob.Store
+	// dataDir is serve's data directory, which keeps the runs' transcripts.
+	dataDir string
 }
 
 // newHostedRuns serves a hosted dashboard whose runs' turns agent answers; nil is planAgent.
 func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
+	t.Helper()
+	substrate := &inProcessSubstrate{agent: agent}
+	api.RegisterSandbox(api.SandboxSubstrate, substrate.selected)
+	t.Cleanup(func() { api.RegisterSandbox(api.SandboxSubstrate, substraterun.Substrate) })
+	h := serveHostedRuns(t, map[string]any{"envAPI": "env.example:443", "control": "control.example:443", "image": "runner@sha256:" + strings.Repeat("0", 64)}, nil)
+	h.substrate = substrate
+	return h
+}
+
+// serveHostedRuns serves a hosted dashboard whose agent runs execute on the substrate backend, as
+// its options spell it; configure, when set, adjusts the dispatcher before serving.
+func serveHostedRuns(t *testing.T, backend map[string]any, configure func(*sandbox.Dispatcher)) hostedRuns {
 	t.Helper()
 	db, _, org := openOrgDB(t)
 	t.Setenv("HOME", t.TempDir())
@@ -166,31 +249,45 @@ func newHostedRuns(t *testing.T, agent captainai.Provider) hostedRuns {
 		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
 	}
 	dataDir := t.TempDir()
+	h.dataDir = dataDir
 	h.workspace = "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
-	relay := &remote.Relay{}
 	logs := blob.Local(t.TempDir())
 	h.logs = logs
-	h.executor = &inProcessExecutor{db: db, relay: relay, agent: agent, bareDir: func(id uuid.UUID) string {
+	h.executor = &inProcessExecutor{db: db, bareDir: func(id uuid.UUID) string {
 		return filepath.Join(dataDir, "repos", org.String(), id.String()+".git")
 	}}
 	dispatcher := &sandbox.Dispatcher{
 		DB: db, Image: "runner", Server: "https://gavel.example", TokenKey: []byte(strings.Repeat("k", 32)),
 		Logs: func(uuid.UUID) blob.Store { return logs }, Limits: sandbox.Limits{Timeout: time.Minute}, Executor: h.executor,
 	}
+	if configure != nil {
+		configure(dispatcher)
+	}
 	srv := &Server{}
 	srv.SetOrg(org, db)
 	srv.SetHostedMode(true)
 	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: dataDir}})
-	srv.SetAgentRuns(AgentRuns{Dispatcher: dispatcher, Relay: relay})
+	sources := &sandbox.Sources{DataDir: dataDir}
+	srv.SetAgentRuns(AgentRuns{
+		Dispatcher: dispatcher, Sources: sources, Transcripts: RunTranscripts{DB: db, DataDir: dataDir},
+		Substrate: backend,
+	})
 	h.base = serveActingAs(t, srv, org)
 	return h
 }
 
 func TestHostedTodoRunsInASandboxJob(t *testing.T) {
-	h := newHostedRuns(t, nil)
+	runsPlanStep(t, newHostedRuns(t, nil), "Fix the build", 30*time.Second)
+}
+
+// runsPlanStep runs the plan step of a new todo titled title on h, as its creator, and checks
+// within wait that its sandbox run and Captain's run succeeded and that the plan was accepted as
+// the todo's outcome.
+func runsPlanStep(t *testing.T, h hostedRuns, title string, wait time.Duration) {
+	t.Helper()
 	db, base, workspace, creator := h.db, h.base, h.workspace, h.ada
 
-	status, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Fix the build"})
+	status, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": title})
 	require.Equal(t, http.StatusCreated, status, created)
 	todo := created["id"].(string)
 
@@ -205,26 +302,33 @@ func TestHostedTodoRunsInASandboxJob(t *testing.T) {
 		UserID uuid.UUID
 		SHA    string
 	}
-	require.Eventually(t, func() bool {
+	if !assert.Eventually(t, func() bool {
 		require.NoError(t, db.Raw(`SELECT status, kind, user_id, sha FROM sandbox_runs WHERE todo_id = ?`, todo).Scan(&run).Error)
-		return run.Status == "succeeded"
-	}, 30*time.Second, 50*time.Millisecond, "the sandbox job ran: %+v", run)
+		var finished bool
+		require.NoError(t, db.Raw(`SELECT count(*) > 0 FROM captain_prompt_runs WHERE id = ? AND state IN ('failed', 'cancelled', 'waiting')`, started["promptRunId"]).Scan(&finished).Error)
+		return run.Status == "succeeded" || run.Status == "failed" || finished
+	}, wait, 50*time.Millisecond, "the sandbox job ran") || run.Status != "succeeded" {
+		var captain string
+		require.NoError(t, db.Raw(`SELECT row_to_json(r)::text FROM captain_prompt_runs r WHERE id = ?`, started["promptRunId"]).Scan(&captain).Error)
+		t.Fatalf("the sandbox job didn't succeed: %+v; Captain's run: %s", run, captain)
+	}
 	assert.Equal(t, "agent", run.Kind)
 	assert.Equal(t, creator, run.UserID)
 	assert.NotEmpty(t, run.SHA)
 
-	var promptRun struct{ State string }
+	var promptRun struct{ State, Error string }
 	require.Eventually(t, func() bool {
-		require.NoError(t, db.Raw(`SELECT state FROM captain_prompt_runs WHERE id = ?`, started["promptRunId"]).Scan(&promptRun).Error)
-		return promptRun.State == "succeeded"
-	}, 30*time.Second, 50*time.Millisecond, "Captain recorded the run's outcome: %+v", promptRun)
+		require.NoError(t, db.Raw(`SELECT state, coalesce(error, '') AS error FROM captain_prompt_runs WHERE id = ?`, started["promptRunId"]).Scan(&promptRun).Error)
+		return promptRun.State == "succeeded" || promptRun.State == "failed" || promptRun.State == "cancelled"
+	}, wait, 50*time.Millisecond, "Captain recorded the run's outcome")
+	require.Equal(t, "succeeded", promptRun.State, "Captain's run: %s", promptRun.Error)
 
 	// The outcome event is the run's last write: once it is there, the todo has its outcome.
 	var outcomes int64
 	require.Eventually(t, func() bool {
 		require.NoError(t, db.Raw(`SELECT count(*) FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcomes).Error)
 		return outcomes == 1
-	}, 30*time.Second, 50*time.Millisecond, "the run's outcome reached the todo")
+	}, wait, 50*time.Millisecond, "the run's outcome reached the todo")
 	var outcome struct {
 		RunState string
 		Success  bool
@@ -251,7 +355,7 @@ func TestHostedTodoRunsNeedASandbox(t *testing.T) {
 
 	status, refused := hostedCall(t, base, http.MethodPost, "/api/todos/run", creator, "org:member", map[string]any{"dir": workspace, "ref": created["id"], "step": "plan"})
 	assert.Equal(t, http.StatusNotImplemented, status)
-	assert.Equal(t, "agent runs need a sandbox: start gavel serve with --sandbox", refused["error"])
+	assert.Equal(t, "agent runs need a substrate sandbox: start gavel serve with --sandbox substrate", refused["error"])
 }
 
 func TestEveryHostedRunGoesToASandbox(t *testing.T) {
@@ -262,7 +366,7 @@ func TestEveryHostedRunGoesToASandbox(t *testing.T) {
 	continuation := run.Continuation{Dir: hosted.Dir, Todo: todo, Step: "run", Override: override}
 
 	withSandbox := &Server{}
-	withSandbox.SetAgentRuns(AgentRuns{Dispatcher: &sandbox.Dispatcher{}, Relay: &remote.Relay{}})
+	withSandbox.SetAgentRuns(AgentRuns{Dispatcher: &sandbox.Dispatcher{}, Substrate: map[string]any{}})
 	req, err := withSandbox.continuationRequest(context.Background(), hosted, continuation)
 	require.NoError(t, err)
 	assert.NotNil(t, req.Remote, "a hosted continuation runs in a sandbox")
@@ -272,7 +376,11 @@ func TestEveryHostedRunGoesToASandbox(t *testing.T) {
 	assert.True(t, req.Approvals, "a sandboxed run asks serve for approvals")
 
 	_, err = (&Server{}).continuationRequest(context.Background(), hosted, continuation)
-	require.ErrorIs(t, err, errAgentRunsNeedSandbox)
+	require.ErrorIs(t, err, errAgentRunsNeedSubstrate)
+	withDocker := &Server{}
+	withDocker.SetAgentRuns(AgentRuns{Dispatcher: &sandbox.Dispatcher{}})
+	_, err = withDocker.continuationRequest(context.Background(), hosted, continuation)
+	require.ErrorIs(t, err, errAgentRunsNeedSubstrate, "a sandbox other than substrate runs no agent runs")
 
 	req, err = (&Server{}).continuationRequest(context.Background(), todoSource{Dir: t.TempDir()}, continuation)
 	require.NoError(t, err)
@@ -300,7 +408,7 @@ func (workingAgent) ExecuteStream(ctx context.Context, _ api.Spec) (<-chan capta
 
 func TestHostedTodoRunsBelongToTheTodosCreator(t *testing.T) {
 	h := newHostedRuns(t, workingAgent{})
-	db, base, workspace, creator, member, executor := h.db, h.base, h.workspace, h.ada, h.grace, h.executor
+	db, base, workspace, creator, member, substrate := h.db, h.base, h.workspace, h.ada, h.grace, h.substrate
 
 	_, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Shared", "visibility": "public"})
 	todo := created["id"].(string)
@@ -323,9 +431,9 @@ func TestHostedTodoRunsBelongToTheTodosCreator(t *testing.T) {
 		require.NoError(t, db.Raw(`SELECT state FROM captain_prompt_runs WHERE id = ?`, promptRun).Scan(&state).Error)
 		return state.State == "cancelled"
 	}, 30*time.Second, 50*time.Millisecond, "the stopped run is recorded as cancelled: %+v", state)
-	executor.mu.Lock()
-	assert.Equal(t, 1, executor.canceled, "stopping the run cancels its sandbox job")
-	executor.mu.Unlock()
+	substrate.mu.Lock()
+	assert.Equal(t, 1, substrate.canceled, "stopping the run stops it on substrate")
+	substrate.mu.Unlock()
 	var outcomes int64
 	require.Eventually(t, func() bool {
 		require.NoError(t, db.Raw(`SELECT count(*) FROM todo_issue_events WHERE issue_id = ? AND kind = 'lifecycle_outcome'`, todo).Scan(&outcomes).Error)
@@ -342,22 +450,21 @@ func TestHostedTriageNewRunsWithItsToolsOnServe(t *testing.T) {
 	status, started := hostedCall(t, base, http.MethodPost, "/api/todos/run", creator, "org:member", map[string]any{"dir": workspace, "ref": todo, "step": "triage.new"})
 	require.Equal(t, http.StatusOK, status, started)
 
-	var spec string
+	var handed promptrun.Input
 	require.Eventually(t, func() bool {
-		require.NoError(t, db.Raw(`SELECT spec->>'agent' FROM sandbox_runs WHERE todo_id = ?`, todo).Scan(&spec).Error)
-		return spec != ""
+		var ok bool
+		handed, _, ok = h.substrate.handed()
+		return ok
 	}, 30*time.Second, 50*time.Millisecond)
-	var job remote.Job
-	require.NoError(t, json.Unmarshal([]byte(spec), &job))
 	var tools []string
-	for _, tool := range job.Tools {
+	for _, tool := range handed.Config.Tools {
 		tools = append(tools, tool.Name)
 	}
 	assert.ElementsMatch(t, []string{
 		"todo_search", "todo_get", "todo_update", "todo_labels", "todo_link", "todo_link_pr",
 		"todo_set_parent", "todo_comment", "todo_plan", "todo_merge", "todo_close",
-	}, tools, "the job calls serve for triage.new's todo tools, and only those")
-	assert.True(t, job.Approvals, "and asks serve for the person's approval of a merge")
+	}, tools, "the run calls serve for triage.new's todo tools, and only those")
+	assert.NotNil(t, handed.Config.OnApproval, "and asks serve for the person's approval of a merge")
 
 	stop := map[string]any{"ref": todo, "promptRunId": started["promptRunId"]}
 	status, stopped := hostedCall(t, base, http.MethodPost, "/api/todos/session/stop?dir="+workspace, creator, "org:member", stop)
@@ -379,28 +486,34 @@ func TestHostedRunToolsSeeOnlyWhatTheRunsUserSees(t *testing.T) {
 
 	status, started := hostedCall(t, base, http.MethodPost, "/api/todos/run", creator, "org:member", map[string]any{"dir": workspace, "ref": todo, "step": "triage.new"})
 	require.Equal(t, http.StatusOK, status, started)
-	var run struct{ ID uuid.UUID }
+	var handed promptrun.Input
+	var runCtx context.Context
 	require.Eventually(t, func() bool {
-		require.NoError(t, db.Raw(`SELECT id FROM sandbox_runs WHERE todo_id = ?`, todo).Scan(&run).Error)
-		return run.ID != uuid.Nil
+		var ok bool
+		handed, runCtx, ok = h.substrate.handed()
+		return ok
 	}, 30*time.Second, 50*time.Millisecond)
-	runID := run.ID
-	// The run's job calls its tools on serve, as remote.Execute does.
-	call := func(tool string, input map[string]any) remote.Reply {
-		var reply remote.Reply
-		require.Eventually(t, func() bool {
-			var err error
-			reply, err = h.executor.relay.Call(context.Background(), runID, remote.ToolCallMessage(tool, input))
-			return !errors.Is(err, remote.ErrNoListener)
-		}, 30*time.Second, 50*time.Millisecond, "serve listens for the run's calls")
-		return reply
+	// The run's program calls its tools back on serve, which runs them here under the run's
+	// context, as captain's relay does.
+	call := func(tool string, input map[string]any) (string, error) {
+		for _, definition := range handed.Config.Tools {
+			if definition.Name == tool {
+				output, err := definition.Handler(runCtx, input)
+				data, _ := json.Marshal(output)
+				return string(data), err
+			}
+		}
+		t.Fatalf("the run has no tool %s", tool)
+		return "", nil
 	}
 
-	searched := call("todo_search", map[string]any{"query": ""})
-	require.Empty(t, searched.Error)
-	assert.NotContains(t, string(searched.Output), "Grace's private todo", "the run's search doesn't list another member's private todo")
-	assert.NotEmpty(t, call("todo_get", map[string]any{"ref": privateRef}).Error, "the run can't read another member's private todo")
-	assert.NotEmpty(t, call("todo_update", map[string]any{"ref": privateRef, "title": "Renamed by ada's run"}).Error, "nor change it")
+	searched, err := call("todo_search", map[string]any{"query": ""})
+	require.NoError(t, err)
+	assert.NotContains(t, searched, "Grace's private todo", "the run's search doesn't list another member's private todo")
+	_, err = call("todo_get", map[string]any{"ref": privateRef})
+	assert.Error(t, err, "the run can't read another member's private todo")
+	_, err = call("todo_update", map[string]any{"ref": privateRef, "title": "Renamed by ada's run"})
+	assert.Error(t, err, "nor change it")
 	var title string
 	require.NoError(t, db.Raw(`SELECT title FROM todo_issues WHERE id = ?`, privateRef).Scan(&title).Error)
 	assert.Equal(t, "Grace's private todo", title)

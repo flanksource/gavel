@@ -75,54 +75,56 @@ func (s *Sources) CommitSubjects(ctx context.Context, repo Repo, base, head stri
 	return strings.Split(strings.TrimSpace(log), "\n"), nil
 }
 
-// PushRunCommits creates branch, which must start with RunBranchPrefix and not exist yet, at the
-// one branch bundle holds, after checking it continues from base, the commit the run started at.
-// It returns the branch's commit.
-func (s *Sources) PushRunCommits(ctx context.Context, repo Repo, base, branch string, bundle io.Reader) (string, error) {
+// PublishRunBranch makes branch, a run's branch whose commits, up to sha, came back to repo's git
+// directory, the repository's own: a pushed repository's bare repository has it at sha, and a
+// GitHub repository's goes to GitHub, which mustn't have it yet. The mirror isn't refreshed
+// first, since a refresh prunes what GitHub doesn't have, which may be the branch; its commits
+// stay in the mirror either way, which is why sha is pushed rather than the branch.
+func (s *Sources) PublishRunBranch(ctx context.Context, repo Repo, branch, sha string) error {
 	if !strings.HasPrefix(branch, RunBranchPrefix) || strings.HasPrefix(branch, "-") {
-		return "", fmt.Errorf("a run's commits go on a %s branch, not %q", RunBranchPrefix, branch)
+		return fmt.Errorf("a run's commits go on a %s branch, not %q", RunBranchPrefix, branch)
 	}
-	if _, err := runGit(ctx, nil, "check-ref-format", "refs/heads/"+branch); err != nil {
-		return "", fmt.Errorf("%q is not a branch name: %w", branch, err)
+	if !commitSHA.MatchString(sha) {
+		return fmt.Errorf("the run's head %q is not a commit SHA", sha)
 	}
-	source, err := s.sourceDir(ctx, repo)
-	if err != nil {
-		return "", err
-	}
-	sha, done, err := receiveCommits(ctx, source, base, bundle)
-	if err != nil {
-		return "", err
-	}
-	defer done()
-
 	switch repo.Source {
 	case "push":
-		if _, err := runGit(ctx, nil, "-C", source, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
-			return "", fmt.Errorf("create branch %s of %s: %w", branch, repo.label(), ErrBranchExists)
+		dir, err := s.sourceDir(ctx, repo)
+		if err != nil {
+			return err
 		}
-		if _, err := runGit(ctx, nil, "-C", source, "update-ref", "refs/heads/"+branch, sha, ""); err != nil {
-			return "", fmt.Errorf("create branch %s of %s: %w", branch, repo.label(), err)
+		if _, err := runGit(ctx, nil, "-C", dir, "update-ref", "refs/heads/"+branch, sha); err != nil {
+			return fmt.Errorf("put branch %s of %s at %s: %w", branch, repo.label(), sha, err)
 		}
+		return nil
 	case "github":
-		header, err := s.authHeader(ctx, repo)
-		if err != nil {
-			return "", err
-		}
-		existing, err := runGit(ctx, nil, "-c", header, "ls-remote", s.githubURL(repo), "refs/heads/"+branch)
-		if err != nil {
-			return "", fmt.Errorf("look for branch %s of %s on GitHub: %w", branch, repo.label(), err)
-		}
-		if strings.TrimSpace(existing) != "" {
-			return "", fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), ErrBranchExists)
-		}
-		// The mirror's origin pushes everything; this pushes the one branch, to its URL. The lease
-		// refuses a branch created since the check above.
-		if _, err := runGit(ctx, nil, "-c", header, "-C", source, "push", "--quiet",
-			"--force-with-lease=refs/heads/"+branch+":", s.githubURL(repo), sha+":refs/heads/"+branch); err != nil {
-			return "", fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), err)
-		}
+		return s.pushNewBranch(ctx, repo, s.mirrorDir(repo), branch, sha)
+	default:
+		return fmt.Errorf("repository %s has source %q, not push or github", repo.ID, repo.Source)
 	}
-	return sha, nil
+}
+
+// pushNewBranch creates branch at sha on GitHub, from source, repo's mirror. A branch GitHub has
+// already is never moved: it's ErrBranchExists.
+func (s *Sources) pushNewBranch(ctx context.Context, repo Repo, source, branch, sha string) error {
+	header, err := s.authHeader(ctx, repo)
+	if err != nil {
+		return err
+	}
+	existing, err := runGit(ctx, nil, "-c", header, "ls-remote", s.githubURL(repo), "refs/heads/"+branch)
+	if err != nil {
+		return fmt.Errorf("look for branch %s of %s on GitHub: %w", branch, repo.label(), err)
+	}
+	if strings.TrimSpace(existing) != "" {
+		return fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), ErrBranchExists)
+	}
+	// The mirror's origin pushes everything; this pushes the one branch, to its URL. The lease
+	// refuses a branch created since the check above.
+	if _, err := runGit(ctx, nil, "-c", header, "-C", source, "push", "--quiet",
+		"--force-with-lease=refs/heads/"+branch+":", s.githubURL(repo), sha+":refs/heads/"+branch); err != nil {
+		return fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), err)
+	}
+	return nil
 }
 
 // LeaveOut adds a commit to branch, a GitHub repository's run branch at head, that puts paths

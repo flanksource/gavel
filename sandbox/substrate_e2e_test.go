@@ -10,13 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flanksource/gavel/sandbox/internal/substrate/ateenvv1alpha"
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/gavel/sandbox/substratetest"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func TestSubstrateExecutorAgainstACluster(t *testing.T) {
@@ -35,17 +33,16 @@ func TestSubstrateExecutorAgainstACluster(t *testing.T) {
 	go func() { _ = serve.Serve(listener) }()
 	t.Cleanup(func() { _ = serve.Close() })
 
-	executor, err := NewSubstrate(SubstrateOptions{
+	executor, err := NewSubstrate(SubstrateOptions{Options: substrate.Options{
 		EnvAPI: cluster.EnvAPI, Control: cluster.Control, ControlTokenFile: cluster.TokenFile,
 		Template: cluster.Template, TrustBundle: substratetest.TrustBundle,
-	})
+	}})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	handle, err := executor.Submit(ctx, Job{
 		RunID: uuid.New(),
-		Image: cluster.Image,
 		Command: []string{"sh", "-c", `echo hi
 echo "token=$GAVEL_RUN_TOKEN"
 echo "key=$E2E_MODEL_KEY"
@@ -56,7 +53,7 @@ curl -sS -m 20 --cacert "$NODE_EXTRA_CA_CERTS" -H "x-gavel-key: $E2E_MODEL_KEY" 
 exit 3`},
 		Env:         map[string]string{"GAVEL_SERVER": cluster.ServeURL},
 		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": "secret-token"},
-		Credentials: []InjectedCredential{{Host: "httpbin.org", Header: "x-gavel-key", Env: "E2E_MODEL_KEY", URI: cluster.CredentialURI}},
+		Credentials: []substrate.Credential{{Host: "httpbin.org", Header: "x-gavel-key", Env: "E2E_MODEL_KEY", URI: cluster.CredentialURI}},
 		Limits:      Limits{Timeout: 5 * time.Minute},
 	})
 	require.NoError(t, err)
@@ -69,7 +66,7 @@ exit 3`},
 	out := string(output)
 	assert.Contains(t, out, "hi\n")
 	assert.Contains(t, out, "token=secret-token", "the run token reaches the job")
-	assert.Contains(t, out, "key="+substrateCredentialPlaceholder+"\n", "the job holds only a placeholder for its model key")
+	assert.Contains(t, out, "key="+substrate.Placeholder+"\n", "the job holds only a placeholder for its model key")
 	assert.NotContains(t, out, "key="+cluster.Credential)
 	assert.Contains(t, out, "serve=pong", "the job reaches serve")
 	assert.Equal(t, "/ping", <-pinged)
@@ -78,10 +75,6 @@ exit 3`},
 	assert.Contains(t, out, `"X-Gavel-Key": "`+cluster.Credential+`"`, "the gateway injects the model key")
 
 	result, err := handle.Wait(ctx)
-	require.NoError(t, err)
+	require.NoError(t, err, "Wait deletes the environment once the job exits")
 	assert.Equal(t, 3, result.ExitCode)
-
-	substrate := executor.(*substrateExecutor)
-	_, err = substrate.envs.GetEnvironment(ctx, &ateenvv1alpha.GetEnvironmentRequest{Id: handle.Ref(), Atespace: substrate.options.Atespace})
-	assert.Equal(t, codes.NotFound, status.Code(err), "the environment is deleted once the job exits: %v", err)
 }

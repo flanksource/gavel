@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	clickytask "github.com/flanksource/clicky/task"
 	commonscontext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
@@ -33,8 +34,6 @@ type RunSpec struct {
 	SHA    string     `json:"sha,omitempty"`
 	TodoID *uuid.UUID `json:"todoId,omitempty"`
 	Step   string     `json:"step,omitempty"`
-	// Agent is an agent run's job: the step's prompt run, as todos/remote encodes it.
-	Agent json.RawMessage `json:"agent,omitempty"`
 	// PR is the URL of the PR an agent run works on, the one PR serve acts on for it.
 	PR string `json:"pr,omitempty"`
 }
@@ -64,7 +63,7 @@ var ErrNoModelKey = errors.New("this organization has no model key")
 
 // credentials are the injected credentials of run, one per model key of org; none unless
 // CredentialURI is set. An agent run needs at least one.
-func (d *Dispatcher) credentials(ctx context.Context, run, org uuid.UUID, kind string) ([]InjectedCredential, error) {
+func (d *Dispatcher) credentials(ctx context.Context, run, org uuid.UUID, kind string) ([]substrate.Credential, error) {
 	if d.CredentialURI == nil {
 		return nil, nil
 	}
@@ -75,23 +74,28 @@ func (d *Dispatcher) credentials(ctx context.Context, run, org uuid.UUID, kind s
 	if kind == "agent" && len(keys) == 0 {
 		return nil, fmt.Errorf("%w: an organization admin adds one under Model keys in the organization's settings", ErrNoModelKey)
 	}
-	credentials := make([]InjectedCredential, 0, len(keys))
+	credentials := make([]substrate.Credential, 0, len(keys))
 	for _, key := range keys {
 		k, ok := modelkeys.KindNamed(key.Kind)
 		if !ok {
 			return nil, fmt.Errorf("organization %s's %s key is of kind %q, which gavel no longer knows; an organization admin must set it again", org, key.Provider, key.Kind)
 		}
-		credentials = append(credentials, InjectedCredential{
+		credentials = append(credentials, substrate.Credential{
 			Host: k.Host, Header: k.Header, Prefix: k.Prefix, Env: k.Env, URI: d.CredentialURI(run, k.Provider),
 		})
 	}
 	return credentials, nil
 }
 
+// RunTimeout is the longest a run may work.
+func (d *Dispatcher) RunTimeout() time.Duration {
+	return d.Limits.withDefaults().Timeout
+}
+
 // RunLifetime is how long a run's token, and so the run, may last: its timeout plus 15 minutes
 // to report how it ended.
 func (d *Dispatcher) RunLifetime() time.Duration {
-	return d.Limits.withDefaults().Timeout + 15*time.Minute
+	return d.RunTimeout() + 15*time.Minute
 }
 
 // Run is a dispatched run.
@@ -132,27 +136,11 @@ func (d *Dispatcher) Start(ctx context.Context, scope tenant.Scope, spec RunSpec
 // StartRun is Start for a run whose ID the caller chose, so it can be ready for the run's
 // messages before its job starts.
 func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec, output io.Writer) (*Run, error) {
-	if !contains(runKinds, spec.Kind) {
-		return nil, fmt.Errorf("sandbox run kind %q is not one of %s", spec.Kind, strings.Join(runKinds, ", "))
-	}
-	credentials, err := d.credentials(ctx, id, scope.OrgID, spec.Kind)
+	credentials, err := d.record(ctx, id, scope, spec)
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := json.Marshal(spec)
-	if err != nil {
-		return nil, fmt.Errorf("encode the run spec: %w", err)
-	}
 	run := &Run{ID: id, done: make(chan struct{})}
-	var repo *uuid.UUID
-	if spec.RepoID != uuid.Nil {
-		repo = &spec.RepoID
-	}
-	if err := d.DB.WithContext(ctx).Exec(`INSERT INTO sandbox_runs (id, org_id, user_id, repo_id, kind, ref, sha, todo_id, status, backend, spec)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
-		run.ID, scope.OrgID, scope.UserID, repo, spec.Kind, spec.Ref, spec.SHA, spec.TodoID, d.Executor.Name(), string(encoded)).Error; err != nil {
-		return nil, fmt.Errorf("record sandbox run: %w", err)
-	}
 
 	limits := d.Limits.withDefaults()
 	job := Job{
@@ -161,7 +149,7 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 		Image:       d.Image,
 		Command:     []string{"gavel", "runner", "exec", "--run", run.ID.String()},
 		Env:         map[string]string{"GAVEL_SERVER": d.Server, "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"},
-		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": SignRunToken(d.TokenKey, run.ID, scope.OrgID, time.Now().Add(d.RunLifetime()))},
+		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": d.runToken(run.ID, scope.OrgID)},
 		Credentials: credentials,
 		Limits:      limits,
 	}
@@ -193,23 +181,92 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 	return run, nil
 }
 
+// record files run id as queued, with its organization's credentials, which it returns.
+func (d *Dispatcher) record(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec) ([]substrate.Credential, error) {
+	if !contains(runKinds, spec.Kind) {
+		return nil, fmt.Errorf("sandbox run kind %q is not one of %s", spec.Kind, strings.Join(runKinds, ", "))
+	}
+	credentials, err := d.credentials(ctx, id, scope.OrgID, spec.Kind)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		return nil, fmt.Errorf("encode the run spec: %w", err)
+	}
+	var repo *uuid.UUID
+	if spec.RepoID != uuid.Nil {
+		repo = &spec.RepoID
+	}
+	if err := d.DB.WithContext(ctx).Exec(`INSERT INTO sandbox_runs (id, org_id, user_id, repo_id, kind, ref, sha, todo_id, status, backend, spec)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
+		id, scope.OrgID, scope.UserID, repo, spec.Kind, spec.Ref, spec.SHA, spec.TodoID, d.Executor.Name(), string(encoded)).Error; err != nil {
+		return nil, fmt.Errorf("record sandbox run: %w", err)
+	}
+	return credentials, nil
+}
+
+// runToken is the token run in org calls the run API with, good for the run's lifetime.
+func (d *Dispatcher) runToken(run, org uuid.UUID) string {
+	return SignRunToken(d.TokenKey, run, org, time.Now().Add(d.RunLifetime()))
+}
+
+// RecordedRun is a run recorded here that executes elsewhere than in a job of the dispatcher's
+// executor, as an agent run does through captain's substrate sandbox.
+type RecordedRun struct {
+	ID uuid.UUID
+	// Token is the run's token, which its program in the environment calls the run API with.
+	Token string
+	// Credentials are its organization's model keys, which substrate's egress gateway injects.
+	Credentials []substrate.Credential
+	// Log takes the run's output, which is stored as its log and shown on its task.
+	Log    io.Writer
+	finish func(succeeded bool)
+}
+
+// Finish stores the run's log and records whether it succeeded.
+func (r *RecordedRun) Finish(succeeded bool) { r.finish(succeeded) }
+
+// RecordRun files run id as running, for a run that executes elsewhere: it signs the run's token,
+// gives it its organization's credentials, and stores what is written to its Log as its log.
+func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec) (*RecordedRun, error) {
+	credentials, err := d.record(ctx, id, scope, spec)
+	if err != nil {
+		return nil, err
+	}
+	logKey := "runs/" + id.String() + "/log.txt"
+	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
+		JobName(id), logKey, id).Error; err != nil {
+		logger.Warnf("record sandbox run %s as running: %v", id, err)
+	}
+	reader, writer := io.Pipe()
+	stored := make(chan struct{})
+	go func() {
+		defer close(stored)
+		typed := clickytask.StartTask(fmt.Sprintf("Sandbox %s run %s", spec.Kind, id.String()[:8]), func(_ commonscontext.Context, task *clickytask.Task) (Result, error) {
+			d.storeLog(context.WithoutCancel(ctx), id, scope.OrgID, logKey, reader, task, nil)
+			return Result{}, nil
+		})
+		_, _ = typed.GetResult()
+	}()
+	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: credentials, Log: writer, finish: func(succeeded bool) {
+		_ = writer.Close()
+		<-stored
+		status := "succeeded"
+		if !succeeded {
+			status = "failed"
+		}
+		d.finish(context.WithoutCancel(ctx), id, status, nil)
+	}}, nil
+}
+
 // follow stores the job's log, waits for it and records how it ended.
 func (d *Dispatcher) follow(ctx context.Context, id, org uuid.UUID, handle Handle, logKey string, output io.Writer, task *clickytask.Task) (Result, error) {
 	logs, err := handle.Logs(ctx)
 	if err != nil {
 		logger.Warnf("follow sandbox run %s: %v", id, err)
 	} else {
-		writers := []io.Writer{taskLog{task}}
-		if output != nil {
-			writers = append(writers, output)
-		}
-		store := d.Logs(org)
-		if store == nil {
-			logger.Warnf("sandbox run %s: no blob store for its log", id)
-			_, _ = io.Copy(io.MultiWriter(writers...), logs)
-		} else if err := store.Write(ctx, logKey, io.TeeReader(logs, io.MultiWriter(writers...))); err != nil {
-			logger.Warnf("store the log of sandbox run %s: %v", id, err)
-		}
+		d.storeLog(ctx, id, org, logKey, logs, task, output)
 		_ = logs.Close()
 	}
 	result, err := handle.Wait(ctx)
@@ -223,6 +280,26 @@ func (d *Dispatcher) follow(ctx context.Context, id, org uuid.UUID, handle Handl
 	}
 	d.finish(ctx, id, status, &result.ExitCode)
 	return result, nil
+}
+
+// storeLog stores logs as run id's log under logKey in org's blob store, writing each line to task
+// and everything to output, when there is one, as it goes. It reads logs to the end, even when the
+// store can't take them, so their writer never blocks.
+func (d *Dispatcher) storeLog(ctx context.Context, id, org uuid.UUID, logKey string, logs io.Reader, task *clickytask.Task, output io.Writer) {
+	writers := []io.Writer{taskLog{task}}
+	if output != nil {
+		writers = append(writers, output)
+	}
+	store := d.Logs(org)
+	if store == nil {
+		logger.Warnf("sandbox run %s: no blob store for its log", id)
+		_, _ = io.Copy(io.MultiWriter(writers...), logs)
+		return
+	}
+	if err := store.Write(ctx, logKey, io.TeeReader(logs, io.MultiWriter(writers...))); err != nil {
+		logger.Warnf("store the log of sandbox run %s: %v", id, err)
+		_, _ = io.Copy(io.Discard, logs)
+	}
 }
 
 func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, exitCode *int) {

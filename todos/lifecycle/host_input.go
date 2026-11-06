@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	gavelai "github.com/flanksource/gavel/ai"
+	"github.com/flanksource/gavel/pr/provider"
+	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/tools"
 	"github.com/flanksource/gavel/todos/types"
@@ -59,6 +62,15 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 	}
 	state.runHooks = h.runHooks(todo, req, HookOptions{Meta: state.meta, pr: prepared.pr, tools: state.tools})
 	state.hooks = state.runHooks.build(prepared.pr.forRun(state.tools))
+	// A run a sandbox runs whole, in an environment of its own, carries the hooks as data.
+	hostData, err := json.Marshal(state.runHooks)
+	if err != nil {
+		return nil, fmt.Errorf("encode the step's hooks for a run elsewhere: %w", err)
+	}
+	selection, err := h.sandboxSelection(req)
+	if err != nil {
+		return nil, fmt.Errorf("step sandbox: %w", err)
+	}
 	if opts.Provider != nil {
 		// A supplied provider skips Captain's setup hook, and gavel's
 		// supplied-provider seam still needs local setup.
@@ -71,7 +83,7 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 		RuntimePresets: prepared.runtimePresets,
 		RuntimeProfile: prepared.runtimeProfile,
 		Config:         captainai.Config{Model: req.Model, Budget: req.Budget, NoCache: req.NoCache, SessionID: providerSessionID},
-		Provider:       opts.Provider, Hooks: state.hookList(nil),
+		Provider:       opts.Provider, Hooks: state.hookList(), HostData: hostData,
 		ContextSources:    prepared.contextSources,
 		CallerOwnsCommits: req.Workflow != nil && len(req.Workflow.Commits) > 0,
 		Verify:            capverify.Options{Timeout: prepared.timeout},
@@ -85,6 +97,14 @@ func (h *Host) runInput(exec *todos.ExecutorContext, todo *types.TODO, prepared 
 		Repo: utils.GitRoot(prepared.workDir),
 	}
 	state.input.Config.Tools = defs
+	state.input.Config.SandboxSelection = selection
+	if pr := prepared.pr; pr != nil && pr.target != nil {
+		// A run executing whole elsewhere has no credentials for the step's PR, so it asks this
+		// host, which answers with the step's own PR client and git.
+		state.input.HostCalls = map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
+			runclient.HostCallName: runclient.AnswerHostCall(provider.LocalRunAPI(pr.client, pr.number, *pr.target, pr.workDir), "local", ""),
+		}
+	}
 	switch {
 	case opts.OnApproval != nil && opts.Approvals:
 		return nil, fmt.Errorf("run options set both OnApproval and Approvals; a run has one approval broker")
@@ -114,13 +134,10 @@ func (h *Host) stepTools(ctx context.Context, todo *types.TODO, prepared *prepar
 	return defs, nil
 }
 
-// hookList is the hook order promptrun is handed: gavel's hooks, the admission
-// hook of a recorded run, then the setup plugin gavel supplies itself.
-func (in *stepInput) hookList(admitted *admittedHook) []any {
+// hookList is the hook order promptrun is handed: gavel's hooks, then the setup
+// plugin gavel supplies itself.
+func (in *stepInput) hookList() []any {
 	hooks := append([]any(nil), in.hooks...)
-	if admitted != nil {
-		hooks = append(hooks, admitted)
-	}
 	if in.setup != nil {
 		hooks = append(hooks, in.setup)
 	}
@@ -128,10 +145,10 @@ func (in *stepInput) hookList(admitted *admittedHook) []any {
 }
 
 // record files the run in Captain's store under the admission the runtime
-// cleared, and runs admitted once that admission is committed.
+// cleared, and runs admitted once Captain has admitted it, wherever it executes.
 func (in *stepInput) record(recording *promptrun.Recording, admitted func() error) {
+	recording.Admitted = admitted
 	in.input.Record = recording
-	in.input.Hooks = in.hookList(&admittedHook{admitted: admitted})
 	in.admitted = admitted
 }
 

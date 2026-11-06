@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -28,7 +29,7 @@ type Job struct {
 	SecretEnv map[string]string
 	// Credentials are the organization's model keys substrate's egress gateway injects into the
 	// job's requests; other executors ignore them.
-	Credentials []InjectedCredential
+	Credentials []substrate.Credential
 	Limits      Limits
 }
 
@@ -77,15 +78,25 @@ type Executor interface {
 	Name() string
 }
 
-// jobName is the backend name of run's job.
-func jobName(run uuid.UUID) string {
-	return "gavel-run-" + run.String()
+// Sweeper is an executor that can delete what runs left behind when serve died before their end.
+type Sweeper interface {
+	// Sweep deletes the environments of runs created more than lifetime ago, which no live run
+	// can be, and returns their names.
+	Sweep(ctx context.Context, lifetime time.Duration) ([]string, error)
 }
+
+// JobName is the backend name of run's job, and of the environment an agent run runs in on substrate.
+func JobName(run uuid.UUID) string {
+	return jobPrefix + run.String()
+}
+
+// jobPrefix starts every run's job name.
+const jobPrefix = "gavel-run-"
 
 // SubstrateActor is the SPIFFE ID substrate's egress gateway reports for run's environment in
 // atespace, the actor named after the run.
 func SubstrateActor(atespace string, run uuid.UUID) string {
-	return "spiffe://substrate-actor.local/actor/" + atespace + "/" + jobName(run)
+	return substrate.Actor(atespace, JobName(run))
 }
 
 // sortedEnv lists env as KEY=VALUE, sorted, rejecting a name that would split differently.

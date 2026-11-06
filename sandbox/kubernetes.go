@@ -123,7 +123,7 @@ func (e *kubernetesExecutor) jobSpec(job Job) (*batchv1.Job, error) {
 		"gavel.dev/org":          job.Scope.OrgID.String(),
 		"gavel.dev/run":          job.RunID.String(),
 	}
-	name := jobName(job.RunID)
+	name := JobName(job.RunID)
 	resources := corev1.ResourceList{corev1.ResourceCPU: cpu, corev1.ResourceMemory: memory}
 	workspaceLimit := resource.MustParse("10Gi")
 	return &batchv1.Job{

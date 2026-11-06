@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/flanksource/gavel/github/cache"
@@ -20,11 +21,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// AgentRuns runs hosted todos' steps in sandbox jobs.
+// AgentRuns runs hosted todos' steps on substrate, and their test and lint runs in sandbox jobs.
 type AgentRuns struct {
 	Dispatcher *sandbox.Dispatcher
-	// Relay hands each job's messages to the run waiting for them; the run API delivers them.
-	Relay *remote.Relay
+	// Substrate is the substrate backend agent runs execute on through captain's substrate
+	// sandbox, as its options spell it; nil refuses agent runs.
+	Substrate map[string]any
+	// Sources has the repositories' git directories, which a run starts from and its commits
+	// come back to.
+	Sources *sandbox.Sources
+	// Transcripts keeps the transcripts agent runs send.
+	Transcripts RunTranscripts
+	// RunAPI is serve's run API, which answers what an agent run asks of its PR.
+	RunAPI http.Handler
 }
 
 // SetAgentRuns runs the organization's todo steps in sandbox jobs. Call it before serving.
@@ -49,7 +58,7 @@ func requireTodoChangeable(ctx context.Context, todo *types.TODO) error {
 	return native.RequireChangeable(ctx, id, createdBy)
 }
 
-var errAgentRunsNeedSandbox = errors.New("agent runs need a sandbox: start gavel serve with --sandbox")
+var errAgentRunsNeedSubstrate = errors.New("agent runs need a substrate sandbox: start gavel serve with --sandbox substrate")
 
 // attachRemote runs req in a sandbox when source is one of a hosted organization's repositories,
 // and only for the todo's creator or an org admin. The run acts for the request's user, so its
@@ -118,20 +127,18 @@ func OrganizationPRs(token func() (string, error), responses *cache.Store) func(
 	}
 }
 
-// remoteRunner runs todo's steps in sandbox jobs of workspace's repository, as the request's user.
+// remoteRunner runs todo's steps on substrate, from workspace's repository, as the request's user.
 func (s *Server) remoteRunner(ctx context.Context, workspace HostedWorkspace, todo *types.TODO) (lifecycle.RemoteRunner, error) {
-	if s.agentRuns == nil {
-		return nil, errAgentRunsNeedSandbox
+	if s.agentRuns == nil || s.agentRuns.Substrate == nil {
+		return nil, errAgentRunsNeedSubstrate
 	}
 	id, err := uuid.Parse(todo.ID)
 	if err != nil {
 		return nil, fmt.Errorf("todo %q has no native ID to run under: %w", todo.ID, err)
 	}
-	return &remote.Runner{
-		Jobs: remote.SandboxJobs{
-			Dispatcher: s.agentRuns.Dispatcher, Scope: tenant.FromContext(ctx),
-			RepoID: workspace.Repo.ID, SHA: workspace.SHA, TodoID: id,
-		},
-		Relay: s.agentRuns.Relay,
+	return &remote.SubstrateRunner{
+		Dispatcher: s.agentRuns.Dispatcher, Sources: s.agentRuns.Sources, Backend: s.agentRuns.Substrate,
+		Scope: tenant.FromContext(ctx), Repo: workspace.Repo, SHA: workspace.SHA, TodoID: id,
+		Transcripts: s.agentRuns.Transcripts.Keep, RunAPI: s.agentRuns.RunAPI,
 	}, nil
 }

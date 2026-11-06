@@ -356,19 +356,18 @@ func TestChartRunsSandboxJobsOnSubstrate(t *testing.T) {
 	requireHelm(t)
 	m := render(t,
 		append(substrateSandbox(),
-			"sandbox.substrate.template=gavel-runner",
 			"sandbox.substrate.egress={api.anthropic.com,api.openai.com}",
 			"sandbox.substrate.trustBundle=/run/ate/egress-trust-bundle/trust-bundle.pem",
 		)...,
 	)
 	container := serveContainer(t, m)
 	args := strings.Join(container.Args, " ")
-	assert.Contains(t, args, " --sandbox substrate --sandbox-image ghcr.io/flanksource/gavel-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	assert.Contains(t, args, " --substrate-env-api ate-env-api.ate-env.svc.cluster.local:7777 --substrate-control api.ate-system.svc.cluster.local:443")
+	assert.Contains(t, args, " --sandbox substrate --substrate-env-api ate-env-api.ate-env.svc.cluster.local:7777 --substrate-control api.ate-system.svc.cluster.local:443")
 	assert.Contains(t, args, " --substrate-token-file /var/run/secrets/substrate/token --substrate-atespace ate-env --substrate-template gavel-runner")
 	assert.Contains(t, args, " --substrate-egress api.anthropic.com --substrate-egress api.openai.com")
 	assert.Contains(t, args, " --substrate-gavel-name beta")
 	assert.NotContains(t, args, "--substrate-credential")
+	assert.NotContains(t, args, "--sandbox-image", "the template sets the image")
 	assert.Equal(t, "secret:gavel-credential-provider/token", env(container)["GAVEL_CREDENTIAL_PROVIDER_TOKEN"])
 	assert.Contains(t, args, " --substrate-trust-bundle /run/ate/egress-trust-bundle/trust-bundle.pem")
 	assert.NotContains(t, args, "--substrate-ca-file", "an unset CA is not passed")
@@ -425,7 +424,7 @@ func TestChartReachesSubstrateInAnotherCluster(t *testing.T) {
 func substrateSandbox() []string {
 	return []string{
 		"sandbox.enabled=true",
-		"sandbox.image=ghcr.io/flanksource/gavel-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"sandbox.substrate.template=gavel-runner",
 		"sandbox.substrate.gavelName=beta",
 		"sandbox.substrate.credentialProviderToken.secretName=gavel-credential-provider",
 	}
@@ -434,21 +433,13 @@ func substrateSandbox() []string {
 func TestChartRefusesASandboxWithoutItsCredentialProvider(t *testing.T) {
 	requireHelm(t)
 	for value, want := range map[string]string{
+		"sandbox.substrate.template=":                           "sandbox.substrate.template is required with sandbox.enabled: the image template its environments are created from, registered with ate-env manifest template --rootfs-image",
 		"sandbox.substrate.gavelName=":                          "sandbox.substrate.gavelName is required with sandbox.enabled",
 		"sandbox.substrate.credentialProviderToken.secretName=": "sandbox.substrate.credentialProviderToken.secretName is required with sandbox.enabled",
 	} {
 		_, err := helmTemplate(t, append(append(append([]string{}, clerkValues...), substrateSandbox()...), value)...)
 		require.Error(t, err, value)
 		assert.Contains(t, err.Error(), want, value)
-	}
-}
-
-func TestChartRefusesASandboxWithoutAPinnedRunnerImage(t *testing.T) {
-	requireHelm(t)
-	for _, image := range []string{"", "ghcr.io/flanksource/gavel-runner:v1"} {
-		_, err := helmTemplate(t, append(append(append([]string{}, clerkValues...), substrateSandbox()...), "sandbox.image="+image)...)
-		require.Error(t, err, image)
-		assert.Contains(t, err.Error(), "sandbox.image must be pinned by digest, as repo@sha256:<digest>", image)
 	}
 }
 

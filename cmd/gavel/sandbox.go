@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/commons/logger"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/modelkeys"
@@ -52,17 +54,20 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		if len(opts.SandboxSecretEnv) > 0 {
 			return nil, fmt.Errorf("--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env; organizations set their own model keys, which substrate's egress gateway injects")
 		}
-		substrate, err := sandbox.NewSubstrate(sandbox.SubstrateOptions{
-			EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
-			ControlTokenFile: opts.SubstrateTokenFile, CAFile: opts.SubstrateCAFile,
-			ClientCertFile: opts.SubstrateClientCert, ClientKeyFile: opts.SubstrateClientKey,
-			Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
-			Egress: opts.SubstrateEgress, TrustBundle: opts.SubstrateTrustBundle,
+		var err error
+		executor, err = sandbox.NewSubstrate(sandbox.SubstrateOptions{
+			Options: substrate.Options{
+				EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
+				ControlTokenFile: opts.SubstrateTokenFile, CAFile: opts.SubstrateCAFile,
+				ClientCertFile: opts.SubstrateClientCert, ClientKeyFile: opts.SubstrateClientKey,
+				Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
+				TrustBundle: opts.SubstrateTrustBundle,
+			},
+			Egress: opts.SubstrateEgress,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("--sandbox substrate: %w", err)
 		}
-		executor = substrate
 	default:
 		return nil, fmt.Errorf("--sandbox must be docker, podman, kubernetes or substrate, got %q", opts.Sandbox)
 	}
@@ -86,6 +91,57 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		}
 	}
 	return dispatcher, nil
+}
+
+// sandboxSweepInterval is how often serve sweeps what runs left behind.
+const sandboxSweepInterval = 10 * time.Minute
+
+// sweepSandboxEvery sweeps what runs older than lifetime left behind, every sandboxSweepInterval
+// until ctx ends.
+func sweepSandboxEvery(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration) {
+	ticker := time.NewTicker(sandboxSweepInterval)
+	defer ticker.Stop()
+	for {
+		sweepSandbox(ctx, sweeper, lifetime)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// sweepSandbox deletes the environments runs older than lifetime left behind, logging what it
+// deleted. A sweep that fails is a warning; the next one tries again.
+func sweepSandbox(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration) {
+	swept, err := sweeper.Sweep(ctx, lifetime)
+	if len(swept) > 0 {
+		logger.Infof("deleted %d sandbox environments that runs older than %s left behind: %s", len(swept), lifetime, strings.Join(swept, ", "))
+	}
+	if err != nil && ctx.Err() == nil {
+		logger.Warnf("sweep the sandbox environments runs left behind: %v", err)
+	}
+}
+
+// substrateAgentBackend is the substrate backend hosted agent runs execute on through captain's
+// substrate sandbox, as its options spell it, from the --substrate-* flags jobs use too, reaching
+// what jobs reach but serve; nil without --sandbox substrate, since agent runs need it.
+func substrateAgentBackend(opts DashboardOptions) (map[string]any, error) {
+	if opts.Sandbox != "substrate" {
+		return nil, nil
+	}
+	backend := map[string]any{"egress": sandbox.SubstrateAgentEgress(opts.SubstrateEgress)}
+	for key, value := range map[string]string{
+		"envAPI": opts.SubstrateEnvAPI, "control": opts.SubstrateControl, "tokenFile": opts.SubstrateTokenFile,
+		"caFile": opts.SubstrateCAFile, "clientCert": opts.SubstrateClientCert, "clientKey": opts.SubstrateClientKey,
+		"atespace": opts.SubstrateAtespace, "template": opts.SubstrateTemplate,
+		"trustBundle": opts.SubstrateTrustBundle,
+	} {
+		if value != "" {
+			backend[key] = value
+		}
+	}
+	return backend, nil
 }
 
 // sandboxKeysWarning says which model keys a container or Kubernetes sandbox's runs use: serve's

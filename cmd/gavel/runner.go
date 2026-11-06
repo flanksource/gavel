@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,12 +15,9 @@ import (
 	"sort"
 	"strings"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
-	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/snapshots"
-	"github.com/flanksource/gavel/todos/remote"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
@@ -50,6 +46,22 @@ func init() {
 	execCmd.Flags().StringVar(&run, "run", "", "The sandbox run's ID")
 	execCmd.Flags().StringVar(&workspace, "workspace", "/workspace", "Scratch directory for the source")
 	runnerCmd.AddCommand(execCmd)
+	var taskDir string
+	runTaskCmd := &cobra.Command{
+		Use:    "run-task",
+		Short:  "Run a step's whole run in a substrate environment, relaying it on stdout",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Stdout is the run's channel to its caller, so everything else goes to stderr, the
+			// environment's log.
+			channel := os.Stdout
+			os.Stdout = os.Stderr
+			return runnerRunTask(cmd.Context(), runTaskOptions{Dir: taskDir}, channel, os.Stdin)
+		},
+	}
+	runTaskCmd.Flags().StringVar(&taskDir, "dir", ".", "The run's directory, holding its task and workspace bundle")
+	runnerCmd.AddCommand(runTaskCmd)
 	rootCmd.AddCommand(runnerCmd)
 }
 
@@ -60,8 +72,6 @@ type runnerOptions struct {
 	// Command runs name with args in dir, streaming its output, and returns its exit code.
 	Command func(ctx context.Context, dir, name string, args []string, output io.Writer) (int, error)
 	Output  io.Writer
-	// Agent is the provider an agent run's turns go to; nil builds it from the job's model.
-	Agent captainai.Provider
 }
 
 // runnerExec runs the sandbox job and returns its exit code.
@@ -87,7 +97,7 @@ func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
 		return 0, err
 	}
 	if spec.Kind == "agent" {
-		return 0, runAgentJob(ctx, api, spec, src, opts.Agent, opts.Output)
+		return 0, errors.New("an agent run runs whole on substrate, through `gavel runner run-task`, not as a sandbox job")
 	}
 	name, args, err := jobCommand(spec, src)
 	if err != nil {
@@ -164,81 +174,6 @@ func jobCommand(spec sandbox.RunSpec, src string) (string, []string, error) {
 	}
 }
 
-// runAgentJob runs an agent run's step in src and reports it to serve as it goes: its messages,
-// its agent's transcripts, and once it ends, its commits and then its result.
-func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src string, agent captainai.Provider, output io.Writer) error {
-	var job remote.Job
-	if err := json.Unmarshal(spec.Agent, &job); err != nil {
-		return fmt.Errorf("decode the agent job of run %s: %w", api.Run, err)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("find the home directory the agent writes its transcripts under: %w", err)
-	}
-	transcripts := &transcriptUploader{api: api, home: home}
-	uploading, stopUploading := context.WithCancel(ctx)
-	uploaderDone := make(chan struct{})
-	go func() {
-		defer close(uploaderDone)
-		transcripts.every(uploading, transcriptInterval, output)
-	}()
-
-	send := func(message remote.Message) error { return api.postMessage(ctx, message) }
-	finished, err := remote.Execute(ctx, job, src, agent, remote.Serve{Send: send, Call: func(message remote.Message) (remote.Reply, error) {
-		return api.call(ctx, message)
-	}})
-	stopUploading()
-	<-uploaderDone
-	if err != nil {
-		return err
-	}
-	if err := transcripts.sync(ctx); err != nil {
-		fmt.Fprintf(output, "gavel runner: %s\n", err)
-	}
-	if err := pushRunCommits(ctx, api, finished.Result); err != nil {
-		finished.Err = errors.Join(finished.Err, err)
-	}
-	return send(remote.ResultMessage(finished.Result, finished.Err))
-}
-
-// pushRunCommits uploads the commits the run made on its worktree's branch, if it made any, and
-// points the result's worktree at the branch serve put them on.
-func pushRunCommits(ctx context.Context, api runAPI, result promptrun.Result) error {
-	if result.Response == nil || result.Response.Workspace == nil || result.Response.Workspace.Worktree == nil {
-		return nil
-	}
-	worktree := result.Response.Workspace.Worktree
-	if worktree.BranchDeleted || worktree.Head == "" || worktree.Head == worktree.Setup {
-		return nil
-	}
-	file, err := os.CreateTemp("", "gavel-run-*.bundle")
-	if err != nil {
-		return fmt.Errorf("bundle the run's commits: %w", err)
-	}
-	_ = file.Close()
-	defer os.Remove(file.Name())
-	if out, err := exec.CommandContext(ctx, "git", "-C", worktree.Repo, "bundle", "create", "--quiet", file.Name(),
-		"refs/heads/"+worktree.Branch, "^"+worktree.Setup).CombinedOutput(); err != nil {
-		return fmt.Errorf("bundle the run's commits on %s: %w: %s", worktree.Branch, err, strings.TrimSpace(string(out)))
-	}
-	data, err := os.Open(file.Name())
-	if err != nil {
-		return fmt.Errorf("read the bundle of the run's commits: %w", err)
-	}
-	defer data.Close()
-	resp, err := api.Do(ctx, http.MethodPost, "commits", data)
-	if err != nil {
-		return fmt.Errorf("push the commits of run %s: %w", api.Run, err)
-	}
-	defer resp.Body.Close()
-	var pushed struct{ Branch, SHA string }
-	if err := json.NewDecoder(resp.Body).Decode(&pushed); err != nil {
-		return fmt.Errorf("read where run %s's commits were pushed: %w", api.Run, err)
-	}
-	worktree.Branch, worktree.Head = pushed.Branch, pushed.SHA
-	return nil
-}
-
 // runSnapshots lists the per-run snapshots in src's .gavel directory.
 func runSnapshots(src string) map[string]bool {
 	matches, _ := filepath.Glob(filepath.Join(src, snapshots.Dir, snapshots.PerRunPrefix+"*.json"))
@@ -294,36 +229,6 @@ func (a runAPI) download(ctx context.Context, path, to string) error {
 		return fmt.Errorf("save the %s of run %s: %w", path, a.Run, err)
 	}
 	return file.Close()
-}
-
-func (a runAPI) postMessage(ctx context.Context, message remote.Message) error {
-	data, err := json.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("encode a %s message of run %s: %w", message.Kind, a.Run, err)
-	}
-	resp, err := a.Do(ctx, http.MethodPost, "messages", bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("send a %s message of run %s: %w", message.Kind, a.Run, err)
-	}
-	return resp.Body.Close()
-}
-
-// call asks serve for its reply to message, a tool call or an approval request.
-func (a runAPI) call(ctx context.Context, message remote.Message) (remote.Reply, error) {
-	data, err := json.Marshal(message)
-	if err != nil {
-		return remote.Reply{}, fmt.Errorf("encode a %s call of run %s: %w", message.Kind, a.Run, err)
-	}
-	resp, err := a.Do(ctx, http.MethodPost, "calls", bytes.NewReader(data))
-	if err != nil {
-		return remote.Reply{}, fmt.Errorf("send a %s call of run %s: %w", message.Kind, a.Run, err)
-	}
-	defer resp.Body.Close()
-	var reply remote.Reply
-	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
-		return remote.Reply{}, fmt.Errorf("decode the reply to a %s call of run %s: %w", message.Kind, a.Run, err)
-	}
-	return reply, nil
 }
 
 func (a runAPI) postResults(ctx context.Context, path string) error {

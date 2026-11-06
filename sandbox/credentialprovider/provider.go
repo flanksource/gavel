@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/sandbox/internal/substrate/credproviderpb"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -49,7 +49,6 @@ type Config struct {
 
 // Server answers FetchSecret.
 type Server struct {
-	credproviderpb.UnimplementedCredentialProviderServer
 	config Config
 
 	mu    sync.Mutex
@@ -65,7 +64,7 @@ type cached struct {
 
 // Register serves s as the CredentialProvider service of server.
 func (s *Server) Register(server *grpc.Server) {
-	credproviderpb.RegisterCredentialProviderServer(server, s)
+	substrate.RegisterCredentialProvider(server, s.FetchSecret)
 }
 
 // New returns a Server for config.
@@ -136,28 +135,28 @@ func parseURI(raw string) (credentialURI, error) {
 	return credentialURI{gavel: parts[0], run: run, provider: parts[2]}, nil
 }
 
-// FetchSecret resolves req's URI to the key of the run's organization, asking the gavel it names
-// on behalf of req's actor.
-func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecretRequest) (*credproviderpb.FetchSecretResponse, error) {
-	uri, err := parseURI(req.GetUri())
+// FetchSecret resolves uri to the key of the run's organization, asking the gavel it names on
+// behalf of actor.
+func (s *Server) FetchSecret(ctx context.Context, uri, actor string) ([]byte, error) {
+	parsed, err := parseURI(uri)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	gavel, ok := s.config.Gavels[uri.gavel]
+	gavel, ok := s.config.Gavels[parsed.gavel]
 	if !ok {
-		return nil, status.Errorf(codes.InvalidArgument, "%q: no gavel named %q is configured", req.GetUri(), uri.gavel)
+		return nil, status.Errorf(codes.InvalidArgument, "%q: no gavel named %q is configured", uri, parsed.gavel)
 	}
-	key := cacheKey{uri: req.GetUri(), actor: req.GetActorSpiffeId()}
+	key := cacheKey{uri: uri, actor: actor}
 	if value, ok := s.cached(key); ok {
-		return &credproviderpb.FetchSecretResponse{OpaqueBytes: value}, nil
+		return value, nil
 	}
-	value, err := s.ask(ctx, gavel, uri, req.GetActorSpiffeId())
+	value, err := s.ask(ctx, gavel, parsed, actor)
 	if err != nil {
-		logger.Warnf("credential fetch %s for %s: %v", req.GetUri(), req.GetActorSpiffeId(), err)
+		logger.Warnf("credential fetch %s for %s: %v", uri, actor, err)
 		return nil, err
 	}
 	s.store(key, value)
-	return &credproviderpb.FetchSecretResponse{OpaqueBytes: value}, nil
+	return value, nil
 }
 
 // ask posts the fetch to gavel and maps its answer to the codes the gateway acts on: Unavailable

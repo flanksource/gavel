@@ -6,13 +6,13 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/blob"
@@ -193,7 +193,7 @@ func TestDispatcherGivesEachRunItsOrganizationsKeys(t *testing.T) {
 	_, err = run.Wait(t.Context())
 	require.NoError(t, err)
 	require.Len(t, executor.submitted, 1)
-	assert.Equal(t, []InjectedCredential{{
+	assert.Equal(t, []substrate.Credential{{
 		Host: "api.anthropic.com", Header: "Authorization", Prefix: "Bearer ", Env: "CLAUDE_CODE_OAUTH_TOKEN",
 		URI: "ate-secret://gavel/beta/" + run.ID.String() + "/anthropic",
 	}}, executor.submitted[0].Credentials)
@@ -276,9 +276,8 @@ func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
 	dispatcher, _, _, org := newDispatcher(t, executor)
 	dispatcher.SecretEnv = map[string]string{"ANTHROPIC_API_KEY": "model-key", "GAVEL_RUN_TOKEN": "forged"}
 	id, todo := uuid.New(), uuid.New()
-	job := json.RawMessage(`{"root":"/srv/repo"}`)
 
-	run, err := dispatcher.StartRun(context.Background(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run", Agent: job}, nil)
+	run, err := dispatcher.StartRun(context.Background(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, id, run.ID)
 	require.Len(t, executor.submitted, 1)
@@ -287,11 +286,54 @@ func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
 
 	record, err := LoadRun(context.Background(), dispatcher.DB, id)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(job), string(record.Spec.Agent))
 	assert.Equal(t, "run", record.Spec.Step)
 
 	require.NoError(t, run.Cancel(context.Background()))
 	assert.Equal(t, []string{"memory-" + id.String()}, executor.cancelled)
 	_, err = run.Wait(context.Background())
 	require.NoError(t, err)
+}
+
+func TestDispatcherRecordsARunThatExecutesElsewhere(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, _, logs, org := newDispatcher(t, executor)
+	withModelKeys(t, dispatcher)
+	require.NoError(t, dispatcher.Keys.Set(t.Context(), org, nil, "anthropic-api-key", "sk-ant-api03-dispatch-test"))
+	id, todo := uuid.New(), uuid.New()
+
+	run, err := dispatcher.RecordRun(t.Context(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run"})
+	require.NoError(t, err)
+	assert.Empty(t, executor.submitted, "the run executes elsewhere than a job of the dispatcher's")
+	tokenRun, tokenOrg, err := VerifyRunToken(dispatcher.TokenKey, run.Token, time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{id, org}, []uuid.UUID{tokenRun, tokenOrg}, "the token is the run's")
+	assert.Equal(t, []substrate.Credential{{
+		Host: "api.anthropic.com", Header: "x-api-key", Env: "ANTHROPIC_API_KEY",
+		URI: "ate-secret://gavel/beta/" + id.String() + "/anthropic",
+	}}, run.Credentials)
+	record, err := LoadRun(t.Context(), dispatcher.DB, id)
+	require.NoError(t, err)
+	assert.Equal(t, "running", record.Status)
+
+	_, err = io.WriteString(run.Log, "the environment's output\n")
+	require.NoError(t, err)
+	run.Finish(false)
+
+	record, err = LoadRun(t.Context(), dispatcher.DB, id)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", record.Status)
+	stored, err := logs.Read(t.Context(), "orgs/"+org.String()+"/runs/"+id.String()+"/log.txt")
+	require.NoError(t, err)
+	defer stored.Close()
+	data, err := io.ReadAll(stored)
+	require.NoError(t, err)
+	assert.Equal(t, "the environment's output\n", string(data))
+}
+
+func TestDispatcherRecordsNoAgentRunWithoutAModelKey(t *testing.T) {
+	dispatcher, _, _, org := newDispatcher(t, &memoryExecutor{})
+	withModelKeys(t, dispatcher)
+
+	_, err := dispatcher.RecordRun(t.Context(), uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
+	require.ErrorIs(t, err, ErrNoModelKey)
 }
