@@ -31,6 +31,16 @@ type Job struct {
 	// job's requests; other executors ignore them.
 	Credentials []substrate.Credential
 	Limits      Limits
+	// Source is the repository the job's commit is in, for an executor that brings the source
+	// into the job itself; nil leaves the job to download it.
+	Source *JobSource
+}
+
+// JobSource is the repository on serve a job's commit is in.
+type JobSource struct {
+	GitDir string
+	// Commit names the job's commit in GitDir: its SHA, or else its ref.
+	Commit string
 }
 
 // Limits bounds a job. CPU and Memory are Kubernetes quantities ("2", "500m", "4Gi").

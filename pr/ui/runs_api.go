@@ -98,16 +98,14 @@ func (a *RunsAPI) handleResults(w http.ResponseWriter, r *http.Request, run sand
 
 // runRepo reads run's repository, answering the request itself when it can't.
 func (a *RunsAPI) runRepo(w http.ResponseWriter, r *http.Request, run sandbox.RunRecord) (sandbox.Repo, bool) {
-	var repo sandbox.Repo
-	result := a.DB.WithContext(r.Context()).Raw(`SELECT id, org_id AS org, source, name, COALESCE(github_repo_id, 0) AS git_hub_repo_id, COALESCE(installation_id, 0) AS installation_id
-		FROM repos WHERE id = ? AND org_id = ?`, run.Spec.RepoID, run.Org).Scan(&repo)
-	if result.Error != nil {
-		logger.Warnf("read the repository of sandbox run %s: %v", run.ID, result.Error)
-		writeCIError(w, http.StatusInternalServerError, "could not read the run's repository")
+	repo, err := sandbox.LoadRepo(r.Context(), a.DB, run.Org, run.Spec.RepoID)
+	if errors.Is(err, sandbox.ErrRepoNotFound) {
+		writeCIError(w, http.StatusNotFound, fmt.Sprintf("run %s has no repository", run.ID))
 		return sandbox.Repo{}, false
 	}
-	if result.RowsAffected == 0 {
-		writeCIError(w, http.StatusNotFound, fmt.Sprintf("run %s has no repository", run.ID))
+	if err != nil {
+		logger.Warnf("read the repository of sandbox run %s: %v", run.ID, err)
+		writeCIError(w, http.StatusInternalServerError, "could not read the run's repository")
 		return sandbox.Repo{}, false
 	}
 	return repo, true
