@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "query step",
+  "description": "Runs a commons-db query profile against a connection; its rows become outputs and, through findings, lint violations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["query"],
+  "properties": {
+    "connection": {
+      "description": "A connection name or connection:// reference (host catalog first, then the gavel connection layers and ./.connections), or an inline commons-db connection spec (type/url/username/password, each a string or {valueFrom}). Overrides the profile's provider.connection.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "object" }
+      ]
+    },
+    "database": {
+      "description": "The database on the connection's server to run against (the SQL provider's database option); overrides the connection's own database and the profile's provider.options.database.",
+      "type": "string",
+      "minLength": 1
+    },
+    "query": {
+      "description": "The query text; an inline commons-db profile body ({query, params, columns, provider, …}); or {profile: <stored profile name>, params} read from ./.profiles, ~/.config/gavel/profiles, then the host's profile store.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "object" }
+      ]
+    },
+    "params": {
+      "description": "Values bound as driver arguments where the query references {{.params.<name>}} or $(.params.<name>); never pasted into the text.",
+      "type": "object"
+    },
+    "findings": {
+      "description": "A CEL expression returning a list of violation maps, or a per-row mapper {when, severity, rule, message, locations, code}. Error findings fail the step; warning and info findings warn it.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["severity", "message"],
+          "properties": {
+            "when": { "type": "string", "description": "CEL over row (and the step's CEL roots); rows where it is false yield no finding." },
+            "severity": { "type": "string", "description": "error, warning or info — or a CEL expression returning one of them." },
+            "rule": { "type": "string", "description": "Rule name, a Go template over .row; defaults to the step id." },
+            "message": { "type": "string", "description": "A Go template over .row." },
+            "code": { "type": "string", "description": "A Go template over .row." },
+            "locations": {
+              "type": "array",
+              "description": "Location shortcuts (file:line, ref:path:line, entity://Kind/id, https://…#css=…) or objects; string values are Go templates over .row.",
+              "items": { "oneOf": [{ "type": "string" }, { "type": "object" }] }
+            }
+          }
+        }
+      ]
+    },
+    "limit": {
+      "description": "The most rows read; a query with more reports truncated: true.",
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

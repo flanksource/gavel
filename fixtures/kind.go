@@ -98,6 +98,7 @@ type StepSpec struct {
 	ID         string            `yaml:"id,omitempty" json:"id,omitempty"`
 	Name       string            `yaml:"name,omitempty" json:"name,omitempty"`
 	Kind       string            `yaml:"kind" json:"kind"`
+	If         string            `yaml:"if,omitempty" json:"if,omitempty"` // CEL gate: false skips the step, an error fails it
 	CEL        string            `yaml:"cel,omitempty" json:"cel,omitempty"`
 	Export     map[string]string `yaml:"export,omitempty" json:"export,omitempty"`
 	Override   bool              `yaml:"override,omitempty" json:"override,omitempty"`
@@ -124,7 +125,7 @@ type StepDefaults struct {
 }
 
 // StepSpecKeys are the envelope keys; everything else on a step is Config.
-var StepSpecKeys = []string{"id", "name", "kind", "cel", "export", "override", "background", "continueOnError", "wait", "retry", "timeout", "traces"}
+var StepSpecKeys = []string{"id", "name", "kind", "if", "cel", "export", "override", "background", "continueOnError", "wait", "retry", "timeout", "traces"}
 
 // EffectiveTimeout is the step's hard cap: its own `timeout:`, else the
 // document default; nil when neither declares one.
@@ -194,8 +195,11 @@ func (s *StepContext) Environ() []string {
 	return pairs
 }
 
+// vars are the template roots: every completed step's outputs under its id
+// (`{{.approval.x}}`), the test's TemplateVars over them, then the reserved
+// roots env, steps, tmp and fixture.
 func (s *StepContext) vars() map[string]any {
-	vars := map[string]any{}
+	vars := stepIDRoots(s.Scope)
 	for k, v := range s.Test.TemplateVars {
 		vars[k] = v
 	}

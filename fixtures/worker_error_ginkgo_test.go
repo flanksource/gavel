@@ -19,7 +19,7 @@ var _ = Describe("fixture worker errors", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		var output bytes.Buffer
-		Expect(RunWorker(bytes.NewReader(input), &output)).To(Succeed())
+		Expect(RunWorker(WorkerIO{Input: bytes.NewReader(input), Output: &output})).To(Succeed())
 
 		var result *workerEvent
 		decoder := json.NewDecoder(&output)

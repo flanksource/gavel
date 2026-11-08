@@ -186,7 +186,7 @@ func benchmarkEntryToTest(entry BenchmarkEntry) parsers.Test {
 	switch entry.Status {
 	case ExecutionQueued:
 		test.Pending = true
-	case ExecutionRunning:
+	case ExecutionRunning, ExecutionWaiting:
 		test.Running = true
 	case ExecutionPassed:
 		test.Passed = true

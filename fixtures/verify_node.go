@@ -11,6 +11,29 @@ import (
 // verifyNodeKind is the framework of a verify node whose result names no type.
 const verifyNodeKind = "fixture"
 
+// ViewMetadataKey is the result Metadata key under which a kind publishes the
+// clicky document (formatters.NewClickyDocument) of what its step returned —
+// a query step's rows as commons-db renders them. The UI shows it as the
+// step's response; outputs stay the plain data CEL and templates read.
+const ViewMetadataKey = "view"
+
+// FormMetadataKey is the result Metadata key under which a `form` step (and a
+// fixture's `params:`) publishes the form it showed: {title, description,
+// schema, values, state, answeredBy, answeredAt}. The UI renders it read-only
+// through the same JsonSchemaForm the prompt dialog used.
+const FormMetadataKey = "form"
+
+// ViolationMetadataKey is the result Metadata key under which a finding (a
+// query step's lint violation) publishes its models.Violation. The tree row
+// shows only the rule and message; the UI renders the locations in the
+// finding's detail.
+const ViolationMetadataKey = "violation"
+
+// QueryMetadataKey is the result Metadata key under which a query step
+// publishes what it ran: {template, sql, arguments, params, queryFile}. The UI
+// shows the template and the issued SQL as tabs, with the params beside them.
+const QueryMetadataKey = "query"
+
 // VerifyNodeFrom maps one fixture result onto a verify node. A result with children is
 // a group: it carries the children's evidence and no state flags of its own,
 // which is what captain's SummarizeNodes counts on when it tallies leaves; a
@@ -164,7 +187,7 @@ func ResultDetail(result *FixtureResult) json.RawMessage {
 	// A typed (YAML/JSON) step's record: which step it was, what it produced and
 	// exported, how its wait went, every Execute attempt and what a background
 	// watcher saw.
-	for _, key := range []string{"step", "outputs", "exports", "wait", "attempts", "events", "background", "source"} {
+	for _, key := range []string{"step", "outputs", ViewMetadataKey, FormMetadataKey, ViolationMetadataKey, QueryMetadataKey, "exports", "wait", "attempts", "events", "background", "source"} {
 		if value, ok := result.Metadata[key]; ok {
 			if key == "attempts" {
 				if attempts, typed := value.([]AttemptReport); typed {

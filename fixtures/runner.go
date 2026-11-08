@@ -19,12 +19,16 @@ import (
 	"github.com/flanksource/commons/logger"
 
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/internal/yamldiag"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/traces"
 )
 
 // ErrNoFixtures reports that the runner's paths declared no fixtures.
 var ErrNoFixtures = errors.New("no fixtures found")
+
+// TaskGroupName is the task group fixture runs execute in.
+const TaskGroupName = "Fixture Tests"
 
 // RunnerOptions configures the fixture runner
 type RunnerOptions struct {
@@ -67,6 +71,14 @@ type RunnerOptions struct {
 	Profile      bool
 	SQLProfile   bool
 	Limits       BenchmarkLimits
+	// RunID names the run a form step's prompt belongs to (prompt.Prompt.Owner),
+	// so a UI lists only its own run's pending forms.
+	RunID string
+	// Prompter answers form steps (RunOptions.Prompter); an isolated run relays
+	// its worker's prompts to it.
+	Prompter Prompter `json:"-" yaml:"-"`
+	// Params pre-supply the fixture's `params:` form (RunOptions.Params).
+	Params map[string]any
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -80,7 +92,7 @@ type Runner struct {
 	// setups holds one prepared `setup:` per markdown file that declared one,
 	// keyed on FixtureNode.Origin.File. Keyed on the file rather than the source
 	// directory because two fixture files in one directory are independent.
-	setups map[string]*PreparedSetup
+	setups fileSetups
 	// traceHost is the store the run's traces commit to, nil while no fixture
 	// arms one; ownsTraceHost when the runner opened it. sharedTraces are the
 	// running file- and run-scope captures, by sharedTraceKey.
@@ -250,6 +262,10 @@ func (r *Runner) Parse() (*FixtureNode, error) {
 
 func (r *Runner) prepareFixtureTree() (*FixtureNode, error) {
 	if err := r.parseFixtureFiles(); err != nil {
+		var diagnostic *yamldiag.Error
+		if errors.As(err, &diagnostic) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("failed to parse fixture files: %w", err)
 	}
 
@@ -292,6 +308,10 @@ func (r *Runner) parseFixtureFiles() error {
 			// Parse with tree structure
 			fileTree, err := ParseFixtureFile(filepath)
 			if err != nil {
+				var diagnostic *yamldiag.Error
+				if errors.As(err, &diagnostic) {
+					return err
+				}
 				return fmt.Errorf("failed to parse fixture file '%s': %w", filepath, err)
 			}
 
@@ -377,7 +397,7 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 	if r.hasSetup() {
 		defer func() {
 			startErr := r.startProgressStep(ctx, ExecutionKindCleanup)
-			cleanupErr := r.cleanupSetups()
+			cleanupErr := r.setups.cleanup()
 			state := ExecutionPassed
 			if cleanupErr != nil {
 				state = ExecutionErrored
@@ -393,7 +413,7 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 	if err := r.startProgressStep(ctx, ExecutionKindSetup); err != nil {
 		return nil, err
 	}
-	if err := r.prepareSetups(ctx); err != nil {
+	if err := r.setups.prepare(ctx, r.tree.Children); err != nil {
 		if progressErr := r.failPrerequisite(ctx, ExecutionKindSetup, err); progressErr != nil {
 			return nil, errors.Join(err, progressErr)
 		}
@@ -460,7 +480,7 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 	// is the only thing that bounds a row's concurrency — the manager's worker
 	// pool is process-wide and already sized — so MaxWorkers has to arrive here
 	// as WithConcurrency or it bounds nothing at all.
-	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests", task.WithConcurrency(r.maxWorkers()))
+	fixtureGroup := task.StartGroup[FixtureResult](TaskGroupName, task.WithConcurrency(r.maxWorkers()))
 	r.cutOff = map[*FixtureNode]bool{}
 	scopes, queued := r.addFixtureTasks(fixtureGroup, parent)
 
@@ -515,12 +535,7 @@ func (r *Runner) executionSteps() []ExecutionStep {
 }
 
 func (r *Runner) hasSetup() bool {
-	for _, file := range r.tree.Children {
-		if setup, _, _ := fileSetup(file); setup != nil {
-			return true
-		}
-	}
-	return false
+	return len(declaredSetups(r.tree.Children)) > 0
 }
 
 func (r *Runner) startProgressStep(ctx context.Context, kind ExecutionKind) error {
@@ -606,6 +621,9 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		Scope:          env.scope,
 		DaemonPort:     r.daemonPort,
 		Progress:       fixtureProgressFromContext(ctx),
+		RunID:          r.options.RunID,
+		Prompter:       r.options.Prompter,
+		Params:         r.options.Params,
 		ExtraArgs: map[string]interface{}{
 			"flanksource_context": ctx,
 		},

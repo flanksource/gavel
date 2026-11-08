@@ -7,6 +7,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/flanksource/gomplate/v3"
 )
 
 // ExportRecord is one exported variable on a step's result:
@@ -135,11 +137,23 @@ func renderConfig(step *StepContext, raw []string) (json.RawMessage, error) {
 	return encodeOrderedJSON(object)
 }
 
+// CELValueKey marks a config value computed by CEL: an object whose only key
+// is `$cel` is replaced by its expression's typed result (a list, map, number,
+// bool or string) over the same roots a template sees — where a Go template
+// could only render a string.
+const CELValueKey = "$cel"
+
 func renderValue(value any, vars map[string]any) (any, error) {
 	switch v := value.(type) {
 	case string:
 		return renderGoTemplate(v, vars)
 	case orderedObject:
+		if expression, ok, err := celValueExpression(v); ok || err != nil {
+			if err != nil {
+				return nil, err
+			}
+			return evalCELValue(expression, vars)
+		}
 		for i, member := range v {
 			rendered, err := renderValue(member.Value, vars)
 			if err != nil {
@@ -160,4 +174,33 @@ func renderValue(value any, vars map[string]any) (any, error) {
 	default:
 		return value, nil
 	}
+}
+
+// celValueExpression is the expression of a `{$cel: …}` object; an object
+// with `$cel` beside other keys, or a non-string expression, is an error.
+func celValueExpression(object orderedObject) (string, bool, error) {
+	index := slices.IndexFunc(object, func(member orderedMember) bool { return member.Key == CELValueKey })
+	if index < 0 {
+		return "", false, nil
+	}
+	if len(object) > 1 {
+		return "", false, fmt.Errorf("%s must be the only key of its object, got %d keys", CELValueKey, len(object))
+	}
+	expression, ok := object[index].Value.(string)
+	if !ok || strings.TrimSpace(expression) == "" {
+		return "", false, fmt.Errorf("%s must be a CEL expression, got %v", CELValueKey, object[index].Value)
+	}
+	return expression, true, nil
+}
+
+func evalCELValue(expression string, vars map[string]any) (any, error) {
+	output, err := gomplate.RunExpression(vars, gomplate.Template{Expression: expression, CelEnvs: ANSICelFunctions()})
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: %w", CELValueKey, expression, err)
+	}
+	plain, err := PlainValue(output)
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: %w", CELValueKey, expression, err)
+	}
+	return plain, nil
 }

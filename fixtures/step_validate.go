@@ -25,9 +25,12 @@ func validateSteps(steps []parsedStep) error {
 	seen := map[string]bool{}
 	kinds := map[string]bool{}
 	exporters := map[string]string{}
-	for _, step := range steps {
+	for i, step := range steps {
 		kinds[step.spec.Kind] = true
 		if err := validateStep(step, seen, exporters); err != nil {
+			return step.diagnostic(err)
+		}
+		if err := validateRootID(*step.spec, steps[i+1:]); err != nil {
 			return fmt.Errorf("%s: %w", step.label, err)
 		}
 		if step.spec.ID != "" {
@@ -96,21 +99,69 @@ func validateStep(step parsedStep, seen map[string]bool, exporters map[string]st
 	return nil
 }
 
-// stepReferences lists the step ids a step's config, CEL, wait, retry and
-// export templates refer to, sorted and de-duplicated.
-func stepReferences(spec StepSpec) []string {
-	texts := []string{strings.ReplaceAll(string(spec.Config), `\"`, `"`), spec.CEL}
+// validateRootID refuses an id that takes a reserved root, and an id that
+// cannot be a root (not a CEL identifier) which a later step uses as one —
+// `stage-approval.approved` would parse as a subtraction.
+func validateRootID(spec StepSpec, later []parsedStep) error {
+	if spec.ID == "" {
+		return nil
+	}
+	if slices.Contains(ReservedRoots, spec.ID) {
+		return fmt.Errorf("step id %q collides with the reserved root %q (reserved: %s)", spec.ID, spec.ID, strings.Join(ReservedRoots, ", "))
+	}
+	if IsRootID(spec.ID) {
+		return nil
+	}
+	id := regexp.QuoteMeta(spec.ID)
+	celRoot := regexp.MustCompile(`(?:^|[^\w.\]"'/:-])` + id + `\.`)
+	templateRoot := regexp.MustCompile(`\{\{-?\s*\.` + id + `\.`)
+	for _, step := range later {
+		uses := slices.ContainsFunc(stepTexts(*step.spec), templateRoot.MatchString) ||
+			slices.ContainsFunc(stepCELTexts(*step.spec), celRoot.MatchString)
+		if uses {
+			return fmt.Errorf("step id %q is used as a root by %s but is not a valid CEL identifier; rename it (e.g. %s) or read it as steps[%q]",
+				spec.ID, step.label, camelID(spec.ID), spec.ID)
+		}
+	}
+	return nil
+}
+
+// camelID suggests a root-safe spelling of an id: stage-approval → stageApproval.
+func camelID(id string) string {
+	parts := strings.FieldsFunc(id, func(r rune) bool { return r == '-' || r == '.' || r == ' ' })
+	for i := 1; i < len(parts); i++ {
+		parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+	}
+	return strings.Join(parts, "")
+}
+
+// stepCELTexts are a step's own CEL expressions: if, cel, wait and retry.
+func stepCELTexts(spec StepSpec) []string {
+	texts := []string{spec.If, spec.CEL}
 	if spec.Wait != nil {
 		texts = append(texts, spec.Wait.Until, spec.Wait.FailWhen)
 	}
 	if spec.Retry != nil {
 		texts = append(texts, spec.Retry.When)
 	}
+	return texts
+}
+
+// stepTexts are the strings of a step that can reference other steps: its
+// config, its CEL expressions and its export templates.
+func stepTexts(spec StepSpec) []string {
+	texts := append([]string{strings.ReplaceAll(string(spec.Config), `\"`, `"`)}, stepCELTexts(spec)...)
 	for _, value := range spec.Export {
 		texts = append(texts, value)
 	}
+	return texts
+}
+
+// stepReferences lists the step ids a step's config, if, CEL, wait, retry and
+// export templates refer to, sorted and de-duplicated.
+func stepReferences(spec StepSpec) []string {
 	found := map[string]bool{}
-	for _, text := range texts {
+	for _, text := range stepTexts(spec) {
 		for _, pattern := range stepRefPatterns {
 			for _, match := range pattern.FindAllStringSubmatch(text, -1) {
 				found[match[1]] = true

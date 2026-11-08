@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/flanksource/captain/pkg/api"
+	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query/profilestore"
 
 	"github.com/flanksource/gavel/processruntime"
 )
@@ -85,6 +87,21 @@ type RunOptions struct {
 	// this node runs in: one per fixture file (Runner) or per RunNodes call.
 	// RunNode given none runs the node as a fixture of its own.
 	Scope *StepScope `json:"-" yaml:"-"`
+
+	// Prompter answers `form` steps, including the form a fixture's `params:`
+	// lowers to. Nil means no interactive surface: a form that must ask fails.
+	Prompter Prompter `json:"-" yaml:"-"`
+	// RunID is the Owner of the prompts this run's form steps raise.
+	RunID string
+	// Params are values supplied up front (--param/--params, a UI start
+	// request) for the fixture's `params:` form; satisfying values skip it.
+	Params map[string]any `json:"-" yaml:"-"`
+	// Connections resolves connection references ahead of gavel's layered
+	// connection store, so a host (oipa-cli serve) can supply its catalog.
+	Connections dbcontext.ConnectionResolver `json:"-" yaml:"-"`
+	// Profiles is the host's query-profile store, layered under the
+	// fixture directory's `.profiles/` and the user's gavel profiles.
+	Profiles profilestore.Store `json:"-" yaml:"-"`
 }
 
 // OutputMode controls when captured command output is shown in rendered

@@ -528,6 +528,13 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &timeoutOnly); err != nil {
 			return nil, fmt.Errorf("%s: invalid timeout configuration: %w", cmd.name, err)
 		}
+		var ifOnly struct {
+			If string `yaml:"if"`
+		}
+		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &ifOnly); err != nil {
+			return nil, fmt.Errorf("%s: if: %w", cmd.name, err)
+		}
+		fixture.If = ifOnly.If
 		if timeoutOnly.Timeout != "" {
 			timeout, err := parseFixtureDuration(timeoutOnly.Timeout)
 			if err != nil {

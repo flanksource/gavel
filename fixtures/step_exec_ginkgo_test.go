@@ -85,6 +85,40 @@ func metadataJSON(result FixtureResult) map[string]any {
 	return decoded
 }
 
+var _ = Describe("a warned step", func() {
+	warned := func(context.Context, *StepContext) (StepOutcome, error) {
+		return StepOutcome{Result: FixtureResult{Status: task.StatusWarning}, Outputs: map[string]any{"rowCount": int64(2)}}, nil
+	}
+	BeforeEach(func() { useKind(fakeKind{name: "warned", execute: warned}) })
+
+	It("records its outputs and exports and passes its cel:, keeping the warning", func() {
+		var seen string
+		useKind(fakeKind{name: "consumer", execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
+			rendered, err := step.Expand("{{.env.ROWS}} {{.inspect.rowCount}}")
+			seen = rendered
+			return StepOutcome{Result: FixtureResult{Status: task.StatusPASS}}, err
+		}})
+
+		results := runSteps(
+			StepSpec{ID: "inspect", Kind: "warned", CEL: "rowCount == 2", Export: map[string]string{"ROWS": "{{.outputs.rowCount}}"}},
+			StepSpec{ID: "use", Kind: "consumer"},
+		)
+
+		Expect(results[0].Status).To(Equal(task.StatusWarning), results[0].Error)
+		Expect(results[0].CELResult).To(BeTrue())
+		Expect(metadataJSON(results[0])["exports"]).To(Equal(map[string]any{"ROWS": map[string]any{"value": "2", "step": "inspect"}}))
+		Expect(results[1].Status).To(Equal(task.StatusPASS), results[1].Error)
+		Expect(seen).To(Equal("2 2"))
+	})
+
+	It("fails when its cel: is false", func() {
+		results := runSteps(StepSpec{ID: "inspect", Kind: "warned", CEL: "rowCount == 0"})
+
+		Expect(results[0].Status).To(Equal(task.StatusFAIL))
+		Expect(results[0].Error).To(ContainSubstring("rowCount == 0 is false"))
+	})
+})
+
 var _ = Describe("generic step execution", func() {
 	It("exports a later step can read from its env and templates, recording where each came from", func() {
 		useKind(fakeKind{name: "producer", execute: passing(map[string]any{"url": "http://127.0.0.1:9"}, map[string]string{"PRODUCER_URL": "http://127.0.0.1:9"})})

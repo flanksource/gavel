@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/task"
+	"github.com/flanksource/gavel/slots"
 )
 
 // StepRef identifies a step on its result: Metadata["step"].
@@ -38,18 +39,24 @@ func runStep(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResu
 		}
 		test.TemplateVars["port"] = strconv.Itoa(opts.DaemonPort)
 	}
+	if test.Step == nil && opts.Scope != nil {
+		test.TemplateVars = withStepRoots(test.TemplateVars, opts.Scope)
+	}
 	step, err := newStepContext(test, spec, opts)
 	if err != nil {
 		return nodeError(test, err.Error())
 	}
-	if test.Step == nil {
-		return runKind(ctx, kind, step)
-	}
 	// A typed step depends on the ones before it (their services, exports and
 	// todo state), so once one fails the rest are skipped, naming the cause,
-	// instead of each failing on a consequence of it.
+	// instead of each failing on a consequence of it. A markdown node is skipped
+	// too: only a typed step marks the scope failed, and in a markdown file that
+	// is the `params:` form every row reads.
 	if failed := step.Scope.FailedStep(); failed != "" {
-		return normalizeResult(FixtureResult{Type: spec.Kind, Status: task.StatusSKIP, Error: fmt.Sprintf("skipped: step %s failed", failed)}, step)
+		result := normalizeResult(FixtureResult{Type: spec.Kind, Status: task.StatusSKIP, Error: fmt.Sprintf("skipped: step %s failed", failed)}, step)
+		return recordSkipped(result, step, "step "+failed+" failed")
+	}
+	if test.Step == nil {
+		return runKind(ctx, kind, step)
 	}
 	result := runKind(ctx, kind, step)
 	if (result.Status == task.StatusFAIL || result.Status == task.StatusERR) && !spec.ContinueOnError {
@@ -69,7 +76,7 @@ func runKind(ctx context.Context, kind Kind, step *StepContext) FixtureResult {
 	if timeout == nil {
 		return runKindUntimed(ctx, kind, step)
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, *timeout, errStepTimeout)
+	ctx, cancel := slots.Timeout(ctx, slots.TimeoutOptions{Limits: step.Opts.ProcessRuntime.Slots, Duration: *timeout, Cause: errStepTimeout})
 	defer cancel()
 	result := runKindUntimed(ctx, kind, step)
 	if isPassingStatus(result.Status) || !errors.Is(context.Cause(ctx), errStepTimeout) {
@@ -105,6 +112,19 @@ func (fixture FixtureTest) declaredTimeout() *time.Duration {
 
 func runKindUntimed(ctx context.Context, kind Kind, step *StepContext) FixtureResult {
 	spec := step.Spec
+	// The gate runs before the config renders: a gated step's config may read
+	// outputs of a step that was itself skipped.
+	if spec.If != "" {
+		run, trace, err := evalStepIf(step)
+		if err != nil {
+			result := stepError(step, err)
+			result.CELExpression, result.CELTrace = spec.If, trace
+			return result
+		}
+		if !run {
+			return recordSkipped(skippedByIf(step), step, "if: "+spec.If)
+		}
+	}
 	if _, raw := kind.(SelfTemplating); !raw && len(spec.Config) > 0 {
 		var raw []string
 		if keys, ok := kind.(RawConfigKeys); ok {
@@ -120,6 +140,58 @@ func runKindUntimed(ctx context.Context, kind Kind, step *StepContext) FixtureRe
 		return startBackground(ctx, kind, step)
 	}
 	return executeStep(ctx, kind, step)
+}
+
+// withStepRoots gives a markdown node, whose kind templates and evaluates over
+// its TemplateVars, the step-id roots a typed step's template sees: the
+// `params:` form's `{{.params.x}}`. Its own TemplateVars win.
+func withStepRoots(vars map[string]any, scope *StepScope) map[string]any {
+	roots := stepIDRoots(scope)
+	if len(roots) == 0 {
+		return vars
+	}
+	maps.Copy(roots, vars)
+	return roots
+}
+
+// StepIfMetadata is Metadata["if"] on a step its `if:` skipped.
+type StepIfMetadata struct {
+	Expression string `json:"expression"`
+	Value      bool   `json:"value"`
+}
+
+// evalStepIf evaluates the step's `if:` against the roots its `cel:` would
+// see before it has outputs of its own. When it does not evaluate, the trace
+// shows the values it read (e.g. `null && null` over a skipped step).
+func evalStepIf(step *StepContext) (bool, string, error) {
+	run, trace, err := evalStepCEL(step.Spec.If, stepCELVars(nil, step.Scope))
+	if err != nil {
+		return false, trace, fmt.Errorf("step %s: if: %s: %w", stepLabel(step), step.Spec.If, err)
+	}
+	return run, "", nil
+}
+
+// recordSkipped binds a skipped step's id to {skipped: true, reason}, so a
+// later `if:` naming it compiles: `false && approval.approved` short-circuits,
+// while a bare `approval.approved` still fails on the missing key.
+func recordSkipped(result FixtureResult, step *StepContext, reason string) FixtureResult {
+	if err := step.Scope.SetOutputs(step.Spec.ID, map[string]any{"skipped": true, "reason": reason}); err != nil {
+		return result.Errorf(err, "record outputs")
+	}
+	return result
+}
+
+func skippedByIf(step *StepContext) FixtureResult {
+	result := normalizeResult(FixtureResult{Type: step.Spec.Kind, Status: task.StatusSKIP,
+		Error: fmt.Sprintf("skipped (if: %s = false)", step.Spec.If)}, step)
+	if step.Test.Step != nil {
+		stampStepMetadata(&result, step.Spec, nil, map[string]ExportRecord{}, nil, nil)
+	}
+	if result.Metadata == nil {
+		result.Metadata = map[string]interface{}{}
+	}
+	result.Metadata["if"] = StepIfMetadata{Expression: step.Spec.If, Value: false}
+	return result
 }
 
 func newStepContext(test FixtureTest, spec StepSpec, opts RunOptions) (*StepContext, error) {
@@ -174,14 +246,14 @@ func executeStep(ctx context.Context, kind Kind, step *StepContext) FixtureResul
 		}
 		result = applyWait(result, report)
 	}
-	if step.Spec.CEL != "" && isPassingStatus(result.Status) {
+	if step.Spec.CEL != "" && completedStatus(result.Status) {
 		result = applyStepCEL(result, step.Spec.CEL, stepCELVarsWithTraces(outputs, scope, step.Opts.Traces.Collect(ctx).CELVars))
 	}
 	if err := scope.SetOutputs(step.Spec.ID, outputs); err != nil {
 		result = result.Errorf(err, "record outputs")
 	}
 	exports := map[string]ExportRecord{}
-	if isPassingStatus(result.Status) {
+	if completedStatus(result.Status) {
 		if exports, err = applyExports(step, outcome.Exports, outputs); err != nil {
 			result = result.Errorf(err, "export")
 		}
@@ -199,6 +271,13 @@ func executeStep(ctx context.Context, kind Kind, step *StepContext) FixtureResul
 		result = recordFinalAttempt(result, attempts)
 	}
 	return result
+}
+
+// completedStatus reports whether a step ran to completion: it passed, or it
+// only warned (a query whose findings are all warnings), so its cel: is still
+// judged and its exports still reach the steps after it.
+func completedStatus(status task.Status) bool {
+	return isPassingStatus(status) || status == task.StatusWarning
 }
 
 // effectiveWait merges the step's wait over the document defaults over the

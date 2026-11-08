@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/flanksource/repomap"
 )
@@ -177,15 +178,29 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if len(exec.Input) > 0 && exec.Terminal != "pty" && terminalTrace == nil {
 		return result.Errorf(fmt.Errorf("input needs terminal: pty"), "prepare terminal input")
 	}
+	lease, err := slots.Acquire(ctx, slots.Request{Limits: opts.ProcessRuntime.Slots, WorkDir: workDir, Command: strings.Join(append([]string{exec.Exec}, exec.Args...), " ")})
+	if err != nil {
+		return result.Errorf(err, "fixture slots")
+	}
+	defer func() {
+		if err := lease.Close(); err != nil {
+			logger.Errorf("release fixture slots: %v", err)
+		}
+	}()
+	maps.Copy(childEnv, lease.Env())
 	var p *clickyExec.ExecResult
 	if exec.Terminal == "pty" || terminalTrace != nil {
 		p = runWithPTY(ctx, ptyRun{exec: exec, workDir: workDir, env: childEnv, terminal: terminalTrace, runtime: opts.ProcessRuntime})
 	} else {
-		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir).WithProcessGroup().WithExactEnv(childEnv)
+		live := fixtures.OutputWriter(ctx)
+		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir).WithProcessGroup().WithExactEnv(childEnv).Stream(live, live)
 		if err := opts.ProcessRuntime.Apply(process); err != nil {
 			return result.Errorf(err, "fixture runtime")
 		}
 		p = process.WithEnv(stringEnv(exec.Env)).WithContext(ctx).Run().Result()
+	}
+	if err := lease.Close(); err != nil {
+		return result.Errorf(err, "release fixture slots")
 	}
 
 	result.Actual = p
