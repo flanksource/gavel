@@ -1,0 +1,41 @@
+kind: Fixture
+name: Database-connected Go tests
+steps:
+  - id: resources
+    kind: services
+    services:
+      db:
+        dbtest: {}
+      tests:
+        git:
+          files:
+            go.mod: |
+              module example.com/database-fixture
+              go 1.22
+            database_test.go: |
+              package databasefixture
+
+              import (
+                "os"
+                "os/exec"
+                "strings"
+                "testing"
+              )
+
+              func TestProvisionedDatabase(t *testing.T) {
+                output, err := exec.Command("psql", "-XAtc", "SELECT current_database()").CombinedOutput()
+                if err != nil {
+                  t.Fatalf("connect to fixture database: %v: %s", err, output)
+                }
+                if actual := strings.TrimSpace(string(output)); actual != os.Getenv("PGDATABASE") {
+                  t.Fatalf("connected to %q, expected %q", actual, os.Getenv("PGDATABASE"))
+                }
+              }
+  - id: tests
+    kind: test
+    paths: [.]
+    framework: [go]
+    work-dir: '{{.steps.resources.tests.dir}}'
+    runtime:
+      env:
+        GOWORK: 'off'

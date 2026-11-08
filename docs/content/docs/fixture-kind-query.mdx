@@ -1,0 +1,97 @@
+---
+title: Query
+description: Run a database query, turn its rows into lint findings, and gate later steps on the result.
+parent: fixture-step-reference
+order: 11
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+import FixtureExample from "../../src/components/site/FixtureExample";
+
+Use the `query` step to run a commons-db query against a connection. Its rows become step outputs, and its `findings:` turn rows into lint violations that render in the same lint UI and JSON as `gavel lint`.
+
+## Example
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Oversized activities
+params:
+  type: object
+  properties:
+    minSize: {type: integer, minimum: 1, default: 20, title: Smallest size to report}
+steps:
+  - id: inspect
+    kind: query
+    connection: {type: sqlite, url: "file::memory:"}
+    query: >-
+      SELECT 'a1' AS guid, 10 AS size UNION ALL SELECT 'a2', 20 UNION ALL SELECT 'a3', 30
+    findings:
+      when: row.size >= params.minSize
+      severity: "row.size >= 30 ? 'warning' : 'info'"
+      message: "{{.row.guid}} holds {{.row.size}} KB"
+      locations: ["entity://Activity/{{.row.guid}}"]
+  - id: report
+    kind: query
+    if: inspect.rowCount == 3
+    connection: {type: sqlite, url: "file::memory:"}
+    query: SELECT count(*) AS n FROM (SELECT 1 UNION ALL SELECT 2) WHERE 1 <= {{.params.min}}
+    params: {min: 1}
+    cel: row.n == 2 && inspect.findings.size() == 2
+```
+
+</FixtureExample>
+
+Save it as `query.fixture.yaml` and run `gavel fixtures query.fixture.yaml`, or `gavel fixtures query.fixture.yaml --param minSize=30` to report only `a3`. `inspect` warns with two findings, and `report` still runs: a warned step records its outputs and exports and evaluates its `cel:`.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+The database the connection points at must be reachable from the fixture's execution environment. Named connections come from `gavel connections` (the shared and gavel layers) and the fixture directory's `.connections/`.
+
+</Prerequisites>
+
+- **`query`** is the query text, an inline commons-db profile body (`{query, params, columns, provider, …}`), or `{profile: <name>, params}` for a stored profile. Stored profiles are read from the fixture directory's `.profiles/`, then `~/.config/gavel/profiles`, then the host's profile store.
+- **`connection`** is a catalog name, a `connection://` reference, or an inline commons-db connection (`type`, `url`, `username`, `password`, each a string or `{valueFrom: …}`, which is hydrated). A host such as oipa-cli answers names first through its own resolver. A step-level `connection` overrides an inline profile's `provider.connection`.
+- **`params`** are bound by the provider as real query arguments wherever the query names `{{.params.<name>}}` or `$(.params.<name>)`. They are never pasted into the text. Inside `query`, `.params` is the step's own `params`. Elsewhere in the fixture it is the `params:` form.
+- **`database`** runs against another database on the connection's server (the SQL provider's `database` option), for example `database: "{{.target.database}}"` after a database picker form. It overrides the connection's own database and a profile's `provider.options.database`. A sqlite connection refuses it.
+- **`limit`** caps the rows read. A query with more rows reports `truncated: true`.
+
+Statements run as written. The step makes no read-only or write distinction; restrict writes through the connection's credentials.
+
+## Results and findings
+
+Outputs are `rows`, `row` (the first row), `rowCount`, `columns`, `connection` (its name, type and any `database` selected, never secrets) and `findings`.
+
+`findings:` takes one of two forms. Both produce gavel lint violations (`models.Violation`).
+
+- **A CEL expression** that returns a list of violation maps. Write it over `outputs.rows`, because the CEL environment types step roots as `any` and `rows` alone would not resolve its element fields:
+
+  ```yaml
+  findings: >-
+    outputs.rows.filter(r, r.size >= 20).map(r, {"severity": "error",
+      "message": r.guid + " is " + string(r.size),
+      "locations": ["queries/q.sql:" + string(r.size), {"entity": {"kind": "Policy", "id": r.policy}}]})
+  ```
+
+- **A per-row mapper** with `when` (CEL over `row`; rows where it is false yield nothing), `severity` (`error`, `warning`, `info`, or a CEL expression returning one), `rule` (defaults to the step id), `message`, `code` and `locations`. Its strings are Go templates over `.row`.
+
+Each location is a `models.ViolationLocation` object (`file`, `line`, `column`, `ref`, `entity: {kind, id, name}`, `url: {url, css | xpath | testId | role+name | text}`, `image: {src, x, y, width, height}`) or one of these shortcuts:
+
+| Shortcut | Parses to |
+| --- | --- |
+| `path/file.sql:42`, `file.sql:42:7` | `{file, line, column}` |
+| `main:rules/data.xml:12:3` (a branch, tag or SHA first) | `{ref, file, line, column}` |
+| `entity://Policy/<id>` | `{entity: {kind, id}}` |
+| `https://app.example/x#css=.row` or `#xpath=//tr` | `{url, css or xpath}` |
+
+An `error` finding fails the step. `warning` and `info` findings only warn it. An unknown severity, a CEL result that is not a list of maps, an unparsable shortcut, or a URL target with two selector strategies is an error that names the element index.
+
+In Markdown, a table row with a `Query` column runs as a query step. It takes its connection from a `Connection` column or the front-matter `connection:` key, and an optional `Findings` column in the CEL form.
+
+## Complete step reference
+
+<FixtureKindReference kind="query" />

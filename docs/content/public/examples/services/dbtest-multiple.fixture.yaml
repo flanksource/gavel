@@ -1,0 +1,20 @@
+kind: Fixture
+name: Explicit default database
+steps:
+  - id: resources
+    kind: services
+    services:
+      app:
+        dbtest:
+          default: true
+      aux:
+        dbtest: {}
+    cel: app.database != aux.database && env.DATABASE_URL == app.url
+  - id: primary
+    kind: exec
+    script: psql -XAtc 'SELECT current_database()'
+    cel: stdout.trim() == steps.resources.app.database
+  - id: auxiliary
+    kind: exec
+    script: psql "$AUX_URL" -XAtc 'SELECT current_database()'
+    cel: stdout.trim() == steps.resources.aux.database

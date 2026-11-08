@@ -1,0 +1,50 @@
+---
+title: Browser
+description: Start Chrome and expose its session and DevTools connection.
+parent: fixture-step-reference
+order: 6
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+
+Use the `browser` step in a YAML fixture to start Chrome and expose its session and DevTools connection. This typed step also supports JSON; Markdown has no native `browser` fence.
+
+## Example
+
+```yaml
+kind: Fixture
+name: Browser example
+steps:
+  - id: chrome
+    kind: browser
+    engine: chrome
+    headless: true
+    session: fixture_browser
+    cel: cdp.ready
+```
+
+Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+Install Chrome, the supported browser engine. Provide `binary` when automatic executable discovery is unsuitable.
+
+</Prerequisites>
+
+`profile`, `headless`, extra `args`, and `startTimeout` configure startup. A created browser is stopped at fixture teardown.
+
+## Results and lifetime
+
+Outputs include `cdp.ready`, `cdp.url`, `cdp.wsUrl`, session name, profile directory, binary, and process ID. Default exports include `BROWSER_CDP_URL`, `BROWSER_WS_URL`, `BROWSER_SESSION`, and `BROWSER_PROFILE_DIR`. Observation re-probes DevTools readiness.
+
+Use the [Agent-browser step](/docs/fixture-kind-agent-browser) next to drive this browser session.
+
+## Complete step reference
+
+Use Tree or Table to browse global fields and this kind's configuration separately. Expand nested fields or additional metadata when available. Shared behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="browser" />
+

@@ -1,0 +1,50 @@
+---
+title: TODO prompt
+description: Dispatch and observe an existing TODO lifecycle step.
+parent: fixture-step-reference
+order: 10
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+
+Use the `todo_prompt` step in a YAML fixture to dispatch and observe an existing TODO lifecycle step. This typed step also supports JSON; Markdown has no native `todo_prompt` fence.
+
+## Example
+
+```yaml
+kind: Fixture
+name: TODO prompt example
+steps:
+  - id: planning
+    kind: todo_prompt
+    server: http://localhost:8080
+    todo: $TODO_ID
+    step: plan
+    timeout: 10m
+```
+
+Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+Use an existing TODO and a configured dashboard, workspace, and AI runtime.
+
+</Prerequisites>
+
+`step` is required and can name built-in or project lifecycle steps. `spec` supplies explicit Captain overrides; `resume` and `reuseBranch` configure continuation.
+
+## Results and lifetime
+
+The kind records the launch and observes TODO/session/plan/verification state. Implementation steps can edit source and commit according to the lifecycle; choosing `plan` is distinct from implementation. `force` bypasses run ownership checks and should follow inspection of the current attempt.
+
+See [Todo run loop](/docs/todo-run-loop) for step contracts, and [Runtime presets](/docs/todo-runtime-profiles) for defaults.
+
+## Complete step reference
+
+Use Tree or Table to browse global fields and this kind's configuration separately. Expand nested fields or additional metadata when available. Shared behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="todo_prompt" />
+

@@ -1,0 +1,28 @@
+kind: Fixture
+name: Seeded git workspace
+steps:
+  - id: resources
+    kind: services
+    services:
+      workspace:
+        git:
+          files:
+            README.md: fixture workspace
+            config/app.yaml: 'name: fixture-app'
+          commit: true
+        export:
+          WORKSPACE: '{{.outputs.dir}}'
+    cel: workspace.ready && workspace.commit != ''
+  - id: history
+    kind: exec
+    script: git -C "$WORKSPACE" rev-list --count HEAD
+    stdout: "1\n"
+  - id: readme
+    kind: exec
+    exec: git
+    args: [-C, '$WORKSPACE', show, 'HEAD:README.md']
+    stdout: fixture workspace
+  - id: clean
+    kind: exec
+    script: git -C "$WORKSPACE" status --porcelain
+    cel: stdout == ''

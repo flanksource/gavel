@@ -1,0 +1,51 @@
+---
+title: Cached lint results
+description: How findings keep their identity across runs, how a linter reports a result it answered from its own cache, and how to force a fresh run.
+parent: lint-execution
+order: 13
+---
+
+Gavel keeps no lint cache of its own. A linter that can tell its inputs are unchanged answers from its own cache, and says so on its result. Gavel then shows how old the result is and treats it like any other: fingerprints, ignores, dismissals and exclusions apply as they do to a fresh run.
+
+## Finding identity
+
+Every finding carries a `fingerprint`, a hash of the linter, the rule, the finding's anchor and its whitespace-normalised message. The line is not part of it, so moving code keeps a finding's identity. When one result holds the same fingerprint more than once, the repeats are numbered `-1`, `-2` in line order.
+
+A linter makes identity stable by setting `anchor` on a violation, most specific first: `symbol`, then `declaration` (for example a transaction GUID), then `section`. With no anchor the file is used. Ignore rules (`lint.ignore[].fingerprint`, see the [configuration reference](/docs/configuration-reference)), per-run dismissals and the comparison between runs (new, fixed, persisting) all match on the fingerprint.
+
+## Cached results
+
+A linter that answered from its cache sets `cache` on its result:
+
+```json
+"cache": {"source": "build", "fingerprint": "lint+v7+transaction:fee+fp:build+static", "stored_at": "2026-10-30T08:54:28Z", "hit": true}
+```
+
+- `source` names what the fingerprint is computed from: `build` for the linter's own digest of its inputs, `uir` for a UIR symbol closure (planned, see below).
+- `hit` is true only when the whole result came from the cache. A result that is partly cached says `hit: false`, and the linter's own log gives the split.
+- `stored_at` is when the oldest reused entry was linted: the worst-case age of what you are looking at.
+
+A full hit is shown as `✓ oipa-transaction (cached, linted 3h ago)` in the CLI summary, and as **cached · 3h** on the linter in the UI, whose detail panel names the source and fingerprint. A [command linter](/docs/linter-command) reports `cache` in its JSON result the same way.
+
+`--baseline` and `--failed` are not caches: they filter which findings or files a run reports, and every selected linter still runs.
+
+## Forcing a fresh run
+
+```bash
+gavel lint --no-lint-cache
+```
+
+`--no-lint-cache` reaches every linter as [`RunOptions.NoCache`](https://pkg.go.dev/github.com/flanksource/gavel/linters#RunOptions). A caching linter then re-checks all of its inputs and overwrites its cached entries. Rerunning a linter from the UI is always fresh.
+
+## Writing a caching linter
+
+- Key the cache on the content of every input a check reads, never on time alone, and include a version you bump whenever a check or the shape of a finding changes.
+- An input that cannot be hashed, such as live data in a database, gets an expiry, and the expiry is part of the linter's documented behaviour.
+- Set `cache` on the result, and honour `NoCache`.
+- Return `sources` for findings on virtual files (database rows, remote rules). A cached result keeps them, so the Files tab still renders, and a file named in `sources` is never read from disk.
+
+See [Embedding the lint engine](/docs/lint-embedding) to run a Go linter in-process through `gavel lint`.
+
+## Where this is going
+
+Findings will become facts stored in UIR, each reused while the symbols its rule read are unchanged, and reported with `source: "uir"`. A linter then no longer keeps a cache of its own. See [Lint findings as generation-gated facts](https://github.com/flanksource/uir/blob/main/docs/lint-result-reuse-plan.md) in UIR.

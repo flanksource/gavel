@@ -107,7 +107,8 @@ List pull requests with filtering, a live browser dashboard, and macOS menu bar 
 
 ```bash
 gavel pr list
-gavel pr list --ui                            # live dashboard in browser
+gavel pr list --ui                            # serve the live dashboard
+gavel pr list --open                          # serve and open the dashboard in the browser
 gavel pr list --menu-bar                      # macOS menu bar status indicator
 gavel pr list --state merged --since 30d
 gavel pr list --any --status                  # all authors, with check status
@@ -128,11 +129,14 @@ gavel pr list --all --org myorg               # all repos in org
 | `--status` | Show GitHub Actions check status counts |
 | `--logs` | Fetch failed job log tails (requires `--status -v`) |
 | `--url` | Show PR URL instead of number |
-| `--ui` | Open PR dashboard in browser with live updates |
-| `--menu-bar` | Show macOS menu bar status indicator |
+| `--ui` | Serve the PR dashboard with live updates |
+| `--open` | Serve and open the PR dashboard in the browser |
+| `--menu-bar` | Show macOS menu bar status indicator; warn and keep serving if menu bar support was not compiled in |
 | `--interval` | Poll interval for `--ui`/`--menu-bar` (default: `60s`) |
 | `--addr` | Interface to bind the `--ui`/`--menu-bar` server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
 | `--port` | UI port (default: `9092`, `0` to auto-scan upward for a free port) |
+
+The dashboard opens a browser only with `--open`. This also applies to `gavel serve`: use `gavel serve --open` to open it at startup. Menu bar builds require macOS, `CGO_ENABLED=1`, and `-tags gavel_menubar` (or `task build:prod`).
 
 See [Azure DevOps support](/docs/azure-devops-pr-support) and [PR-linked TODOs](/docs/pr-todos).
 

@@ -1,0 +1,52 @@
+{
+  "name": "gavel-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "rspress dev --port 5190",
+    "build": "tsc --noEmit && rspress build",
+    "preview": "rspress preview --port 5190",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@flanksource/clicky-ui": "^0.3.51",
+    "@rspress/core": "^2.1.1",
+    "@vercel/analytics": "^1.4.1",
+    "@vercel/kv": "^3.0.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.469.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "resend": "^4.0.1",
+    "shiki": "^1.29.2",
+    "streamdown": "^2.7.1",
+    "tailwind-merge": "^2.5.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@mdx-js/react": "^3.1.1",
+    "@mdx-js/rollup": "^3.1.1",
+    "@shikijs/types": "^4.6.0",
+    "@tailwindcss/postcss": "^4.3.5",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "gray-matter": "^4.0.3",
+    "jsdom": "^25.0.1",
+    "rehype-slug": "6.0.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-mdx-frontmatter": "^5.2.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.4.3",
+    "vitest": "^3.2.6"
+  }
+}

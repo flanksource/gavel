@@ -1,0 +1,50 @@
+---
+title: "Projects"
+description: "Register local projects and control their visibility in the dashboard."
+parent: cli-usage
+order: 20
+---
+
+`projects` manages the workspace projects the dashboard shows: named local directories, each backing zero or more GitHub repos, stored in `~/.config/gavel/projects.json`. The dashboard's `/api/projects` serves the same store.
+
+```bash
+gavel projects list
+gavel projects add acme ~/src/acme --repo acme/acme
+gavel projects update acme --repo acme/acme --repo acme/acme-ui
+gavel projects hide acme
+gavel projects unhide acme
+gavel projects delete acme
+```
+
+## Hiding a project
+
+A hidden project stays registered but drops out of the dashboard: the project picker, the Projects sidebar, processes, sessions, TODO lists and the git summary all leave it out, and the git state tracker stops scanning its repository. Its stored git rows are kept but no longer read.
+
+- In the dashboard, hover a project in the project picker and click the hide (closed eye) button. Hidden projects are listed under **Manage hidden** in the same picker, where the eye button shows them again.
+- From the CLI, `gavel projects hide <name>` and `gavel projects unhide <name>` set the same flag. `gavel projects list` lists every project, hidden ones included, with a `hidden` column.
+
+Hiding from the dashboard stops git tracking immediately. Hiding from the CLI only takes effect for a running dashboard's tracker when it restarts, because the tracker lives in the dashboard process. Editing a project in the dashboard's form keeps its hidden flag.
+
+One exception is intentional: a view that reads stored git data for a specific repository, such as the diff stats of a TODO run whose worktree is in a hidden project's repository, registers that repository with the tracker again so the data it shows is current. Hiding the project again, or restarting the dashboard, stops it.
+
+## Rebasing a worktree
+
+Select a checked-out branch in the project's **Worktree or branch** picker and click **Rebase…**. The dialog previews the source branch, worktree, and number of uncommitted files. **Rebase from** defaults to `origin/main`; choose any other local branch to use its current local commit. Gavel fetches `origin/main` before rebasing against it. Rebasing keeps the branch and worktree and does not push.
+
+Gavel stashes tracked and untracked changes before rebasing, then restores them with their original staging where Git can do so. Ignored files stay in the worktree. A failure retains the saved edits and operation details in the worktree's Git metadata, so reloading the page does not lose recovery information.
+
+If Git reports conflicts, **Send to rebase prompt** starts the `branch-rebase` prompt in that same worktree. The agent continues the rebase and resolves conflicts; it does not land the branch or remove the worktree. Its current session appears beside the controls, with a **Stop** button. Stopping the agent preserves the operation for another attempt. **Abort and restore edits** aborts a pending rebase and restores saved local changes.
+
+Conflicts while restoring saved edits are reported separately. The stash stays available until those edits have been recovered. Recovery must leave the saved edits uncommitted. A restoration interrupted between applying the stash and recording completion also requires explicit confirmation, rather than guessing whether the changes were applied.
+
+The same recovery helpers are available from the CLI. `--worktree` identifies the checkout; `--operation` is the ID shown in a failed command's JSON result. `start` also requires the source branch, expected HEAD, and a full target ref. Reusing an operation ID resumes that operation with its original target.
+
+```bash
+SOURCE_COMMIT=$(git -C /src/acme-topic rev-parse HEAD)
+gavel git rebase start --worktree /src/acme-topic --branch topic --expected-head "$SOURCE_COMMIT" --target refs/remotes/origin/main
+gavel git rebase check --worktree /src/acme-topic --operation '<operation-id>'
+gavel git rebase finish --worktree /src/acme-topic --operation '<operation-id>'
+gavel git rebase abort --worktree /src/acme-topic --operation '<operation-id>'
+```
+
+After manually recovering saved-edit conflicts, `finish --resolved` acknowledges that all saved changes have been restored and no unmerged paths remain. Use it only after inspecting the stash, files, and index. It removes only the operation's own saved stash; other stashes are preserved. A completed `finish` is safe to repeat with the same operation ID.

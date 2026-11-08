@@ -1,0 +1,110 @@
+---
+title: Form
+description: Ask a person for input mid-run, take run parameters up front, and gate later steps on the answers with if.
+parent: fixture-step-reference
+order: 12
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import FixtureExample from "../../src/components/site/FixtureExample";
+
+Use the `form` step to ask a person to fill a JSON-schema form and wait for the answer. A fixture's `params:` is a form asked before the first step. With `if:`, a later step runs only when the answers allow it.
+
+## Example
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Reviewed purge
+params:
+  type: object
+  required: [minSize]
+  properties:
+    minSize: {type: integer, minimum: 1, title: Smallest size to purge}
+steps:
+  - id: inspect
+    kind: query
+    connection: {type: sqlite, url: "file::memory:"}
+    query: SELECT 'a2' AS guid, 20 AS size UNION ALL SELECT 'a3', 30
+  - id: approval
+    kind: form
+    if: inspect.rowCount > 0
+    title: Purge {{.inspect.rowCount}} activities above {{.params.minSize}} KB?
+    description: Review the rows of step `inspect` first.
+    schema:
+      type: object
+      required: [expected]
+      properties:
+        expected: {type: integer, minimum: 1, title: Reviewed count}
+  - id: purge
+    kind: query
+    if: approval.approved && approval.expected == inspect.rowCount
+    connection: {type: sqlite, url: "file::memory:"}
+    query: SELECT 1 AS purged
+    cel: row.purged == 1
+```
+
+</FixtureExample>
+
+Save it as `purge.fixture.yaml` and run `gavel fixtures purge.fixture.yaml --ui --param minSize=20`. The run pauses at `approval`, shown amber as waiting, and the run view's banner opens the form. Submit `2` and `purge` runs. Cancel, and `approval.approved` is false, so `purge` is skipped and the fixture still passes. On a terminal, `gavel fixtures purge.fixture.yaml` asks the same questions in the terminal.
+
+## Forms
+
+`title` and `description` are templates over the run's roots. `schema` is an object JSON Schema, and `default` pre-fills it. The answer is validated against the schema: an invalid one is refused and the form stays pending.
+
+Outputs:
+
+- `approved`: true when the form is submitted, false when it is cancelled or rejected. A rejection does not fail the step.
+- `values`: the answer, also spread at the top level, so `approval.expected` works.
+- `answeredBy` and `answeredAt`. In the gavel UI the answerer is the `X-Gavel-User` header, else the client address. On a terminal it is `$USER` with `git config user.email`.
+
+Who answers depends on where the run happens:
+
+| Run | Prompter |
+| --- | --- |
+| `gavel fixtures --ui`, `gavel test --ui` | The UI server's prompt API at `/api/prompts`, shown in the run view and filtered to the run |
+| `gavel fixtures` on a terminal | A terminal form |
+| Neither | None: a form that must ask fails with `form "approval" needs an interactive prompter (--ui or a TTY)` and names the missing keys |
+
+Run cancellation or the step's `timeout:` expires the prompt and fails the step.
+
+A property with `format: connection`, optionally with `x-connection-types: [sql_server]`, is a connection picker over the gavel connection catalog. Its value is the connection name, ready to pass to a query step's `connection:`. The UI resolves it through `GET /api/v1/connection?types=…&__lookup_q=…`, which lists names and types only.
+
+To pick from what an earlier step found, compute the property's `enum` with `{$cel: …}` (see [step outputs](./fixture-step-reference#outputs-and-exports)). For example, a database picker is a query that lists the names, followed by a form that offers them:
+
+```yaml
+- id: databases
+  kind: query
+  connection: "{{.params.db}}"
+  query: SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name OFFSET 0 ROWS
+- id: target
+  kind: form
+  schema:
+    type: object
+    required: [database]
+    properties:
+      database: {type: string, enum: {$cel: "databases.rows.map(r, r.name)"}}
+```
+
+An `enum` that is empty, repeats an option, or holds something other than strings, numbers or booleans is a schema error naming the property.
+
+## Params
+
+Front-matter, or a YAML fixture's top level, may declare `params:` as an object JSON Schema. It becomes a leading form step with the id `params`, so `{{.params.x}}` and CEL `params.x` read its answers. Values come from `--param key=value` (repeatable), `--params file.yaml`, or a UI rerun request's `params`. They are typed by the schema and filled with its defaults. When they satisfy the schema the step resolves without asking. Otherwise it asks with the gathered values pre-filled.
+
+## if: and step-id roots
+
+Every completed step's outputs are bound at the root under its id, beside `steps.<id>`: `approval.approved` in CEL, `{{.approval.expected}}` in templates. An id that is read as a root must be a valid CEL identifier (`stageApproval`, not `stage-approval`). It may not take a reserved root: `env`, `steps`, `outputs`, `fixture` or `tmp`. Both are load errors.
+
+`if:` on any step is CEL evaluated before the step renders its config:
+
+- True runs the step.
+- False skips it with `skipped (if: <expression> = false)` and the fixture does not fail. The expression and its value are recorded in the result.
+- An expression that does not evaluate errors the step.
+
+A skipped step binds `{skipped: true, reason}` under its id. `count.row.n > 0 && approval.approved` is therefore false when `approval` was skipped, while a bare `approval.approved` on a skipped step fails loudly on the missing key. Markdown rows take an `If` column, and command blocks an `if` key.
+
+## Complete step reference
+
+<FixtureKindReference kind="form" />

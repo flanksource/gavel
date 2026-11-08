@@ -1,0 +1,127 @@
+---
+title: CLI usage
+description: Choose commands, scope work to a repository, pass native runner options, and automate Gavel.
+order: 2
+---
+
+Run Gavel from the repository you want to inspect. Use the global `--cwd` flag when invoking it from another directory; relative command paths resolve from that selected working directory.
+
+```bash
+gavel version
+gavel --help
+gavel --cwd ../service test
+gavel --cwd ../service config --json
+```
+
+## Command map
+
+| Command | Purpose |
+| --- | --- |
+| `gavel test` | Discover and execute Go, Ginkgo, Jest, Vitest, Playwright, and configured fixtures |
+| `gavel lint` | Discover native linter configurations and combine their findings |
+| `gavel fixtures` | Execute named YAML, Markdown, or JSON fixture files |
+| `gavel config [path]` | Inspect merged project settings and their sources |
+| `gavel configure` | Write AI model selections to project configuration |
+| `gavel test outline` / `history` | Inspect test structure and previous execution statistics |
+| `gavel summary` | Produce a compact Markdown summary from test JSON |
+| `gavel ui serve` | Browse a saved test report |
+| `gavel todos` | Create, inspect, plan, implement, and verify tracked work |
+| `gavel external-issues jira` | Read Jira issues, comments, and attachments through TWG CLI |
+| `gavel pr` | Inspect pull requests, checks, logs, and review state; create PRs |
+| `gavel commit` | Generate commit content and run configured commit gates |
+| `gavel git` | Inspect and analyze repository changes |
+| `gavel bench` | Compare Go benchmark results between refs |
+| `gavel proc` | Start, restart, inspect, and stop Procfile processes |
+| `gavel serve` / `projects` | Serve the development dashboard and manage its projects |
+| `gavel repomap` | Inspect repository mapping configuration |
+| `gavel ssh` / `system` | Configure the push backend and background service |
+| `gavel mcp` | Manage MCP server integration |
+| `gavel completion` | Generate shell completion scripts |
+
+Use the installed command's help for its complete flag list:
+
+```bash
+gavel test --help
+gavel lint --help
+gavel todos run --help
+gavel fixtures --schema
+```
+
+## Select a framework or tool
+
+Framework and linter subcommands make the selected engine explicit. A comma-separated or repeated filter selects several engines:
+
+```bash
+gavel test go ./pkg/parser
+gavel test vitest ./web
+gavel test --framework go,ginkgo ./pkg
+gavel lint eslint ./web
+gavel lint --linters golangci-lint,ruff
+```
+
+Arguments after `--` are runner arguments. Select one framework when using its native options so flags cannot be interpreted by another engine. Go-style name focus is translated where the selected engine supports it:
+
+```bash
+gavel test go ./pkg/parser -- -run TestParser -count=1
+gavel test ginkgo ./pkg/parser -- --focus Parser
+gavel test vitest ./web -- --testNamePattern parser
+```
+
+## Global output options
+
+`--json`, `--yaml`, `--markdown`, and `--html` choose a representation. `--format` also writes several artifacts from one invocation. `--no-progress` disables the live progress display, and `--no-color` removes terminal colors. Logging goes to stderr by default.
+
+```bash
+mkdir -p .tmp
+gavel test --no-progress --format "json=.tmp/tests.json,html=.tmp/tests.html,markdown=.tmp/tests.md"
+gavel config --yaml
+```
+
+`-v`, `-vv`, and `-vvv` increase verbosity; test and fixture commands also provide `--show-passed`, `--show-stdout`, and `--show-stderr`. See [Reporting](/docs/reporting) for output shapes, snapshots, and live reports.
+
+## Jira issues
+
+Install and authenticate [TWG CLI](https://developer.atlassian.com/platform/teamwork-graph/twg-cli/getting-started/installation/) and ensure `twg` is on your `PATH`. Gavel uses its existing credentials and selected site. Use `--site` or `--profile` on the Jira command to select another configured site or profile.
+
+```bash
+gavel external-issues jira get EXAMPLE-123
+gavel external-issues jira list --jql 'project = EXAMPLE' --limit 20
+gavel external-issues jira comment list EXAMPLE-123
+gavel external-issues jira attachment list EXAMPLE-123
+gavel external-issues jira get EXAMPLE-123 --format markdown=issue.md
+```
+
+The full issue output includes descriptions, comments, attachment links, related issues, remote links, and custom fields. Embedded Jira file references use the `atlassian-media://` scheme; use the attachment list to find downloadable links. Accessing attachment links can require Jira authentication. Unsupported rich-text content produces an error identifying the ADF node rather than silently omitting it.
+
+In JSON output, issue fields appear in a `fields` map keyed by display name. Each entry contains its Jira `id` and original `value`; duplicate names include the ID in the key, and fields with unknown names use their ID. List results also include a field map. Use `--fields` on `list` to request additional Jira fields.
+
+Gavel builds a field catalog from TWG create and edit metadata as it encounters issue types and issues. The catalog is stored in the operating system's user cache under `gavel/jira`, isolated by site, account, and Jira project. Metadata is refreshed after 24 hours; `--refresh-fields` forces a refresh. Set `GAVEL_JIRA_CACHE_DIR` to choose a different catalog directory. TWG does not expose names for every field through these metadata endpoints, so some fields remain identified by ID.
+
+```bash
+gavel external-issues jira comment create EXAMPLE-123 --body 'Review complete.'
+gavel external-issues jira attachment download 12345 --output report.pdf
+gavel external-issues jira attachment upload EXAMPLE-123 --file report.pdf
+gavel external-issues jira attachment delete 12345 --yes
+```
+
+Comment creation and attachment upload change Jira. Attachment deletion is permanent and requires `--yes`. Download writes to the requested local path.
+
+## A local development cycle
+
+```bash
+gavel test --dry-run
+gavel lint --dry-run
+gavel test --changed --lint
+gavel test --failed
+gavel lint --failed
+```
+
+Dry-run inspects planned commands. Changed runs reduce feedback to the affected scope. Failed runs need a previous report; start with a normal run if `.gavel/last.json` does not exist. These commands do not create commits. `gavel commit`, `gavel pr create`, and TODO implementation runs have their own write behavior; [Todo run loop](/docs/todo-run-loop) documents automatic commits.
+
+Continue with [Test execution](/docs/test-execution), [Lint execution](/docs/lint-execution), and the [Configuration reference](/docs/configuration-reference).
+
+## Command guides
+
+import DocChildren from "../../src/components/site/DocChildren";
+
+<DocChildren parent="cli-usage" />

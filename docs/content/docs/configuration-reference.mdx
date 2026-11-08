@@ -57,6 +57,32 @@ flagged rather than silently ignored.
 
 
 
+## Machine-wide slots
+
+`slots.global` and `slots.projectDefault` are read only from `~/.gavel.yaml`. A project's layered `.gavel.yaml` may set `slots.project` to override its default share; the global limit still applies. Each linter invocation and fixture command needs one slot in both configured pools. A batched `go test` (such as `./...`) takes up to one slot per test binary it runs in parallel (its `-p`, by default `GOMAXPROCS`), downgraded to the slots that are free (at least one) rather than waiting for all of them, and runs with `-p` set to the slots it got. Linked worktrees share a project pool identified by their canonical git common directory.
+
+```yaml
+# ~/.gavel.yaml
+slots:
+  global: 8
+  projectDefault: 50%
+```
+
+Set `slots: {project: 2}` in a repository's `.gavel.yaml` to cap that project at two subprocesses. Values must be positive integers or percentages from `1%` to `100%` of CPU cores, rounded down with a minimum of one. Invalid values fail with their key name. Omitted pools are unlimited; with no slots configured, no locks are taken.
+
+OS file locks under `slots/global/` and `slots/projects/<repo-id>/` in gavel's user cache directory record holder PIDs, commands, projects and limits. The cache directory is `$XDG_CACHE_HOME/gavel` when `XDG_CACHE_HOME` is set (on every platform), otherwise the OS user cache directory's `gavel`; on macOS that is `~/Library/Caches/gavel`. Exits, crashes and timeouts release slots automatically, and a new holder replaces stale PID records. Waiting logs identify the pool and holders, and waiting time is excluded from command timeouts. Whole-run deadlines and cancellation remain active. With slots enabled, fixture timeout budgets apply to commands; CPU and memory caps still use a supervised worker.
+
+### Seeing who holds slots
+
+`gavel slots` lists every pool with the processes holding a slot and those queued for one. `--project` keeps only the global pool and the current repository's, and `--format json` suits scripts.
+
+```bash
+gavel slots
+gavel slots --project --format json
+```
+
+Each running `gavel test`, `gavel lint` and `gavel fixtures` also publishes its status to `status/<pid>.json` in the cache directory. The status carries the run's test counts, the same task-group progress the test UI shows (test packages, linters, prompt lint, fixtures), the tasks running now, and the slots the process holds or waits for. The file is rewritten when anything changes and removed when the run ends. Once a run has lasted 30 seconds it also serves the status on `status/<pid>.sock`: `GET /status` returns it, and `GET /status/stream` streams each change as a server-sent event. `telltale top` reads these to show each gavel process's progress and slots live. Other tools can use the Go client in `github.com/flanksource/gavel/sdk/status`.
+
 ## Shared process runtime
 
 `runtime` configures every linter and test type, including fixtures. Put defaults in `~/.gavel.yaml`, then override them in a repository or invocation directory. Each file applies root `runtime`, category `lint.runtime` or `test.runtime`, then the type's runtime. Later files win even when an earlier file has a more specific override; explicit CLI/caller settings win last. `gavel config --runtime --json` shows the effective settings for each type with environment names only.

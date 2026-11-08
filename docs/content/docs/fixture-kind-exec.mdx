@@ -6,12 +6,16 @@ order: 1
 ---
 
 import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+import FixtureExample from "../../src/components/site/FixtureExample";
 
 Use the `exec` step to execute commands and scripts with stdout, stderr, exit-code, and CEL assertions.
 
 In YAML and JSON fixtures, a step with `exec:` can omit `kind: exec`; Gavel infers it from the executable field. An explicit kind is always honored. Steps using only `script:` still require `kind: exec`.
 
 ## Example
+
+<FixtureExample>
 
 ```yaml
 kind: Fixture
@@ -23,11 +27,27 @@ steps:
     cel: stdout == "ready" && exitCode == 0
 ```
 
-Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+````markdown
+# Exec example
+
+| Name | Command | CEL |
+| --- | --- | --- |
+| Greeting | printf '%s' ready | stdout == "ready" && exitCode == 0 |
+````
+
+</FixtureExample>
+
+Save the YAML variant as `exec.fixture.yaml`, then inspect it with `gavel fixtures outline exec.fixture.yaml` and run `gavel fixtures exec.fixture.yaml`. For Markdown, save `exec.fixture.md` and pass that filename to the same commands.
 
 ## Configuration and prerequisites
 
-Use `exec` and `args` for an executable or `script` for a shell body. `cwd`, `env`, `terminal`, expected streams, and expected exit code configure the process. Commands run in the fixture's execution directory; required tools must be installed.
+<Prerequisites>
+
+Install the executables and script tools used by your commands in the fixture's execution environment.
+
+</Prerequisites>
+
+Use `exec` and `args` for an executable or `script` for a shell body. `cwd`, `env`, `terminal`, expected streams, and expected exit code configure the process. Commands run in the fixture's execution directory.
 
 `$VAR` and `${VAR}` in `exec` and `args` expand to what the command will see: template variables first, then the step's `env:`, earlier steps' exports, armed traces' exports (a `pg_proxy`'s rewritten DSN, say) and the process environment. A `script` body expands template variables only and leaves the rest to the shell, which may reassign them. Anything else — an unknown variable, `${VAR:-default}`, `${0#prefix}`, `$1` — is passed through exactly as written.
 
@@ -48,6 +68,18 @@ Outputs include `stdout`, `stderr`, and `exitCode`. A wait re-executes the comma
 
 [Fixture formats](/docs/fixture-formats) covers Markdown command blocks, table cases, and golden files.
 
+`cleanup` is a shell body run with `bash -c` at fixture teardown, with the step's `env` and `cwd`. It runs once the step has run, whether the step or a later one passed or failed, so it undoes what the step changed. A non-zero exit fails the teardown and reports the output. `{{.tmp}}` outlives every cleanup, which makes it the place to record what to restore:
+
+```yaml
+- id: scaleDown
+  kind: exec
+  env: {STATE: "{{.tmp}}/replicas"}
+  script: |
+    kubectl get deploy/app -o jsonpath='{.spec.replicas}' > "$STATE"
+    kubectl scale deploy/app --replicas=0
+  cleanup: kubectl scale deploy/app --replicas="$(cat "$STATE")"
+```
+
 ## Scripted terminal input
 
 With `terminal: pty`, `input` answers an interactive command the way a person at the terminal would. Each item waits until its `expect` text appears in the output (escape sequences stripped, after the previous item's match), then types `send` followed by the named `keys`: `enter`, `tab`, `space`, `esc`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`. While a script runs, the terminal also answers the cursor-position and background-colour queries TUI libraries send.
@@ -67,7 +99,7 @@ The step fails when the command exits before an expectation appears, and the err
 
 ## Complete step reference
 
-Expand objects and array items to inspect nested fields. This reference includes the common step envelope; its behavior is documented in [Step policies](/docs/fixture-step-policies).
+Use Tree or Table to browse global fields and this kind's configuration separately. Expand nested fields or additional metadata when available. Shared behavior is documented in [Step policies](/docs/fixture-step-policies).
 
 <FixtureKindReference kind="exec" />
 

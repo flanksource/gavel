@@ -1,0 +1,63 @@
+---
+title: JSON, YAML and NDJSON
+description: Validate data syntax and JSON Schemas using explicit paths or document declarations.
+parent: lint-execution
+order: 12
+---
+
+`gavel lint json` checks `.json`, `.yaml`, `.yml`, and `.ndjson` files. It is built into Gavel and runs automatically during `gavel lint` when matching files are found. Files without a schema receive syntax checks.
+
+```sh
+gavel lint json '*.yaml' '*.json' '*.ndjson'
+gavel lint json config.yaml --schema ./schema.json
+gavel lint json ./configs --changed
+gavel lint json ./configs --dry-run
+```
+
+Paths can name individual files, directories, or quoted globs. Gavel applies its usual file scopes, Git ignores, `--ignore`, rule exclusions, and baselines. Explicitly named files can be checked even when Git ignores them.
+
+## Select a schema
+
+`--schema` accepts a local JSON Schema file or an HTTP(S) URL and overrides declarations in the input. Relative CLI schema paths resolve from the invocation's working directory.
+
+For YAML, put the schema declaration in a leading comment. Relative paths resolve from the YAML file:
+
+```yaml
+# yaml-language-server: $schema=./schema.json
+name: example
+```
+
+JSON objects can declare a schema through their top-level `$schema` property:
+
+```json
+{"$schema":"./schema.json","name":"example"}
+```
+
+Gavel leaves `$schema` in the document during validation. The schema must allow that property if it forbids additional properties. Each NDJSON record can declare its own schema; an explicit `--schema` applies to every record.
+
+Schema references resolve relative to the containing schema file or URL. Schemas are loaded and compiled once per run. Draft-07 and draft 2020-12 declarations are supported. Invalid schemas, missing files, and HTTP failures stop validation with an execution error.
+
+## Project defaults
+
+Set a default schema through `lint.linters.json.options.schema`. Local paths resolve from the `.gavel.yaml` file that declares them; URLs stay unchanged. CLI flags override configured defaults.
+
+```yaml
+lint:
+  linters:
+    json:
+      options:
+        schema: ./schemas/config.json
+      runtime:
+        timeout: 30s
+```
+
+## Findings
+
+YAML files may contain multiple documents. A YAML header applies to every document in that file. NDJSON validates each nonblank line independently and reports the original line numbers, including blank lines. Records can exceed 64 KiB.
+
+Findings use the `json` source with `syntax` or `schema` rule IDs. Schema findings include an instance path and source location. Error findings and execution failures produce a nonzero command exit status.
+
+```sh
+gavel lint json ./configs --exclude json:schema
+```
+

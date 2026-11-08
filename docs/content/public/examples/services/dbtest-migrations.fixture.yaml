@@ -1,0 +1,21 @@
+kind: Fixture
+name: Reusable migration template
+steps:
+  - id: resources
+    kind: services
+    services:
+      db:
+        dbtest:
+          migrations:
+            dir: schema
+            name: services-example
+            variables:
+              greeting: hello from template
+  - id: seed
+    kind: exec
+    script: psql -XAtc 'SELECT message FROM messages'
+    stdout: "hello from template\n"
+  - id: instance
+    kind: exec
+    script: psql -XAtc 'SELECT count(*) FROM instance_events WHERE database_name = current_database()'
+    stdout: "1\n"

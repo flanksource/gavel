@@ -1,0 +1,72 @@
+---
+title: "Infrastructure and background services"
+description: "Run a Git push test backend and manage a persistent PR dashboard."
+parent: cli-usage
+order: 20
+---
+
+## SSH push backend
+
+The `ssh` group turns Gavel into a git-push backend. Developers push to a Gavel SSH remote; the server accepts the push, runs `gavel test --lint` by default, and streams results back like a lightweight local CI service.
+
+Use `ssh serve` when you want to host that flow in the foreground:
+
+```bash
+gavel ssh serve --port 2222
+git remote add gavel ssh://localhost:2222/myproject
+git push gavel HEAD:main
+```
+
+## Install the SSH command
+
+Install and enable a systemd unit for the SSH server (Linux only).
+
+```bash
+gavel ssh install                    # install and enable service
+gavel ssh install --dry-run          # preview without making changes
+gavel ssh install --port 3333 --user gavel
+```
+
+| Flag | Description |
+|------|-------------|
+| `--port` | SSH server port (default: `2222`) |
+| `--host` | Listen address (default: `0.0.0.0`) |
+| `--user` | System user to run the service as (default: `gavel`) |
+| `--unit-path` | Path to write the systemd unit (default: `/etc/systemd/system/gavel-ssh.service`) |
+| `--data-dir` | Directory for host key and cached repos (default: `/var/lib/gavel`) |
+| `--binary` | Path to the gavel binary (default: current executable) |
+| `--dry-run` | Print actions without writing |
+| `--force` | Overwrite an existing unit file |
+
+## Background service
+
+The `system` group manages a detached PR dashboard service. Concretely, it is about running `gavel pr list --all --ui --menu-bar` in the background, keeping its service definition installed, and checking whether the daemon is healthy.
+
+Use it when you want an always-on PR dashboard instead of launching `pr list --ui` manually each time.
+
+Common workflows:
+
+```bash
+gavel system install
+gavel system start
+gavel system status
+gavel system stop
+gavel system uninstall
+```
+
+Command intent:
+
+- `install`: create the user-level service, launch it through the user's login and interactive shell so `.zshrc` PATH changes apply, and persist daemon config such as database mode and GitHub token
+- `start`: launch the detached daemon immediately
+- `status`: inspect service state, DB mode, live daemon health, and recent logs
+- `stop`: terminate the daemon process
+- `uninstall`: remove the installed service definition
+
+## SSH server options
+
+| Flag | Description |
+|------|-------------|
+| `--port` | SSH server port (default: `2222`) |
+| `--host` | Listen address (default: `0.0.0.0`) |
+| `--host-key` | Path to SSH host key (default: `~/.gavel/ssh_host_key`) |
+| `--repo-dir` | Directory for cached bare repos (default: `~/.gavel/repos`) |

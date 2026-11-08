@@ -1,0 +1,26 @@
+---
+title: Editable lifecycles
+description: Configure ordered TODO steps and manually start PR actions from provider context.
+order: 48
+---
+
+Open **Prompts → Lifecycles** in the dashboard, choose **TODO** or **PR**, then select the global or project scope. The editor shows inherited steps and the overrides authored in that scope. Edit an inherited step to copy it into the scope, reorder steps with Up and Down, disable a step, or reset its override. Adding a step uses the Steps form.
+
+**Preview lifecycle** validates the definition and shows its resolved form. Saving requires a successful preview of the current draft. Changes to a source file after loading require a reload. Discard restores the saved scope; reset removes the scope's overrides. TODO verification cannot be disabled or replaced with an agent prompt.
+
+Definitions live under `todos.lifecycle` and `pr.lifecycle` in `.gavel.yaml`. A named step replaces the inherited step completely; new names are appended. `order` lists steps in priority order, leaving unlisted steps in their inherited relative order. `disabled: []` explicitly enables steps disabled by a lower scope. A `file` reference loads a lifecycle document confined to the directory owning that configuration file. The editor saves an existing referenced document while preserving the reference.
+
+```yaml
+pr:
+  lifecycle:
+    order: [comment, conflicts, failures, review]
+    disabled: [review]
+```
+
+Each step declares `name`, `prompt`, an optional CEL `when`, output `events`, and ordered `outcomes`. Optional `inputs` map prompt variables to CEL expressions, and `spec` configures Captain execution. PR steps can reference `pr.fix`, `pr.review`, or a confined `file:` prompt. `pr.steps.<name>` supplies the project's runtime override for a custom step; `pr.fix` and `pr.review` configure the built-in prompts.
+
+PR conditions read `subject`, `event`, `runs` and `last`. Context types are `pr.create`, `pr.update`, `pr.comment`, `git.conflict`, `test.failure` and `lint.failure`. `event` contains `id`, `type`, `author`, `body`, `mentions` and `url`. For example, `event.type == 'pr.comment' && 'reviewer' in event.mentions` selects comments mentioning a particular identity. Mentions exclude email addresses and code. The step's `events` field is separately the vocabulary of its output envelope, such as `completed` or `blocked`.
+
+Expand **Lifecycle actions** in a PR's detail pane to load current provider context and Captain run history. Only the first matching enabled step is offered for each context. Preview an action to inspect its resolved prompt and runtime, then start it explicitly. Refresh loads new context; opening the dashboard does not dispatch a run. A changed PR head, changed preview, or another active lifecycle run blocks kickoff. Runs execute in an isolated PR worktree; configured commit policies use the PR source branch with a head lease. Cancel stops an active run. History links open Captain's native session viewer.
+
+Failure contexts come only from structured Gavel CI results whose workflow head matches the current PR head. An unclassified failed job does not become a test or lint failure. Closed or merged PRs offer no actions. Native PR state remains owned by the hosting provider; lifecycle outcomes describe the local run (`succeeded`, `failed` or `cancelled`).

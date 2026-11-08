@@ -1,0 +1,75 @@
+---
+title: "Catalog services with deps"
+parent: fixture-kind-services
+order: 14
+---
+
+import Prerequisites from "../../../src/components/site/Prerequisites";
+
+Use `deps` to start services from [`github.com/flanksource/deps/start`](https://pkg.go.dev/github.com/flanksource/deps/start). Gavel preserves the native catalog's version resolution, runtime selection, parameters, and readiness checks. Choose `dbtest` instead when you want an isolated PostgreSQL database on commons-db's shared server.
+
+## PostgreSQL through a local binary
+
+The complete <a href="/examples/services/deps-postgres.fixture.yaml" download>PostgreSQL fixture</a> starts PostgreSQL 17 through the binary runtime, exports its URL to a subsequent command, and verifies a real SQL query.
+
+<Prerequisites>
+
+- The PostgreSQL `psql` client on `PATH`.
+- Access to download the catalog's PostgreSQL binaries on the first run.
+
+</Prerequisites>
+
+The fixture uses its own data and service state under its temporary directory.
+
+```bash
+./.bin/gavel fixtures outline docs/content/public/examples/services/deps-postgres.fixture.yaml
+./.bin/gavel fixtures docs/content/public/examples/services/deps-postgres.fixture.yaml
+```
+
+Expected results: PostgreSQL becomes healthy, `POSTGRES_URL` and `POSTGRES_PORT` are exported automatically, and the query prints `catalog connection`. Teardown stops this PostgreSQL service; it does not stop commons-db's shared dbtest server.
+
+## Valkey through Docker
+
+The complete <a href="/examples/services/deps-valkey.fixture.yaml" download>Valkey fixture</a> starts the native catalog's Valkey service, checks the emitted connection type, then runs `valkey-cli` against `CACHE_URL`.
+
+<Prerequisites>
+
+- A running local Docker daemon and permission to run containers.
+- `valkey-cli` on `PATH`.
+
+</Prerequisites>
+
+The catalog generates credentials and configures the container's authentication. Its Redis URL includes those credentials.
+
+```bash
+./.bin/gavel fixtures outline docs/content/public/examples/services/deps-valkey.fixture.yaml
+./.bin/gavel fixtures docs/content/public/examples/services/deps-valkey.fixture.yaml
+```
+
+Expected results: the readiness check succeeds, the connection type is `redis`, and the command prints `PONG`. Docker uses ephemeral volume storage for fixture services; fixture teardown stops the service and removes its disposable storage.
+
+## Configuration
+
+| Setting | Meaning |
+| --- | --- |
+| `deps` | Native catalog service name, such as `postgres` or `valkey` |
+| `version` | Optional version constraint understood by the native catalog |
+| `runtime` | Optional `binary`, `docker`, `helm`, or `command`; the service must support the selected runtime |
+| `parameters` | Native service parameter map; names and accepted values come from that service's catalog definition |
+| `env` | Extra service process environment, layered over inherited fixture variables for host processes |
+| `wait.timeout` | Maximum time for native startup and health checks |
+| `export` | Additional environment mappings from the entry's outputs |
+
+Version and runtime support differ by service. In particular, the current Valkey catalog supports Docker and Helm, rather than a local binary. Inspect the native service definition before adding parameters; Gavel does not reinterpret unknown parameters or invent runtime support.
+
+## Connections and chaining
+
+Outputs include `url`, `host`, `port`, `username`, `password`, `connection`, `runtime`, `log`, `env`, and `ready`. `connection` carries the native type, URL, credentials, and properties. URL and port exports use the fixture entry name: an entry named `cache` exports `CACHE_URL` and `CACHE_PORT`.
+
+A later service can set `env: {CACHE_URL: "{{.services.cache.url}}"}`. A later command already inherits `CACHE_URL`. Use `export` for an application-specific name when its convention differs. Docker containers do not receive the entire Gavel host environment; supply container settings explicitly where supported.
+
+## Troubleshooting
+
+A missing runtime or unsupported parameter fails with the catalog error. Inspect the entry's log output when health checks fail. For a readiness timeout, adjust `wait.timeout` only after checking that the service can start with the supplied configuration. An entry uses the native health check; `ready.http`, `ready.tcp`, and `ready.exec` are for supervised `exec` entries.
+
+Helm and command runtimes may target an existing cluster or daemon. The examples deliberately use local binary and Docker runtimes with disposable resources. Confirm the target before adapting a fixture to external infrastructure.

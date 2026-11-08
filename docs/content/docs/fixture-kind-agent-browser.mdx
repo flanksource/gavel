@@ -1,0 +1,52 @@
+---
+title: Agent-browser
+description: Execute browser commands using a fixture's session and CDP connection.
+parent: fixture-step-reference
+order: 7
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+
+Use the `agent-browser` step in a YAML fixture to execute browser commands using a fixture's session and CDP connection. This typed step also supports JSON; Markdown command blocks can call the CLI, but do not provide the typed step's browser lifecycle or outputs.
+
+## Example
+
+```yaml
+kind: Fixture
+name: Agent-browser example
+steps:
+  - kind: browser
+    id: chrome
+  - id: inspect
+    kind: agent-browser
+    commands:
+      - open http://localhost:8080
+      - snapshot
+    cel: stdout != ""
+```
+
+Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+Install agent-browser and start your local application before running this fixture. Start a [browser step](/docs/fixture-kind-browser) first to supply its session and CDP connection.
+
+</Prerequisites>
+
+Commands omit the executable name. `session` and `cdp` inherit the browser step's exports; `binary` can choose an explicit executable.
+
+## Results and lifetime
+
+Outputs include command stdout, a snapshot when captured, and per-command results. `observe` specifies the command repeated on wait ticks; use a read-only command such as `snapshot` for polling. `$NAME` values expand from fixture environment variables.
+
+[Browser](/docs/fixture-kind-browser) covers session startup. [Step policies](/docs/fixture-step-policies) covers waiting on observed state.
+
+## Complete step reference
+
+Use Tree or Table to browse global fields and this kind's configuration separately. Expand nested fields or additional metadata when available. Shared behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="agent-browser" />
+
