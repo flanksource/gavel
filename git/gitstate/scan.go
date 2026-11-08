@@ -154,7 +154,7 @@ func scanRefs(ctx context.Context, store *Store, repoID uuid.UUID, root string) 
 		case byName[wt.Branch].Head == wt.Head:
 			ref.LastCommitAt = byName[wt.Branch].LastCommitAt
 		default:
-			if ref.LastCommitAt, err = gavelgit.CommitTime(wt.Path, wt.Head); err != nil {
+			if ref.LastCommitAt, err = gavelgit.CommitTime(root, wt.Head); err != nil {
 				return refsResult{}, err
 			}
 		}

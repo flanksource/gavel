@@ -8,11 +8,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/sdk/status"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
@@ -24,11 +24,11 @@ func OpenBlobs(ctx context.Context) (blob.Store, error) {
 	if err != nil || store != nil {
 		return store, err
 	}
-	dir, err := os.UserCacheDir()
+	dir, err := status.CacheDir()
 	if err != nil {
 		return nil, fmt.Errorf("find the cache directory for the blob store: %w", err)
 	}
-	return blob.Local(filepath.Join(dir, "gavel", "blobs")), nil
+	return blob.Local(filepath.Join(dir, "blobs")), nil
 }
 
 // OrgBlobs is org's part of store: orgs/<org>/.
