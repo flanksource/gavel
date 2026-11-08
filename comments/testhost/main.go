@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/gavel/comments"
 	api "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/comments/postgres"
+	"github.com/flanksource/gavel/internal/database"
 	"gorm.io/gorm"
 )
 
@@ -52,7 +53,7 @@ func run() (result error) {
 		return err
 	}
 	defer func() { result = errors.Join(result, closeDB()) }()
-	if err = postgres.Provision(ctx, db.DSN()); err != nil {
+	if err = database.Migrate(ctx, db.DSN()); err != nil {
 		return err
 	}
 	resolve := func(ctx context.Context) (*comments.Service, error) {

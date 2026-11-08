@@ -5,6 +5,7 @@ import (
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/comments"
 	"github.com/flanksource/gavel/comments/postgres"
+	"github.com/flanksource/gavel/internal/database"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"testing"
@@ -29,11 +30,11 @@ var _ = Describe("transactional comments", func() {
 		db := dbtest.ForGinkgo(dbtest.Options{Name: "comments"})
 		Expect(db.Gorm().Exec("CREATE TABLE host_sentinel (value text NOT NULL)").Error).NotTo(HaveOccurred())
 		Expect(db.Gorm().Exec("INSERT INTO host_sentinel VALUES ('preserved')").Error).NotTo(HaveOccurred())
-		Expect(postgres.Provision(ctx, db.DSN())).To(Succeed())
+		Expect(database.Migrate(ctx, db.DSN())).To(Succeed())
 		var sentinel string
 		Expect(db.Gorm().Raw("SELECT value FROM host_sentinel").Scan(&sentinel).Error).NotTo(HaveOccurred())
 		Expect(sentinel).To(Equal("preserved"))
-		Expect(postgres.Provision(ctx, db.DSN())).To(Succeed())
+		Expect(database.Migrate(ctx, db.DSN())).To(Succeed())
 		store, err := postgres.New(db.Gorm())
 		Expect(err).NotTo(HaveOccurred())
 		a := access{tenant: "tenant-a"}

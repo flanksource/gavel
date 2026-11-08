@@ -12,7 +12,7 @@ import (
 )
 
 func commentGitHub(ctx context.Context, p comments.Principal, t comments.Target) (github.Options, error) {
-	if err := (commentAccess{}).Authorize(ctx, p, "provider", t); err != nil {
+	if err := (CommentAccess{}).Authorize(ctx, p, "provider", t); err != nil {
 		return github.Options{}, err
 	}
 	project, err := commentProject(ctx, t.ScopeURI)

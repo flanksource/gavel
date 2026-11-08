@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/gavel/comments"
 	api "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/comments/postgres"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/spf13/cobra"
 )
 
@@ -55,7 +56,7 @@ func run() error {
 	dsn := flag.String("db", os.Getenv("COMMENTS_EXAMPLE_DSN"), "PostgreSQL connection string for an empty example database")
 	port := flag.Uint("port", 8099, "Loopback HTTP port")
 	scope := flag.String("scope", "example://workspace", "Host-owned target namespace")
-	provision := flag.Bool("provision", false, "Explicitly provision empty comments tables before serving")
+	migrate := flag.Bool("migrate", false, "Apply gavel's database schema (comments tables included) before serving")
 	flag.Parse()
 	if *dsn == "" {
 		return fmt.Errorf("set COMMENTS_EXAMPLE_DSN or --db")
@@ -64,8 +65,8 @@ func run() error {
 		return fmt.Errorf("port must be 1..65535")
 	}
 	ctx := context.Background()
-	if *provision {
-		if err := postgres.Provision(ctx, *dsn); err != nil {
+	if *migrate {
+		if err := database.Migrate(ctx, *dsn); err != nil {
 			return err
 		}
 	}

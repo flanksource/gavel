@@ -5,6 +5,7 @@ import (
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/comments"
 	"github.com/flanksource/gavel/comments/postgres"
+	"github.com/flanksource/gavel/internal/database"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -12,7 +13,7 @@ import (
 var _ = Describe("lint request metadata", func() {
 	It("deduplicates admission and retains native references without claiming execution state", func(ctx SpecContext) {
 		db := dbtest.ForGinkgo(dbtest.Options{Name: "comment_lint"})
-		Expect(postgres.Provision(ctx, db.DSN())).To(Succeed())
+		Expect(database.Migrate(ctx, db.DSN())).To(Succeed())
 		store, err := postgres.New(db.Gorm())
 		Expect(err).NotTo(HaveOccurred())
 		a := access{tenant: "lint"}

@@ -6,7 +6,7 @@ Gavel owns outcome-oriented comments for DOM anchors, Markdown/templates, captur
 
 ## Storage
 
-Construct `postgres.New(db)` from a host-owned GORM Postgres connection. Call `postgres.Provision(ctx, dsn)` explicitly for a fresh database. Provisioning uses commons-db's SQLglot migration infrastructure and defines only new comments tables. There are no imports, backfills or legacy-data conversion paths.
+Construct `postgres.New(db)` from a host-owned GORM Postgres connection. The tables are part of Gavel's database schema (`internal/database/schema/comment*.hcl`): `gavel serve` migrates them with every other Gavel table, and in-module hosts and tests call `database.Migrate(ctx, dsn)`.
 
 Every `Access.Principal` must return a tenant and stable actor. `Access.Authorize` runs on resolved targets and each action. Target resolvers must validate supported selectors, resource ownership and source revisions. Return `comments.ErrForbidden` for access rejection.
 
@@ -24,7 +24,7 @@ Root create request IDs are tenant-scoped. Reusing one with different input conf
 
 The `metadata` action replaces opaque host content; `retarget` changes a target within its existing scope after host authorization. `edit-reply` and `delete-reply` address `messageId`, preserve author/creation metadata, and reject deleting a reply that still has children. `delete` hides a root from listings, detail and attachments without discarding audit history; `restore` reverses that local deletion. Retargeting and root deletion/restoration require a human. Retrying a create request whose result was deleted conflicts.
 
-`gavel launch serve` embeds this API for local workspaces. Its scope is `gavel://workspace/<sha256-of-absolute-root>` and the tenant is the local user. Only loopback callers may use this host; `X-Gavel-Comment-Actor` is a base64url JSON actor assertion from a trusted local UI host. Remote/hosted applications must supply their own authentication and resolver instead. Provision tables explicitly with `gavel comments provision` before using comments.
+`gavel launch serve` embeds this API for local workspaces. Its scope is `gavel://workspace/<sha256-of-absolute-root>` and the tenant is the local user. Only loopback callers may use this host; `X-Gavel-Comment-Actor` is a base64url JSON actor assertion from a trusted local UI host. Remote/hosted applications must supply their own authentication and resolver instead. The tables exist once `gavel serve` has migrated the database.
 
 ## Lint
 

@@ -6,6 +6,7 @@ import (
 	"github.com/flanksource/gavel/comments"
 	commentlint "github.com/flanksource/gavel/comments/lint"
 	"github.com/flanksource/gavel/comments/postgres"
+	"github.com/flanksource/gavel/internal/database"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"sync"
@@ -14,7 +15,7 @@ import (
 var _ = Describe("comment concurrency and findings", func() {
 	It("accepts one concurrent writer and materializes structured findings idempotently", func(ctx SpecContext) {
 		db := dbtest.ForGinkgo(dbtest.Options{Name: "comments_concurrency"})
-		Expect(postgres.Provision(ctx, db.DSN())).To(Succeed())
+		Expect(database.Migrate(ctx, db.DSN())).To(Succeed())
 		store, err := postgres.New(db.Gorm())
 		Expect(err).NotTo(HaveOccurred())
 		a := access{tenant: "tenant-concurrent"}

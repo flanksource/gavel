@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 
@@ -51,13 +50,16 @@ func OpenComments(ctx context.Context) (*comments.Service, error) {
 	if s := entityServer(ctx); s != nil && s.blobs != nil {
 		blobs = commentblob.Store{Store: s.blobs}
 	}
-	access := commentAccess{}
+	access := CommentAccess{}
 	return comments.New(comments.Options{Store: store, Access: access, Targets: access, Workflows: []comments.Workflow{comments.HumanReview(), comments.NativePR()}, Blobs: blobs, AttachmentLimit: 10 << 20, Providers: []comments.Provider{providers.GitHub{Resolve: commentGitHub}, providers.Azure{Resolve: commentAzure}}})
 }
 
-type commentAccess struct{}
+// CommentAccess is the comment host for gavel://project/<name> scopes: the
+// signed-in user or, locally, the asserted actor or the OS user. `gavel edit`
+// embeds it so file threads live under their project, where `gavel comments` reaches them.
+type CommentAccess struct{}
 
-func (commentAccess) Principal(ctx context.Context) (comments.Principal, error) {
+func (CommentAccess) Principal(ctx context.Context) (comments.Principal, error) {
 	scope := tenant.FromContext(ctx)
 	if scope.UserID != nil {
 		return comments.Principal{TenantID: scope.OrgID.String(), Actor: comments.Actor{Kind: "user", ID: scope.UserID.String()}}, nil
@@ -65,9 +67,15 @@ func (commentAccess) Principal(ctx context.Context) (comments.Principal, error) 
 	if !scope.IsLocal() {
 		return comments.Principal{}, comments.ErrForbidden
 	}
-	return comments.Principal{TenantID: scope.OrgID.String(), Actor: comments.Actor{Kind: "user", ID: fmt.Sprintf("local:%d", os.Getuid())}}, nil
+	// Locally the caller may act as an agent it asserted (GAVEL_COMMENT_ACTOR on
+	// the CLI, the loopback actor header over HTTP): the same machine-local trust.
+	if actor, ok := commentapi.ActorFrom(ctx); ok {
+		return comments.Principal{TenantID: scope.OrgID.String(), Actor: actor}, nil
+	}
+	actor, err := commentapi.LocalUser()
+	return comments.Principal{TenantID: scope.OrgID.String(), Actor: actor}, err
 }
-func (commentAccess) Authorize(ctx context.Context, p comments.Principal, _ string, t comments.Target) error {
+func (CommentAccess) Authorize(ctx context.Context, p comments.Principal, _ string, t comments.Target) error {
 	if p.TenantID != tenant.FromContext(ctx).OrgID.String() {
 		return comments.ErrForbidden
 	}
@@ -106,7 +114,7 @@ func (commentAccess) Authorize(ctx context.Context, p comments.Principal, _ stri
 	}
 	return comments.ErrForbidden
 }
-func (a commentAccess) Resolve(ctx context.Context, p comments.Principal, t comments.Target) (comments.Target, error) {
+func (a CommentAccess) Resolve(ctx context.Context, p comments.Principal, t comments.Target) (comments.Target, error) {
 	if err := a.Authorize(ctx, p, "resolve-target", t); err != nil {
 		return t, err
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/comments"
 	"github.com/flanksource/gavel/comments/postgres"
+	"github.com/flanksource/gavel/internal/database"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -14,7 +15,7 @@ import (
 var _ = Describe("comment read markers and attachments", func() {
 	It("tracks unread versions per actor and preserves binary attachments with tenant isolation", func(ctx SpecContext) {
 		db := dbtest.ForGinkgo(dbtest.Options{Name: "comment_resources"})
-		Expect(postgres.Provision(ctx, db.DSN())).To(Succeed())
+		Expect(database.Migrate(ctx, db.DSN())).To(Succeed())
 		store, err := postgres.New(db.Gorm())
 		Expect(err).NotTo(HaveOccurred())
 		a := access{tenant: "resources"}

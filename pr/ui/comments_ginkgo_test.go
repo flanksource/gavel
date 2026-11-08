@@ -16,7 +16,7 @@ var _ = Describe("Gavel comments authorization", func() {
 		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
 		DeferCleanup(func() { projectsPath = previous })
 		Expect(SaveProjects([]Project{{Name: "demo", Dir: GinkgoT().TempDir(), Repos: []string{"acme/demo"}}})).To(Succeed())
-		access := commentAccess{}
+		access := CommentAccess{}
 		ctx := context.Background()
 		p, err := access.Principal(ctx)
 		Expect(err).NotTo(HaveOccurred())

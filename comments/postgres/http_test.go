@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/gavel/comments"
 	api "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/comments/postgres"
+	"github.com/flanksource/gavel/internal/database"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
@@ -23,7 +24,7 @@ import (
 var _ = Describe("generated HTTP comments", func() {
 	It("creates and closes through generated routes and returns stale writes as JSON conflicts", func(ctx SpecContext) {
 		db := dbtest.ForGinkgo(dbtest.Options{Name: "comments_http"})
-		Expect(postgres.Provision(ctx, db.DSN())).To(Succeed())
+		Expect(database.Migrate(ctx, db.DSN())).To(Succeed())
 		store, err := postgres.New(db.Gorm())
 		Expect(err).NotTo(HaveOccurred())
 		a := access{tenant: "tenant-http"}

@@ -3,11 +3,8 @@ package launch
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,11 +16,10 @@ import (
 	"gorm.io/gorm"
 )
 
-type commentActorKey struct{}
 type localCommentHost struct{ scope string }
 
 func (h localCommentHost) Principal(ctx context.Context) (comments.Principal, error) {
-	actor, ok := ctx.Value(commentActorKey{}).(comments.Actor)
+	actor, ok := api.ActorFrom(ctx)
 	if !ok {
 		return comments.Principal{}, comments.ErrForbidden
 	}
@@ -60,20 +56,9 @@ func CommentsHandler(db *gorm.DB, root string) (http.Handler, error) {
 		return nil, err
 	}
 	handler := api.Handler(func(context.Context) (*comments.Service, error) { return service, nil })
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		address, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil || !net.ParseIP(address).IsLoopback() {
-			http.Error(w, "workspace comments require a loopback caller", http.StatusForbidden)
-			return
-		}
-		actor := comments.Actor{Kind: "user", ID: fmt.Sprintf("local:%d", os.Getuid()), Label: "You"}
-		if value := r.Header.Get("X-Gavel-Comment-Actor"); value != "" {
-			data, err := base64.RawURLEncoding.DecodeString(value)
-			if err != nil || json.Unmarshal(data, &actor) != nil || actor.ID == "" || (actor.Kind != "user" && actor.Kind != "agent") {
-				http.Error(w, "invalid local comment actor", 400)
-				return
-			}
-		}
-		handler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), commentActorKey{}, actor)))
-	}), nil
+	you, err := api.LocalUser()
+	if err != nil {
+		return nil, err
+	}
+	return api.LocalActor(handler, you), nil
 }

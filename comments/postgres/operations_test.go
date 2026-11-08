@@ -7,6 +7,7 @@ import (
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/comments"
 	"github.com/flanksource/gavel/comments/postgres"
+	"github.com/flanksource/gavel/internal/database"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"time"
@@ -22,7 +23,7 @@ func (e *uncertainDelivery) Execute(context.Context, comments.Operation) (json.R
 var _ = Describe("durable publication admission", func() {
 	It("retains uncertain delivery without replaying it", func(ctx SpecContext) {
 		db := dbtest.ForGinkgo(dbtest.Options{Name: "comments_outbox"})
-		Expect(postgres.Provision(ctx, db.DSN())).To(Succeed())
+		Expect(database.Migrate(ctx, db.DSN())).To(Succeed())
 		store, err := postgres.New(db.Gorm())
 		Expect(err).NotTo(HaveOccurred())
 		a := access{tenant: "tenant-outbox"}

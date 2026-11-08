@@ -15,19 +15,21 @@ Import `github.com/flanksource/gavel/comments` for the core, `comments/postgres`
 
 `CodeSelector` validates version 1, relative paths, inclusive line ranges, code revisions, and both diff commits plus the selected side. Other selector kinds are host-defined JSON. Structured root/reply content and capture metadata round-trip without a Gavel-specific presentation schema.
 
-Provision only empty comments tables with `postgres.Provision(ctx, dsn)`. Existing-data conversion, backfill, filesystem import and xero-cli refactoring are excluded. The playground consumes the comments API through its host projection without importing old JSON comments.
+The comments tables are part of Gavel's database schema (`internal/database/schema/comment*.hcl`). `gavel serve` migrates them with every other Gavel table, and in-module hosts call `database.Migrate(ctx, dsn)`. The playground consumes the comments API through its host projection without importing old JSON comments.
 
 ## Gavel host
 
 Gavel registers comments on its CLI, generated API/catalog and assistant tool surface. It resolves the pool and tenant per request and authorizes targets against registered projects. Project scopes are `gavel://project/<URL-escaped-project-name>`; local targets can be namespaced beneath that URI. Native PR URLs must belong to the project's repository inventory.
 
+`gavel edit` threads live under the project holding the file, as `gavel://project/<name>/files/<path>`. An agent replies as itself by exporting `GAVEL_COMMENT_ACTOR` (base64url JSON `{kind, id, label}`), which only the local tenant honours.
+
 ```sh
-gavel comments provision
 gavel comments list --scope 'gavel://project/demo' --limit 50
+GAVEL_COMMENT_ACTOR=<actor> gavel comments reply <id> --expectedVersion <version> --bodyMarkdown 'Done'
 gavel comments dispatch
 ```
 
-Provisioning and dispatch are explicit local CLI operations. The hosted API uses organization/user identity and its repository inventory. Hosted Azure credentials and lint execution against host files are refused until the host supplies the corresponding authorized integration.
+Dispatch is an explicit local CLI operation. The hosted API uses organization/user identity and its repository inventory. Hosted Azure credentials and lint execution against host files are refused until the host supplies the corresponding authorized integration.
 
 ## Generated API
 
@@ -57,10 +59,10 @@ Lint records retain selection, prompt version, native run/session references and
 
 ## Runnable host
 
-The [example](../examples/comments/main.go) uses a loopback listener, fixed demonstration identity and a host-owned target namespace. Supply a disposable empty Postgres database:
+The [example](../examples/comments/main.go) uses a loopback listener, fixed demonstration identity and a host-owned target namespace. Supply a disposable Postgres database; `--migrate` applies Gavel's schema to it:
 
 ```sh
-go run ./examples/comments --db "$COMMENTS_EXAMPLE_DSN" --provision --port 8099
+go run ./examples/comments --db "$COMMENTS_EXAMPLE_DSN" --migrate --port 8099
 ```
 
 Create a template comment:
