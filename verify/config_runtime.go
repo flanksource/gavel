@@ -5,6 +5,7 @@ import (
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/runconfig"
 	"path/filepath"
+	"runtime"
 	"slices"
 )
 
@@ -50,6 +51,11 @@ func (c GavelConfig) RuntimeFor(category, name string, caller processruntime.Opt
 		}
 	}
 	runtime = runtime.Merge(caller)
+	var err error
+	runtime.Slots, err = c.SlotLimits()
+	if err != nil {
+		return runtime, nil, err
+	}
 	return runtime, args, runtime.Validate()
 }
 
@@ -77,6 +83,9 @@ func frameworkKey(name string) string {
 }
 
 func (c GavelConfig) validateRuntime() error {
+	if err := c.Slots.Validate(runtime.NumCPU()); err != nil {
+		return err
+	}
 	if err := runconfig.Validate(c.Lint.Options, false); err != nil {
 		return fmt.Errorf("lint.options: %w", err)
 	}

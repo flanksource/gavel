@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/sdk/status"
 	"github.com/gofrs/flock"
 )
 
@@ -105,11 +106,11 @@ func (s CatalogStore) lock(ctx context.Context, scope CatalogScope) (string, *fl
 	}
 	dir := s.Dir
 	if dir == "" {
-		cacheDir, err := os.UserCacheDir()
+		cacheDir, err := status.CacheDir()
 		if err != nil {
 			return "", nil, fmt.Errorf("resolve Jira cache directory: %w", err)
 		}
-		dir = filepath.Join(cacheDir, "gavel", "jira")
+		dir = filepath.Join(cacheDir, "jira")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", nil, fmt.Errorf("create Jira catalog directory: %w", err)

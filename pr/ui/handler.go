@@ -550,6 +550,8 @@ func (s *Server) RefreshCh() chan struct{} {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/connections/storage", s.handleConnectionStorage)
+ for _,pattern:=range []string{"GET /api/connections","POST /api/connections","GET /api/connections/{reference}","PATCH /api/connections/{reference}","DELETE /api/connections/{reference}","POST /api/connections/{reference}/validate"} {mux.HandleFunc(pattern,s.handleConnections)}
 	if s.launchService != nil {
 		for _, path := range []string{"/api/launch", "/api/launch/", "/api/runs", "/api/runs/"} {
 			mux.Handle(path, s.launchService.Handler())

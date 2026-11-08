@@ -100,6 +100,7 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	addConnectionsOpenAPI(document)
 	respondJSON(w, http.StatusOK, document)
 }
 

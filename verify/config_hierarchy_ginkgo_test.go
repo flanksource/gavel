@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/sdk/status"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -44,9 +45,9 @@ var _ = Describe("Hierarchical configuration", func() {
 		first, err := LoadGavelConfig(target)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(filepath.Join(repo, ".gavel")).NotTo(BeAnExistingFile(), "reading configuration leaves the checkout clean")
-		userCache, err := os.UserCacheDir()
+		userCache, err := status.CacheDir()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(filepath.Glob(filepath.Join(userCache, "gavel", "config", "*.json"))).To(HaveLen(1))
+		Expect(filepath.Glob(filepath.Join(userCache, "config", "*.json"))).To(HaveLen(1))
 		gavelConfigCache.Lock()
 		gavelConfigCache.entries = map[string]gavelConfigCacheEntry{}
 		gavelConfigCache.Unlock()

@@ -32,6 +32,7 @@ func gavelConfigSchema() map[string]any {
 			"or any directory through the target; layers merge in that order with nearer layers overriding earlier ones. "+
 			"Run `gavel config [path]` to inspect the merged result.",
 		map[string]any{
+			"slots":          slotsSchema(),
 			"externalIssues": externalIssuesSchema(),
 			"runtime":        runtimeSchema(),
 			"ai":             aiSchema(specSchema),

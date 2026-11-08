@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/runconfig"
+	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gavel/todos/types"
 	yamlv3 "gopkg.in/yaml.v3"
 )
@@ -338,6 +339,7 @@ func (f FixturesConfig) ResolvedFiles() []string {
 }
 
 type GavelConfig struct {
+	Slots          slots.Config           `yaml:"slots,omitempty" json:"slots,omitempty"`
 	ExternalIssues ExternalIssuesConfig   `yaml:"externalIssues,omitempty" json:"externalIssues,omitempty"`
 	Runtime        processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	RuntimeLayers  []RuntimeLayer         `yaml:"-" json:"-"`

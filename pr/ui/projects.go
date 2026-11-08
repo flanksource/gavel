@@ -50,6 +50,14 @@ type LoadProjectsOptions struct {
 
 var projectsPath = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "projects.json")
 
+// UseProjectsFileForTest points the project catalog at path, for another
+// package's tests, and returns the restore.
+func UseProjectsFileForTest(path string) (restore func()) {
+	previous := projectsPath
+	projectsPath = path
+	return func() { projectsPath = previous }
+}
+
 // withRepos returns the project with a non-nil Repos list. Go marshals a nil
 // slice as JSON null, and every consumer of the catalog — the dashboard's
 // Project type, the CLI table, the TODO runtime — treats repos as a list, so a
