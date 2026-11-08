@@ -33,11 +33,13 @@ const TAB_KEYS: readonly TabKey[] = ['tests', 'lint', 'files', 'bench', 'process
 
 export interface RouteState {
   tab: TabKey;
-  // On the Files tab this is the open file's path relative to `workDir`.
+  // On the Files tab this is the open file's or folder's path relative to `workDir` (empty for a work dir's root folder).
   selectedPath: string;
+  // Files tab: the open node is a folder (`?kind=folder`), not a file.
+  folder?: boolean;
   // Files tab: the root `selectedPath` is relative to (`?dir=`), the same relative path can exist under several.
   workDir?: string;
-  // Files tab: the open file's tab (`?view=`): preview (Source for code) unless it says source or problems.
+  // Files tab: the open node's tab (`?view=`): a built-in or host tab id; preview (Source for code, Problems for a folder) when absent.
   view?: FileReviewView;
   // Files tab: 1-based line to reveal (`?line=`).
   line?: number;
@@ -57,8 +59,9 @@ function splitCSV(value: string | null): string[] {
   return value.split(',').map(v => v.trim()).filter(Boolean);
 }
 
+// Any tab id is kept: FileFindingsView shows a node's first tab for a view it does not have.
 function parseView(value: string | null): FileReviewView {
-  return value === 'source' || value === 'problems' ? value : 'preview';
+  return value || 'preview';
 }
 
 export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): RouteState {
@@ -109,6 +112,7 @@ export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): Rou
     sampleIndex: sample !== null && /^\d+$/.test(sample) ? Number(sample) : undefined,
     hideExited: params.get('hideExited') === '1',
     ...(dir ? { workDir: dir } : {}),
+    ...(tab === 'files' && params.get('kind') === 'folder' ? { folder: true } : {}),
     view: parseView(params.get('view')),
     line: line !== null && /^\d+$/.test(line) && Number(line) > 0 ? Number(line) : undefined,
   };
@@ -137,6 +141,7 @@ export function buildRoute(state: RouteState): string {
   }
   if (state.tab === 'files') {
     if (state.workDir) params.set('dir', state.workDir);
+    if (state.folder) params.set('kind', 'folder');
     if (state.view && state.view !== 'preview') params.set('view', state.view);
     if (state.line !== undefined) params.set('line', String(state.line));
     if (state.problemFilters.severity.size > 0) params.set('problemSeverity', encodeFilterState(state.problemFilters.severity).join(','));

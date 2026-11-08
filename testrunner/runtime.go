@@ -45,6 +45,7 @@ func (o *TestOrchestrator) buildCommand(runner runners.Runner, pkg string, extra
 		return nil, err
 	}
 	run.Process.WithTimeout(timeout)
+	run.Slots = runtime.Slots
 	return run, nil
 }
 

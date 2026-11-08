@@ -22,7 +22,15 @@ import {
   type TestFilters,
   type Violation,
 } from '@flanksource/clicky-ui/data';
-import { lintFindings, testFindings, type FileFinding, type FileRef, type FileReviewView, type ProblemFilters } from '@flanksource/clicky-ui/file-findings';
+import {
+  lintFindings,
+  testFindings,
+  type FileFinding,
+  type FileRef,
+  type FileReviewView,
+  type FileTreeSelection,
+  type ProblemFilters,
+} from '@flanksource/clicky-ui/file-findings';
 import { Button, Tabs } from '@flanksource/clicky-ui/components';
 import {
   UiArrowLeft,
@@ -41,6 +49,7 @@ import { FixtureBenchView } from './components/FixtureBenchView';
 import { LintTasks } from './components/LintTasks';
 import { RerunDialog } from './components/RerunDialog';
 import { RunActions } from './components/RunActions';
+import { RunPrompts } from './components/RunPrompts';
 import { RunHistory } from './components/RunHistory';
 import { RunProcesses } from './components/RunProcesses';
 import { RunSwitcher } from './components/RunSwitcher';
@@ -300,10 +309,11 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     });
     return { findings: [...lintEntries, ...testFindings(withWorkDir(tests, gitRoot))], linterByFinding, sourceUrlByFinding };
   }, [lint, tests, gitRoot]);
-  const selectedFile = useMemo<FileRef | null>(
-    () => (route.tab === 'files' && route.selectedPath ? { file: route.selectedPath, ...(route.workDir ? { workDir: route.workDir } : {}) } : null),
-    [route.tab, route.selectedPath, route.workDir],
-  );
+  const selectedFileNode = useMemo<FileTreeSelection | null>(() => {
+    if (route.tab !== 'files' || (!route.selectedPath && !route.folder)) return null;
+    const ref = { file: route.selectedPath, ...(route.workDir ? { workDir: route.workDir } : {}) };
+    return { kind: route.folder ? 'folder' : 'file', ref };
+  }, [route.tab, route.selectedPath, route.folder, route.workDir]);
 
   const traces = useMemo(() => rebaseTraces(snapshotStatus.traces, base), [snapshotStatus.traces, base]);
   const processTraceAvailable = !!processMount(snapshotStatus.traces);
@@ -343,7 +353,7 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   }, [route, selectedTest, selectedLint, selectedProcess, tests.length, done, lintRun, lint, trace.nodes.length, rootProcess, commitRoute]);
 
   const onTabChange = useCallback((tab: string) => {
-    const { workDir: _workDir, line: _line, ...rest } = route;
+    const { workDir: _workDir, line: _line, folder: _folder, ...rest } = route;
     commitRoute({ ...rest, tab: tab as TabKey, selectedPath: '' });
   }, [route, commitRoute]);
   const onSelectTest = useCallback((node: ClickyTest | null) => commitRoute({ ...route, selectedPath: node?.route_path ?? '' }), [route, commitRoute]);
@@ -353,15 +363,24 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   const onSelectLint = useCallback((selectedPath: string | null) => commitRoute({ ...route, selectedPath: selectedPath ?? '' }), [route, commitRoute]);
   const onSelectProcess = useCallback((key: string) => commitRoute({ ...route, tab: 'processes', selectedPath: key }), [route, commitRoute]);
   const onHideExitedChange = useCallback((hideExited: boolean) => commitRoute({ ...route, tab: 'processes', hideExited }, 'replace'), [route, commitRoute]);
-  const openFile = useCallback((ref: FileRef, line?: number) => {
-    const { workDir: _workDir, line: _line, ...rest } = route;
-    commitRoute({ ...rest, tab: 'files', selectedPath: ref.file, ...(ref.workDir ? { workDir: ref.workDir } : {}), ...(line ? { line } : {}) });
+  const openFileNode = useCallback((selection: FileTreeSelection, line?: number) => {
+    const { workDir: _workDir, line: _line, folder: _folder, ...rest } = route;
+    const { ref } = selection;
+    commitRoute({
+      ...rest,
+      tab: 'files',
+      selectedPath: ref.file,
+      ...(selection.kind === 'folder' ? { folder: true } : {}),
+      ...(ref.workDir ? { workDir: ref.workDir } : {}),
+      ...(line ? { line } : {}),
+    });
   }, [route, commitRoute]);
+  const openFile = useCallback((ref: FileRef, line?: number) => openFileNode({ kind: 'file', ref }, line), [openFileNode]);
   const onOpenFile = useCallback(
     (target: OpenFileTarget) => openFile({ file: target.file, ...(target.workDir || gitRoot ? { workDir: target.workDir || gitRoot } : {}) }, target.line),
     [openFile, gitRoot],
   );
-  const onSelectFile = useCallback((ref: FileRef) => openFile(ref), [openFile]);
+  const onSelectFileNode = useCallback((selection: FileTreeSelection) => openFileNode(selection), [openFileNode]);
   const onLineChange = useCallback((line: number | undefined) => {
     const { line: _line, ...rest } = route;
     commitRoute({ ...rest, ...(line ? { line } : {}) }, 'replace');
@@ -500,8 +519,8 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   }), [route, snapshotStatus.test_edit_supported, onTestEdit, testEditBusy]);
 
   const registry = useMemo(
-    () => gavelRegistry({ traces, processes: trace.nodes, onOpenProcess: onSelectProcess, actions }),
-    [traces, trace.nodes, onSelectProcess, actions],
+    () => gavelRegistry({ traces, processes: trace.nodes, onOpenProcess: onSelectProcess, actions, scope, promptOwner: runMeta?.prompt_owner }),
+    [traces, trace.nodes, onSelectProcess, actions, scope, runMeta?.prompt_owner],
   );
   const fetchProcessMetrics = useMemo(
     () => fetchProcessMetricsFromSamples({ samples: trace.samples, nodes: trace.nodes }),
@@ -515,18 +534,6 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   const benchRegressions = run.bench?.deltas?.filter(d => d.significant && d.delta_pct > run.bench!.threshold).length || 0;
   const canExport = (route.tab === 'tests' && displayedTests.length > 0) || (route.tab === 'lint' && lintRun) || (route.tab === 'bench' && showBenchTab);
   const canGlobalStop = snapshotStatus.running && !!snapshotStatus.stop_supported;
-  const runActions = (
-    <RunActions
-      runMeta={runMeta}
-      canStop={canGlobalStop}
-      stopping={stopBusyKey === GLOBAL_STOP_KEY}
-      onStop={onStopAll}
-      exportState={canExport ? wholeResultRoute : undefined}
-    />
-  );
-  const status = notice ?? streamError ?? statusText;
-  const backTo = (window as unknown as { __gavelBackTo?: string }).__gavelBackTo;
-
   const tabs = [
     { id: 'tests', label: 'Tests', icon: UiBeaker, count: totals.failed > 0 ? totals.failed : totals.total, countColor: totals.failed > 0 ? 'bg-red-500' : 'bg-muted-foreground' },
     ...(showLintTab ? [{ id: 'lint', label: 'Lint', icon: UiListChecks, count: lintTotal, countColor: lintTotal > 0 ? 'bg-yellow-500' : 'bg-muted-foreground' }] : []),
@@ -539,6 +546,25 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     ...(showProcessesTab ? [{ id: 'processes', label: 'Processes', icon: UiServerProcess, count: processCount, countColor: 'bg-blue-500' }] : []),
     ...(history.available ? [{ id: 'history', label: 'History', icon: UiHistory }] : []),
   ];
+  const showTabsRow = tabs.length > 1 || history.available;
+  // The prompt indicator mounts once, top right: in the tests tab's header
+  // actions, else at the right of the tabs row (the history tab has no actions).
+  const promptsInRunActions = route.tab === 'tests' || !showTabsRow;
+  const prompts = <RunPrompts owner={runMeta?.prompt_owner} scope={scope} />;
+  const runActions = (
+    <>
+      {promptsInRunActions && prompts}
+      <RunActions
+        runMeta={runMeta}
+        canStop={canGlobalStop}
+        stopping={stopBusyKey === GLOBAL_STOP_KEY}
+        onStop={onStopAll}
+        exportState={canExport ? wholeResultRoute : undefined}
+      />
+    </>
+  );
+  const status = notice ?? streamError ?? statusText;
+  const backTo = (window as unknown as { __gavelBackTo?: string }).__gavelBackTo;
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -550,10 +576,11 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
           </a>
         </div>
       )}
-      {(tabs.length > 1 || history.available) && (
+      {showTabsRow && (
         <div className="flex shrink-0 items-center gap-2 pr-density-4">
           <Tabs tabs={tabs} value={route.tab} onChange={onTabChange} className="min-w-0 flex-1 px-density-4" />
           {history.available && <RunSwitcher history={history} navigate={navigate} />}
+          {!promptsInRunActions && prompts}
         </div>
       )}
 
@@ -631,8 +658,8 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
               <Suspense fallback={<FilesLoading />}>
                 <FilesTab
                   findings={findings}
-                  selectedFile={selectedFile}
-                  onSelectFile={onSelectFile}
+                  selected={selectedFileNode}
+                  onSelect={onSelectFileNode}
                   line={route.line}
                   onLineChange={onLineChange}
                   view={route.view ?? 'preview'}

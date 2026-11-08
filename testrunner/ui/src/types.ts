@@ -43,6 +43,8 @@ export interface Test {
   // distinct from pending (queued/not-yet-started). Renderers show running with
   // an active spinner and pending with a static hollow icon.
   running?: boolean;
+  // waiting marks a running fixture blocked on a person answering a form.
+  waiting?: boolean;
   timed_out?: boolean;
   cached?: boolean;
   task_id?: string;
@@ -339,6 +341,8 @@ export interface RunMeta {
   timed_out?: boolean;
   // run_id names the run's trace store, .gavel/traces/<run_id>.
   run_id?: string;
+  // prompt_owner scopes the run's pending form prompts (/api/prompts?owner=).
+  prompt_owner?: string;
   // process_trace names the run's process capture in that store.
   process_trace?: ProcessTraceRefs;
 }

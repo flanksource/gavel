@@ -14,6 +14,7 @@ import (
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky/api"
 	clickyexec "github.com/flanksource/clicky/exec"
+	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
@@ -70,6 +71,13 @@ type Server struct {
 	taskSource    func() []clickytask.TaskSnapshot
 	frozenTasks   []clickytask.TaskSnapshot
 	tasksFrozen   bool
+
+	// prompts answers the form steps of the runs this server starts (Prompter).
+	prompts     *prompt.Manager
+	promptsOnce sync.Once
+	identify    func(*http.Request) string
+	// connectionDir is where the connection pickers read the catalog from.
+	connectionDir string
 }
 
 func NewServer() *Server {
@@ -85,6 +93,7 @@ func (s *Server) BeginRun(kind string) {
 	}
 	meta := s.ensureMetadataLocked()
 	meta.Sequence = next
+	meta.PromptOwner = fmt.Sprintf("run-%d", next)
 	meta.Kind = kind
 	meta.Started = time.Now().UTC()
 	meta.Ended = time.Time{}
@@ -391,6 +400,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/rerun", s.handleRerun)
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/stop", s.handleStop)
+	s.prompter().RegisterHandlers(mux, PromptsMount)
+	mux.HandleFunc("/api/v1/connection", s.handleConnectionLookup)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("/api/lint/dismiss", s.handleLintDismiss)
 	mux.HandleFunc("/api/lint/fix", s.handleLintFix)

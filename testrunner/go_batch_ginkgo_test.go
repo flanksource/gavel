@@ -222,7 +222,7 @@ var _ = Describe("unified Go runner", func() {
 				ginkgoPlan = plan
 			}
 		}
-		process, err := o.buildGoBatchCommand(ginkgoPlan)
+		process, err := o.buildGoBatchCommand(ginkgoPlan, 0)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(process.Args).To(ContainElements("-args", "-ginkgo.focus=selected"))
 	})

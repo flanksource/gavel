@@ -24,7 +24,7 @@ var _ = Describe("Nested test configuration", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(plans).To(HaveLen(2))
 		for _, plan := range plans {
-			command, err := o.buildGoBatchCommand(plan)
+			command, err := o.buildGoBatchCommand(plan, 0)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(command.Env["PACKAGE_ENV"]).To(Equal(filepath.Base(plan.packages[0])))
 		}

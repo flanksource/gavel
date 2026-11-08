@@ -46,6 +46,20 @@ var _ = Describe("GET /api/file", func() {
 		Expect([]any{code, contentType, body}).To(Equal([]any{http.StatusOK, "text/plain; charset=utf-8", source}))
 	})
 
+	It("serves a binary png as image/png with nosniff and a sandboxing CSP", func() {
+		png := "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+		Expect(os.WriteFile(filepath.Join(workDir, "cmd", "diagram.png"), []byte(png), 0o644)).To(Succeed())
+		query := url.Values{"work_dir": {workDir}, "path": {"cmd/diagram.png"}}
+		response := get(lintServer().Handler(), "/api/file?"+query.Encode())
+		Expect([]any{
+			response.Code,
+			response.Header().Get("Content-Type"),
+			response.Header().Get("X-Content-Type-Options"),
+			response.Header().Get("Content-Security-Policy"),
+			response.Body.String(),
+		}).To(Equal([]any{http.StatusOK, "image/png", "nosniff", "default-src 'none'; style-src 'unsafe-inline'; sandbox", png}))
+	})
+
 	It("serves a virtual file from its lint result's source map, and still misses an unmapped one", func() {
 		const xml = "<Transaction>\n  <Math/>\n</Transaction>\n"
 		srv := testui.NewServer()

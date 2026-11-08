@@ -8,6 +8,7 @@ import (
 	"github.com/flanksource/clicky/exec"
 	commonsCtx "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/slots"
 )
 
 // PackageTimeoutReason is the diagnostics reason a package that ran past its
@@ -118,6 +119,15 @@ func mergeParentContext(primary, parent context.Context) (context.Context, conte
 // reason (PackageTimeoutReason) before each subprocess kill so timeout output
 // captures live goroutine, task, and process state.
 var captureGlobalDiagnostics = func(string) {}
+
+func (o *TestOrchestrator) acquireSlots(ctx commonsCtx.Context, request slots.Request) (*slots.Lease, error) {
+	if !request.Limits.Enabled() {
+		return slots.Acquire(ctx, request)
+	}
+	parent, cancel := mergeParentContext(ctx, o.Context)
+	defer cancel()
+	return slots.Acquire(parent, request)
+}
 
 // SetCaptureGlobalDiagnostics installs the diagnostics hook invoked by the
 // per-package supervisor before it kills a timed-out subprocess. The caller

@@ -1,15 +1,20 @@
 package testrunner
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/gavel/fixtures"
+	_ "github.com/flanksource/gavel/fixtures/kinds/query"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -35,7 +40,7 @@ var _ = Describe("fixture progress adapter", func() {
 			},
 		}
 
-		tests := executionSnapshotToTests(snapshot)
+		tests := projectTests(snapshot)
 
 		Expect(tests).To(HaveLen(2))
 		Expect(tests[0].Name).To(Equal("Fixture lifecycle"))
@@ -60,7 +65,7 @@ var _ = Describe("fixture progress adapter", func() {
 			}},
 		}}
 
-		Expect(executionSnapshotToTests(snapshot)[0].Context).To(Equal(parsers.FixtureContext{Traces: windows}))
+		Expect(projectTests(snapshot)[0].Context).To(Equal(parsers.FixtureContext{Traces: windows}))
 	})
 
 	It("keeps the internal progress key out of a node's detail; it is the TaskID", func() {
@@ -75,7 +80,7 @@ var _ = Describe("fixture progress adapter", func() {
 			}},
 		}}
 
-		test := executionSnapshotToTests(snapshot)[0]
+		test := projectTests(snapshot)[0]
 		raw, err := json.Marshal(test.Detail)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -108,8 +113,8 @@ var _ = Describe("fixture progress adapter", func() {
 			}},
 		}}}
 
-		tests := executionSnapshotToTests(snapshot)
-		Expect(mergeFixtureResultDetails(tests, tree, "")).To(Succeed())
+		tests := projectTests(snapshot)
+		Expect(mergeFixtureResultDetails(tests, tree, "", nil)).To(Succeed())
 
 		raw, err := json.Marshal(tests[0].Detail)
 		Expect(err).NotTo(HaveOccurred())
@@ -150,8 +155,8 @@ var _ = Describe("fixture progress adapter", func() {
 		fileNode.AddChild(&fixtures.FixtureNode{Name: "watch", Type: fixtures.TestNode, Origin: stepOrigin, Results: started})
 		fileNode.AddChild(&fixtures.FixtureNode{Name: verdict.Name, Type: fixtures.TestNode, Results: &verdict})
 
-		tests := executionSnapshotToTests(snapshot)
-		Expect(mergeFixtureResultDetails(tests, &fixtures.FixtureNode{Children: []*fixtures.FixtureNode{fileNode}}, "")).To(Succeed())
+		tests := projectTests(snapshot)
+		Expect(mergeFixtureResultDetails(tests, &fixtures.FixtureNode{Children: []*fixtures.FixtureNode{fileNode}}, "", nil)).To(Succeed())
 
 		watch := tests[0].Children[0]
 		raw, err := json.Marshal(watch.Detail)
@@ -165,6 +170,138 @@ var _ = Describe("fixture progress adapter", func() {
 		}`))
 	})
 })
+
+var _ = Describe("live fixture step results", func() {
+	// testOf is the projected test named name, anywhere under tests.
+	var testOf func(tests []parsers.Test, name string) *parsers.Test
+	testOf = func(tests []parsers.Test, name string) *parsers.Test {
+		for i := range tests {
+			if tests[i].Name == name {
+				return &tests[i]
+			}
+			if found := testOf(tests[i].Children, name); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+
+	It("shows a finished step's detail and findings while the next step still runs", func() {
+		GinkgoT().Setenv("XDG_CONFIG_HOME", GinkgoT().TempDir())
+		dir := GinkgoT().TempDir()
+		dbPath := filepath.Join(dir, "data.db")
+		db, err := sql.Open("sqlite", dbPath)
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = db.Close() }()
+		_, err = db.Exec("CREATE TABLE activities(guid TEXT); INSERT INTO activities VALUES ('a1'), ('a2')")
+		Expect(err).NotTo(HaveOccurred())
+		writeTestFile(filepath.Join(dir, ".connections", "lab.yaml"), "apiVersion: mission-control.flanksource.com/v1\nkind: Connection\n"+
+			"metadata:\n  name: lab\nspec:\n  type: sqlite\n  url:\n    value: "+dbPath+"\n")
+		path := filepath.Join(dir, "live.fixture.yaml")
+		writeTestFile(path, `kind: Fixture
+steps:
+  - id: inspect
+    kind: query
+    connection: lab
+    query: SELECT guid FROM activities ORDER BY guid
+    findings: "outputs.rows.map(r, {'severity': 'warning', 'message': r.guid})"
+  - id: arrived
+    kind: query
+    connection: lab
+    query: SELECT guid FROM activities
+    wait: {until: "rowCount == 3", interval: 50ms, timeout: 20s}
+`)
+		var mu sync.Mutex
+		var live *parsers.Test
+		runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
+			Paths: []string{path}, WorkDir: dir,
+			ProgressSink: func(_ context.Context, snapshot fixtures.ExecutionSnapshot) error {
+				mu.Lock()
+				defer mu.Unlock()
+				tests, err := executionSnapshotToTests(snapshot)
+				if err != nil {
+					return err
+				}
+				inspect, arrived := testOf(tests, "inspect"), testOf(tests, "arrived")
+				if live != nil || inspect == nil || inspect.Running || inspect.Pending || arrived == nil || !arrived.Running {
+					return nil
+				}
+				live = inspect
+				// Only now let the second step's wait succeed.
+				_, err = db.Exec("INSERT INTO activities VALUES ('a3')")
+				return err
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = runner.Run()
+		Expect(err).NotTo(HaveOccurred())
+
+		mu.Lock()
+		defer mu.Unlock()
+		Expect(live).NotTo(BeNil(), "no snapshot had inspect finished while arrived ran")
+		Expect(live.Warned).To(BeTrue())
+		var names []string
+		for _, child := range live.Children {
+			names = append(names, child.Name)
+		}
+		Expect(names).To(Equal([]string{"inspect: a1", "inspect: a2"}))
+		raw, err := json.Marshal(live.Detail)
+		Expect(err).NotTo(HaveOccurred())
+		var detail map[string]any
+		Expect(json.Unmarshal(raw, &detail)).To(Succeed())
+		Expect(detail).To(HaveKeyWithValue("step", HaveKeyWithValue("id", "inspect")))
+		Expect(detail).To(HaveKeyWithValue("outputs", HaveKeyWithValue("rowCount", BeNumerically("==", 2))))
+	})
+
+	It("does not lay a step's start result over its live result twice at run end", func() {
+		file := filepath.Join(GinkgoT().TempDir(), "q.fixture.yaml")
+		origin := &fixtures.FixtureOrigin{File: file, Line: 3}
+		finding := &fixtures.FixtureNode{Name: "inspect: a1", Type: fixtures.TestNode, Results: &fixtures.FixtureResult{Name: "inspect: a1", Status: task.StatusWarning}}
+		result := &fixtures.FixtureResult{Name: "inspect", Status: task.StatusWarning, Stdout: "live",
+			Metadata: map[string]any{"step": map[string]any{"id": "inspect"}}, Children: []*fixtures.FixtureNode{finding}}
+		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+			Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionWarned,
+			Children: []*fixtures.ExecutionNode{{
+				Key: "inspect", Name: "inspect", Kind: fixtures.ExecutionKindCommand, State: fixtures.ExecutionWarned, Origin: origin, Result: result,
+			}},
+		}}
+		final := *result
+		final.Stdout, final.Children = "tree", nil
+		tree := &fixtures.FixtureNode{Children: []*fixtures.FixtureNode{{Name: "inspect", Type: fixtures.TestNode, Origin: origin, Results: &final,
+			Children: []*fixtures.FixtureNode{finding}}}}
+
+		tests := projectTests(snapshot)
+		Expect(tests[0].Stdout).To(Equal("live"))
+		Expect(mergeFixtureResultDetails(tests, tree, "", liveResultKeys(snapshot))).To(Succeed())
+
+		Expect(tests[0].Stdout).To(Equal("live"), "the start result was already applied from the node")
+		Expect(tests[0].Children).To(HaveLen(1))
+	})
+
+	It("shows a running step's streamed output as its stdout", func() {
+		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+			Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionRunning,
+			Children: []*fixtures.ExecutionNode{{
+				Key: "setup", Name: "setup", Kind: fixtures.ExecutionKindCommand, State: fixtures.ExecutionRunning, Output: "batch 1: purging\n",
+			}},
+		}}
+		Expect(projectTests(snapshot)[0].Stdout).To(Equal("batch 1: purging\n"))
+	})
+})
+
+// projectTests is executionSnapshotToTests for a snapshot that must project.
+func projectTests(snapshot fixtures.ExecutionSnapshot) []parsers.Test {
+	GinkgoHelper()
+	tests, err := executionSnapshotToTests(snapshot)
+	Expect(err).NotTo(HaveOccurred())
+	return tests
+}
+
+func writeTestFile(path, body string) {
+	GinkgoHelper()
+	Expect(os.MkdirAll(filepath.Dir(path), 0o700)).To(Succeed())
+	Expect(os.WriteFile(path, []byte(body), 0o600)).To(Succeed())
+}
 
 var _ = Describe("fixture detail in the terminal", func() {
 	const stderr = "render failed: CALC_RATE target must be numeric"
@@ -182,8 +319,8 @@ var _ = Describe("fixture detail in the terminal", func() {
 		}}
 		result.Name, result.Status, result.Stderr = "render", task.StatusFAIL, stderr
 		tree := &fixtures.FixtureNode{Children: []*fixtures.FixtureNode{{Name: "render", Type: fixtures.TestNode, Origin: origin, Results: result}}}
-		tests := executionSnapshotToTests(snapshot)
-		Expect(mergeFixtureResultDetails(tests, tree, "")).To(Succeed())
+		tests := projectTests(snapshot)
+		Expect(mergeFixtureResultDetails(tests, tree, "", nil)).To(Succeed())
 		return tests[0]
 	}
 

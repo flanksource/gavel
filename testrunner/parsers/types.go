@@ -97,6 +97,7 @@ type Test struct {
 	// terminal Passed/Failed/Skipped transition; renderers show Running with
 	// an active spinner and Pending with a static hollow icon.
 	Running  bool   `json:"running,omitempty"`
+	Waiting  bool   `json:"waiting,omitempty"`   // A running node blocked on a person answering a form (a fixture form step); renderers show it amber
 	Cached   bool   `json:"cached,omitempty"`    // True when this result came from gavel's run-cache, not a fresh run
 	TimedOut bool   `json:"timed_out,omitempty"` // True when the test package subprocess was killed by the --test-timeout or --timeout supervisor
 	TaskID   string `json:"task_id,omitempty"`

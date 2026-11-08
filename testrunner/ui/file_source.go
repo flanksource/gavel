@@ -11,7 +11,8 @@ import (
 )
 
 // handleFileSource serves GET /api/file?work_dir=&path= — the raw text of a
-// file under one of the run's known work dirs, so the UI can overlay findings.
+// file under one of the run's known work dirs, so the UI can overlay findings,
+// or the bytes of an image file for previews.
 func (s *Server) handleFileSource(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -39,9 +40,14 @@ func (s *Server) handleFileSource(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(mapped))
 		return
 	}
-	data, err := fileread.Read(root, path)
+	_, image := fileread.ContentType(path)
+	data, err := fileread.Read(root, path, fileread.Options{Image: image})
 	if err != nil {
 		writeFileSourceError(w, path, err)
+		return
+	}
+	if image {
+		_ = fileread.WriteImage(w, path, data)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

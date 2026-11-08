@@ -29,6 +29,7 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/git/changeset"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 	"github.com/flanksource/gavel/traces"
@@ -160,6 +161,9 @@ type RunOptions struct {
 	SigquitDumper            *SigquitDumper                   `json:"-" yaml:"-"`                                                                                                    // The process capture's sigquit stack transport, which watches the go test batches for the Go test binaries it can dump. Nil watches none.
 	FixtureBenchmarkProgress func(fixtures.ExecutionSnapshot) `json:"-" yaml:"-"`
 	FixtureBenchmarkResult   func(*fixtures.BenchmarkReport)  `json:"-" yaml:"-"`
+	FixturePrompter          fixtures.Prompter                `json:"-" yaml:"-"`                                                       // Answers the fixtures' form steps (the --ui server's prompts); overrides the fixture runner's own.
+	FixtureRunID             string                           `json:"-" yaml:"-"`                                                       // The prompt owner FixturePrompter files the fixtures' forms under.
+	FixtureParams            map[string]any                   `json:"-" yaml:"-"`                                                       // Pre-supplied values for the fixtures' params: forms (a UI run request's params); overrides the fixture runner's own.
 	Frameworks               []string                         `json:"frameworks,omitempty" yaml:"framework,omitempty" flag:"framework"` // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
 	Baseline                 string                           `json:"baseline,omitempty" yaml:"baseline,omitempty" flag:"baseline"`     // Path to previous results JSON; only report NEW failures not in baseline
 	Failed                   string                           `json:"failed,omitempty" yaml:"failed,omitempty" flag:"failed"`           // Path to previous results JSON; re-run only failed tests
@@ -176,6 +180,18 @@ type RunOptions struct {
 }
 
 type fixtureOptions = fixtures.RunnerOptions
+
+// withFixtureForms hands runner the run's form prompter, prompt owner and
+// pre-supplied params, where the run has them.
+func (opts RunOptions) withFixtureForms(runner fixtures.RunnerOptions) fixtures.RunnerOptions {
+	if opts.FixturePrompter != nil {
+		runner.Prompter, runner.RunID = opts.FixturePrompter, opts.FixtureRunID
+	}
+	if opts.FixtureParams != nil {
+		runner.Params = opts.FixtureParams
+	}
+	return runner
+}
 
 func (opts RunOptions) Pretty() api.Text {
 	text := clicky.Text("")
@@ -696,7 +712,7 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 			}
 			opts.FixtureRunner.ExecutablePath = execPath
 		}
-		fixtureTests, err := t.runFixtureRunner(*opts.FixtureRunner, opts.runtimeWorkDir())
+		fixtureTests, err := t.runFixtureRunner(opts.withFixtureForms(*opts.FixtureRunner), opts.runtimeWorkDir())
 		if err != nil {
 			fixtureErr = err
 		}
@@ -1290,6 +1306,16 @@ func (o *TestOrchestrator) runPackageTest(
 	// task group dumps dirty tasks before the package finishes.
 	t.SetName(formatRunningCommand(testRun.Process.Cmd, testRun.Process.Args))
 
+	lease, err := o.acquireSlots(ctx, slots.Request{Limits: testRun.Slots, WorkDir: process.Cwd, Command: formatRunningCommand(process.Cmd, process.Args)})
+	if err != nil {
+		return packageResult{}, err
+	}
+	defer func() {
+		if err := lease.Close(); err != nil {
+			logger.Errorf("release test slots: %v", err)
+		}
+	}()
+	process.WithEnv(lease.Env())
 	pkgCtx, cancelPkg, supervision := o.supervisePackage(ctx, process, pkgPath)
 	defer cancelPkg()
 	process.WithContext(pkgCtx)
@@ -1300,6 +1326,9 @@ func (o *TestOrchestrator) runPackageTest(
 	}
 	runStart := time.Now()
 	result := clearOrphanedPipeError(process.WithContext(pkgCtx).Run().Result(), pkgPath)
+	if err := lease.Close(); err != nil {
+		return packageResult{}, err
+	}
 	runDuration := time.Since(runStart)
 	cancelPkg()
 	timedOut := supervision.TimedOut()
@@ -1671,7 +1700,7 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 		return nil, err
 	}
 	for _, batch := range goBatches {
-		process, err := o.buildGoBatchCommand(batch)
+		process, err := o.buildGoBatchCommand(batch, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -1851,7 +1880,7 @@ func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test
 	}
 	var tests []parsers.Test
 	for _, file := range fixtureFiles {
-		fixtureTests, err := t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: []string{file}, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace, TraceArchive: archive}, filepath.Dir(file))
+		fixtureTests, err := t.runFixtureRunner(opts.withFixtureForms(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: []string{file}, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace, TraceArchive: archive}), filepath.Dir(file))
 		// A broad discovery glob also matches markdown that only supports
 		// fixtures (shared templates, notes); such a file is not a fixture file.
 		if errors.Is(err, fixtures.ErrNoFixtures) {
@@ -1897,7 +1926,11 @@ func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions, c
 				}
 			}
 			if streamer != nil {
-				streamer.UpdateFixtures(executionSnapshotToTests(snapshot))
+				tests, err := executionSnapshotToTests(snapshot)
+				if err != nil {
+					return err
+				}
+				streamer.UpdateFixtures(tests)
 			}
 			if onProgress != nil {
 				onProgress(snapshot)
@@ -1927,8 +1960,12 @@ func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions, c
 	if result == nil {
 		return nil, err
 	}
-	tests := executionSnapshotToTests(runner.ExecutionSnapshot())
-	if mergeErr := mergeFixtureResultDetails(tests, result, runnerOpts.WorkDir); mergeErr != nil {
+	snapshot := runner.ExecutionSnapshot()
+	tests, projectErr := executionSnapshotToTests(snapshot)
+	if projectErr != nil {
+		return nil, errors.Join(err, projectErr)
+	}
+	if mergeErr := mergeFixtureResultDetails(tests, result, runnerOpts.WorkDir, liveResultKeys(snapshot)); mergeErr != nil {
 		return tests, errors.Join(err, mergeErr)
 	}
 	mergeFixtureMeasurements(tests, runner.BenchmarkReport())
@@ -1957,6 +1994,7 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 			Stderr:    r.Stderr,
 			Failed:    r.Status == task.StatusFAIL || r.Status == task.StatusFailed || r.Status == task.StatusERR,
 			Passed:    r.Status == task.StatusPASS || r.Status == task.StatusSuccess,
+			Warned:    r.Status == task.StatusWarning,
 			Message:   r.Error,
 			Context: parsers.FixtureContext{
 				Command:       r.Command,
@@ -1972,6 +2010,12 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 		}
 		if detail := fixtures.ResultDetail(r); detail != nil {
 			t.Detail = fixtureDetail(detail)
+		}
+		// A step's own result children — a query step's findings — are part of
+		// what it reports, so they become the test's children. The Runner moves
+		// them onto the node (attachResult); RunNodes leaves them on the result.
+		for _, child := range append(append([]*fixtures.FixtureNode{}, node.Children...), r.Children...) {
+			t.Children = append(t.Children, fixtureNodeToTestsWithFile(child, fixtureFile)...)
 		}
 		if r.Profile != nil {
 			t.FixtureProfile = &parsers.FixtureProfile{

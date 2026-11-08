@@ -4,15 +4,19 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/clicky/task"
 	commonsCtx "github.com/flanksource/commons/context"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 )
@@ -139,8 +143,36 @@ func (o *TestOrchestrator) planUnfocusedGoBatch(base goBatchPlan) []goBatchPlan 
 	return plans
 }
 
+// acquireGoBatchSlots takes up to one slot per test binary the batch would run
+// at once (-p) and returns the -p it may use: 0 with slots disabled, else the granted
+// count (or the wanted one when running on an inherited lease).
+func (o *TestOrchestrator) acquireGoBatchSlots(ctx commonsCtx.Context, plan goBatchPlan) (*slots.Lease, int, error) {
+	wanted, err := goBatchParallelism(plan)
+	if err != nil {
+		return nil, 0, err
+	}
+	lease, err := o.acquireSlots(ctx, slots.Request{Limits: plan.runtime.Slots, WorkDir: o.WorkDir, Command: "go test " + strings.Join(plan.targets, " "), Count: wanted})
+	if err != nil || !plan.runtime.Slots.Enabled() {
+		return lease, 0, err
+	}
+	if granted := lease.Count(); granted > 0 && granted < wanted {
+		logger.Infof("Downgraded go test parallelism from %d to %d to fit available slots", wanted, granted)
+		return lease, granted, nil
+	}
+	return lease, wanted, nil
+}
+
 func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan goBatchPlan) (packageResult, error) {
-	process, err := o.buildGoBatchCommand(plan)
+	lease, parallel, err := o.acquireGoBatchSlots(ctx, plan)
+	if err != nil {
+		return packageResult{}, err
+	}
+	defer func() {
+		if err := lease.Close(); err != nil {
+			logger.Errorf("release test slots: %v", err)
+		}
+	}()
+	process, err := o.buildGoBatchCommand(plan, parallel)
 	if err != nil {
 		return packageResult{}, err
 	}
@@ -149,6 +181,7 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 		process.Stream(o.OutputTee, o.OutputTee)
 	}
 	t.SetName(formatRunningCommand(process.Cmd, process.Args))
+	process.WithEnv(lease.Env())
 	started := time.Now()
 	runContext, cancel, supervision := o.supervisePackage(ctx, process, strings.Join(plan.targets, " "))
 	defer cancel()
@@ -160,6 +193,9 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 		return packageResult{}, err
 	}
 	result := process.WithContext(runContext).Run().Result()
+	if err := lease.Close(); err != nil {
+		return packageResult{}, err
+	}
 	if result == nil {
 		return packageResult{}, fmt.Errorf("go test produced no process result")
 	}
@@ -358,7 +394,45 @@ func goImportPrefix(workDir string) (string, error) {
 	}
 }
 
-func (o *TestOrchestrator) buildGoBatchCommand(plan goBatchPlan) (*exec.Process, error) {
+// goBatchParallelism is how many test binaries a batch wants to run at once:
+// its own -p, or go test's default of GOMAXPROCS.
+func goBatchParallelism(plan goBatchPlan) (int, error) {
+	args := append(slices.Clone(plan.runtimeArgs), plan.args...)
+	for i, arg := range args {
+		value, ok := strings.CutPrefix(arg, "-p=")
+		if !ok && arg == "-p" && i+1 < len(args) {
+			value, ok = args[i+1], true
+		}
+		if !ok {
+			continue
+		}
+		parallel, err := strconv.Atoi(value)
+		if err != nil || parallel < 1 {
+			return 0, fmt.Errorf("go test -p must be a positive integer, got %q", value)
+		}
+		return parallel, nil
+	}
+	return goruntime.GOMAXPROCS(0), nil
+}
+
+// withoutGoParallelism drops -p from args so the slot-granted value applies.
+func withoutGoParallelism(args []string) []string {
+	var kept []string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "-p" && i+1 < len(args):
+			i++
+		case strings.HasPrefix(args[i], "-p="):
+		default:
+			kept = append(kept, args[i])
+		}
+	}
+	return kept
+}
+
+// buildGoBatchCommand runs the batch with -p=parallel when parallel is
+// positive, replacing any -p in its args.
+func (o *TestOrchestrator) buildGoBatchCommand(plan goBatchPlan, parallel int) (*exec.Process, error) {
 	overlay, err := runners.BuildGinkgoOverlay(o.WorkDir, plan.ginkgo, o.Tags)
 	if err != nil {
 		return nil, err
@@ -388,8 +462,12 @@ func (o *TestOrchestrator) buildGoBatchCommand(plan goBatchPlan) (*exec.Process,
 			return nil, err
 		}
 	}
+	flags := append(runtimeArgs, plan.args...)
+	if parallel > 0 {
+		flags = append(withoutGoParallelism(flags), fmt.Sprintf("-p=%d", parallel))
+	}
 	var ginkgoArgs []string
-	for _, arg := range append(runtimeArgs, plan.args...) {
+	for _, arg := range flags {
 		if strings.HasPrefix(arg, "-ginkgo.") {
 			ginkgoArgs = append(ginkgoArgs, arg)
 		} else {

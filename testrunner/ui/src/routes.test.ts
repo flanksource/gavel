@@ -98,11 +98,26 @@ describe('files route', () => {
     expect(buildRoute(route)).toBe(`/files/a.go?dir=${DIR_PARAM}`);
   });
 
-  it('ignores a line that is not a positive integer and a view that is not one', () => {
+  it('ignores a line that is not a positive integer, and keeps any view id for host tabs', () => {
     expect(at('/files/a.go?line=0').line).toBeUndefined();
     expect(at('/files/a.go?line=x').line).toBeUndefined();
-    expect(at('/files/a.go?view=nonsense').view).toBe('preview');
+    expect(at('/files/a.go?view=owners').view).toBe('owners');
+    expect(at('/files/a.go?view=').view).toBe('preview');
     expect(at('/files/a.go?view=problems').view).toBe('problems');
+  });
+
+  it('round trips an open folder, including the root folder of a work dir', () => {
+    const folder = at(`/files/pkg/server?dir=${DIR_PARAM}&kind=folder`);
+    const root = at(`/files?dir=${DIR_PARAM}&kind=folder`);
+    expect({
+      folder: { path: folder.selectedPath, folder: folder.folder, url: buildRoute(folder) },
+      root: { path: root.selectedPath, folder: root.folder, url: buildRoute(root) },
+      file: at('/files/a.go').folder,
+    }).toEqual({
+      folder: { path: 'pkg/server', folder: true, url: `/files/pkg/server?dir=${DIR_PARAM}&kind=folder` },
+      root: { path: '', folder: true, url: `/files?dir=${DIR_PARAM}&kind=folder` },
+      file: undefined,
+    });
   });
 
   it('round trips the Problems severity and issue-type filters with their include/exclude marks', () => {

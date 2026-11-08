@@ -6,9 +6,11 @@ import {
   type TestNodeAdapterRegistry,
 } from '@flanksource/clicky-ui/data';
 import type { FixtureContext, ProcessTraceNode, Test, TraceResult, TracesStatus } from '../types';
+import { FixtureFileSource, fixtureFileRef } from './FixtureFileSource';
 import { GavelDetailBody } from './GavelDetailBody';
 import { NodeActions, type NodeActionsConfig } from './NodeActions';
 import { ResourcesPanel } from './ResourcesPanel';
+import { StepPendingForm } from '../components/StepPendingForm';
 import { StepProcesses } from './StepProcesses';
 import { TracesPanel } from './TracesPanel';
 
@@ -85,6 +87,19 @@ export function resourcesAdapter(): TestNodeAdapter {
   };
 }
 
+/** The YAML/Markdown tab of a root fixture node: the whole file that ran. */
+export function fixtureFileAdapter(scope: { runId?: string } = {}): TestNodeAdapter {
+  return {
+    id: 'gavel-fixture-file',
+    match: node => fixtureFileRef(asGavel(node)) !== undefined,
+    detailTabs: ({ node }) => {
+      const source = fixtureFileRef(asGavel(node));
+      if (!source) return [];
+      return [{ id: 'fixture-file', label: source.label, render: () => <FixtureFileSource source={source} scope={scope} /> }];
+    },
+  };
+}
+
 /** Download, AI-prompt copy and Skip/Delete source actions in the node's detail header. */
 export function nodeActionsAdapter(config: NodeActionsConfig): TestNodeAdapter {
   return {
@@ -101,12 +116,17 @@ export interface GavelAdapterOptions {
   processes: ProcessTraceNode[];
   onOpenProcess: (key: string) => void;
   actions: NodeActionsConfig;
+  /** The run the page shows, for the fixture file tab's /api/file read and the prompt API. */
+  scope?: { runId?: string };
+  /** The run's prompt owner (metadata.prompt_owner), whose pending forms a waiting step answers inline. */
+  promptOwner?: string | undefined;
 }
 
 /** Gavel's node adapters, in the order they take precedence. */
-export function gavelAdapters({ traces, processes, onOpenProcess, actions }: GavelAdapterOptions): TestNodeAdapter[] {
+export function gavelAdapters({ traces, processes, onOpenProcess, actions, scope }: GavelAdapterOptions): TestNodeAdapter[] {
   return [
     detailAdapter(),
+    fixtureFileAdapter(scope),
     nodeActionsAdapter(actions),
     tracesAdapter(traces),
     processesAdapter({ processes, onOpenProcess }),
@@ -117,8 +137,12 @@ export function gavelAdapters({ traces, processes, onOpenProcess, actions }: Gav
 /**
  * The registry the test runner renders gavel runs with: gavel's adapters, then
  * clicky's verification adapters, which own fixture steps (attempt chooser,
- * typed step sections, copy brief).
+ * typed step sections, copy brief) and show a waiting step's pending form.
  */
 export function gavelRegistry(options: GavelAdapterOptions): TestNodeAdapterRegistry {
-  return createTestRunnerRegistry([...gavelAdapters(options), ...verificationAdapters().adapters]);
+  const { promptOwner, scope } = options;
+  const verification = verificationAdapters({
+    renderPendingPrompt: node => <StepPendingForm node={node} owner={promptOwner} {...(scope ? { scope } : {})} />,
+  });
+  return createTestRunnerRegistry([...gavelAdapters(options), ...verification.adapters]);
 }

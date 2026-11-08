@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1217,6 +1218,10 @@ func buildPerformanceViewNodes(tests []parsers.Test, performance *fixtures.Bench
 	return nodes
 }
 
+// unfinishedStates are the progress states of a fixture that has no result
+// yet: still queued, running, or waiting on a person to answer a form.
+var unfinishedStates = []fixtures.ExecutionState{fixtures.ExecutionQueued, fixtures.ExecutionRunning, fixtures.ExecutionWaiting}
+
 func buildFixtureBenchmarkViewNodes(state *FixtureBenchmarkState) []*ViewNode {
 	if state.Report == nil {
 		var nodes []*ViewNode
@@ -1226,7 +1231,7 @@ func buildFixtureBenchmarkViewNodes(state *FixtureBenchmarkState) []*ViewNode {
 				if node == nil {
 					return
 				}
-				if len(node.Children) == 0 && node.State != fixtures.ExecutionQueued && node.State != fixtures.ExecutionRunning {
+				if len(node.Children) == 0 && !slices.Contains(unfinishedStates, node.State) {
 					nodes = append(nodes, &ViewNode{Name: node.Name, Kind: string(node.Kind), Status: string(node.State), Duration: node.Duration})
 				}
 				for _, child := range node.Children {

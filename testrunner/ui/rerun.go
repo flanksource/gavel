@@ -22,6 +22,9 @@ type RerunRequest struct {
 	Lint         bool     `json:"lint,omitempty"`
 	LintFiles    []string `json:"lint_files,omitempty"`
 	LintLinters  []string `json:"lint_linters,omitempty"`
+	// Params pre-supply the fixtures' params: forms; without them a rerun
+	// keeps the run's own (--param / --params) and prompts for what is missing.
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // RerunFunc is invoked to rerun the tests described by req.
