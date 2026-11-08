@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	flagmeta "github.com/flanksource/clicky/flags"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/spf13/cobra"
@@ -179,11 +180,18 @@ func commandSchema(cmd *cobra.Command, positionalName string, opts commandSchema
 		order = append(order, positionalName)
 	}
 
-	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+	flags := pflag.NewFlagSet(cmd.Name(), pflag.ContinueOnError)
+	flags.AddFlagSet(cmd.Flags())
+	for parent := cmd; parent != nil; parent = parent.Parent() {
+		flags.AddFlagSet(parent.PersistentFlags())
+	}
+	flags.VisitAll(func(flag *pflag.Flag) {
 		if flag.Hidden || opts.Exclude[flag.Name] {
 			return
 		}
-		properties[flag.Name] = propertyFromFlag(flag)
+		prop := propertyFromFlag(flag)
+		prop["x-cli-group"] = commandFlagCategory(cmd, flag)
+		properties[flag.Name] = prop
 		order = append(order, flag.Name)
 	})
 
@@ -195,6 +203,18 @@ func commandSchema(cmd *cobra.Command, positionalName string, opts commandSchema
 		"x-order":              order,
 		"x-help":               commandSchemaHelp(cmd.Name()),
 	}
+}
+
+func commandFlagCategory(cmd *cobra.Command, flag *pflag.Flag) string {
+	if category := flagmeta.Category(flag); category != "" {
+		return category
+	}
+	for parent := cmd; parent != nil; parent = parent.Parent() {
+		if parent.PersistentFlags().Lookup(flag.Name) == flag {
+			return "Global flags"
+		}
+	}
+	return "Command flags"
 }
 
 func addStepDisplaySchema(schema fixtureJSONSchema) {

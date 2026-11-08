@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/internal/yamldiag"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/gavel/workspace"
@@ -17,7 +19,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func runFixtures(cmd *cobra.Command, args []string) error {
+func runFixtures(cmd *cobra.Command, args []string) (runError error) {
+	defer func() {
+		var diagnostic *yamldiag.Error
+		if errors.As(runError, &diagnostic) {
+			cmd.SilenceErrors = true
+		}
+	}()
 	if fixturesSchema {
 		return writeFixturesSchema(os.Stdout)
 	}
@@ -83,7 +91,12 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	params, err := fixtureRunParams(fixturesParamsFile, fixturesParams)
+	if err != nil {
+		return err
+	}
 	runnerOpts := fixtures.RunnerOptions{
+		Params:         params,
 		TraceArchive:   archive,
 		ProcessRuntime: runtime,
 		Args:           runtimeArgs,
@@ -116,15 +129,27 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		_, err = runTests(opts, detach)
 		return err
 	}
+	if runnerOpts.Prompter, err = fixtureTerminalPrompter(cmd.Context(), wd); err != nil {
+		return err
+	}
 
 	runner, err := fixtures.NewRunner(runnerOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create fixture runner: %w", err)
 	}
 
+	dirs, err := workspace.From(cmd.Context())
+	if err != nil {
+		return err
+	}
+	reporter, err := startRunStatus(dirs)
+	if err != nil {
+		return err
+	}
 	clickytask.SetLiveRenderer(fixtureLiveRenderer{})
 	defer clickytask.SetLiveRenderer(nil)
 	tree, runErr := runner.Run()
+	runErr = errors.Join(runErr, reporter.Stop())
 	if tree != nil {
 		if runner.BenchmarkReport() != nil && strings.EqualFold(runnerOpts.Format, "json") {
 			data, err := os.ReadFile(runner.BenchmarkReport().Path)

@@ -143,9 +143,11 @@ func gavelMCPExcludedCommands() []string {
 		"^action-watchdog$",
 		// Interactive authentication and credential mutation are not agent tools.
 		"^login$", "^logout$", "^whoami$", "^org$", "^org ", "^ssh-key$", "^ssh-key ",
+		"^connections$", "^connections ",
 		// needs a GitHub Actions job's OIDC token, or a sandbox job's run token
 		"^ci$", "^ci ", "^runner$", "^runner ",
 		// long-running servers that would block the MCP request indefinitely
+		"^edit$",
 		"^ssh$", "^ssh ",
 		"^ui$", "^ui ",
 		// top-level lint/test are enough; framework/linter aliases duplicate the same options
@@ -219,6 +221,7 @@ func gavelMCPPRListIgnoredParams() []string {
 		"all",
 		"interval",
 		"menu-bar",
+		"open",
 		"persist-port",
 		"port",
 	}
@@ -248,12 +251,11 @@ func gavelMCPFormatIgnoredParams() []string {
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == fixtures.WorkerCommand {
-		output := os.NewFile(3, "fixture-worker-protocol")
-		if output == nil {
-			fmt.Fprintln(os.Stderr, "fixture worker protocol descriptor is missing")
-			os.Exit(1)
+		wio, err := fixtures.WorkerProcessIO()
+		if err == nil {
+			err = fixtures.RunWorker(wio)
 		}
-		if err := fixtures.RunWorker(os.Stdin, output); err != nil {
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

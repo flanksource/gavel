@@ -8,6 +8,14 @@ import (
 )
 
 var _ = Describe("JSON lint command", func() {
+	It("exposes yaml as the JSON validator alias with schema selection", func() {
+		lint, err := schemaCommand("lint")
+		Expect(err).NotTo(HaveOccurred())
+		command, _, err := lint.Find([]string{"yaml"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(command.Name()).To(Equal("yaml"))
+		Expect(command.Flags().Lookup("schema")).NotTo(BeNil())
+	})
 	DescribeTable("binds the schema flag around the linter subcommand", func(args []string) {
 		root := &cobra.Command{Use: "gavel"}
 		var captured LintOptions

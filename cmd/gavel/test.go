@@ -119,6 +119,11 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	defer func() {
 		runErr = errors.Join(runErr, recorder.Stop(runSucceeded))
 	}()
+	reporter, err := startRunStatus(opts.Dirs)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { runErr = errors.Join(runErr, reporter.Stop()) }()
 
 	// Load .gavel.yaml once at the top — previously the lint path loaded it
 	// lazily, but the push-hook support needs Pre/Post from the same config
@@ -201,6 +206,8 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			return testrunnerUpdates
 		}
 		uiServer.BeginRun("initial")
+		opts.FixturePrompter, opts.FixtureRunID = uiServer.Prompter(), uiServer.PromptOwner()
+		uiServer.SetConnectionCatalog(opts.WorkDir)
 		if mode := fixtureBenchmarkMode(opts); mode != "" {
 			uiServer.SetFixtureBenchmarkMode(mode)
 			opts.FixtureBenchmarkProgress = uiServer.SetFixtureBenchmarkProgress
@@ -210,7 +217,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 				}
 			}
 		}
-		opts.Updates = attachRecorderTee(recorder, opts, runStarted, attachUIUpdates())
+		opts.Updates = attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Options: opts, Started: runStarted, Downstream: attachUIUpdates()})
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			clicky.ClearGlobalTasks()
 			rerunCtx, cancelRerun := newStopContext(opts.Context, opts.Timeout)
@@ -236,6 +243,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 				return nil
 			}
 			rerunOpts := prepareRerunOptions(opts, req, attachUIRerunUpdates())
+			rerunOpts.FixtureRunID = uiServer.PromptOwner()
 			rerunOpts.Context = rerunCtx
 			rerunOpts.OutputTee = output.StdoutWriter()
 			_, err := testrunner.Run(rerunOpts)
@@ -258,7 +266,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	// In non-UI mode the recorder still needs a feed of test updates; attach
 	// a tee with no downstream so each batch reaches the recorder.
 	if opts.Updates == nil {
-		opts.Updates = attachRecorderTee(recorder, opts, runStarted, nil)
+		opts.Updates = attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Options: opts, Started: runStarted})
 	}
 
 	if !opts.SkipHooks && len(gavelCfg.Pre) > 0 {
@@ -888,6 +896,9 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 	}
 	rerunOpts.StartingPaths = req.PackagePaths
 	rerunOpts.ExtraArgs = buildRerunArgs(req)
+	if req.Params != nil {
+		rerunOpts.FixtureParams = req.Params
+	}
 	if len(req.PackagePaths) > 0 {
 		rerunOpts.Recursive = false
 	}

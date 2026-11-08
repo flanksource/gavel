@@ -30,6 +30,7 @@ var lintSubcommands = []struct {
 	{"jscpd", "jscpd", "Run only jscpd (duplicate-code detector)"},
 	{"uir", "uir", "Run SQL architecture rules from .uir.yaml"},
 	{"json", "json", "Validate JSON, YAML and NDJSON syntax and schemas"},
+	{"yaml", "json", "Validate YAML syntax and schemas (alias for json)"},
 	{"betterleaks", "betterleaks", "Run only betterleaks (secret scanner)"},
 	{"secrets", "betterleaks", "Alias for betterleaks"},
 }

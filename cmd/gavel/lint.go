@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -66,7 +67,7 @@ func splitLintPassThroughArgs(cmd *cobra.Command, opts LintOptions) (LintOptions
 // passed explicitly, or -y/--yes opted into auto-fixing lint violations.
 func resolveAIFix(o LintOptions) bool { return o.AIFix || o.Yes }
 
-func runLint(ctx context.Context, opts LintOptions) (any, error) {
+func runLint(ctx context.Context, opts LintOptions) (value any, runErr error) {
 	if opts.OptionFields == nil {
 		opts.OptionFields = runconfig.Present(opts)
 	}
@@ -114,6 +115,11 @@ func runLint(ctx context.Context, opts LintOptions) (any, error) {
 		}
 		return nil, nil
 	}
+	reporter, err := startRunStatus(opts.Dirs)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { runErr = errors.Join(runErr, reporter.Stop()) }()
 
 	if opts.UI {
 		var err error

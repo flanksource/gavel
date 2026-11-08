@@ -6,12 +6,10 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	captaincli "github.com/flanksource/captain/pkg/cli"
@@ -42,6 +40,7 @@ type PRListOptions struct {
 	Logs             bool     `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
 	URL              bool     `flag:"url" help:"Show PR URL instead of number"`
 	UI               bool     `flag:"ui" help:"Open PR dashboard in browser with live updates"`
+	Open             bool     `flag:"open" help:"Open the PR dashboard in the browser"`
 	MenuBar          bool     `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
 	Interval         string   `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
 	Addr             string   `flag:"addr" help:"Interface to bind the --ui/--menu-bar HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
@@ -465,18 +464,20 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 
 		logger.Infof("%s", testui.Banner("PR Dashboard", dashboardURL, networkURL))
 		logger.Infof("React Grab → todo: install the bookmarklet at %s/react-grab", dashboardURL)
-		if opts.UI {
-			testui.OpenBrowser(dashboardURL)
-		}
 	}
 
+	return runDashboardFrontend(ctx, srv, dashboardURL, opts)
+}
+
+func runDashboardFrontend(ctx context.Context, srv *ui.Server, dashboardURL string, opts PRListOptions) error {
+	if opts.UI {
+		testui.OpenBrowser(dashboardURL)
+	}
 	if opts.MenuBar {
 		return runMenuBar(srv, dashboardURL)
 	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	<-ctx.Done()
 	return nil
 }
 

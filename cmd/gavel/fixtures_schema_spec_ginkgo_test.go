@@ -7,9 +7,28 @@ import (
 
 	g "github.com/onsi/ginkgo/v2"
 	o "github.com/onsi/gomega"
+	"github.com/spf13/pflag"
 )
 
 var _ = g.Describe("fixture document schema", func() {
+	g.It("retains native CLI flag groups for global reference fields", func() {
+		for _, name := range []string{"test", "lint"} {
+			cmd, err := schemaCommand(name)
+			o.Expect(err).NotTo(o.HaveOccurred())
+			var original []string
+			cmd.Flags().VisitAll(func(flag *pflag.Flag) { original = append(original, flag.Name) })
+			schema := commandSchema(cmd, "", commandSchemaOptions{})
+			properties := schema["properties"].(map[string]any)
+			var updated []string
+			cmd.Flags().VisitAll(func(flag *pflag.Flag) { updated = append(updated, flag.Name) })
+			o.Expect(updated).To(o.Equal(original))
+			for flag, group := range map[string]string{"format": "Formatting", "json": "Formatting", "loglevel": "Logging", "max-concurrent": "Tasks", "cwd": "Global flags", "db-url": "Global flags"} {
+				o.Expect(properties).To(o.HaveKey(flag), name+" --"+flag)
+				o.Expect(properties[flag].(fixtureSchemaProperty)["x-cli-group"]).To(o.Equal(group), name+" --"+flag)
+			}
+		}
+	})
+
 	g.It("composes a step oneOf over every registered kind, with the CLI option sets for test and lint", func() {
 		doc, err := fixturesSchemaDocument()
 		o.Expect(err).NotTo(o.HaveOccurred())
@@ -35,6 +54,19 @@ var _ = g.Describe("fixture document schema", func() {
 		o.Expect(branches["lint"]).To(o.HaveKey("linters"))
 		o.Expect(branches["exec"]).To(o.HaveKey("script"))
 		o.Expect(schema["properties"].(map[string]any)["kind"]).To(o.Equal(map[string]any{"const": "Fixture"}))
+	})
+})
+
+var _ = g.Describe("fixture frontmatter params schema", func() {
+	g.It("offers params: as an object JSON Schema the run is started with", func() {
+		data, err := json.Marshal(fixtureFrontmatterSchema())
+		o.Expect(err).NotTo(o.HaveOccurred())
+		var schema map[string]any
+		o.Expect(json.Unmarshal(data, &schema)).To(o.Succeed())
+		params := schema["properties"].(map[string]any)["params"].(map[string]any)
+		o.Expect(params["type"]).To(o.Equal("object"))
+		o.Expect(params["properties"].(map[string]any)["type"]).To(o.Equal(map[string]any{"const": "object"}))
+		o.Expect(params["required"]).To(o.Equal([]any{"type", "properties"}))
 	})
 })
 
