@@ -14,6 +14,12 @@ import (
 )
 
 var _ = Describe("JSON lint integration", func() {
+	It("resolves yaml to the built-in JSON validator", func() {
+		names, explicit, err := resolveRequestedLinters(builtinLinterRegistry(GinkgoT().TempDir()), []string{"yaml"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(explicit).To(BeTrue())
+		Expect(names).To(Equal([]string{"json"}))
+	})
 	var root string
 	BeforeEach(func() {
 		root = GinkgoT().TempDir()

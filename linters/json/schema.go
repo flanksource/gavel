@@ -3,8 +3,11 @@ package jsonlint
 import (
 	"context"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -74,7 +77,16 @@ func (l schemaLoader) Load(location string) (any, error) {
 		return nil, err
 	}
 	if parsed.Scheme == "file" {
-		return (jsonschema.FileLoader{}).Load(location)
+		path, err := (jsonschema.FileLoader{}).ToFile(location)
+		if err != nil {
+			return nil, err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		return decodeSchema(file, path, "")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported schema URL scheme %q", parsed.Scheme)
@@ -91,7 +103,38 @@ func (l schemaLoader) Load(location string) (any, error) {
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("schema %s: HTTP %s", location, response.Status)
 	}
-	return jsonschema.UnmarshalJSON(response.Body)
+	return decodeSchema(response.Body, parsed.Path, response.Header.Get("Content-Type"))
+}
+
+func decodeSchema(reader io.Reader, path, contentType string) (any, error) {
+	extension := strings.ToLower(filepath.Ext(path))
+	yamlEncoded := extension == ".yaml" || extension == ".yml"
+	if !yamlEncoded && contentType != "" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			return nil, fmt.Errorf("schema content type %q: %w", contentType, err)
+		}
+		switch mediaType {
+		case "application/yaml", "application/x-yaml", "text/yaml", "text/x-yaml":
+			yamlEncoded = true
+		}
+	}
+	if !yamlEncoded {
+		return jsonschema.UnmarshalJSON(reader)
+	}
+	decoder := yaml.NewDecoder(reader)
+	var document yaml.Node
+	if err := decoder.Decode(&document); err != nil {
+		return nil, err
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("schema must contain exactly one YAML document")
+	}
+	return yamlValue(&document, map[*yaml.Node]bool{})
 }
 
 func schemaDeclaration(value any) (string, error) {

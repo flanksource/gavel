@@ -18,6 +18,7 @@ import (
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
@@ -492,7 +493,9 @@ func (vn *violationNode) Pretty() api.Text {
 	}
 
 	// At -v, show source line with line number gutter and column pointer
-	if verbose && vn.v.Line > 0 {
+	if vn.v.Excerpt != nil {
+		t = t.NewLine().Add(vn.v.Excerpt.Pretty())
+	} else if verbose && vn.v.Line > 0 {
 		if srcLine := readFileLine(vn.v.File, vn.v.Line); srcLine != "" {
 			lineNo := fmt.Sprintf("%d", vn.v.Line)
 			gutter := strings.Repeat(" ", len(lineNo))
@@ -602,7 +605,7 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 	}
 	var cancel context.CancelFunc
 	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		ctx, cancel = slots.Timeout(ctx, slots.TimeoutOptions{Limits: opts.Runtime.Slots, Duration: timeout})
 	} else {
 		ctx, cancel = context.WithCancel(ctx)
 	}

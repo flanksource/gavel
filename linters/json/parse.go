@@ -195,7 +195,11 @@ func syntaxViolation(path string, data []byte, err error, offset int) models.Vio
 	} else if match := yamlLine.FindStringSubmatch(err.Error()); len(match) > 0 {
 		line, _ = strconv.Atoi(match[1])
 	}
-	return violation(path, line+offset, column, "syntax", err.Error())
+	result := violation(path, line+offset, column, "syntax", err.Error())
+	result.Excerpt = models.NewSourceExcerpt(data, line, column)
+	result.Excerpt.StartLine += offset
+	result.Excerpt.Line += offset
+	return result
 }
 
 func violation(path string, line, column int, rule, message string) models.Violation {

@@ -189,7 +189,7 @@ func (r *reviewRun) readFile(_ context.Context, raw map[string]any) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	data, err := fileread.Read(r.WorkDir, input.Path)
+	data, err := fileread.Read(r.WorkDir, input.Path, fileread.Options{})
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", input.Path, err)
 	}
@@ -355,7 +355,7 @@ func locateCode(dir string, v *models.Violation) error {
 		}
 		path = rel
 	}
-	data, err := fileread.Read(dir, path)
+	data, err := fileread.Read(dir, path, fileread.Options{})
 	if err != nil {
 		return fmt.Errorf("read %s: %w", v.File, err)
 	}

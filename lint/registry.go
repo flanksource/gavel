@@ -207,6 +207,7 @@ func isInvocationCovered(invocation linterInvocation, scheduledRoots []string) b
 
 // linterAliases maps CLI-friendly aliases onto registered linter names.
 var linterAliases = map[string]string{
+	"yaml":          "json",
 	"secrets":       "betterleaks",
 	"golangci-lint": "golangci-lint",
 	"golangci":      "golangci-lint",

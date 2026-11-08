@@ -118,6 +118,7 @@ Examples:
   gavel lint uir                     # SQL rules from .uir.yaml
   gavel lint uir --exclude 'small-*'
   gavel lint json config.yaml --schema schema.json
+  gavel lint yaml config.yaml --schema schema.json  # YAML alias; errors include numbered source excerpts
   gavel lint --exclude 'ruff:F401,eslint:no-debugger'
   gavel lint secrets                 # alias for betterleaks
   gavel lint --linters=golangci-lint
