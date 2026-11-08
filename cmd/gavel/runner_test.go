@@ -245,7 +245,7 @@ func TestRunnerExecRunsAnAgentJobAndReportsIt(t *testing.T) {
 	workspace := t.TempDir()
 
 	code, err := runnerExec(context.Background(), runnerOptions{
-		Run: run.String(), Workspace: workspace, Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
+		Run: run.String(), Workspace: workspace, Home: t.TempDir(), Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
 		Agent: scriptedRunnerAgent{text: "done"},
 	})
 	require.NoError(t, err)
@@ -297,7 +297,7 @@ func TestRunnerExecPushesTheCommitsAnAgentRunMade(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
 
 	code, err := runnerExec(context.Background(), runnerOptions{
-		Run: run.String(), Workspace: t.TempDir(), Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
+		Run: run.String(), Workspace: t.TempDir(), Home: t.TempDir(), Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
 		Agent: committingAgent{t: t},
 	})
 	require.NoError(t, err)
@@ -318,8 +318,11 @@ func TestRunnerExecPushesTheCommitsAnAgentRunMade(t *testing.T) {
 	assert.Equal(t, "abc123", result.Response.Workspace.Worktree.Head)
 }
 
-// transcribingAgent writes a Claude transcript under $HOME, as the Claude CLI does.
-type transcribingAgent struct{ t *testing.T }
+// transcribingAgent writes a Claude transcript under home, as the Claude CLI does under $HOME.
+type transcribingAgent struct {
+	t    *testing.T
+	home string
+}
 
 func (a transcribingAgent) GetModel() string { return "claude-sonnet-5" }
 func (a transcribingAgent) GetRuntime() api.Runtime {
@@ -329,9 +332,7 @@ func (a transcribingAgent) Execute(context.Context, api.Spec) (*api.Response, er
 	return nil, fmt.Errorf("the transcribing agent only streams")
 }
 func (a transcribingAgent) ExecuteStream(context.Context, api.Spec) (<-chan captainai.Event, error) {
-	home, err := os.UserHomeDir()
-	require.NoError(a.t, err)
-	dir := filepath.Join(home, ".claude", "projects", "-workspace-src")
+	dir := filepath.Join(a.home, ".claude", "projects", "-workspace-src")
 	require.NoError(a.t, os.MkdirAll(dir, 0o755))
 	require.NoError(a.t, os.WriteFile(filepath.Join(dir, "session-1.jsonl"), []byte(`{"type":"user"}`+"\n"), 0o644))
 	ch := make(chan captainai.Event, 2)
@@ -342,7 +343,12 @@ func (a transcribingAgent) ExecuteStream(context.Context, api.Spec) (<-chan capt
 }
 
 func TestRunnerExecUploadsTheAgentsTranscripts(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	earlier := filepath.Join(home, ".claude", "projects", "-elsewhere", "earlier-session.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(earlier), 0o755))
+	require.NoError(t, os.WriteFile(earlier, []byte(`{"type":"user"}`+"\n"), 0o644))
+	lastWeek := time.Now().Add(-7 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(earlier, lastWeek, lastWeek))
 	run := uuid.New()
 	bundle, first := sourceBundle(t, map[string]string{"README.md": "first"})
 	spec := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}, Prompt: api.Prompt{User: "fix the build"}}
@@ -354,12 +360,13 @@ func TestRunnerExecUploadsTheAgentsTranscripts(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	code, err := runnerExec(context.Background(), runnerOptions{
-		Run: run.String(), Workspace: t.TempDir(), Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
-		Agent: transcribingAgent{t: t},
+		Run: run.String(), Workspace: t.TempDir(), Home: home, Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
+		Agent: transcribingAgent{t: t, home: home},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 0, code)
-	assert.Equal(t, map[string]string{"claude:-workspace-src/session-1.jsonl": `{"type":"user"}` + "\n"}, fake.transcripts)
+	assert.Equal(t, map[string]string{"claude:-workspace-src/session-1.jsonl": `{"type":"user"}` + "\n"}, fake.transcripts,
+		"only the transcripts the job's agent wrote are uploaded, not ones already under the home before the job started")
 	assert.Equal(t, remote.KindResult, fake.messages[len(fake.messages)-1].Kind, "the transcripts are up before the result")
 }
 

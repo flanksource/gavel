@@ -6,23 +6,27 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/flanksource/captain/pkg/ai/history"
 )
 
 // transcriptInterval is how often a job uploads the transcripts that changed.
 const transcriptInterval = 10 * time.Second
 
-// transcriptUploader uploads the agent transcripts under home that changed since it last looked.
+// transcriptUploader uploads the agent transcripts under home that were written since the job
+// started and changed since it last looked. Transcripts older than since belong to sessions
+// that ran before the job, so they are never uploaded.
 type transcriptUploader struct {
-	api  runAPI
-	home string
-	seen map[string]transcriptStamp
+	api   runAPI
+	home  string
+	since time.Time
+	seen  map[string]transcriptStamp
 }
 
 type transcriptStamp struct {
@@ -30,10 +34,11 @@ type transcriptStamp struct {
 	modTime time.Time
 }
 
-// transcriptRoots are where each agent writes its transcripts, under home.
+// transcriptRoots are where each agent writes its transcripts, under home. Upload names are
+// relative to them.
 var transcriptRoots = map[string]string{
-	"claude": filepath.Join(".claude", "projects"),
-	"codex":  filepath.Join(".codex", "sessions"),
+	history.TranscriptSourceClaude: filepath.Join(".claude", "projects"),
+	history.TranscriptSourceCodex:  filepath.Join(".codex", "sessions"),
 }
 
 // sync uploads every transcript that changed since the last sync.
@@ -41,39 +46,23 @@ func (u *transcriptUploader) sync(ctx context.Context) error {
 	if u.seen == nil {
 		u.seen = map[string]transcriptStamp{}
 	}
-	for source, root := range transcriptRoots {
-		dir := filepath.Join(u.home, root)
-		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				if os.IsNotExist(err) {
-					return filepath.SkipDir
-				}
-				return err
-			}
-			if entry.IsDir() || filepath.Ext(path) != ".jsonl" {
-				return nil
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			stamp := transcriptStamp{size: info.Size(), modTime: info.ModTime()}
-			if u.seen[path] == stamp {
-				return nil
-			}
-			name, err := filepath.Rel(dir, path)
-			if err != nil {
-				return err
-			}
-			if err := u.upload(ctx, source, filepath.ToSlash(name), path); err != nil {
-				return err
-			}
-			u.seen[path] = stamp
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("upload the %s transcripts: %w", source, err)
+	found, err := history.FindTranscripts(history.TranscriptQuery{Home: u.home, ModifiedSince: u.since})
+	if err != nil {
+		return fmt.Errorf("find the agent transcripts under %s: %w", u.home, err)
+	}
+	for _, transcript := range found {
+		stamp := transcriptStamp{size: transcript.Info.Size(), modTime: transcript.Info.ModTime()}
+		if u.seen[transcript.Path] == stamp {
+			continue
 		}
+		name, err := filepath.Rel(filepath.Join(u.home, transcriptRoots[transcript.Source]), transcript.Path)
+		if err != nil {
+			return err
+		}
+		if err := u.upload(ctx, transcript.Source, filepath.ToSlash(name), transcript.Path); err != nil {
+			return fmt.Errorf("upload the %s transcripts: %w", transcript.Source, err)
+		}
+		u.seen[transcript.Path] = stamp
 	}
 	return nil
 }

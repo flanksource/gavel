@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/promptrun"
@@ -35,8 +36,12 @@ func init() {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("find the home directory the agent writes its transcripts under: %w", err)
+			}
 			code, err := runnerExec(cmd.Context(), runnerOptions{
-				Run: run, Workspace: workspace, Getenv: os.Getenv, Command: runCommandIn, Output: cmd.OutOrStdout(),
+				Run: run, Workspace: workspace, Home: home, Getenv: os.Getenv, Command: runCommandIn, Output: cmd.OutOrStdout(),
 			})
 			if err != nil {
 				return err
@@ -56,7 +61,9 @@ func init() {
 type runnerOptions struct {
 	Run       string
 	Workspace string
-	Getenv    func(string) string
+	// Home is the home directory an agent run's agent writes its transcripts under.
+	Home   string
+	Getenv func(string) string
 	// Command runs name with args in dir, streaming its output, and returns its exit code.
 	Command func(ctx context.Context, dir, name string, args []string, output io.Writer) (int, error)
 	Output  io.Writer
@@ -87,7 +94,7 @@ func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
 		return 0, err
 	}
 	if spec.Kind == "agent" {
-		return 0, runAgentJob(ctx, api, spec, src, opts.Agent, opts.Output)
+		return 0, runAgentJob(ctx, api, spec, src, opts)
 	}
 	name, args, err := jobCommand(spec, src)
 	if err != nil {
@@ -166,16 +173,16 @@ func jobCommand(spec sandbox.RunSpec, src string) (string, []string, error) {
 
 // runAgentJob runs an agent run's step in src and reports it to serve as it goes: its messages,
 // its agent's transcripts, and once it ends, its commits and then its result.
-func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src string, agent captainai.Provider, output io.Writer) error {
+func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src string, opts runnerOptions) error {
 	var job remote.Job
 	if err := json.Unmarshal(spec.Agent, &job); err != nil {
 		return fmt.Errorf("decode the agent job of run %s: %w", api.Run, err)
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("find the home directory the agent writes its transcripts under: %w", err)
+	if opts.Home == "" {
+		return fmt.Errorf("agent run %s has no home directory to find its agent's transcripts under", api.Run)
 	}
-	transcripts := &transcriptUploader{api: api, home: home}
+	output := opts.Output
+	transcripts := &transcriptUploader{api: api, home: opts.Home, since: time.Now()}
 	uploading, stopUploading := context.WithCancel(ctx)
 	uploaderDone := make(chan struct{})
 	go func() {
@@ -184,7 +191,7 @@ func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src stri
 	}()
 
 	send := func(message remote.Message) error { return api.postMessage(ctx, message) }
-	finished, err := remote.Execute(ctx, job, src, agent, remote.Serve{Send: send, Call: func(message remote.Message) (remote.Reply, error) {
+	finished, err := remote.Execute(ctx, job, src, opts.Agent, remote.Serve{Send: send, Call: func(message remote.Message) (remote.Reply, error) {
 		return api.call(ctx, message)
 	}})
 	stopUploading()
