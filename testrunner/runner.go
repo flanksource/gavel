@@ -453,17 +453,7 @@ func Run(opts RunOptions) (any, error) {
 
 	// Split starting paths by execution root so each group runs with the
 	// correct WorkDir. Nested Go modules get their own groups.
-	var groups []testGroup
-	var err error
-	if opts.UIRSelected != nil {
-		absolute, absErr := filepath.Abs(opts.WorkDir)
-		if absErr != nil {
-			return nil, absErr
-		}
-		groups = []testGroup{{workDir: absolute}}
-	} else {
-		groups, err = groupPathsByGitRoot(opts.WorkDir, opts.StartingPaths)
-	}
+	groups, err := groupPathsByGitRoot(opts.WorkDir, opts.StartingPaths)
 	if err != nil {
 		return nil, err
 	}
@@ -499,13 +489,22 @@ func runMultiRoot(base RunOptions, groups []testGroup) (any, error) {
 		defer close(base.Updates)
 	}
 
-	baseWorkDir := base.WorkDir
+	baseWorkDir, err := filepath.Abs(base.WorkDir)
+	if err != nil {
+		return nil, err
+	}
 	var allTree []parsers.Test
 	var streamedTree []parsers.Test
 	for _, g := range groups {
 		opts := base
 		opts.WorkDir = g.workDir
 		opts.StartingPaths = g.paths
+		if opts.UIRSelected != nil && filepath.Clean(g.workDir) != filepath.Clean(baseWorkDir) {
+			// UIRSelected keys are relative to the planned module. A child module can have the same
+			// package path, so it must run normally rather than inherit another module's evidence.
+			opts.UIRSelected = nil
+			opts.UIRAllowEmpty = false
+		}
 
 		var result any
 		var err error
