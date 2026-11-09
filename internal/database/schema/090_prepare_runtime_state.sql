@@ -6,6 +6,7 @@
 -- Atlas drops that cached column; the post-schema bundle recreates them as
 -- read-time state and activity functions. 089 has already removed the triggers
 -- on Captain's tables that used the trigger functions dropped here.
+DROP VIEW IF EXISTS public.todo_issue_overview;
 DROP VIEW IF EXISTS public.todo_issue_runtime;
 DROP FUNCTION IF EXISTS public.gavel_todo_iteration_projection_trigger();
 DROP FUNCTION IF EXISTS public.gavel_todo_request_projection_trigger();

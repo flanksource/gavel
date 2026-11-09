@@ -11,6 +11,9 @@ import (
 	"sync"
 
 	"github.com/flanksource/gavel/todos"
+	todoruntime "github.com/flanksource/gavel/todos/runtime"
+	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 )
 
 const todoBatchConcurrency = 4
@@ -84,6 +87,20 @@ func (s *Server) loadTodoBatch(ctx context.Context, dirs []string) []todoBatchRe
 	if len(dirs) == 0 {
 		return results
 	}
+	providers := make([]todos.Provider, len(dirs))
+	var nativeProviders []*todoruntime.Provider
+	for i, dir := range dirs {
+		provider, _, err := s.todoReadProviderContext(ctx, todoSource{Dir: dir})
+		if err != nil {
+			results[i].Error = todoBatchErrorFor(err)
+			continue
+		}
+		providers[i] = provider
+		if provider, ok := provider.(*todoruntime.Provider); ok {
+			nativeProviders = append(nativeProviders, provider)
+		}
+	}
+	nativeLists, nativeErr := todoruntime.ListWorkspaces(ctx, nativeProviders)
 
 	workers := min(len(dirs), todoBatchConcurrency)
 	jobs := make(chan int)
@@ -93,7 +110,10 @@ func (s *Server) loadTodoBatch(ctx context.Context, dirs []string) []todoBatchRe
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				results[i] = s.loadTodoBatchWorkspace(ctx, dirs[i])
+				if results[i].Error != nil {
+					continue
+				}
+				results[i] = s.loadTodoBatchWorkspace(ctx, dirs[i], providers[i], nativeLists, nativeErr)
 			}
 		}()
 	}
@@ -115,18 +135,28 @@ func (s *Server) loadTodoBatch(ctx context.Context, dirs []string) []todoBatchRe
 	return results
 }
 
-func (s *Server) loadTodoBatchWorkspace(ctx context.Context, dir string) todoBatchResult {
+func (s *Server) loadTodoBatchWorkspace(ctx context.Context, dir string, provider todos.Provider, nativeLists map[uuid.UUID]todoruntime.WorkspaceList, nativeErr error) todoBatchResult {
 	result := todoBatchResult{Dir: dir}
 	if err := ctx.Err(); err != nil {
 		result.Error = todoBatchErrorFor(err)
 		return result
 	}
-	provider, _, err := s.todoProviderContext(ctx, todoSource{Dir: dir})
-	if err != nil {
-		result.Error = todoBatchErrorFor(err)
-		return result
+	var items types.TODOS
+	var err error
+	if nativeProvider, ok := provider.(*todoruntime.Provider); ok {
+		if nativeErr != nil {
+			result.Error = todoBatchErrorFor(nativeErr)
+			return result
+		}
+		list, ok := nativeLists[nativeProvider.Workspace().ID]
+		if !ok {
+			result.Error = todoBatchErrorFor(fmt.Errorf("missing native workspace list for %s", dir))
+			return result
+		}
+		items, err = list.Items, list.Err
+	} else {
+		items, err = provider.List(ctx, todos.DiscoveryFilters{})
 	}
-	items, err := provider.List(ctx, todos.DiscoveryFilters{})
 	if err != nil {
 		result.Error = todoBatchErrorFor(err)
 		return result

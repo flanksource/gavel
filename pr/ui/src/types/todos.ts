@@ -81,6 +81,7 @@ export interface TodoItem {
   // Agent session id of the most recent run, used to follow the session live
   // and to resume it. Recorded in the native issue execution state.
   sessionId?: string;
+  sessionSummary?: { found: boolean; inProgress: boolean; state: string; durationMs: number; costUsd: number; updatedAt: string };
   // Present only when this detail was resolved from a session UUID. It selects
   // that exact historical transcript while sessionId continues to identify the
   // Todo's active/latest run for lifecycle actions.

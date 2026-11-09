@@ -23,6 +23,9 @@ const projects: Project[] = [
 
 vi.mock('./useAppQueries', () => ({
   useAppQueries: () => ({
+    config: { repos: ['acme/gavel'], project: 'gavel' },
+    prsLoading: false,
+    prError: '',
     snapshot: {
       prs: [],
       config: { repos: ['acme/gavel'], project: 'gavel' },

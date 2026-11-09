@@ -1,4 +1,5 @@
 export const queryKeys = {
+  config: () => ['dashboard', 'config'] as const,
   me: () => ['me'] as const,
   sshKeys: () => ['ssh-keys'] as const,
   sandboxRuns: () => ['sandbox-runs'] as const,

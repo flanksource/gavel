@@ -156,7 +156,7 @@ export function todoTableColumns(
       sortable: false,
       shrink: true,
       accessor: row => row.todo.status,
-      render: (_value, row) => <TodoStatusCell todo={row.todo} dir={row.workspace.dir} />,
+      render: (_value, row) => <TodoStatusCell todo={row.todo} />,
     },
     {
       key: 'title',
@@ -273,11 +273,11 @@ export function ParentHint({ title }: { title: string | undefined }) {
 
 // TodoStatusCell is the list row's status affordance: a live run reports its own
 // state and elapsed time, anything else falls back to the lifecycle icon.
-function TodoStatusCell({ todo, dir }: { todo: TodoItem; dir: string }) {
+function TodoStatusCell({ todo }: { todo: TodoItem }) {
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
       {todo.sessionId ? (
-        <SessionBadge dir={dir} sessionId={todo.sessionId} status={todo.status} live={isLiveRun(todo)} />
+        <SessionBadge stats={todo.sessionSummary} status={todo.status} live={isLiveRun(todo)} />
       ) : (
         <StatusIcon status={todo.status} />
       )}

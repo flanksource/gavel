@@ -34,7 +34,7 @@ describe('tag definition cache', () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     vi.stubGlobal('fetch', vi.fn(async () => {
       await gate;
-      return { ok: true, json: async () => fresh } as Response;
+      return { ok: true, json: async () => ({ results: [{ dir, labels: fresh }] }) } as Response;
     }));
 
     render(

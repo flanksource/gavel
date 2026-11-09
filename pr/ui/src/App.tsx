@@ -138,6 +138,7 @@ export function App() {
   const [menubarTab, setMenubarTab] = useState<MobileTab>('prs');
   const [menubarSessionId, setMenubarSessionId] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback({ copiedMs: 2500, errorMs: 2500 });
   const [addOpen, setAddOpen] = useState(false);
@@ -165,6 +166,9 @@ export function App() {
   const streamsActive = visible || isMenubar;
 
   const {
+    config,
+    prsLoading,
+    prError,
     snapshot,
     projects: allProjects,
     projectsLoaded,
@@ -173,7 +177,7 @@ export function App() {
     updateSnapshot,
     refreshProjects,
     refreshProjectsAndProcesses,
-  } = useAppQueries({ enabled: streamsActive, hostData: hostControls, initialConfig });
+  } = useAppQueries({ enabled: streamsActive, prsEnabled: (!isTodoNewPage && !isProcessesPage && (isMenubar ? menubarTab === 'prs' : activeTab === 'prs')) || paletteOpen || statusOpen, hostData: hostControls, initialConfig });
   const {
     error: mutationError,
     markSeen,
@@ -195,7 +199,6 @@ export function App() {
   const fetchedAt = snapshot.fetchedAt;
   const nextFetchIn = snapshot.nextFetchIn;
   const error = mutationError || snapshot.error || processError;
-  const config = snapshot.config;
   const paused = snapshot.paused;
   const rateLimit = snapshot.rateLimit;
   const syncStatus = snapshot.syncStatus ?? {};
@@ -702,6 +705,7 @@ export function App() {
         <OrgChooser config={{ ...config, project: scopeProject }} projects={allProjects} onChange={updateScopeConfig} onSetProjectHidden={hideProject} />
       )}
       <StatusIndicator
+        onOpenChange={setStatusOpen}
         fetchedAt={fetchedAt}
         error={error}
         nextFetchIn={nextFetchIn}
@@ -879,6 +883,8 @@ export function App() {
       </AppShell>
 
       <CommandPalette
+        prsLoading={prsLoading}
+        prError={prError}
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         prs={prs}

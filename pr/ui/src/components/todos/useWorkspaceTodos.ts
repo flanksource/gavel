@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import type { Project, TodoCounts, TodoDensity, TodoGroupBy, TodoItem, TodoLayout, TodoListResponse, TodoStatus } from '../../types';
 import { addCounts, emptyCounts } from './format';
+import { readWorkspaceBatch } from './workspaceBatch';
+import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { loadDensity, saveDensity } from './todoDensity';
 import { loadGroupBy, saveGroupBy } from './todoGroup';
 import { loadLayout, saveLayout } from './todoLayout';
@@ -11,13 +13,10 @@ import { loadTodoSort, saveTodoSort } from './todoSort';
 import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRange';
 import { setTodoQueryData, todoGlobalItemQueryOptions, todoItemQueryOptions, todoQueryKeys } from './todoQueries';
 import { useTodoSelection, type SelectedTodo } from './todoSelection';
-import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
 import { useTodoTagIndexes } from './tagQueries';
 import type { TodoDetailView } from '../../routes';
 
 export type { SelectedTodo };
-
-const activeTodoDetailPollInterval = 1000;
 
 export interface WorkspaceTodoError {
   code: string;
@@ -89,25 +88,6 @@ function workspaceTodoBatchState(dirs: string[], payload: WorkspaceTodoBatchResp
   };
 }
 
-function responseError(payload: unknown, status: number): string {
-  if (typeof payload === 'object' && payload !== null && 'error' in payload && typeof payload.error === 'string') {
-    return payload.error || `Load failed (HTTP ${status})`;
-  }
-  return `Load failed (HTTP ${status})`;
-}
-
-async function fetchWorkspaceTodoBatch(dirs: string[], signal: AbortSignal): Promise<WorkspaceTodoBatchState> {
-  const response = await fetch('/api/todos/batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dirs }),
-    signal,
-  });
-  const payload = await response.json().catch(() => null) as WorkspaceTodoBatchResponse | null;
-  if (!response.ok) throw new Error(responseError(payload, response.status));
-  if (!payload) throw new Error('Todo batch response was not valid JSON');
-  return workspaceTodoBatchState(dirs, payload);
-}
 
 
 // useWorkspaceTodos drives the shared todos data layer: it lists every
@@ -152,18 +132,28 @@ export function useWorkspaceTodos(
   }, [projects]);
   const workspaceDirsKey = JSON.stringify(workspaces.map(workspace => workspace.dir).sort());
   const workspaceDirs = useMemo(() => JSON.parse(workspaceDirsKey) as string[], [workspaceDirsKey]);
-  const listQueryKey = useMemo(() => workspaceTodoBatchKeys.list(workspaceDirs), [workspaceDirs]);
   // One tag index per workspace, resolved here rather than in the rows: a row
   // component renders once per todo, and a subscription per row would be
   // hundreds of them.
   const tagsByDir = useTodoTagIndexes(workspaceDirs, enabled);
   const queryClient = useQueryClient();
-  const listQuery = useQuery({
-    queryKey: listQueryKey,
-    queryFn: ({ signal }) => fetchWorkspaceTodoBatch(workspaceDirs, signal),
-    enabled: enabled && workspaceDirs.length > 0,
+  const changes = useWorkspaceChanges(enabled);
+  const combine = useCallback((results: UseQueryResult<TodoListResponse, Error>[]) => {
+    const state = workspaceTodoBatchState(workspaceDirs, { results: results.map((query, index) => ({
+      dir: workspaceDirs[index], counts: query.data?.counts ?? emptyCounts, items: query.data?.items ?? [],
+      ...(query.error ? { error: { code: 'load_failed', message: query.error.message } } : {}),
+    })) });
+    for (let index = 0; index < results.length; index++) {
+      if (results[index].data) state.byDir[workspaceDirs[index]] = results[index].data!;
+    }
+    return { data: results.some(query => query.isFetched) ? state : undefined, isFetching: results.some(query => query.isFetching) };
+  }, [workspaceDirs]);
+  const listQuery = useQueries({ queries: workspaceDirs.map(dir => ({
+    queryKey: todoQueryKeys.list(dir),
+    queryFn: ({ signal }: { signal: AbortSignal }) => readWorkspaceBatch(queryClient, dir, signal),
+    enabled: enabled && changes.ready,
     staleTime: Infinity,
-  });
+  })), combine });
   const emptyByDir = useMemo(
     () => Object.fromEntries(workspaceDirs.map(dir => [dir, { dir, counts: emptyCounts, items: [] }])),
     [workspaceDirs],
@@ -173,7 +163,7 @@ export function useWorkspaceTodos(
   // list, and a new empty object each render would re-render the whole tree for
   // the common case of no errors at all.
   const errorsByDir = listQuery.data?.errorsByDir ?? noErrors;
-  const error = listQuery.error?.message ?? listQuery.data?.error ?? '';
+  const error = changes.error || listQuery.data?.error || '';
   const loadingList = listQuery.isFetching;
   // False until the first batch has landed: `byDir` is then a placeholder of
   // empty lists, which must not be read as workspaces that hold no todos.
@@ -272,10 +262,7 @@ export function useWorkspaceTodos(
     enabled: resolvingRoute,
   });
   const selectedDetailQuery = useQuery({
-    ...todoItemQueryOptions(selected?.dir ?? '', selected?.ref ?? '', {
-      pollWhileActive: true,
-      intervalMs: activeTodoDetailPollInterval,
-    }),
+    ...todoItemQueryOptions(selected?.dir ?? '', selected?.ref ?? ''),
     enabled: !!selected && !resolvingRoute,
   });
   const detail = resolvingRoute ? null : selectedDetailQuery.data ?? null;
@@ -294,10 +281,10 @@ export function useWorkspaceTodos(
     const status = detail?.status;
     const previous = previousDetail.current;
     if (previous.key === key && previous.status === 'in_progress' && status && status !== 'in_progress') {
-      void queryClient.invalidateQueries({ queryKey: listQueryKey, exact: true });
+      if (selected) void queryClient.invalidateQueries({ queryKey: todoQueryKeys.list(selected.dir), exact: true });
     }
     previousDetail.current = { key, status };
-  }, [detail?.status, listQueryKey, queryClient, selected]);
+  }, [detail?.status, queryClient, selected]);
 
   // Resolve a deep link independently of the batch. The global query accepts a
   // canonical ID, short ID, session ID, or imported alias; seed its canonical
@@ -329,8 +316,8 @@ export function useWorkspaceTodos(
   );
 
   const refresh = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: listQueryKey, exact: true });
-  }, [listQueryKey, queryClient]);
+    for (const dir of workspaceDirs) void queryClient.invalidateQueries({ queryKey: todoQueryKeys.list(dir), exact: true });
+  }, [workspaceDirs, queryClient]);
 
   const created = useCallback((dir: string, todo: TodoItem) => {
     setShowCreate(false);

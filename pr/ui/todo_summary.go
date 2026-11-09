@@ -38,25 +38,26 @@ type todoListResponse struct {
 }
 
 type todoSummary struct {
-	PR             *types.PR      `json:"pr,omitempty"`
-	Ref            string         `json:"ref"`
-	ID             string         `json:"id,omitempty"`
-	ShortID        string         `json:"shortId,omitempty"`
-	Version        int64          `json:"version,omitempty"`
-	WorkspaceID    string         `json:"workspaceId,omitempty"`
-	ParentID       string         `json:"parentId,omitempty"`
-	ExecutionState string         `json:"executionState,omitempty"`
-	Title          string         `json:"title"`
-	Status         types.Status   `json:"status"`
-	Priority       types.Priority `json:"priority"`
-	CWD            string         `json:"cwd,omitempty"`
-	CreatedBy      string         `json:"createdBy,omitempty"`
-	Visibility     string         `json:"visibility,omitempty"`
-	Labels         []string       `json:"labels,omitempty"`
-	Attempts       int            `json:"attempts,omitempty"`
-	Created        *time.Time     `json:"created,omitempty"`
-	LastRun        *time.Time     `json:"lastRun,omitempty"`
-	SessionID      string         `json:"sessionId,omitempty"`
+	SessionSummary *types.SessionSummary `json:"sessionSummary,omitempty"`
+	PR             *types.PR             `json:"pr,omitempty"`
+	Ref            string                `json:"ref"`
+	ID             string                `json:"id,omitempty"`
+	ShortID        string                `json:"shortId,omitempty"`
+	Version        int64                 `json:"version,omitempty"`
+	WorkspaceID    string                `json:"workspaceId,omitempty"`
+	ParentID       string                `json:"parentId,omitempty"`
+	ExecutionState string                `json:"executionState,omitempty"`
+	Title          string                `json:"title"`
+	Status         types.Status          `json:"status"`
+	Priority       types.Priority        `json:"priority"`
+	CWD            string                `json:"cwd,omitempty"`
+	CreatedBy      string                `json:"createdBy,omitempty"`
+	Visibility     string                `json:"visibility,omitempty"`
+	Labels         []string              `json:"labels,omitempty"`
+	Attempts       int                   `json:"attempts,omitempty"`
+	Created        *time.Time            `json:"created,omitempty"`
+	LastRun        *time.Time            `json:"lastRun,omitempty"`
+	SessionID      string                `json:"sessionId,omitempty"`
 	// LookupSessionID is set only when a global detail request used a Captain
 	// session UUID instead of an issue reference. The client uses it to open the
 	// exact historical session without replacing the Todo's active SessionID.
@@ -155,6 +156,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		LastRun:        todo.LastRun,
 		ExternalIssue:  todo.ExternalIssue,
 		Phases:         todo.PhaseRuns,
+		SessionSummary: todo.SessionSummary,
 	}
 	if todo.LLM != nil {
 		out.SessionID = todo.LLM.SessionId

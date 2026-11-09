@@ -18,7 +18,7 @@ export interface TodoSessionDetailOptions {
 /** The todo's attempts, newest first — one shared poll per todo. */
 export function useTodoSessionDetail(dir: string, ref: string, active: boolean, { intervalMs = 1500 }: TodoSessionDetailOptions = {}) {
   const enabled = active && !!ref;
-  const query = useQuery({ ...sessionDetailQueryOptions(dir, ref, intervalMs), enabled });
+  const query = useQuery({ ...sessionDetailQueryOptions(dir, ref), enabled });
   return {
     detail: enabled ? query.data ?? null : null,
     error: enabled && query.error

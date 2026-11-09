@@ -63,14 +63,13 @@ export function todoListQueryOptions(dir: string) {
       signal,
       `Failed to load todos for ${queryDir(dir) || 'the default workspace'}`,
     ),
-    staleTime: 30_000,
+    staleTime: Infinity,
   });
 }
 
 export function todoItemQueryOptions(
   dir: string,
   ref: string,
-  options: { pollWhileActive?: boolean; intervalMs?: number } = {},
 ) {
   return queryOptions({
     queryKey: todoQueryKeys.item(dir, ref),
@@ -83,10 +82,8 @@ export function todoItemQueryOptions(
         `Failed to load todo ${ref}`,
       );
     },
-    staleTime: 5_000,
-    refetchInterval: options.pollWhileActive
-      ? query => query.state.data?.status === 'in_progress' ? (options.intervalMs ?? 1_000) : false
-      : false,
+    staleTime: Infinity,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
   });
 }
@@ -105,7 +102,7 @@ export function todoGlobalItemQueryOptions(ref: string) {
       if (!todo.cwd?.trim() && !todo.dir?.trim()) throw new Error(`Failed to resolve todo ${ref}: response omitted its workspace directory`);
       return todo;
     },
-    staleTime: 5_000,
+    staleTime: Infinity,
   });
 }
 
@@ -131,7 +128,7 @@ async function fetchSessionStats(dir: string, sessionId: string, signal: AbortSi
 // or DB row yet. That is only worth retrying while a run is actually expected to
 // start; for a settled todo whose session was pruned it would poll forever, and a
 // list showing many such todos would poll forever in parallel.
-export function sessionStatsQueryOptions({ dir, sessionId, expectLive = true }: {
+export function sessionStatsQueryOptions({ dir, sessionId }: {
   dir: string;
   sessionId: string;
   expectLive?: boolean;
@@ -141,13 +138,8 @@ export function sessionStatsQueryOptions({ dir, sessionId, expectLive = true }: 
     queryFn: ({ signal }) => fetchSessionStats(dir, sessionId, signal),
     // Settled totals do not move, so a row that only wants the final duration and
     // cost re-reads them rarely instead of on every remount.
-    staleTime: expectLive ? 1_500 : 300_000,
-    refetchInterval: query => {
-      const stats = query.state.data;
-      if (stats?.inProgress) return 2_000;
-      if (!stats?.found) return expectLive ? 4_000 : false;
-      return false;
-    },
+    staleTime: Infinity,
+    refetchInterval: false,
   });
 }
 
@@ -166,17 +158,11 @@ export async function fetchTodoSessionDetail(dir: string, ref: string, signal?: 
 
 // SETTLED_ATTEMPTS_POLL_MS is how often a todo whose attempts have all finished
 // is re-read: a new attempt can still be started elsewhere (the CLI, another tab).
-const SETTLED_ATTEMPTS_POLL_MS = 15_000;
-
-function attemptsSettled(detail: TodoSessionDetailResponse | undefined) {
-  return !!detail && detail.attempts.every(attempt => attempt.phase === 'finished');
-}
-
-export function sessionDetailQueryOptions(dir: string, ref: string, intervalMs: number) {
+export function sessionDetailQueryOptions(dir: string, ref: string) {
   return queryOptions({
     queryKey: todoQueryKeys.sessionDetail(dir, ref),
     queryFn: ({ signal }) => fetchTodoSessionDetail(dir, ref, signal),
-    staleTime: Math.min(intervalMs, 1_500),
-    refetchInterval: query => attemptsSettled(query.state.data) ? Math.max(intervalMs, SETTLED_ATTEMPTS_POLL_MS) : intervalMs,
+    staleTime: Infinity,
+    refetchInterval: false,
   });
 }

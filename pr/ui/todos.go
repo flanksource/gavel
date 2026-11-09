@@ -54,7 +54,7 @@ func (s *Server) handleTodoItem(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTodosList(w http.ResponseWriter, r *http.Request) {
 	source := todoSourceFromRequest(r)
-	provider, source, err := s.todoProviderContext(r.Context(), source)
+	provider, source, err := s.todoReadProviderContext(r.Context(), source)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -157,7 +157,7 @@ func (s *Server) resolveTodoGetReference(
 	if ownerDir == "" {
 		return nil, source, nil, "", fmt.Errorf("resolved session %q has no owning workspace path", ref)
 	}
-	provider, source, err = s.todoProviderContext(ctx, todoSource{Dir: ownerDir})
+	provider, source, err = s.todoReadProviderContext(ctx, todoSource{Dir: ownerDir})
 	if err != nil {
 		return nil, source, nil, "", err
 	}
@@ -176,7 +176,7 @@ func (s *Server) resolveTodoGetReference(
 func (s *Server) resolveTodoReference(ctx context.Context, requested todoSource, ref string) (todos.Provider, todoSource, *types.TODO, error) {
 	globalLookup := strings.TrimSpace(requested.Dir) == ""
 	if !globalLookup {
-		provider, source, err := s.todoProviderContext(ctx, requested)
+		provider, source, err := s.todoReadProviderContext(ctx, requested)
 		if err != nil {
 			return nil, source, nil, err
 		}
@@ -196,7 +196,7 @@ func (s *Server) resolveTodoReference(ctx context.Context, requested todoSource,
 	if ownerDir == "" {
 		return nil, requested, nil, fmt.Errorf("resolved TODO %q has no owning workspace path", ref)
 	}
-	provider, source, err := s.todoProviderContext(ctx, todoSource{Dir: ownerDir})
+	provider, source, err := s.todoReadProviderContext(ctx, todoSource{Dir: ownerDir})
 	if err != nil {
 		return nil, source, nil, err
 	}
@@ -296,6 +296,14 @@ var openTodoProvider = func(ctx context.Context, dir string) (todos.Provider, er
 		return nil, err
 	}
 	return todoruntime.Open(ctx, project.WorkspaceOptions())
+}
+
+func (s *Server) todoReadProviderContext(ctx context.Context, source todoSource) (todos.Provider, todoSource, error) {
+	if s.workspaceData != nil {
+		provider, err := s.workspaceReadProvider(ctx, source.Dir)
+		return provider, source, err
+	}
+	return s.todoProviderContext(ctx, source)
 }
 
 var openGlobalTodoProvider = func(ctx context.Context) (todos.GlobalReferenceProvider, error) {

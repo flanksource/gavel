@@ -99,6 +99,23 @@ afterEach(() => {
 });
 
 describe('useAppQueries', () => {
+  it('loads shared configuration without requesting PR data when there is no PR consumer', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      return Response.json(url === '/api/config' ? snapshot.config : []);
+    }));
+    vi.stubGlobal('EventSource', FakeEventSource);
+    function TodosProbe() {
+      const state = useAppQueries({ enabled: true, prsEnabled: false, hostData: false, initialConfig: { repos: [] } });
+      return <div>{state.config.repos.join(',')}</div>;
+    }
+    render(<Provider client={createClient()}><TodosProbe /></Provider>);
+    await screen.findByText('acme/gavel');
+    expect(calls.sort()).toEqual(['/api/config', '/api/projects']);
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
   it('deduplicates bootstrap reads, stores stream frames in the cache, and reuses data after remount', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

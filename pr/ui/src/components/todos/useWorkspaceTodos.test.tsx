@@ -5,7 +5,7 @@ import type { Project, TodoItem, TodoListResponse } from '../../types';
 import { queryTestWrapper } from './queryTestWrapper';
 import { useWorkspaceTodos } from './useWorkspaceTodos';
 
-vi.mock('./format', () => {
+vi.mock('./format', async importOriginal => {
   const emptyCounts = {
     total: 0,
     open: 0,
@@ -21,6 +21,7 @@ vi.mock('./format', () => {
     skipped: 0,
   };
   return {
+    ...await importOriginal<typeof import('./format')>(),
     emptyCounts,
     addCounts: (_left: unknown, right: unknown) => right,
     todoQuery: (dir: string) => {

@@ -1,9 +1,9 @@
 import type { ComponentType } from 'react';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo, useEffect, useState } from 'react';
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { UiAdd, UiBeaker, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiListTree, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
-import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoLayout, TodoPriority, TodoStatus } from '../../types';
+import type { TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoLayout, TodoPriority, TodoStatus } from '../../types';
 import { TODO_PHASES } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
 import type { FacetModes } from '../../utils';
@@ -13,7 +13,7 @@ import { DENSITY_OPTIONS } from './todoDensity';
 import { LAYOUT_OPTIONS } from './todoLayout';
 import { TodoPhaseStrip } from './TodoPhaseCell';
 import { isStatusShown } from './todoFilter';
-import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
+import { formatCost, formatDuration } from './TodoSessionTimer';
 import { TodoTagRow } from './TodoTag';
 import { todoVisibleLabels, type TagIndex } from './tagResolve';
 import { TodoPRBadge } from './TodoPRBadge';
@@ -237,7 +237,7 @@ interface SessionBadgeView {
 // end settles to Done (green), anything else to Ended (neutral), so the row
 // mirrors the real session state instead of a perpetual blue spinner. Before the
 // log appears (found=false) the session is still starting, so it stays live.
-function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
+function sessionBadgeView(stats: TodoItem['sessionSummary'] | null): SessionBadgeView {
   if (stats?.state === 'ask') {
     return { className: statusClass('skipped'), icon: UiComment, label: 'Awaiting input' };
   }
@@ -273,15 +273,20 @@ export function isLiveRun(todo: TodoItem): boolean {
 // spinning forever. Until the session resolves there is nothing to report, so a
 // settled todo falls back to its own status icon and only a live run claims to be
 // in progress. Render it only for a row that has a session id.
-export function SessionBadge({ dir, sessionId, status, live }: {
-  dir: string;
-  sessionId: string;
+export function SessionBadge({ stats, status, live }: {
+  stats?: TodoItem['sessionSummary'];
   status: TodoStatus | string;
   live: boolean;
 }) {
-  const { stats, elapsedMs } = useSessionStats({ dir, sessionId, active: true, expectLive: live });
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!stats?.inProgress) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [stats?.inProgress]);
+  const elapsedMs = stats ? stats.durationMs + (stats.inProgress ? Math.max(0, now - Date.parse(stats.updatedAt)) : 0) : 0;
   if (!stats?.found && !live) return <StatusIcon status={status} />;
-  const view = sessionBadgeView(stats);
+  const view = sessionBadgeView(stats ?? null);
   const ViewIcon = view.icon;
   const cost = stats ? formatCost(stats.costUsd) : '';
   return (
@@ -505,10 +510,7 @@ function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectab
   // Memoised so the row's style prop keeps one identity: a fresh object literal
   // here re-renders ListMenuItem (and commits DOM) on every parent render.
   const style = useMemo(() => ({ borderLeftColor: severityColor(todo.priority) }), [todo.priority]);
-  // Any todo carrying a session shows that run's duration and cost, whatever
-  // lifecycle status it settled into. Only a live run keeps polling (see
-  // sessionStatsQueryOptions), so a long list of finished todos reads its totals
-  // once instead of firing a request storm.
+  // Session summaries arrive with the workspace batch; rows never fetch them.
   const sessionId = dir ? todo.sessionId : undefined;
   return (
     <ListMenuItem
@@ -543,7 +545,7 @@ function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectab
       >
         <div className="flex min-w-0 max-w-full items-center gap-2 overflow-hidden">
           {sessionId ? (
-            <SessionBadge dir={dir!} sessionId={sessionId} status={todo.status} live={isLiveRun(todo)} />
+            <SessionBadge stats={todo.sessionSummary} status={todo.status} live={isLiveRun(todo)} />
           ) : (
             <StatusIcon status={todo.status} />
           )}

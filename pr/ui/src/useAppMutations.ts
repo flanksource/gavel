@@ -82,13 +82,23 @@ export function useAppMutations(): AppMutations {
     onMutate: async config => {
       clearError();
       await queryClient.cancelQueries({ queryKey: queryKeys.prSnapshot(), exact: true });
-      const previous = queryClient.getQueryData<Snapshot>(queryKeys.prSnapshot())?.config;
+      await queryClient.cancelQueries({ queryKey: queryKeys.config(), exact: true });
+      const previous = queryClient.getQueryData<SearchConfig>(queryKeys.config()) ?? queryClient.getQueryData<Snapshot>(queryKeys.prSnapshot())?.config;
+      queryClient.setQueryData(queryKeys.config(), config);
       setSnapshot(current => ({ ...current, config }));
       return { previous };
     },
-    onSuccess: config => setSnapshot(current => ({ ...current, config })),
+    onSuccess: config => {
+      queryClient.setQueryData(queryKeys.config(), config);
+      setSnapshot(current => ({ ...current, config }));
+    },
     onError: (cause, _config, context) => {
-      if (context?.previous) setSnapshot(current => ({ ...current, config: context.previous! }));
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.config(), context.previous);
+        setSnapshot(current => ({ ...current, config: context.previous! }));
+      } else {
+        queryClient.removeQueries({ queryKey: queryKeys.config(), exact: true });
+      }
       reportError(cause);
     },
   });

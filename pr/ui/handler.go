@@ -53,6 +53,7 @@ type repoInfo struct {
 }
 
 type Server struct {
+	workspaceData *workspaceData
 	// ctx is the process root context carrying the shared services; reach it
 	// through context(), which gives a zero-value Server its own.
 	ctx     gavelctx.Context
@@ -550,8 +551,11 @@ func (s *Server) RefreshCh() chan struct{} {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/todos/changes", s.handleWorkspaceChanges)
 	mux.HandleFunc("GET /api/connections/storage", s.handleConnectionStorage)
- for _,pattern:=range []string{"GET /api/connections","POST /api/connections","GET /api/connections/{reference}","PATCH /api/connections/{reference}","DELETE /api/connections/{reference}","POST /api/connections/{reference}/validate"} {mux.HandleFunc(pattern,s.handleConnections)}
+	for _, pattern := range []string{"GET /api/connections", "POST /api/connections", "GET /api/connections/{reference}", "PATCH /api/connections/{reference}", "DELETE /api/connections/{reference}", "POST /api/connections/{reference}/validate"} {
+		mux.HandleFunc(pattern, s.handleConnections)
+	}
 	if s.launchService != nil {
 		for _, path := range []string{"/api/launch", "/api/launch/", "/api/runs", "/api/runs/"} {
 			mux.Handle(path, s.launchService.Handler())
@@ -596,6 +600,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(testRunTracesPrefix+"/", s.testRunTraces())
 	mux.HandleFunc("/api/todos", s.handleTodos)
 	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
+	mux.HandleFunc("POST /api/todos/labels/batch", s.handleTodoLabelsBatch)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
 	mux.HandleFunc("GET /api/todos/new/steps", s.handleTodoNewSteps)
@@ -1204,6 +1209,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.mu.RLock()
 		cfg := s.config
 		s.mu.RUnlock()
+		if cfg.Repos == nil {
+			cfg.Repos = []string{}
+		}
 		json.NewEncoder(w).Encode(cfg) //nolint:errcheck
 	case http.MethodPost:
 		var cfg SearchConfig
