@@ -34,8 +34,8 @@ type goBatchPlan struct {
 var goBatchCount atomic.Int64
 
 func (o *TestOrchestrator) unfocusedGoRun(startingPaths []string) bool {
-	return len(startingPaths) == 0 && len(o.Frameworks) == 0 && len(o.Ignore) == 0 &&
-		!o.hasChangeSelector() && o.Failed == "" && len(o.PassThroughArgs) == 0 && o.UIRSelected == nil
+	return len(startingPaths) == 0 && (len(o.Frameworks) == 0 || o.UIRRunAll) && len(o.Ignore) == 0 &&
+		!o.hasChangeSelector() && o.Failed == "" && len(o.PassThroughArgs) == 0 && o.UIRSkippable == nil
 }
 
 func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string, unfocused bool) ([]goBatchPlan, error) {
@@ -86,12 +86,12 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 		for _, pkg := range base.packages {
 			args := o.augmentBenchArgs(runner, pkg, base.args)
 			if base.framework == parsers.GoTest {
-				if selected, planned := o.UIRSelected[pkg]; planned {
-					quoted := make([]string, len(selected))
-					for i, name := range selected {
+				if skippable := o.UIRSkippable[pkg]; len(skippable) > 0 {
+					quoted := make([]string, len(skippable))
+					for i, name := range skippable {
 						quoted[i] = regexp.QuoteMeta(name)
 					}
-					args = append(args, "-run=^(?:"+strings.Join(quoted, "|")+")$")
+					args = append(args, "-skip=^(?:"+strings.Join(quoted, "|")+")$")
 				}
 			}
 			index := -1

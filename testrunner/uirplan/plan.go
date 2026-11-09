@@ -21,7 +21,7 @@ import (
 	"github.com/flanksource/gavel/testrunner/uirexport"
 )
 
-const ContractVersion = 1
+const ContractVersion = 2
 
 type Test struct {
 	ID        string   `json:"id"`
@@ -75,16 +75,16 @@ func Inventory(workDir string, tags []string) (InventoryResult, error) {
 	targets := map[string]bool{}
 	seen := map[string]bool{}
 	for _, pkg := range graph.Packages {
-		if len(pkg.TestGoFiles)+len(pkg.XTestGoFiles) == 0 {
-			continue
-		}
 		targetRel, err := filepath.Rel(workDir, pkg.Dir)
 		if err != nil || !filepath.IsLocal(targetRel) {
 			continue
 		}
 		target := "./" + filepath.ToSlash(targetRel)
-		targets[target] = true
 		if pkg.Module == nil || filepath.Clean(pkg.Module.Dir) != filepath.Clean(moduleRoot) {
+			continue
+		}
+		targets[target] = true
+		if len(pkg.TestGoFiles)+len(pkg.XTestGoFiles) == 0 {
 			continue
 		}
 		for _, name := range append(append([]string(nil), pkg.TestGoFiles...), pkg.XTestGoFiles...) {
@@ -98,9 +98,10 @@ func Inventory(workDir string, tags []string) (InventoryResult, error) {
 			if err != nil {
 				return InventoryResult{}, err
 			}
+			testingNames, dotTesting := testingImports(file)
 			for _, decl := range file.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || !ordinaryTest(fn) || containsRunSpecs(fn.Body) {
+				if !ok || !ordinaryTest(fn, testingNames, dotTesting) || containsRunSpecs(fn.Body) {
 					continue
 				}
 				id := "go test\x00" + pkg.ImportPath + "\x00" + fn.Name.Name
@@ -139,7 +140,25 @@ func moduleRoot(workDir string) (string, error) {
 	}
 }
 
-func ordinaryTest(fn *ast.FuncDecl) bool {
+func testingImports(file *ast.File) (map[string]bool, bool) {
+	names := map[string]bool{}
+	dot := false
+	for _, spec := range file.Imports {
+		if strings.Trim(spec.Path.Value, `"`) != "testing" {
+			continue
+		}
+		if spec.Name == nil {
+			names["testing"] = true
+		} else if spec.Name.Name == "." {
+			dot = true
+		} else if spec.Name.Name != "_" {
+			names[spec.Name.Name] = true
+		}
+	}
+	return names, dot
+}
+
+func ordinaryTest(fn *ast.FuncDecl, testingNames map[string]bool, dotTesting bool) bool {
 	if fn.Recv != nil || fn.Body == nil || fn.Name.Name == "TestMain" || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 {
 		return false
 	}
@@ -147,8 +166,15 @@ func ordinaryTest(fn *ast.FuncDecl) bool {
 	if !ok {
 		return false
 	}
-	selector, ok := star.X.(*ast.SelectorExpr)
-	return ok && selector.Sel.Name == "T"
+	switch value := star.X.(type) {
+	case *ast.SelectorExpr:
+		name, ok := value.X.(*ast.Ident)
+		return ok && testingNames[name.Name] && value.Sel.Name == "T"
+	case *ast.Ident:
+		return dotTesting && value.Name == "T"
+	default:
+		return false
+	}
 }
 
 func containsRunSpecs(body ast.Node) bool {
@@ -206,7 +232,8 @@ func Execute(ctx context.Context, binary, workDir string, request Request) (Resp
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
 		return Response{}, fmt.Errorf("decode uir tests plan output: %w: %s", err, strings.TrimSpace(stdout.String()))
 	}
-	if response.Version != ContractVersion || response.PlanID == "" || response.InventoryDigest == "" || (response.Mode != "run_all" && response.Mode != "selected") {
+	if response.Version != ContractVersion || response.PlanID == "" || response.InventoryDigest == "" ||
+		(response.Mode != "run_all" && response.Mode != "selected") || response.Mode == "run_all" && len(response.Skippable) != 0 {
 		return Response{}, fmt.Errorf("uir tests plan returned an invalid response")
 	}
 	known := map[string]bool{}

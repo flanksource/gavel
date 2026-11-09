@@ -171,7 +171,8 @@ type RunOptions struct {
 	UIRSkip                  bool                             `json:"uir_skip,omitempty" yaml:"-" flag:"uir-skip" help:"Opt in to UIR-proved ordinary Go test skipping; requires --framework go, --uir-export and --uir-input-context"`
 	UIRBinary                string                           `json:"uir_binary,omitempty" yaml:"-" flag:"uir-binary" default:"uir" help:"UIR executable used by --uir-skip"`
 	UIRInputContext          string                           `json:"uir_input_context,omitempty" yaml:"-" flag:"uir-input-context" help:"Identity of declared service, environment and other runtime inputs for --uir-skip"`
-	UIRSelected              map[string][]string              `json:"-" yaml:"-"`
+	UIRSkippable             map[string][]string              `json:"-" yaml:"-"`
+	UIRRunAll                bool                             `json:"-" yaml:"-"`
 	UIRAllowEmpty            bool                             `json:"-" yaml:"-"`
 
 	PassThroughArgs []string `json:"pass_through_args,omitempty" yaml:"-"` // CLI-only arguments supplied after --. Focus aliases are normalized; remaining args require one selected framework.
@@ -499,10 +500,10 @@ func runMultiRoot(base RunOptions, groups []testGroup) (any, error) {
 		opts := base
 		opts.WorkDir = g.workDir
 		opts.StartingPaths = g.paths
-		if opts.UIRSelected != nil && filepath.Clean(g.workDir) != filepath.Clean(baseWorkDir) {
-			// UIRSelected keys are relative to the planned module. A child module can have the same
+		if opts.UIRSkippable != nil && filepath.Clean(g.workDir) != filepath.Clean(baseWorkDir) {
+			// UIRSkippable keys are relative to the planned module. A child module can have the same
 			// package path, so it must run normally rather than inherit another module's evidence.
-			opts.UIRSelected = nil
+			opts.UIRSkippable = nil
 			opts.UIRAllowEmpty = false
 		}
 
@@ -1135,16 +1136,17 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		}
 	}
 
-	if o.UIRSelected != nil {
-		packages := packagesByFramework[parsers.GoTest]
-		kept := packages[:0]
-		for _, pkg := range packages {
-			selected, planned := o.UIRSelected[pkg]
-			if !planned || len(selected) > 0 {
-				kept = append(kept, pkg)
+	if o.UIRSkippable != nil {
+		seen := map[string]bool{}
+		for _, pkg := range packagesByFramework[parsers.GoTest] {
+			seen[pkg] = true
+		}
+		for pkg := range o.UIRSkippable {
+			if !seen[pkg] {
+				packagesByFramework[parsers.GoTest] = append(packagesByFramework[parsers.GoTest], pkg)
 			}
 		}
-		packagesByFramework[parsers.GoTest] = kept
+		sort.Strings(packagesByFramework[parsers.GoTest])
 	}
 
 	// If dry-run mode, display what would be executed and return early

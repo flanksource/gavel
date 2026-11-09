@@ -100,7 +100,7 @@ if args[2:4] == ["tests", "plan"]:
     skippable = []
     if ` + selectTest + `:
         skippable = [next(test["id"] for test in request["inventory"] if test["name"] == "TestRootSkippable")]
-    print(json.dumps({"version": 1, "plan_id": "plan-1", "inventory_digest": "inventory-1", "mode": "` + planMode + `", "skippable": skippable}))
+    print(json.dumps({"version": 2, "plan_id": "plan-1", "inventory_digest": "inventory-1", "mode": "` + planMode + `", "skippable": skippable}))
 elif args[2:4] == ["tests", "import"]:
     (location / "imported").write_text("yes")
     print("{}")
@@ -131,20 +131,27 @@ func assertNestedUIRExport(t *testing.T, path, mode string, selective bool) {
 		t.Fatal(err)
 	}
 	var document struct {
-		Runs []struct {
+		Version int `json:"version"`
+		Runs    []struct {
 			SelectionMode string `json:"selection_mode"`
 			Complete      bool   `json:"complete"`
 			Tests         []struct {
 				Package string `json:"package"`
 				Name    string `json:"name"`
 			} `json:"tests"`
+			Inventory []struct {
+				Package string `json:"package"`
+			} `json:"inventory"`
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(data, &document); err != nil {
 		t.Fatal(err)
 	}
-	if len(document.Runs) != 1 || document.Runs[0].SelectionMode != mode || !document.Runs[0].Complete {
+	if document.Version != 2 || len(document.Runs) != 1 || document.Runs[0].SelectionMode != mode || !document.Runs[0].Complete {
 		t.Fatalf("export metadata = %+v", document.Runs)
+	}
+	if len(document.Runs[0].Inventory) != 2 {
+		t.Fatalf("export inventory = %+v", document.Runs[0].Inventory)
 	}
 	wantTests := map[string]bool{"TestRootRequired": true, "TestRootSkippable": !selective}
 	wantCount := 2

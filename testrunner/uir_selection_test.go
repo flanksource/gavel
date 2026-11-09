@@ -9,7 +9,7 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
-func TestUIRSelectionBuildsAnchoredPackageRunsAndOmitsSkippedPackages(t *testing.T) {
+func TestUIRSelectionExcludesOnlyNamedTestsAndKeepsEveryPackage(t *testing.T) {
 	repo := t.TempDir()
 	files := map[string]string{
 		"go.mod": "module example.com/selection\n\ngo 1.22\n",
@@ -36,19 +36,25 @@ func TestSkippedOnly(t *testing.T) { if err := os.WriteFile("../skipped-ran", []
 	var results []parsers.Test
 	_, err := Run(RunOptions{
 		WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, ResultsOut: &results,
-		UIRSelected: map[string][]string{
-			"./selected": {"TestExact"},
-			"./skipped":  {},
+		UIRSkippable: map[string][]string{
+			"./selected": {"TestOther"},
+			"./skipped":  {"TestSkippedOnly"},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Name != "TestExact" {
+	if len(results) != 2 {
 		t.Fatalf("results = %+v", results)
 	}
-	if !strings.Contains(results[0].Command, "-run=^(?:TestExact)$") {
-		t.Fatalf("command is not anchored to the package selection: %s", results[0].Command)
+	var exact *parsers.Test
+	for i := range results {
+		if results[i].Name == "TestExact" {
+			exact = &results[i]
+		}
+	}
+	if exact == nil || !strings.Contains(exact.Command, "-skip=^(?:TestOther)$") {
+		t.Fatalf("command is not anchored to the package exclusion: %+v", exact)
 	}
 	for _, marker := range []string{"other-ran", "skipped-ran"} {
 		if _, statErr := os.Stat(filepath.Join(repo, marker)); !os.IsNotExist(statErr) {

@@ -1,12 +1,11 @@
-// Package uirexport writes a gavel test run as the JSON `uir tests import` reads: version 1 of
-// uir's producer-neutral test run contract (github.com/flanksource/uir, testruns.Import). The types
-// mirror that contract field for field; gavel does not import uir.
+// Package uirexport writes the v1 legacy and v2 affected-test JSON contracts read by `uir tests import`.
 package uirexport
 
 import "time"
 
 // ContractVersion is the version of uir's test import contract these types follow.
 const ContractVersion = 2
+const LegacyContractVersion = 1
 
 // Import is the document `uir tests import` reads.
 type Import struct {
@@ -32,8 +31,19 @@ type Run struct {
 	Complete         bool              `json:"complete,omitempty"`
 	IdentityVerified bool              `json:"identity_verified,omitempty"`
 	PlanID           string            `json:"plan_id,omitempty"`
+	Inventory        []InventoryTest   `json:"inventory,omitempty"`
 	Tests            []Test            `json:"tests"`
 	Coverage         []Block           `json:"coverage,omitempty"`
+}
+
+type InventoryTest struct {
+	ID        string   `json:"id"`
+	Framework string   `json:"framework"`
+	Package   string   `json:"package"`
+	Suite     []string `json:"suite,omitempty"`
+	Name      string   `json:"name"`
+	File      string   `json:"file,omitempty"`
+	Line      int      `json:"line,omitempty"`
 }
 
 // Test is one test the run reported. Package is a Go import path; File is module-relative with

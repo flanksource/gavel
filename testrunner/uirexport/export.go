@@ -26,6 +26,8 @@ type Options struct {
 	Complete         bool
 	IdentityVerified bool
 	PlanID           string
+	Inventory        []InventoryTest
+	ContractVersion  int
 	// Provenance is the code the tests ran on, also taken before they ran (CaptureProvenance).
 	Provenance Provenance
 	// CoverProfiles are the run's go test -coverprofile files, the run's aggregate coverage.
@@ -47,6 +49,7 @@ func Build(tests []parsers.Test, options Options) (Import, error) {
 		Producer: "gavel", GitCommit: options.Provenance.GitCommit, Dirty: options.Provenance.Dirty, GitTree: options.Provenance.GitTree,
 		StartedAt: options.StartedAt.UTC(), FinishedAt: options.FinishedAt.UTC(), Tests: []Test{}, SelectionMode: options.SelectionMode,
 		InventoryDigest: options.InventoryDigest, Complete: options.Complete, IdentityVerified: options.IdentityVerified, PlanID: options.PlanID}
+	run.Inventory = options.Inventory
 	seen := map[string]bool{}
 	command := ""
 	var walk func(tests []parsers.Test) error
@@ -108,7 +111,11 @@ func Build(tests []parsers.Test, options Options) (Import, error) {
 	if run.Coverage, err = readProfiles(options.CoverProfiles, m); err != nil {
 		return Import{}, err
 	}
-	return Import{Version: ContractVersion, Runs: []Run{run}}, nil
+	version := options.ContractVersion
+	if version == 0 {
+		version = LegacyContractVersion
+	}
+	return Import{Version: version, Runs: []Run{run}}, nil
 }
 
 // Write encodes imported to path.
