@@ -5,6 +5,7 @@ import (
 	"io"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -34,7 +35,7 @@ var goBatchCount atomic.Int64
 
 func (o *TestOrchestrator) unfocusedGoRun(startingPaths []string) bool {
 	return len(startingPaths) == 0 && len(o.Frameworks) == 0 && len(o.Ignore) == 0 &&
-		!o.hasChangeSelector() && o.Failed == "" && len(o.PassThroughArgs) == 0
+		!o.hasChangeSelector() && o.Failed == "" && len(o.PassThroughArgs) == 0 && o.UIRSelected == nil
 }
 
 func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string, unfocused bool) ([]goBatchPlan, error) {
@@ -84,6 +85,15 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 	for _, base := range bases {
 		for _, pkg := range base.packages {
 			args := o.augmentBenchArgs(runner, pkg, base.args)
+			if base.framework == parsers.GoTest {
+				if selected, planned := o.UIRSelected[pkg]; planned {
+					quoted := make([]string, len(selected))
+					for i, name := range selected {
+						quoted[i] = regexp.QuoteMeta(name)
+					}
+					args = append(args, "-run=^(?:"+strings.Join(quoted, "|")+")$")
+				}
+			}
 			index := -1
 			for i := range plans {
 				if plans[i].framework == base.framework && slices.Equal(plans[i].args, args) {

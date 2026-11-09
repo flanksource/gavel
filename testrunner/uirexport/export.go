@@ -19,7 +19,13 @@ type Options struct {
 	StartedAt, FinishedAt time.Time
 	// InputsDigest is the run's InputsDigest, taken before its tests ran so files they write do not
 	// change it.
-	InputsDigest string
+	InputsDigest     string
+	Environment      map[string]string
+	SelectionMode    string
+	InventoryDigest  string
+	Complete         bool
+	IdentityVerified bool
+	PlanID           string
 	// Provenance is the code the tests ran on, also taken before they ran (CaptureProvenance).
 	Provenance Provenance
 	// CoverProfiles are the run's go test -coverprofile files, the run's aggregate coverage.
@@ -39,7 +45,8 @@ func Build(tests []parsers.Test, options Options) (Import, error) {
 	}
 	run := Run{
 		Producer: "gavel", GitCommit: options.Provenance.GitCommit, Dirty: options.Provenance.Dirty, GitTree: options.Provenance.GitTree,
-		StartedAt: options.StartedAt.UTC(), FinishedAt: options.FinishedAt.UTC(), Tests: []Test{}}
+		StartedAt: options.StartedAt.UTC(), FinishedAt: options.FinishedAt.UTC(), Tests: []Test{}, SelectionMode: options.SelectionMode,
+		InventoryDigest: options.InventoryDigest, Complete: options.Complete, IdentityVerified: options.IdentityVerified, PlanID: options.PlanID}
 	seen := map[string]bool{}
 	command := ""
 	var walk func(tests []parsers.Test) error
@@ -92,7 +99,9 @@ func Build(tests []parsers.Test, options Options) (Import, error) {
 	if err := walk(tests); err != nil {
 		return Import{}, err
 	}
-	if run.Environment, err = environment(m.root, command); err != nil {
+	if options.Environment != nil {
+		run.Environment = options.Environment
+	} else if run.Environment, err = Environment(m.root, command); err != nil {
 		return Import{}, err
 	}
 	run.InputsDigest = options.InputsDigest

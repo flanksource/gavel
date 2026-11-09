@@ -12,7 +12,7 @@ import (
 // environment is what makes the run comparable with another: GOOS, GOARCH and the go toolchain from
 // `go env` in the module root, and race, tags and count from GOFLAGS overridden by the go test command
 // the run executed. Every key is always present, so an unset flag reads the same in every run.
-func environment(moduleRoot, command string) (map[string]string, error) {
+func Environment(moduleRoot, command string) (map[string]string, error) {
 	goEnv := exec.Command("go", "env", "-json", "GOOS", "GOARCH", "GOVERSION", "GOFLAGS")
 	goEnv.Dir = moduleRoot
 	output, err := goEnv.Output()

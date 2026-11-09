@@ -166,8 +166,13 @@ type RunOptions struct {
 	SummaryOut               *parsers.TestSummary             `json:"-" yaml:"-"`                                                       // If non-nil, the runner writes the aggregate pass/fail/skip/total/duration counts here before returning, so CLI callers can print an end-of-run summary even when the run errors mid-way and returns a partial tree.
 	ResultsOut               *[]parsers.Test                  `json:"-" yaml:"-"`                                                       // If non-nil, the runner appends every test it parsed here, flat and before the display tree is built, so exporters see each test's own File, Package and Attempts. Filled even when the run errors mid-way.
 	CoverDir                 string                           `json:"-" yaml:"-"`                                                       // If set, every go test batch writes its -coverprofile into this directory, one batch-<n>.out per batch.
-	UIRExport                string                           `json:"uir_export,omitempty" yaml:"-" flag:"uir-export" help:"Write the run's Go and Ginkgo results, aggregate coverage and inputs digest as a uir tests import (contract v1) to this file"`
+	UIRExport                string                           `json:"uir_export,omitempty" yaml:"-" flag:"uir-export" help:"Write the run's Go and Ginkgo results, aggregate coverage and inputs digest as a uir tests import (contract v2) to this file"`
 	UIRTestCoverage          bool                             `json:"uir_test_coverage,omitempty" yaml:"-" flag:"uir-test-coverage" help:"With --uir-export, also rerun each Go test and Ginkgo spec alone to record its own coverage (slow)"`
+	UIRSkip                  bool                             `json:"uir_skip,omitempty" yaml:"-" flag:"uir-skip" help:"Opt in to UIR-proved ordinary Go test skipping; requires --framework go, --uir-export and --uir-input-context"`
+	UIRBinary                string                           `json:"uir_binary,omitempty" yaml:"-" flag:"uir-binary" default:"uir" help:"UIR executable used by --uir-skip"`
+	UIRInputContext          string                           `json:"uir_input_context,omitempty" yaml:"-" flag:"uir-input-context" help:"Identity of declared service, environment and other runtime inputs for --uir-skip"`
+	UIRSelected              map[string][]string              `json:"-" yaml:"-"`
+	UIRAllowEmpty            bool                             `json:"-" yaml:"-"`
 
 	PassThroughArgs []string `json:"pass_through_args,omitempty" yaml:"-"` // CLI-only arguments supplied after --. Focus aliases are normalized; remaining args require one selected framework.
 
@@ -448,7 +453,17 @@ func Run(opts RunOptions) (any, error) {
 
 	// Split starting paths by execution root so each group runs with the
 	// correct WorkDir. Nested Go modules get their own groups.
-	groups, err := groupPathsByGitRoot(opts.WorkDir, opts.StartingPaths)
+	var groups []testGroup
+	var err error
+	if opts.UIRSelected != nil {
+		absolute, absErr := filepath.Abs(opts.WorkDir)
+		if absErr != nil {
+			return nil, absErr
+		}
+		groups = []testGroup{{workDir: absolute}}
+	} else {
+		groups, err = groupPathsByGitRoot(opts.WorkDir, opts.StartingPaths)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +478,7 @@ func Run(opts RunOptions) (any, error) {
 		opts.StartingPaths = groups[0].paths
 		result, err = runSingleRoot(opts)
 	}
-	return requireExecutedTests(result, err, opts.DryRun)
+	return requireExecutedTests(result, err, opts.DryRun || opts.UIRAllowEmpty)
 }
 
 func requireExecutedTests(result any, err error, dryRun bool) (any, error) {
@@ -1119,6 +1134,18 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			}
 			argsByFramework[fw] = append(argsByFramework[fw], mapper.FocusArgs(pattern)...)
 		}
+	}
+
+	if o.UIRSelected != nil {
+		packages := packagesByFramework[parsers.GoTest]
+		kept := packages[:0]
+		for _, pkg := range packages {
+			selected, planned := o.UIRSelected[pkg]
+			if !planned || len(selected) > 0 {
+				kept = append(kept, pkg)
+			}
+		}
+		packagesByFramework[parsers.GoTest] = kept
 	}
 
 	// If dry-run mode, display what would be executed and return early

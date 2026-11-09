@@ -6,7 +6,7 @@ package uirexport
 import "time"
 
 // ContractVersion is the version of uir's test import contract these types follow.
-const ContractVersion = 1
+const ContractVersion = 2
 
 // Import is the document `uir tests import` reads.
 type Import struct {
@@ -18,17 +18,22 @@ type Import struct {
 // race, tags and count. GitCommit, Dirty and, for a dirty worktree, GitTree name the code the tests
 // ran on (Provenance).
 type Run struct {
-	Producer     string            `json:"producer"`
-	GitCommit    string            `json:"git_commit"`
-	Dirty        bool              `json:"dirty"`
-	GitTree      string            `json:"git_tree,omitempty"`
-	Environment  map[string]string `json:"environment"`
-	StartedAt    time.Time         `json:"started_at"`
-	FinishedAt   time.Time         `json:"finished_at"`
-	TaskRunID    string            `json:"task_run_id,omitempty"`
-	InputsDigest string            `json:"inputs_digest,omitempty"`
-	Tests        []Test            `json:"tests"`
-	Coverage     []Block           `json:"coverage,omitempty"`
+	Producer         string            `json:"producer"`
+	GitCommit        string            `json:"git_commit"`
+	Dirty            bool              `json:"dirty"`
+	GitTree          string            `json:"git_tree,omitempty"`
+	Environment      map[string]string `json:"environment"`
+	StartedAt        time.Time         `json:"started_at"`
+	FinishedAt       time.Time         `json:"finished_at"`
+	TaskRunID        string            `json:"task_run_id,omitempty"`
+	InputsDigest     string            `json:"inputs_digest,omitempty"`
+	SelectionMode    string            `json:"selection_mode,omitempty"`
+	InventoryDigest  string            `json:"inventory_digest,omitempty"`
+	Complete         bool              `json:"complete,omitempty"`
+	IdentityVerified bool              `json:"identity_verified,omitempty"`
+	PlanID           string            `json:"plan_id,omitempty"`
+	Tests            []Test            `json:"tests"`
+	Coverage         []Block           `json:"coverage,omitempty"`
 }
 
 // Test is one test the run reported. Package is a Go import path; File is module-relative with
