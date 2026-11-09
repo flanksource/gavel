@@ -1,12 +1,11 @@
-// Package uirexport writes a gavel test run as the JSON `uir tests import` reads: version 1 of
-// uir's producer-neutral test run contract (github.com/flanksource/uir, testruns.Import). The types
-// mirror that contract field for field; gavel does not import uir.
+// Package uirexport writes the v1 legacy and v2 affected-test JSON contracts read by `uir tests import`.
 package uirexport
 
 import "time"
 
 // ContractVersion is the version of uir's test import contract these types follow.
-const ContractVersion = 1
+const ContractVersion = 2
+const LegacyContractVersion = 1
 
 // Import is the document `uir tests import` reads.
 type Import struct {
@@ -18,17 +17,33 @@ type Import struct {
 // race, tags and count. GitCommit, Dirty and, for a dirty worktree, GitTree name the code the tests
 // ran on (Provenance).
 type Run struct {
-	Producer     string            `json:"producer"`
-	GitCommit    string            `json:"git_commit"`
-	Dirty        bool              `json:"dirty"`
-	GitTree      string            `json:"git_tree,omitempty"`
-	Environment  map[string]string `json:"environment"`
-	StartedAt    time.Time         `json:"started_at"`
-	FinishedAt   time.Time         `json:"finished_at"`
-	TaskRunID    string            `json:"task_run_id,omitempty"`
-	InputsDigest string            `json:"inputs_digest,omitempty"`
-	Tests        []Test            `json:"tests"`
-	Coverage     []Block           `json:"coverage,omitempty"`
+	Producer         string            `json:"producer"`
+	GitCommit        string            `json:"git_commit"`
+	Dirty            bool              `json:"dirty"`
+	GitTree          string            `json:"git_tree,omitempty"`
+	Environment      map[string]string `json:"environment"`
+	StartedAt        time.Time         `json:"started_at"`
+	FinishedAt       time.Time         `json:"finished_at"`
+	TaskRunID        string            `json:"task_run_id,omitempty"`
+	InputsDigest     string            `json:"inputs_digest,omitempty"`
+	SelectionMode    string            `json:"selection_mode,omitempty"`
+	InventoryDigest  string            `json:"inventory_digest,omitempty"`
+	Complete         bool              `json:"complete,omitempty"`
+	IdentityVerified bool              `json:"identity_verified,omitempty"`
+	PlanID           string            `json:"plan_id,omitempty"`
+	Inventory        []InventoryTest   `json:"inventory,omitempty"`
+	Tests            []Test            `json:"tests"`
+	Coverage         []Block           `json:"coverage,omitempty"`
+}
+
+type InventoryTest struct {
+	ID        string   `json:"id"`
+	Framework string   `json:"framework"`
+	Package   string   `json:"package"`
+	Suite     []string `json:"suite,omitempty"`
+	Name      string   `json:"name"`
+	File      string   `json:"file,omitempty"`
+	Line      int      `json:"line,omitempty"`
 }
 
 // Test is one test the run reported. Package is a Go import path; File is module-relative with

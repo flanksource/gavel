@@ -71,11 +71,10 @@ func CaptureProvenance(workDir, output string) (Provenance, error) {
 	return provenance, nil
 }
 
-// dirty reports whether the module's worktree differs from HEAD in a way uir would index: a tracked
-// file changed, staged or not, or an untracked, non-ignored Go file uir would index (one outside
-// directories starting with "." or "_", vendor, testdata and nested modules). The export file does
-// not count; neither do nested modules, which the export leaves out. prefix is the module's directory
-// and exportFile the export file, both relative to the checkout's top.
+// dirty reports whether any tracked or untracked, non-ignored module file differs from HEAD. This
+// matches UIR's worktree identity even for files represented by InputsDigest rather than its Go
+// index. The export file and nested modules do not count. prefix is the module's directory and
+// exportFile the export file, both relative to the checkout's top.
 func dirty(m *module, prefix, exportFile string) (bool, error) {
 	// Porcelain paths are relative to the checkout's top whatever the working directory.
 	status, err := git(m.root, nil, "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".")
@@ -98,7 +97,7 @@ func dirty(m *module, prefix, exportFile string) (bool, error) {
 			continue
 		}
 		rel := m.relative(m.root, filepath.Join(m.root, filepath.FromSlash(inModule)))
-		if rel == "" || code == "??" && !indexedSource(rel) {
+		if rel == "" {
 			continue
 		}
 		logger.V(1).Infof("uir export: %s is dirty: %s %s", m.root, code, rel)
@@ -134,12 +133,16 @@ func workingTree(top, exportFile string) (string, error) {
 	}()
 	env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(scratch, "index"))
 	add := []string{"add", "-A", "--", "."}
-	if exportFile != "" {
-		add = append(add, ":(exclude,literal)"+exportFile)
-	}
 	for _, args := range [][]string{{"read-tree", "HEAD"}, add} {
 		if _, err := git(top, env, args...); err != nil {
 			return "", fmt.Errorf("the working tree of %s: %w", top, err)
+		}
+	}
+	if exportFile != "" {
+		// Restore the export's HEAD entry after adding the worktree. Unlike an exclusion pathspec on
+		// git add, this also avoids Git rejecting an ignored, generated export that is already present.
+		if _, err := git(top, env, "reset", "-q", "HEAD", "--", exportFile); err != nil {
+			return "", fmt.Errorf("exclude generated UIR export from the working tree of %s: %w", top, err)
 		}
 	}
 	tree, err := git(top, env, "write-tree")
