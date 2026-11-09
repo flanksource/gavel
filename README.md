@@ -160,6 +160,29 @@ each runner's focus mapping. Any other arguments after `--` require exactly
 one selected framework, using a framework subcommand or a single
 `--framework` value.
 
+To opt in to UIR-proved ordinary Go test skipping, install the matching UIR
+version, index the checkout, and run:
+
+```bash
+gavel test --framework go --uir-skip --uir-binary uir \
+  --uir-export .gavel/uir-run.json \
+  --uir-input-context 'postgres=ci;redis=ci'
+```
+
+The first run establishes a complete passing baseline. Later runs use
+package-scoped `go test -skip` patterns only for tests UIR proves unchanged;
+new tests, examples, fuzz seeds, uninventoried tests, nested modules and any
+planning or identity failure run normally. `--uir-input-context` identifies
+runtime inputs Gavel cannot inspect, such as services and environment data.
+
+The file identity covers every tracked or untracked, non-ignored module file,
+ignored embedded/build-selected inputs, and mutable workspace or local-replace
+dependencies. Deliberate exclusions are the generated export/cache outputs,
+ignored files Go neither embeds nor compiles, and immutable module-cache and
+standard-library files already identified by dependency/toolchain versions.
+If complete input identity cannot be established, Gavel runs the full command
+and records no affected-test baseline.
+
 | Flag | Description |
 |------|-------------|
 | `[paths...]` | Package paths to test (e.g. `./pkg/...`). If empty, all packages are discovered. |

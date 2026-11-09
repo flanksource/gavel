@@ -353,16 +353,29 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	var uirInventory uirplan.InventoryResult
 	var uirPlan uirplan.Response
 	var uirPlanValid bool
+	var uirExportReady = opts.UIRExport != ""
 	if opts.UIRExport != "" {
 		// Record the code and digest the inputs before the tests run, so files they write do not change them.
 		var err error
 		if uirProvenance, err = uirexport.CaptureProvenance(opts.WorkDir, opts.UIRExport); err != nil {
-			return nil, fmt.Errorf("--uir-export: %w", err)
+			if !opts.UIRSkip {
+				return nil, fmt.Errorf("--uir-export: %w", err)
+			}
+			logger.Warnf("--uir-skip identity capture failed open; running the ordinary full test command without export: %v", err)
+			uirExportReady = false
+			runOpts.UIRRunAll = true
 		}
-		if uirInputs, err = uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport); err != nil {
-			return nil, fmt.Errorf("--uir-export: %w", err)
+		if uirExportReady {
+			if uirInputs, err = uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport); err != nil {
+				if !opts.UIRSkip {
+					return nil, fmt.Errorf("--uir-export: %w", err)
+				}
+				logger.Warnf("--uir-skip input inventory failed open; running the ordinary full test command without export: %v", err)
+				uirExportReady = false
+				runOpts.UIRRunAll = true
+			}
 		}
-		if opts.UIRSkip {
+		if opts.UIRSkip && uirExportReady {
 			planErr := error(nil)
 			if uirEnvironment, planErr = uirexport.Environment(opts.WorkDir, "-tags="+strings.Join(opts.Tags, ",")); planErr == nil {
 				uirEnvironment["gavel.timeout"] = opts.Timeout.String()
@@ -424,7 +437,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	}
 	result, err := testrunner.Run(runOpts)
 	testsFinished := time.Now().UTC()
-	if opts.UIRSkip && uirPlanValid {
+	if opts.UIRSkip && uirPlanValid && uirExportReady {
 		current, identityErr := uirexport.CaptureProvenance(opts.WorkDir, opts.UIRExport)
 		filesDigest, inputsErr := uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport)
 		verified := identityErr == nil && inputsErr == nil && current == uirProvenance && uirplan.InputsDigest(filesDigest, opts.UIRInputContext) == uirInputs
@@ -459,7 +472,9 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	// Wait for lint to finish
 	wg.Wait()
 
-	if opts.UIRExport != "" && (!opts.UIRSkip || !uirPlanValid) && len(uirTests) == 0 {
+	if opts.UIRExport != "" && !uirExportReady {
+		logger.Warnf("--uir-export: safe input identity was unavailable; %s not written", opts.UIRExport)
+	} else if opts.UIRExport != "" && (!opts.UIRSkip || !uirPlanValid) && len(uirTests) == 0 {
 		logger.Warnf("--uir-export: no tests ran; %s not written", opts.UIRExport)
 	} else if opts.UIRExport != "" && (!opts.UIRSkip || !uirPlanValid) {
 		if exportErr := writeUIRExport(runOpts, uirTests, uirInputs, uirProvenance, runStarted, testsFinished, uirRunMetadata{}); exportErr != nil {

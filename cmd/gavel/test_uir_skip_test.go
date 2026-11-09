@@ -36,7 +36,11 @@ func TestUIRSkipRealBinaryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("paired full-baseline round trip: %v", err)
 	}
-	for _, marker := range []string{"known-ran", "new-ran", "dot-ran", "suite-ran", "fuzz-ran", "example-ran"} {
+	markers := []string{"known-ran", "new-ran", "dot-ran", "golden-ran", "suite-ran", "fuzz-ran", "example-ran"}
+	if runtime.GOARCH == "amd64" {
+		markers = append(markers, "assembly-ran")
+	}
+	for _, marker := range markers {
 		if err := os.Remove(filepath.Join(repo, marker)); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
@@ -49,7 +53,11 @@ func TestUIRSkipRealBinaryRoundTrip(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), `"version":2`) || !strings.Contains(string(data), `"selection_mode":"partial"`) || !strings.Contains(string(data), `"inventory"`) {
 		t.Fatalf("paired export: %s: %v", data, err)
 	}
-	for _, marker := range []string{"known-ran", "new-ran", "dot-ran"} {
+	skipped := []string{"known-ran", "new-ran", "dot-ran", "golden-ran"}
+	if runtime.GOARCH == "amd64" {
+		skipped = append(skipped, "assembly-ran")
+	}
+	for _, marker := range skipped {
 		if _, err := os.Stat(filepath.Join(repo, marker)); !os.IsNotExist(err) {
 			t.Fatalf("real selected plan did not omit %s: %v", marker, err)
 		}
@@ -57,6 +65,55 @@ func TestUIRSkipRealBinaryRoundTrip(t *testing.T) {
 	for _, marker := range []string{"suite-ran", "fuzz-ran", "example-ran"} {
 		if _, err := os.Stat(filepath.Join(repo, marker)); err != nil {
 			t.Fatalf("real selected plan omitted uninventoried %s: %v", marker, err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "fixtures", "want.golden"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldExitCode := exitCode
+	exitCode = 0
+	_, err = runTests(options, false)
+	goldenExitCode := exitCode
+	exitCode = oldExitCode
+	if err != nil {
+		t.Fatalf("paired golden mutation run: %v", err)
+	}
+	if goldenExitCode != 1 {
+		t.Fatal("changed golden input did not fail the real paired run")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "golden-ran")); err != nil {
+		t.Fatalf("changed golden input was skipped: %v", err)
+	}
+
+	if runtime.GOARCH == "amd64" {
+		if err := os.WriteFile(filepath.Join(repo, "fixtures", "want.golden"), []byte("want\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(repo, "assembly-ran")); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		assembly := filepath.Join(repo, "assembly", "add_amd64.s")
+		content, readErr := os.ReadFile(assembly)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if err := os.WriteFile(assembly, []byte(strings.Replace(string(content), "ADDQ", "SUBQ", 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		oldExitCode = exitCode
+		exitCode = 0
+		_, err = runTests(options, false)
+		assemblyExitCode := exitCode
+		exitCode = oldExitCode
+		if err != nil {
+			t.Fatalf("paired assembly mutation run: %v", err)
+		}
+		if assemblyExitCode != 1 {
+			t.Fatal("changed assembly input did not fail the real paired run")
+		}
+		if _, err := os.Stat(filepath.Join(repo, "assembly-ran")); err != nil {
+			t.Fatalf("changed assembly input was skipped: %v", err)
 		}
 	}
 }
@@ -116,7 +173,11 @@ func TestUIRSkipRunsUnskippableInventoryTestsAcrossSubprocesses(t *testing.T) {
 	if len(document.Runs[0].Tests) < 5 {
 		t.Fatalf("exported tests = %+v", document.Runs[0].Tests)
 	}
-	if len(document.Runs[0].Inventory) != 3 {
+	wantInventory := 4
+	if runtime.GOARCH == "amd64" {
+		wantInventory++
+	}
+	if len(document.Runs[0].Inventory) != wantInventory {
 		t.Fatalf("exported inventory = %+v", document.Runs[0].Inventory)
 	}
 }
@@ -133,10 +194,40 @@ func TestUIRRunAllPreservesOrdinaryGoTestSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runTests: %v", err)
 	}
-	for _, marker := range []string{"known-ran", "new-ran", "dot-ran", "suite-ran", "fuzz-ran", "example-ran"} {
+	markers := []string{"known-ran", "new-ran", "dot-ran", "golden-ran", "suite-ran", "fuzz-ran", "example-ran"}
+	if runtime.GOARCH == "amd64" {
+		markers = append(markers, "assembly-ran")
+	}
+	for _, marker := range markers {
 		if _, err := os.Stat(filepath.Join(repo, marker)); err != nil {
 			t.Fatalf("run_all did not preserve %s: %v", marker, err)
 		}
+	}
+}
+
+func TestUIRSkipInputInventoryFailureRunsFullWithoutExport(t *testing.T) {
+	repo := newUIRSkipFixture(t, false)
+	export := filepath.Join(repo, "uir-run.json")
+	if err := os.WriteFile(filepath.Join(repo, "export_embed.go"), []byte("package fixture\n\nimport _ \"embed\"\n\n//go:embed uir-run.json\nvar exported []byte\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(export, []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runTests(testrunner.RunOptions{
+		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		UIRSkip: true, UIRBinary: filepath.Join(repo, "missing-uir"), UIRExport: export, UIRInputContext: "postgres=test",
+	}, false)
+	if err != nil {
+		t.Fatalf("input inventory failure did not fail open: %v", err)
+	}
+	for _, marker := range []string{"known-ran", "new-ran", "dot-ran", "suite-ran", "fuzz-ran", "example-ran"} {
+		if _, err := os.Stat(filepath.Join(repo, marker)); err != nil {
+			t.Fatalf("input inventory fallback omitted %s: %v", marker, err)
+		}
+	}
+	if data, err := os.ReadFile(export); err != nil || string(data) != "seed" {
+		t.Fatalf("unsafe fallback wrote export: data=%q err=%v", data, err)
 	}
 }
 
@@ -334,6 +425,27 @@ func Example() {
 	// Output: only
 }
 `,
+		"fixtures/want.golden": "want\n",
+		"golden/golden_test.go": `package golden
+import ("os"; "testing")
+func TestGolden(t *testing.T) {
+	if err := os.WriteFile("../golden-ran", []byte("golden"), 0o600); err != nil { t.Fatal(err) }
+	got, err := os.ReadFile("../fixtures/want.golden")
+	if err != nil { t.Fatal(err) }
+	if string(got) != "want\n" { t.Fatalf("golden = %q", got) }
+}
+`,
+	}
+	if runtime.GOARCH == "amd64" {
+		files["assembly/add.go"] = "package assembly\nfunc Add(a, b int) int\n"
+		files["assembly/add_amd64.s"] = "#include \"textflag.h\"\nTEXT ·Add(SB), NOSPLIT, $0-24\n\tMOVQ a+0(FP), AX\n\tADDQ b+8(FP), AX\n\tMOVQ AX, ret+16(FP)\n\tRET\n"
+		files["assembly/add_test.go"] = `package assembly
+import ("os"; "testing")
+func TestAssembly(t *testing.T) {
+	if err := os.WriteFile("../assembly-ran", []byte("assembly"), 0o600); err != nil { t.Fatal(err) }
+	if got := Add(1, 2); got != 3 { t.Fatalf("Add(1, 2) = %d", got) }
+}
+`
 	}
 	for name, content := range files {
 		path := filepath.Join(repo, name)

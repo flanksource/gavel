@@ -50,7 +50,8 @@ func newNestedUIRSkipFixture(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	files := map[string]string{
-		"go.mod": "module example.com/root\n\ngo 1.22\n",
+		".gitignore": "*-ran\nimported\nuir-run.json\n",
+		"go.mod":     "module example.com/root\n\ngo 1.22\n",
 		"pkg/root_test.go": `package pkg
 import ("os"; "testing")
 func TestRootSkippable(t *testing.T) { if err := os.WriteFile("../root-skippable-ran", []byte("yes"), 0o600); err != nil { t.Fatal(err) } }
