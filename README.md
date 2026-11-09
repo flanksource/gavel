@@ -181,7 +181,10 @@ dependencies. Deliberate exclusions are the generated export/cache outputs,
 ignored files Go neither embeds nor compiles, and immutable module-cache and
 standard-library files already identified by dependency/toolchain versions.
 If complete input identity cannot be established, Gavel runs the full command
-and records no affected-test baseline.
+and records no affected-test baseline. If inputs change during a selected run,
+Gavel discards that evidence and reruns the ordinary full command before
+returning success. An identity, export or import failure after a full run is a
+warning: the tests keep their own pass/fail status, but no baseline is recorded.
 
 | Flag | Description |
 |------|-------------|

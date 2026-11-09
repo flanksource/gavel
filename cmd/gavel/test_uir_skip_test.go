@@ -21,6 +21,7 @@ func TestUIRSkipRealBinaryRoundTrip(t *testing.T) {
 		t.Skip("set GAVEL_UIR_INTEGRATION_BINARY to run the paired-binary integration")
 	}
 	repo := newUIRSkipFixture(t, false)
+	addIgnoredGeneratedConstantFixture(t, repo)
 	dsn := filepath.Join(t.TempDir(), "uir.db")
 	t.Setenv("UIR_DSN", dsn)
 	command := exec.Command(binary, "add", repo)
@@ -36,7 +37,7 @@ func TestUIRSkipRealBinaryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("paired full-baseline round trip: %v", err)
 	}
-	markers := []string{"known-ran", "new-ran", "dot-ran", "golden-ran", "suite-ran", "fuzz-ran", "example-ran"}
+	markers := []string{"known-ran", "new-ran", "dot-ran", "generated-ran", "golden-ran", "suite-ran", "fuzz-ran", "example-ran"}
 	if runtime.GOARCH == "amd64" {
 		markers = append(markers, "assembly-ran")
 	}
@@ -53,7 +54,7 @@ func TestUIRSkipRealBinaryRoundTrip(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), `"version":2`) || !strings.Contains(string(data), `"selection_mode":"partial"`) || !strings.Contains(string(data), `"inventory"`) {
 		t.Fatalf("paired export: %s: %v", data, err)
 	}
-	skipped := []string{"known-ran", "new-ran", "dot-ran", "golden-ran"}
+	skipped := []string{"known-ran", "new-ran", "dot-ran", "generated-ran", "golden-ran"}
 	if runtime.GOARCH == "amd64" {
 		skipped = append(skipped, "assembly-ran")
 	}
@@ -68,10 +69,32 @@ func TestUIRSkipRealBinaryRoundTrip(t *testing.T) {
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(repo, "fixtures", "want.golden"), []byte("changed\n"), 0o644); err != nil {
+	generated := filepath.Join(repo, "gen", "zz_gen.go")
+	if err := os.WriteFile(generated, []byte("package gen\nconst generatedValue = \"after\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	oldExitCode := exitCode
+	exitCode = 0
+	_, err = runTests(options, false)
+	generatedExitCode := exitCode
+	exitCode = oldExitCode
+	if err != nil {
+		t.Fatalf("paired ignored generated Go mutation run: %v", err)
+	}
+	if generatedExitCode != 1 {
+		t.Fatal("changed ignored build-selected Go source did not fail the real paired run")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "generated-ran")); err != nil {
+		t.Fatalf("changed ignored build-selected Go source was skipped: %v", err)
+	}
+	if err := os.WriteFile(generated, []byte("package gen\nconst generatedValue = \"before\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "fixtures", "want.golden"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldExitCode = exitCode
 	exitCode = 0
 	_, err = runTests(options, false)
 	goldenExitCode := exitCode
@@ -115,6 +138,27 @@ func TestUIRSkipRealBinaryRoundTrip(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(repo, "assembly-ran")); err != nil {
 			t.Fatalf("changed assembly input was skipped: %v", err)
 		}
+	}
+
+	coverageRepo := newUIRSkipFixture(t, false)
+	addIgnoredGeneratedCoverageFixture(t, coverageRepo)
+	command = exec.Command(binary, "add", coverageRepo)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("index ignored generated coverage fixture: %v: %s", err, output)
+	}
+	coverageOptions := options
+	coverageOptions.WorkDir = coverageRepo
+	coverageOptions.UIRExport = filepath.Join(coverageRepo, "uir-run.json")
+	oldExitCode = exitCode
+	exitCode = 0
+	_, err = runTests(coverageOptions, false)
+	coverageExitCode := exitCode
+	exitCode = oldExitCode
+	if err != nil || coverageExitCode != 0 {
+		t.Fatalf("ignored generated coverage metadata changed passing status: err=%v exit=%d", err, coverageExitCode)
+	}
+	if _, err := os.Stat(filepath.Join(coverageRepo, "generated-coverage-ran")); err != nil {
+		t.Fatalf("ignored generated coverage test did not run: %v", err)
 	}
 }
 
@@ -320,23 +364,106 @@ func TestUIRSkipIdentityMutationBeforeExecutionFailsOpen(t *testing.T) {
 	}
 }
 
-func TestUIRSkipRejectsIdentityMutationDuringExecution(t *testing.T) {
+func TestUIRSkipRerunsFullAfterSelectedIdentityMutation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake UIR executable is a Python script")
 	}
 	repo := newUIRSkipFixture(t, true)
+	testFile := filepath.Join(repo, "pkg", "value_test.go")
+	testSource, readErr := os.ReadFile(testFile)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	testSource = []byte(strings.Replace(string(testSource),
+		`if err := os.WriteFile("../known-ran", []byte("known"), 0o600); err != nil { t.Fatal(err) }`,
+		`if err := os.WriteFile("../known-ran", []byte("known"), 0o600); err != nil { t.Fatal(err) }
+	if Value != 1 { t.Fatalf("Value = %d", Value) }`, 1))
+	if err := os.WriteFile(testFile, testSource, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldExitCode := exitCode
+	exitCode = 0
+	t.Cleanup(func() { exitCode = oldExitCode })
 	_, err := runTests(testrunner.RunOptions{
 		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: newFakeUIR(t, false, false), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
 	}, false)
-	if err == nil || !strings.Contains(err.Error(), "inputs changed during execution; results were not imported") {
-		t.Fatalf("runTests error = %v", err)
+	if err != nil {
+		t.Fatalf("safe full rerun failed: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(repo, "new-ran")); statErr != nil {
 		t.Fatalf("mutation fixture did not execute: %v", statErr)
 	}
+	if _, statErr := os.Stat(filepath.Join(repo, "known-ran")); statErr != nil {
+		t.Fatalf("successful invalidated selection was not rerun in full: %v", statErr)
+	}
+	if exitCode != 1 {
+		t.Fatal("full safety rerun did not preserve the failure hidden by the invalidated selection")
+	}
 	if _, statErr := os.Stat(filepath.Join(repo, "imported")); !os.IsNotExist(statErr) {
 		t.Fatalf("mutated execution was imported: %v", statErr)
+	}
+}
+
+func TestUIRSkipFullIdentityMutationPreservesPassingStatusWithoutBaseline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake UIR executable is a Python script")
+	}
+	repo := newUIRSkipFixture(t, false)
+	addOutputWritingTest(t, repo, false)
+	options := testrunner.RunOptions{
+		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		UIRSkip: true, UIRBinary: newFakeUIR(t, false, true), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
+	}
+	for run := 1; run <= 2; run++ {
+		_, err := runTests(options, false)
+		if err != nil {
+			t.Fatalf("passing full test command %d became a metadata failure: %v", run, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(repo, "out.log")); statErr != nil {
+			t.Fatalf("output-writing test %d did not run: %v", run, statErr)
+		}
+		if _, statErr := os.Stat(filepath.Join(repo, "imported")); !os.IsNotExist(statErr) {
+			t.Fatalf("identity-mutated full execution %d became a baseline: %v", run, statErr)
+		}
+	}
+}
+
+func TestUIRSkipFullIdentityMutationPreservesFailingStatusWithoutBaseline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake UIR executable is a Python script")
+	}
+	repo := newUIRSkipFixture(t, false)
+	addOutputWritingTest(t, repo, true)
+	oldExitCode := exitCode
+	exitCode = 0
+	t.Cleanup(func() { exitCode = oldExitCode })
+	_, err := runTests(testrunner.RunOptions{
+		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		UIRSkip: true, UIRBinary: newFakeUIR(t, false, true), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
+	}, false)
+	if err != nil {
+		t.Fatalf("test failure became an infrastructure error: %v", err)
+	}
+	if exitCode != 1 {
+		t.Fatal("failing full test command lost its failure status")
+	}
+	if _, statErr := os.Stat(filepath.Join(repo, "imported")); !os.IsNotExist(statErr) {
+		t.Fatalf("failing identity-mutated execution became a baseline: %v", statErr)
+	}
+}
+
+func TestUIRSkipImportFailurePreservesPassingStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake UIR executable is a Python script")
+	}
+	repo := newUIRSkipFixture(t, false)
+	_, err := runTests(testrunner.RunOptions{
+		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		UIRSkip: true, UIRBinary: newFakeUIRWithImportFailure(t), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
+	}, false)
+	if err != nil {
+		t.Fatalf("passing test command became an import failure: %v", err)
 	}
 }
 
@@ -462,6 +589,77 @@ func TestAssembly(t *testing.T) {
 	return repo
 }
 
+func addOutputWritingTest(t *testing.T, repo string, fail bool) {
+	t.Helper()
+	failure := ""
+	if fail {
+		failure = `
+	t.Fatal("intentional failure")`
+	}
+	if err := os.WriteFile(filepath.Join(repo, "pkg", "writer_test.go"), []byte(`package pkg
+import ("os"; "testing")
+func TestWritesOutput(t *testing.T) {
+	previous, _ := os.ReadFile("../out.log")
+	if err := os.WriteFile("../out.log", append(previous, 'x'), 0o600); err != nil { t.Fatal(err) }`+failure+`
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func addIgnoredGeneratedConstantFixture(t *testing.T, repo string) {
+	t.Helper()
+	gitignore, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		".gitignore":      string(gitignore) + "gen/zz_gen.go\n",
+		"gen/use.go":      "package gen\nfunc Value() string { return generatedValue }\n",
+		"gen/zz_gen.go":   "package gen\nconst generatedValue = \"before\"\n",
+		"gen/use_test.go": "package gen\nimport (\"os\"; \"testing\")\nfunc TestGenerated(t *testing.T) { if err := os.WriteFile(\"../generated-ran\", []byte(\"yes\"), 0o600); err != nil { t.Fatal(err) }; if got := Value(); got != \"before\" { t.Fatalf(\"Value() = %q\", got) } }\n",
+	}
+	writeUIRSkipFixtureFiles(t, repo, files)
+	gitIn(t, repo, "add", ".gitignore", "gen/use.go", "gen/use_test.go")
+	gitIn(t, repo, "commit", "-qm", "add ignored generated source fixture")
+}
+
+func addIgnoredGeneratedCoverageFixture(t *testing.T, repo string) {
+	t.Helper()
+	gitignore, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		".gitignore":            string(gitignore) + "coveragegen/zz_gen.go\n",
+		"coveragegen/use.go":    "package coveragegen\nfunc Value() string { return generatedValue() }\n",
+		"coveragegen/zz_gen.go": "package coveragegen\nfunc generatedValue() string { return \"ok\" }\n",
+		"coveragegen/use_test.go": `package coveragegen
+import ("os"; "testing")
+func TestGeneratedCoverage(t *testing.T) {
+	if err := os.WriteFile("../generated-coverage-ran", []byte("yes"), 0o600); err != nil { t.Fatal(err) }
+	if got := Value(); got != "ok" { t.Fatalf("Value() = %q", got) }
+}
+`,
+	}
+	writeUIRSkipFixtureFiles(t, repo, files)
+	gitIn(t, repo, "add", ".gitignore", "coveragegen/use.go", "coveragegen/use_test.go")
+	gitIn(t, repo, "commit", "-qm", "add ignored generated coverage fixture")
+}
+
+func writeUIRSkipFixtureFiles(t *testing.T, repo string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		path := filepath.Join(repo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func newFakeUIR(t *testing.T, mutate, runAll bool) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "uir")
@@ -482,6 +680,29 @@ if args[2:4] == ["tests", "plan"]:
 elif args[2:4] == ["tests", "import"]:
     (location / "imported").write_text("yes")
     print("{}")
+else:
+    raise SystemExit("unexpected arguments: " + repr(args))
+`
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binary
+}
+
+func newFakeUIRWithImportFailure(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "uir")
+	script := `#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+args = sys.argv[1:]
+if args[2:4] == ["tests", "plan"]:
+    print(json.dumps({"version": 2, "plan_id": "plan-1", "inventory_digest": "inventory-1", "mode": "run_all", "skippable": []}))
+elif args[2:4] == ["tests", "import"]:
+    print("fixture import failure", file=sys.stderr)
+    raise SystemExit(1)
 else:
     raise SystemExit("unexpected arguments: " + repr(args))
 `

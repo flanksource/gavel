@@ -190,7 +190,8 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	// the end. The stream adapter (below) forwards testrunner updates to
 	// the UI while keeping hook pseudo-tests pinned at the top.
 	var (
-		attachUIUpdates func() chan []parsers.Test
+		attachUIUpdates          func() chan []parsers.Test
+		attachSafetyRerunUpdates func(testrunner.RunOptions) chan<- []parsers.Test
 	)
 	if opts.UI {
 		var err error
@@ -231,6 +232,10 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 				close(uiUpdates)
 			}()
 			return testrunnerUpdates
+		}
+		attachSafetyRerunUpdates = func(rerunOpts testrunner.RunOptions) chan<- []parsers.Test {
+			uiServer.BeginRun("rerun")
+			return attachRecorderTee(recorder, stream, rerunOpts, runStarted, attachUIRerunUpdates())
 		}
 		uiServer.BeginRun("initial")
 		if mode := fixtureBenchmarkMode(opts); mode != "" {
@@ -291,6 +296,12 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 	// a tee with no downstream so each batch reaches the recorder.
 	if opts.Updates == nil {
 		opts.Updates = attachRecorderTee(recorder, stream, opts, runStarted, nil)
+	}
+	freshSafetyRerunUpdates := func(rerunOpts testrunner.RunOptions) chan<- []parsers.Test {
+		if attachSafetyRerunUpdates != nil {
+			return attachSafetyRerunUpdates(rerunOpts)
+		}
+		return attachRecorderTee(recorder, stream, rerunOpts, runStarted, nil)
 	}
 
 	if !opts.SkipHooks && len(gavelCfg.Pre) > 0 {
@@ -442,8 +453,23 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 		filesDigest, inputsErr := uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport)
 		verified := identityErr == nil && inputsErr == nil && current == uirProvenance && uirplan.InputsDigest(filesDigest, opts.UIRInputContext) == uirInputs
 		if !verified {
-			if err == nil {
-				err = errors.Join(identityErr, inputsErr, fmt.Errorf("--uir-skip: indexed or declared file inputs changed during execution; results were not imported"))
+			verificationErr := errors.Join(identityErr, inputsErr, fmt.Errorf("indexed or declared file inputs changed during execution"))
+			logger.Warnf("--uir-skip evidence invalidated; no affected-test baseline was imported: %v", verificationErr)
+			uirExportReady = false
+			if len(uirPlan.Skippable) > 0 && err == nil && fullSummary.Failed == 0 {
+				logger.Warnf("--uir-skip rerunning the ordinary full test command because the successful partial result is no longer safe to accept")
+				fullSummary = parsers.TestSummary{}
+				uirTests = nil
+				fallbackOpts := opts
+				fallbackOpts.UIRRunAll = true
+				fallbackOpts.UIRSkippable = nil
+				fallbackOpts.UIRAllowEmpty = false
+				fallbackOpts.CoverDir = ""
+				fallbackOpts.ResultsOut = nil
+				fallbackOpts.SummaryOut = &fullSummary
+				fallbackOpts.Updates = freshSafetyRerunUpdates(fallbackOpts)
+				result, err = testrunner.Run(fallbackOpts)
+				testsFinished = time.Now().UTC()
 			}
 		} else {
 			selection := "full"
@@ -455,9 +481,9 @@ func runTests(opts testrunner.RunOptions, detach bool) (any, error) {
 				IdentityVerified: true, PlanID: uirPlan.PlanID}
 			metadata.Inventory = uirInventory.Tests
 			if exportErr := writeUIRExport(runOpts, uirTests, uirInputs, uirProvenance, runStarted, testsFinished, metadata); exportErr != nil {
-				err = errors.Join(err, fmt.Errorf("--uir-export: %w", exportErr))
+				logger.Warnf("--uir-skip could not write verified execution evidence; test status is unchanged and no baseline was imported: %v", exportErr)
 			} else if importErr := importUIRRun(opts.Context, opts.UIRBinary, opts.WorkDir, opts.UIRExport); importErr != nil {
-				err = errors.Join(err, importErr)
+				logger.Warnf("--uir-skip could not import verified execution evidence; test status is unchanged and no baseline was imported: %v", importErr)
 			}
 		}
 	}

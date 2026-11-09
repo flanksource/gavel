@@ -93,6 +93,26 @@ func TestInputsDigestIncludesIgnoredSelectedAssembly(t *testing.T) {
 	}
 }
 
+func TestInputsDigestIncludesIgnoredBuildSelectedGo(t *testing.T) {
+	repo := inputTestModule(t, "example.com/ignoredgo")
+	writeInputTestFile(t, repo, ".gitignore", "zz_gen.go\nignored_test.go\n")
+	writeInputTestFile(t, repo, "main.go", "package ignoredgo\n")
+	writeInputTestFile(t, repo, "zz_gen.go", "package ignoredgo\nconst Value = 1\n")
+	writeInputTestFile(t, repo, "ignored_test.go", "package ignoredgo\nimport \"testing\"\nfunc TestIgnored(t *testing.T) {}\n")
+	commitInputTestFiles(t, repo)
+
+	first := inputTestDigest(t, repo)
+	writeInputTestFile(t, repo, "zz_gen.go", "package ignoredgo\nconst Value = 2\n")
+	second := inputTestDigest(t, repo)
+	if second == first {
+		t.Fatal("editing ignored build-selected Go source did not change inputs digest")
+	}
+	writeInputTestFile(t, repo, "ignored_test.go", "package ignoredgo\nimport \"testing\"\nfunc TestIgnored(t *testing.T) { t.Log(\"changed\") }\n")
+	if third := inputTestDigest(t, repo); third == second {
+		t.Fatal("editing ignored build-selected Go test source did not change inputs digest")
+	}
+}
+
 func TestCaptureProvenanceTracksNonGoFilesAndExcludesGeneratedOutput(t *testing.T) {
 	repo := inputTestModule(t, "example.com/provenance")
 	writeInputTestFile(t, repo, ".gitignore", ".gavel/\n")

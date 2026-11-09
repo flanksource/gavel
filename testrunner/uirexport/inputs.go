@@ -37,7 +37,7 @@ func InputsDigest(workDir string, tags []string, output string) (string, error) 
 //     XTestEmbedFiles under the run's build tags, whatever its name, even when git ignores it; or
 //   - tracked or untracked and non-ignored below the module, unless it is regular Go source UIR
 //     indexes; or
-//   - non-Go build-selected source, even when ignored; or
+//   - build-selected source absent from Git's visible inventory, even when ignored; or
 //   - a visible file or build-selected source of a local replacement or workspace dependency,
 //     since its bytes are not fixed by a module version.
 //
@@ -62,11 +62,13 @@ func inputsDigest(m *module, tags []string, output string) (string, int, error) 
 	if err != nil {
 		return "", 0, fmt.Errorf("list module test inputs: %w", err)
 	}
+	visible := map[string]bool{}
 	for _, name := range strings.Split(listed, "\x00") {
 		if name == "" {
 			continue
 		}
 		rel := filepath.ToSlash(name)
+		visible[rel] = true
 		path := filepath.Join(m.root, filepath.FromSlash(rel))
 		if m.relative(m.root, path) == "" {
 			continue
@@ -86,7 +88,7 @@ func inputsDigest(m *module, tags []string, output string) (string, int, error) 
 		}
 	}
 
-	dependencies, err := mutableDependencyInputs(m, tags)
+	dependencies, err := mutableDependencyInputs(m, tags, visible)
 	if err != nil {
 		return "", 0, err
 	}
@@ -130,8 +132,8 @@ func inputsDigest(m *module, tags []string, output string) (string, int, error) 
 // mutableDependencyInputs returns build-selected source from local replacements and workspace
 // modules outside the invocation module. Versioned module-cache and standard-library packages are
 // immutable under their dependency/toolchain identities and need no second content digest here.
-func mutableDependencyInputs(m *module, tags []string) (map[string]string, error) {
-	fields := "Dir,ImportPath,Module,GoFiles,CgoFiles,CFiles,CXXFiles,MFiles,HFiles,FFiles,SFiles,SwigFiles,SwigCXXFiles,SysoFiles,EmbedFiles"
+func mutableDependencyInputs(m *module, tags []string, visible map[string]bool) (map[string]string, error) {
+	fields := "Dir,ImportPath,Module,GoFiles,CgoFiles,TestGoFiles,XTestGoFiles,CFiles,CXXFiles,MFiles,HFiles,FFiles,SFiles,SwigFiles,SwigCXXFiles,SysoFiles,EmbedFiles"
 	args := []string{"list", "-deps", "-test", "-json=" + fields}
 	if len(tags) > 0 {
 		args = append(args, "-tags="+strings.Join(tags, ","))
@@ -152,9 +154,9 @@ func mutableDependencyInputs(m *module, tags []string) (map[string]string, error
 		Replace            *selectedModule
 	}
 	type listedPackage struct {
-		Dir, ImportPath                                                                                                     string
-		Module                                                                                                              *selectedModule
-		GoFiles, CgoFiles, CFiles, CXXFiles, MFiles, HFiles, FFiles, SFiles, SwigFiles, SwigCXXFiles, SysoFiles, EmbedFiles []string
+		Dir, ImportPath                                                                                                                                string
+		Module                                                                                                                                         *selectedModule
+		GoFiles, CgoFiles, TestGoFiles, XTestGoFiles, CFiles, CXXFiles, MFiles, HFiles, FFiles, SFiles, SwigFiles, SwigCXXFiles, SysoFiles, EmbedFiles []string
 	}
 	inputs := map[string]string{}
 	modules := map[string]string{}
@@ -168,13 +170,21 @@ func mutableDependencyInputs(m *module, tags []string) (map[string]string, error
 			continue
 		}
 		if m.rootOf(pkg.Dir) == m.root {
-			files := slices.Concat(pkg.CgoFiles, pkg.CFiles, pkg.CXXFiles, pkg.MFiles, pkg.HFiles, pkg.FFiles,
+			files := slices.Concat(pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles, pkg.CFiles, pkg.CXXFiles, pkg.MFiles, pkg.HFiles, pkg.FFiles,
 				pkg.SFiles, pkg.SwigFiles, pkg.SwigCXXFiles, pkg.SysoFiles, pkg.EmbedFiles)
 			for _, name := range files {
+				// go list -test also reports its generated absolute _testmain.go; it is tool output,
+				// not a source input owned by the module.
+				if filepath.IsAbs(name) {
+					continue
+				}
 				path := filepath.Join(pkg.Dir, filepath.FromSlash(name))
 				rel := m.relative(m.root, path)
 				if rel == "" {
 					return nil, fmt.Errorf("selected module input %s/%s is outside the module", pkg.ImportPath, name)
+				}
+				if indexedSource(rel) && visible[rel] {
+					continue
 				}
 				inputs[rel] = path
 			}
@@ -197,6 +207,9 @@ func mutableDependencyInputs(m *module, tags []string) (map[string]string, error
 		files := slices.Concat(pkg.GoFiles, pkg.CgoFiles, pkg.CFiles, pkg.CXXFiles, pkg.MFiles, pkg.HFiles,
 			pkg.FFiles, pkg.SFiles, pkg.SwigFiles, pkg.SwigCXXFiles, pkg.SysoFiles, pkg.EmbedFiles)
 		for _, name := range files {
+			if filepath.IsAbs(name) {
+				continue
+			}
 			path := filepath.Join(pkg.Dir, filepath.FromSlash(name))
 			info, err := os.Lstat(path)
 			if err != nil {
