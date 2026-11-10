@@ -8,7 +8,6 @@ import type { TodoItem, TodoSessionDetailResponse } from '../../types';
 import { TodoVerification } from './TodoVerification';
 import { queryTestWrapper } from './queryTestWrapper';
 import { todoQueryKeys } from './todoQueries';
-import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
 
 const fixtureEditorCalls = vi.hoisted(() => ({
   props: [] as FixtureEditorProps[],
@@ -335,7 +334,7 @@ describe('TodoVerification', () => {
     });
     expect(screen.getByText('Verification runtime editor')).toBeTruthy();
     expect(onChanged).toHaveBeenCalledTimes(1);
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: workspaceTodoBatchKeys.all });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: todoQueryKeys.list('/workspace'), exact: true });
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: todoQueryKeys.sessionDetail('/workspace', 'todo-1'),
     });

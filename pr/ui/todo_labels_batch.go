@@ -80,6 +80,9 @@ func (s *Server) handleTodoLabelsBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) labelProjects(r *http.Request) ([]projectInfo, error) {
+	if s.workspaceData != nil {
+		return s.catalogProjects()
+	}
 	if s.workspaces != nil {
 		return s.workspaces.Projects(r.Context(), s.orgID())
 	}

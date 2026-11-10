@@ -419,6 +419,11 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	if runtime.IngestStats != nil {
 		srv.SetIngestStats(runtime.IngestStats)
 	}
+	if runtime.DB != nil {
+		if err := srv.StartWorkspaceData(ctx, runtime.DB); err != nil {
+			return err
+		}
+	}
 	if err := startGitChangeFeed(ctx, srv, tracker, runtime.DB); err != nil {
 		return err
 	}

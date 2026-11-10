@@ -2,12 +2,11 @@ import type React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TodoItem } from '../../types';
+import type { TodoItem, TodoListResponse } from '../../types';
 import { AcceptanceCriteria } from './AcceptanceCriteria';
 import { emptyCounts } from './format';
 import { queryTestWrapper } from './queryTestWrapper';
 import { todoQueryKeys } from './todoQueries';
-import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
   Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
@@ -51,11 +50,6 @@ describe('AcceptanceCriteria', () => {
     const list = { dir: '/repo', counts: { ...emptyCounts, total: 1, open: 1, pending: 1 }, items: [todo] };
     client.setQueryData(todoQueryKeys.item('/repo', todo.ref), todo);
     client.setQueryData(todoQueryKeys.list('/repo'), list);
-    client.setQueryData(workspaceTodoBatchKeys.list(['/repo']), {
-      byDir: { '/repo': list },
-      errorsByDir: {},
-      error: '',
-    });
     render(<AcceptanceCriteria dir="/repo" todo={todo} onChanged={onChanged} />, {
       wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
     });
@@ -64,9 +58,7 @@ describe('AcceptanceCriteria', () => {
     fireEvent.click(checkbox);
     expect(checkbox.checked).toBe(true);
     expect(client.getQueryData<TodoItem>(todoQueryKeys.item('/repo', todo.ref))?.criteria?.[0]?.done).toBe(true);
-    expect(client.getQueryData<{ byDir: Record<string, { items: TodoItem[] }> }>(
-      workspaceTodoBatchKeys.list(['/repo']),
-    )?.byDir['/repo'].items[0].criteria?.[0]?.done).toBe(true);
+    expect(client.getQueryData<TodoListResponse>(todoQueryKeys.list('/repo'))?.items[0].criteria?.[0]?.done).toBe(true);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await act(async () => {
       resolveResponse({
@@ -79,9 +71,7 @@ describe('AcceptanceCriteria', () => {
 
     await waitFor(() => expect(checkbox.checked).toBe(false));
     expect(client.getQueryData<TodoItem>(todoQueryKeys.item('/repo', todo.ref))?.criteria?.[0]?.done).toBe(false);
-    expect(client.getQueryData<{ byDir: Record<string, { items: TodoItem[] }> }>(
-      workspaceTodoBatchKeys.list(['/repo']),
-    )?.byDir['/repo'].items[0].criteria?.[0]?.done).toBe(false);
+    expect(client.getQueryData<TodoListResponse>(todoQueryKeys.list('/repo'))?.items[0].criteria?.[0]?.done).toBe(false);
     expect(screen.getByText(/acceptance criteria update failed.*criteria version changed/i)).toBeTruthy();
     expect(onChanged).not.toHaveBeenCalled();
   });

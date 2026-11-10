@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TodoTagListResponse } from '../../types';
-import { todoTagsCacheKey, useTodoTagCounts, useTodoTagIndex } from './tagQueries';
+import { todoTagKeys, useTodoTagCounts, useTodoTagIndex } from './tagQueries';
 
 const dir = '/work/acme';
 
@@ -22,14 +22,13 @@ afterEach(() => {
 });
 
 describe('tag definition cache', () => {
-  // The label picker on the new-todo window offers the last known vocabulary
-  // at once, then swaps in the fresh taxonomy — which is cached per workspace.
-  it('renders the cached taxonomy while loading and caches the fresh one per workspace', async () => {
+  it('reuses the account cache and refreshes taxonomy on explicit invalidation', async () => {
     const ui = { name: 'ui', color: 'blue', scope: 'workspace' } as const;
     const flaky = { name: 'flaky', color: 'red', scope: 'global' } as const;
     const cached: TodoTagListResponse = { definitions: [ui], counts: { ui: 3 } };
     const fresh: TodoTagListResponse = { definitions: [ui, flaky], counts: { ui: 4, flaky: 1 } };
-    localStorage.setItem(todoTagsCacheKey(dir), JSON.stringify(cached));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(todoTagKeys.list(dir), cached);
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     vi.stubGlobal('fetch', vi.fn(async () => {
@@ -38,16 +37,17 @@ describe('tag definition cache', () => {
     }));
 
     render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <QueryClientProvider client={client}>
         <Probe />
       </QueryClientProvider>,
     );
 
     expect(screen.getByTestId('tags').textContent).toBe('ui:3');
     expect(screen.getByTestId('tags').dataset.loading).toBe('false');
-    release();
+    await act(async () => { void client.invalidateQueries({ queryKey: todoTagKeys.list(dir) }); release(); });
     await waitFor(() => expect(screen.getByTestId('tags').textContent).toBe('ui:4,flaky:1'));
-    expect(JSON.parse(localStorage.getItem(todoTagsCacheKey(dir)) ?? 'null')).toEqual(fresh);
-    expect(localStorage.getItem(todoTagsCacheKey('/work/other'))).toBeNull();
+    expect(client.getQueryData(todoTagKeys.list(dir))).toEqual(fresh);
+    expect(client.getQueryData(todoTagKeys.list('/work/other'))).toBeUndefined();
+    expect(localStorage.length).toBe(0);
   });
 });

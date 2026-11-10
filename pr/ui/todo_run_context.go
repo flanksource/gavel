@@ -197,7 +197,7 @@ func todoRunContext(ctx context.Context, workDir string) (todoRunContextResponse
 // the runtime the repository's configuration resolves it to. Those are the only runtimes its
 // runs use; serve's own agents and credentials aren't what a sandbox offers.
 func (s *Server) hostedRunContext(ctx context.Context, dir string) (todoRunContextResponse, error) {
-	provider, source, err := s.todoProviderContext(ctx, todoSource{Dir: dir})
+	provider, source, err := s.todoReadProviderContext(ctx, todoSource{Dir: dir})
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}

@@ -29,6 +29,7 @@ const mutationActor = "gavel"
 
 // Provider adapts one existing native workspace to todos.Provider.
 type Provider struct {
+	readOnly    bool
 	workDir     string
 	db          *gorm.DB
 	repository  *native.Repository
@@ -55,11 +56,7 @@ type Provider struct {
 	// columns off the per-row query path.
 	phasesMu    sync.RWMutex
 	phasesCache map[uuid.UUID]map[uuid.UUID]types.PhaseRuns
-	// execCache memoizes one workspace's prompt-run overviews and links, primed
-	// by List. See execution_index.go — it is what keeps the active run, its
-	// provider session and the attempt count off the per-row query path.
-	execMu    sync.RWMutex
-	execCache map[uuid.UUID]*executionIndex
+	listAliases map[uuid.UUID][]native.Alias
 }
 
 var _ todos.Provider = (*Provider)(nil)
@@ -351,21 +348,27 @@ func (p *Provider) Workspace() *native.Workspace {
 }
 
 func (p *Provider) List(ctx context.Context, filters todos.DiscoveryFilters) (types.TODOS, error) {
-	if err := reconcileWorkspaceAnswers(ctx, map[uuid.UUID]*Provider{p.workspace.ID: p}); err != nil {
-		return nil, err
+	if !p.readOnly {
+		if err := reconcileWorkspaceAnswers(ctx, map[uuid.UUID]*Provider{p.workspace.ID: p}); err != nil {
+			return nil, err
+		}
 	}
 	issues, err := p.repository.ListIssues(ctx, p.workspace.ID)
 	if err != nil {
 		return nil, err
 	}
+	return p.listIssues(ctx, filters, issues)
+}
+
+func (p *Provider) listIssues(ctx context.Context, filters todos.DiscoveryFilters, issues []native.Issue) (types.TODOS, error) {
 	// One query for the whole workspace's GitHub links, not one per issue.
-	links, err := p.repository.ListAliasesByKind(ctx, p.workspace.ID, githubpush.AliasKind)
-	if err != nil {
-		return nil, err
-	}
-	// Two more for every issue's active run and run links, for the same reason.
-	if err := p.primeExecutionIndex(ctx, p.workspace.ID); err != nil {
-		return nil, err
+	links := p.listAliases
+	if links == nil {
+		var err error
+		links, err = p.repository.ListAliasesByKind(ctx, []uuid.UUID{p.workspace.ID}, githubpush.AliasKind)
+		if err != nil {
+			return nil, err
+		}
 	}
 	result := make(types.TODOS, 0, len(issues))
 	for index := range issues {
@@ -387,8 +390,10 @@ func (p *Provider) Get(ctx context.Context, ref string) (*types.TODO, error) {
 	if err != nil {
 		return nil, err
 	}
-	if issue, err = p.reconcileIssue(ctx, issue, p.workDir); err != nil {
-		return nil, err
+	if !p.readOnly {
+		if issue, err = p.reconcileIssue(ctx, issue, p.workDir); err != nil {
+			return nil, err
+		}
 	}
 	todo, err := p.todoFromIssue(ctx, issue, p.workDir, true)
 	if err != nil {

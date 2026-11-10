@@ -24,6 +24,7 @@ const ErrSchemaBehind = "database schema is behind this binary; run `gavel serve
 // can have either without the other. A bundle that has its newest column has
 // everything before it.
 var requiredColumns = []string{
+	"todo_issue_overview.session_summary",
 	"captain_prompt_run_iterations.verification_result",
 	"todo_issues.parent_issue_id",
 }

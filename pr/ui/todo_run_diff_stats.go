@@ -28,6 +28,26 @@ type runDiffStatProvider interface {
 // provider without native run storage has recorded no runs, so it has no
 // stats.
 func (s *Server) runDiffStats(ctx context.Context, provider todos.Provider) (map[string]gavelgit.DiffStat, error) {
+	if s.workspaceData != nil {
+		if source, ok := provider.(runDiffStatProvider); ok && source.Workspace() != nil {
+			d := s.workspaceData
+			d.mu.RLock()
+			defer d.mu.RUnlock()
+			id := source.Workspace().ID
+			if err := d.diffErrors[id]; err != nil {
+				return nil, err
+			}
+			stats, ok := d.diffs[id]
+			if !ok {
+				return nil, fmt.Errorf("diff metadata for workspace %s is not prepared", id)
+			}
+			return stats, nil
+		}
+	}
+	return s.prepareRunDiffStats(ctx, provider)
+}
+
+func (s *Server) prepareRunDiffStats(ctx context.Context, provider todos.Provider) (map[string]gavelgit.DiffStat, error) {
 	source, ok := provider.(runDiffStatProvider)
 	if !ok || source.Captain() == nil || source.Repository() == nil || source.Workspace() == nil {
 		return map[string]gavelgit.DiffStat{}, nil

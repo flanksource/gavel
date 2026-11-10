@@ -252,6 +252,9 @@ var authorizeTodoDir = func(dir string) (string, error) {
 }
 
 func (s *Server) todoProviderContext(ctx context.Context, source todoSource) (todos.Provider, todoSource, error) {
+	if s.workspaceData != nil && !s.hosted {
+		return s.todoReadProviderContext(ctx, source)
+	}
 	if s.workspaces != nil {
 		workspace, err := s.workspaces.Resolve(ctx, s.orgID(), source.Dir)
 		if err != nil {
@@ -300,7 +303,13 @@ var openTodoProvider = func(ctx context.Context, dir string) (todos.Provider, er
 
 func (s *Server) todoReadProviderContext(ctx context.Context, source todoSource) (todos.Provider, todoSource, error) {
 	if s.workspaceData != nil {
+		if source.Dir == "" && !s.hosted {
+			source.Dir = s.todoWorkDir()
+		}
 		provider, err := s.workspaceReadProvider(ctx, source.Dir)
+		if err == nil {
+			source.Dir = provider.Workspace().RootPath
+		}
 		return provider, source, err
 	}
 	return s.todoProviderContext(ctx, source)
@@ -313,6 +322,9 @@ var openGlobalTodoProvider = func(ctx context.Context) (todos.GlobalReferencePro
 // globalTodoProvider resolves todo references across the Server's workspaces: the
 // organization's repositories in hosted mode, the host's projects otherwise.
 func (s *Server) globalTodoProvider(ctx context.Context) (todos.GlobalReferenceProvider, error) {
+	if s.workspaceData != nil {
+		return todoruntime.NewGlobalForOrg(s.workspaceData.db, s.orgID())
+	}
 	if s.workspaces != nil {
 		return todoruntime.NewGlobalForOrg(s.orgDB, s.orgID())
 	}

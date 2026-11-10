@@ -1,9 +1,12 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { focusManager } from '@tanstack/react-query';
+import { focusManager, QueryClient } from '@tanstack/react-query';
+import { todoQueryKeys } from './todoQueries';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, TodoItem, TodoListResponse } from '../../types';
 import { queryTestWrapper } from './queryTestWrapper';
 import { useWorkspaceTodos } from './useWorkspaceTodos';
+
+vi.mock('./useWorkspaceChanges', () => ({ useWorkspaceChanges: () => ({ ready: true, error: '' }) }));
 
 vi.mock('./format', async importOriginal => {
   const emptyCounts = {
@@ -351,7 +354,7 @@ describe('useWorkspaceTodos', () => {
     await waitFor(() => expect(requestSignal?.aborted).toBe(true));
   });
 
-  it('polls an active detail until the provider session and terminal projection arrive', async () => {
+  it('refreshes an active detail only when explicitly invalidated', async () => {
     focusManager.setFocused(true);
     const active: TodoItem = {
       ref: 'run-1', id: 'run-1', cwd: '/work/gavel', title: 'Live run',
@@ -377,10 +380,12 @@ describe('useWorkspaceTodos', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result } = renderHook(() => useWorkspaceTodos(projects, { selectedId: 'run-1' }), { wrapper: queryTestWrapper() });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useWorkspaceTodos(projects, { selectedId: 'run-1' }), { wrapper: queryTestWrapper(client) });
     await waitFor(() => expect(result.current.detail?.status).toBe('in_progress'));
     expect(result.current.detail?.sessionId).toBeUndefined();
 
+    await act(async () => { await client.invalidateQueries({ queryKey: todoQueryKeys.item('/work/gavel', 'run-1') }); });
     await waitFor(() => expect(result.current.detail?.sessionId).toBe('codex-session-1'), { timeout: 1_500 });
     expect(detailURLs).toEqual([
       '/api/todos/item?ref=run-1',
@@ -388,7 +393,8 @@ describe('useWorkspaceTodos', () => {
     ]);
     expect(result.current.detail?.status).toBe('in_progress');
 
-    await waitFor(() => expect(result.current.detail?.status).toBe('review'), { timeout: 1_500 });
+    await act(async () => { await client.invalidateQueries({ queryKey: todoQueryKeys.item('/work/gavel', 'run-1') }); });
+    await waitFor(() => expect(result.current.detail?.status).toBe('review'));
     expect(result.current.detail?.hasPlan).toBe(true);
   });
 

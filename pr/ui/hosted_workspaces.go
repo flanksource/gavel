@@ -140,6 +140,9 @@ func (w HostedWorkspaces) repoID(org uuid.UUID, ref string) (uuid.UUID, bool) {
 // projectList is the dashboard's projects: the organization's repositories in hosted mode,
 // the host's registered projects otherwise.
 func (s *Server) projectList(ctx context.Context) ([]projectInfo, error) {
+	if s.workspaceData != nil {
+		return s.catalogProjectCounts(ctx)
+	}
 	if s.workspaces != nil {
 		return s.workspaces.Projects(ctx, s.orgID())
 	}

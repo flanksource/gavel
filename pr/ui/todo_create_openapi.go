@@ -11,6 +11,9 @@ import (
 )
 
 func addTodoNewOpenAPI(document map[string]any) error {
+	if err := addWorkspaceOpenAPI(document); err != nil {
+		return err
+	}
 	schemas := document["components"].(map[string]any)["schemas"].(map[string]any)
 	request, err := todoOpenAPISchema(&todoNewPayload{}, schemas)
 	if err != nil {

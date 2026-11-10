@@ -8,10 +8,6 @@ import { useTodoSessionDetail } from './TodoSessionDetail';
 import { latestRunWorkspace, shortSha, type LatestRunWorkspace } from './runWorkspace';
 import { TodoWorktreeStatus } from './TodoWorktreeStatus';
 
-// RUN_BRANCH_POLL_MS matches the detail pane's background attempts poll, so the
-// branch panel shares that one query rather than adding a faster one.
-const RUN_BRANCH_POLL_MS = 15_000;
-
 function KeptWorktreeWarning({ path, reason, dirty }: { path?: string; reason?: string; dirty: number }) {
   return (
     <div role="alert" className="flex items-start gap-2 border-b border-border bg-amber-500/10 px-3 py-2 text-xs text-amber-700 [[data-theme=dark]_&]:text-amber-300">
@@ -43,7 +39,7 @@ export interface TodoRunBranchProps {
  * run records a worktree or commits.
  */
 export function TodoRunBranch({ dir, todoRef, renderActions, events, onPatch }: TodoRunBranchProps) {
-  const { detail, error } = useTodoSessionDetail(dir, todoRef, !!todoRef, { intervalMs: RUN_BRANCH_POLL_MS });
+  const { detail, error } = useTodoSessionDetail(dir, todoRef, !!todoRef);
   const latest = detail ? latestRunWorkspace(detail.attempts) : null;
   if (!latest && !error) return null;
   const worktree = latest?.workspace.worktree;

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/todos/query"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 )
@@ -163,10 +164,39 @@ func SaveProjects(ps []Project) error {
 	if err != nil {
 		return fmt.Errorf("marshal gavel projects file %s: %w", projectsPath, err)
 	}
-	if err := os.WriteFile(projectsPath, data, 0o644); err != nil {
+	if err := writeProjectsFile(data); err != nil {
 		return fmt.Errorf("write gavel projects file %s: %w", projectsPath, err)
 	}
 	return nil
+}
+
+func writeProjectsFile(data []byte) (err error) {
+	file, err := os.CreateTemp(filepath.Dir(projectsPath), ".projects-*.json")
+	if err != nil {
+		return err
+	}
+	path := file.Name()
+	defer func() {
+		if file != nil {
+			err = errors.Join(err, file.Close())
+		}
+		err = errors.Join(err, safefs.SafeRemove(path, safefs.RemoveContext{AllowedRoot: filepath.Dir(projectsPath)}))
+	}()
+	if err := file.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		file = nil
+		return err
+	}
+	file = nil
+	return os.Rename(path, projectsPath)
 }
 
 // ResolvedDir expands a leading "~" in Dir to the user's home directory so the

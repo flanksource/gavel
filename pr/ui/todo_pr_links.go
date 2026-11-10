@@ -144,7 +144,7 @@ func (s *Server) todoPRLinkTarget(w http.ResponseWriter, ctx context.Context, di
 }
 
 func (s *Server) todoPRLinkProvider(ctx context.Context, dir string) (todos.Provider, todos.PRLinkProvider, error) {
-	provider, _, err := s.todoProviderContext(ctx, todoSource{Dir: strings.TrimSpace(dir)})
+	provider, _, err := s.todoReadProviderContext(ctx, todoSource{Dir: strings.TrimSpace(dir)})
 	if err != nil {
 		return nil, nil, err
 	}

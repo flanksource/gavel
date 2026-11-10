@@ -2,13 +2,19 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/flanksource/clicky/sse"
+	"github.com/flanksource/commons/logger"
+	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos/native"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
@@ -18,15 +24,20 @@ import (
 )
 
 type workspaceEntry struct {
+	Project   projectInfo
 	Options   todoruntime.WorkspaceOptions
 	Workspace *native.Workspace
 	Err       error
 }
 type workspaceRevision struct {
-	ID          uuid.UUID `json:"id"`
-	Dir         string    `json:"dir"`
-	Revision    uint64    `json:"revision"`
-	Fingerprint string    `json:"-"`
+	ID                uuid.UUID `json:"id"`
+	Dir               string    `json:"dir"`
+	Revision          uint64    `json:"revision"`
+	Fingerprint       string    `json:"-"`
+	Labels            uint64    `json:"labels"`
+	LabelFingerprint  string    `json:"-"`
+	Config            uint64    `json:"config"`
+	ConfigFingerprint string    `json:"-"`
 }
 type workspaceSnapshot struct {
 	Epoch      string                       `json:"epoch"`
@@ -35,60 +46,60 @@ type workspaceSnapshot struct {
 	Error      string                       `json:"error,omitempty"`
 }
 type workspaceData struct {
-	mu       sync.RWMutex
-	reloadMu sync.Mutex
-	db       *gorm.DB
-	entries  map[string]workspaceEntry
-	snapshot workspaceSnapshot
-	changed  sse.Notifier
+	mu                 sync.RWMutex
+	reloadMu           sync.Mutex
+	refreshMu          sync.Mutex
+	db                 *gorm.DB
+	entries            map[string]workspaceEntry
+	snapshot           workspaceSnapshot
+	changed            sse.Notifier
+	org                uuid.UUID
+	workers            sync.WaitGroup
+	ready              chan struct{}
+	watcher            *fsnotify.Watcher
+	catalogFingerprint string
+	listenerError      string
+	configChanges      map[string]string
+	diffs              map[uuid.UUID]map[string]gavelgit.DiffStat
+	diffErrors         map[uuid.UUID]error
+	diffFingerprints   map[uuid.UUID]string
 }
 
 // StartWorkspaceData prepares read dependencies before the HTTP listener starts.
-func (s *Server) StartWorkspaceData(ctx context.Context, db *gorm.DB) error {
+func (s *Server) StartWorkspaceData(ctx context.Context, db *gorm.DB) (err error) {
 	if db == nil {
 		return fmt.Errorf("workspace data requires PostgreSQL")
 	}
-	data := &workspaceData{db: db, snapshot: workspaceSnapshot{Epoch: uuid.NewString(), Workspaces: map[string]workspaceRevision{}}}
+	ctx, cancel := context.WithCancel(ctx)
+	data := &workspaceData{db: db, org: s.orgID(), ready: make(chan struct{}), configChanges: map[string]string{}, diffs: map[uuid.UUID]map[string]gavelgit.DiffStat{}, diffErrors: map[uuid.UUID]error{}, diffFingerprints: map[uuid.UUID]string{}, snapshot: workspaceSnapshot{Epoch: uuid.NewString(), Workspaces: map[string]workspaceRevision{}}}
 	s.workspaceData = data
-	if err := s.reloadWorkspaceData(ctx); err != nil {
-		return err
-	}
+	defer func() {
+		if err != nil {
+			cancel()
+			data.workers.Wait()
+		}
+	}()
 	if err := s.startWorkspaceChanges(ctx); err != nil {
 		return err
 	}
 	if !s.hosted {
-		watcher, err := fsnotify.NewWatcher()
-		if err != nil {
+		if err := s.startWorkspaceFiles(ctx); err != nil {
 			return err
 		}
-		if err := watcher.Add(filepath.Dir(projectsPath)); err != nil {
-			watcher.Close()
-			return err
-		}
-		go func() {
-			defer watcher.Close()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case event, ok := <-watcher.Events:
-					if !ok {
-						return
-					}
-					if filepath.Clean(event.Name) == filepath.Clean(projectsPath) {
-						if err := s.reloadWorkspaceData(ctx); err != nil {
-							data.fail(err)
-						}
-					}
-				case err, ok := <-watcher.Errors:
-					if !ok {
-						return
-					}
-					data.fail(err)
-				}
-			}
-		}()
 	}
+	if err := s.reloadWorkspaceData(ctx); err != nil {
+		return err
+	}
+	if err := s.reconcileWorkspaceData(ctx); err != nil {
+		return err
+	}
+	if err := s.prepareWorkspaceDiffs(ctx); err != nil {
+		return err
+	}
+	if err := data.refresh(ctx); err != nil {
+		return err
+	}
+	close(data.ready)
 	return nil
 }
 
@@ -109,8 +120,27 @@ func (s *Server) reloadWorkspaceData(ctx context.Context) error {
 			return err
 		}
 		for _, p := range rows {
-			projects = append(projects, projectInfo{Name: p.Name, Dir: p.ResolvedDir(), Repos: p.Repos})
+			info, err := newProjectInfo(ctx, p, todoCountsResult{})
+			if err != nil {
+				return err
+			}
+			info.TodoCounts = nil
+			projects = append(projects, info)
 		}
+	}
+	encoded, err := json.Marshal(projects)
+	if err != nil {
+		return err
+	}
+	data.mu.RLock()
+	previous := data.entries
+	unchanged := data.catalogFingerprint == string(encoded)
+	data.mu.RUnlock()
+	if unchanged {
+		data.mu.Lock()
+		data.snapshot.Error = ""
+		data.mu.Unlock()
+		return data.refresh(ctx)
 	}
 	entries := map[string]workspaceEntry{}
 	for _, project := range projects {
@@ -122,7 +152,13 @@ func (s *Server) reloadWorkspaceData(ctx context.Context) error {
 			}
 			options.RootPath = filepath.Join(s.workspaces.Sources.DataDir, "workspaces", s.orgID().String(), id.String())
 		}
-		entry := workspaceEntry{Options: options}
+		entry, exists := previous[project.Dir]
+		if exists && reflect.DeepEqual(entry.Options, options) && entry.Err == nil {
+			entry.Project = project
+			entries[project.Dir] = entry
+			continue
+		}
+		entry = workspaceEntry{Options: options, Project: project}
 		provider, err := todoruntime.NewForOrg(ctx, data.db, options, tenant.Scope{OrgID: s.orgID()})
 		entry.Err = err
 		if err == nil {
@@ -130,8 +166,12 @@ func (s *Server) reloadWorkspaceData(ctx context.Context) error {
 		}
 		entries[project.Dir] = entry
 	}
+	if err := data.watchWorkspaceRoots(entries); err != nil {
+		return err
+	}
 	data.mu.Lock()
 	data.entries = entries
+	data.catalogFingerprint = string(encoded)
 	data.snapshot.Catalog++
 	data.snapshot.Error = ""
 	data.mu.Unlock()
@@ -149,10 +189,51 @@ func (d *workspaceData) fail(err error) {
 	d.changed.Notify()
 }
 
+func (d *workspaceData) snapshotCopy() workspaceSnapshot {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	snapshot := d.snapshot
+	snapshot.Workspaces = make(map[string]workspaceRevision, len(d.snapshot.Workspaces))
+	if snapshot.Error == "" {
+		snapshot.Error = d.listenerError
+	}
+	for key, value := range d.snapshot.Workspaces {
+		snapshot.Workspaces[key] = value
+	}
+	return snapshot
+}
+
+func (s *Server) catalogProjects() ([]projectInfo, error) {
+	d := s.workspaceData
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.snapshot.Error != "" {
+		return nil, fmt.Errorf("workspace catalog: %s", d.snapshot.Error)
+	}
+	rows := make([]projectInfo, 0, len(d.entries))
+	for _, entry := range d.entries {
+		info := entry.Project
+		if entry.Err != nil {
+			info.Error = entry.Err.Error()
+		}
+		rows = append(rows, info)
+	}
+	slices.SortFunc(rows, func(a, b projectInfo) int { return strings.Compare(a.Name, b.Name) })
+	return rows, nil
+}
+
 func (s *Server) workspaceReadProvider(ctx context.Context, dir string) (*todoruntime.Provider, error) {
 	data := s.workspaceData
 	data.mu.RLock()
 	entry, ok := data.entries[dir]
+	if !ok {
+		for _, candidate := range data.entries {
+			if candidate.Options.RootPath == dir {
+				entry, ok = candidate, true
+				break
+			}
+		}
+	}
 	failure := data.snapshot.Error
 	data.mu.RUnlock()
 	if failure != "" {
@@ -176,16 +257,9 @@ func (s *Server) handleWorkspaceChanges(w http.ResponseWriter, r *http.Request) 
 	wake, unsubscribe := d.changed.Subscribe()
 	defer unsubscribe()
 	err := sse.ServeSnapshot(w, r, sse.SnapshotOptions{Interval: 30 * time.Second, Wake: wake, Load: func(context.Context) (any, error) {
-		d.mu.RLock()
-		defer d.mu.RUnlock()
-		snapshot := d.snapshot
-		snapshot.Workspaces = make(map[string]workspaceRevision, len(d.snapshot.Workspaces))
-		for key, value := range d.snapshot.Workspaces {
-			snapshot.Workspaces[key] = value
-		}
-		return snapshot, nil
+		return d.snapshotCopy(), nil
 	}})
 	if err != nil && r.Context().Err() == nil {
-		d.fail(err)
+		logger.Warnf("workspace change stream: %v", err)
 	}
 }

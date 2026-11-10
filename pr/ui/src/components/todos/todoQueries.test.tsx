@@ -100,32 +100,19 @@ describe('todo detail queries', () => {
     expect(signals).toEqual([workspaceSignal, globalSignal]);
   });
 
-  it('polls visible in-progress details and stops for terminal details', () => {
-    const options = todoItemQueryOptions('/repo', 'todo-1', { pollWhileActive: true, intervalMs: 1_000 });
-    const interval = options.refetchInterval as (query: { state: { data?: { status?: string } } }) => number | false;
-
-    expect(interval({ state: { data: { status: 'in_progress' } } })).toBe(1_000);
-    expect(interval({ state: { data: { status: 'completed' } } })).toBe(false);
+  it('keeps details fresh until an explicit invalidation', () => {
+    const options = todoItemQueryOptions('/repo', 'todo-1');
+    expect(options.staleTime).toBe(Infinity);
+    expect(options.refetchInterval).toBe(false);
     expect(options.refetchIntervalInBackground).toBe(false);
   });
 });
 
 describe('session stats query', () => {
-  it.each([
-    ['a live run keeps retrying until its session appears', true, stats({ found: false }), 4_000],
-    ['a settled run stops after one look for a missing session', false, stats({ found: false }), false],
-    ['a running session polls regardless of what the todo status claims', false, stats({ inProgress: true }), 2_000],
-    ['final totals never refetch', false, stats(), false],
-  ])('%s', (_label, expectLive, data, expected) => {
-    const options = sessionStatsQueryOptions({ dir: '/repo', sessionId: 'session-1', expectLive });
-    const interval = options.refetchInterval as (query: { state: { data?: SessionStats } }) => number | false;
-
-    expect(interval({ state: { data } })).toBe(expected);
-  });
-
-  it('re-reads settled totals far less often than a live run', () => {
-    expect(sessionStatsQueryOptions({ dir: '/repo', sessionId: 'session-1', expectLive: false }).staleTime)
-      .toBeGreaterThan(sessionStatsQueryOptions({ dir: '/repo', sessionId: 'session-1' }).staleTime as number);
+  it('refreshes stats through invalidation without recurring reads', () => {
+    const options = sessionStatsQueryOptions({ dir: '/repo', sessionId: 'session-1' });
+    expect(options.staleTime).toBe(Infinity);
+    expect(options.refetchInterval).toBe(false);
   });
 
   it('deduplicates concurrent consumers and reuses fresh cached data on remount', async () => {

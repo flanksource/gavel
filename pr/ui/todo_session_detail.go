@@ -60,7 +60,7 @@ func (s *Server) handleTodoSessionDetail(w http.ResponseWriter, r *http.Request)
 		writeTodoError(w, http.StatusBadRequest, errors.New("ref is required"))
 		return
 	}
-	provider, _, err := s.todoProviderContext(r.Context(), todoSource{Dir: r.URL.Query().Get("dir")})
+	provider, _, err := s.todoReadProviderContext(r.Context(), todoSource{Dir: r.URL.Query().Get("dir")})
 	if err != nil {
 		writeTodoError(w, todoErrorStatus(http.StatusBadRequest, err), err)
 		return

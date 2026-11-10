@@ -10,13 +10,7 @@ import { sessionDetailQueryOptions } from './todoQueries';
 import { hasRunWorkspace, shortSha } from './runWorkspace';
 import type { TodoLaunchProgress } from './todoLaunch';
 
-export interface TodoSessionDetailOptions {
-  /** Poll period while an attempt is live; settled attempts are re-read slowly. */
-  intervalMs?: number;
-}
-
-/** The todo's attempts, newest first — one shared poll per todo. */
-export function useTodoSessionDetail(dir: string, ref: string, active: boolean, { intervalMs = 1500 }: TodoSessionDetailOptions = {}) {
+export function useTodoSessionDetail(dir: string, ref: string, active: boolean) {
   const enabled = active && !!ref;
   const query = useQuery({ ...sessionDetailQueryOptions(dir, ref), enabled });
   return {

@@ -144,7 +144,7 @@ func TestRepositoryIsolatesOrganizations(t *testing.T) {
 
 		aliases, err := other.ListAliases(ctx, issue.ID)
 		requireHidden(t, aliases, err, "ListAliases")
-		byKind, err := other.ListAliasesByKind(ctx, workspace.ID, "ticket")
+		byKind, err := other.ListAliasesByKind(ctx, []uuid.UUID{workspace.ID}, "ticket")
 		if !errors.Is(err, native.ErrNotFound) {
 			require.NoError(t, err)
 			assert.Empty(t, byKind)

@@ -111,6 +111,7 @@ type ProviderEvent struct {
 // It combines fixture test nodes with TODO-specific metadata for tracking
 // implementation tasks including reproduction steps, verification tests, and execution status.
 type TODO struct {
+	SessionSummary *SessionSummary       `json:"session_summary,omitempty"`
 	FilePath       string                `json:"file_path,omitempty"`
 	FileNode       *fixtures.FixtureNode `json:"file_node,omitempty"` // Root file node from fixtures parser
 	ID             string                `json:"id,omitempty"`

@@ -37,7 +37,7 @@ func (s *Server) handleTodoNewSteps(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	provider, source, err := s.todoProviderContext(r.Context(), todoSourceFromRequest(r))
+	provider, source, err := s.todoReadProviderContext(r.Context(), todoSourceFromRequest(r))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return

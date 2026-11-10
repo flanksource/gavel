@@ -12,25 +12,15 @@ import { VerificationFailureStatus } from './VerificationFailureStatus';
 import { currentAuthMode } from '../../query';
 import { hostControlsVisible } from '../../hostedUI';
 
-// useSessionStats polls /api/todos/session/stats for one agent session. The
-// server serves live runs from the cmux tailer's in-memory cache and reads
-// finished/old sessions from the on-disk log, so this hook simply polls: fast
-// while a run is in progress, slower while waiting for the log to appear, and it
-// stops once a finished session's totals are final. Between polls of a running
-// session the displayed clock ticks locally so the timer advances smoothly.
-export function useSessionStats({ dir, sessionId, active, expectLive = true }: {
+export function useSessionStats({ dir, sessionId, active }: {
   dir: string;
   sessionId: string | undefined;
   active: boolean;
-  // expectLive marks a run that should still produce a session, so the stats
-  // request keeps retrying until it appears. Settled callers (a list row reading
-  // a finished run's totals) pass false and look exactly once.
-  expectLive?: boolean;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const enabled = active && !!sessionId;
   const query = useQuery({
-    ...sessionStatsQueryOptions({ dir, sessionId: sessionId ?? '', expectLive }),
+    ...sessionStatsQueryOptions({ dir, sessionId: sessionId ?? '' }),
     enabled,
   });
   const stats = enabled && !query.error ? query.data ?? null : null;

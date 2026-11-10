@@ -26,14 +26,10 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceIDs []uui
 		SELECT issue.workspace_id,
 		       issue.status,
 		       COALESCE(runtime.execution_state, 'idle') AS execution_state,
-		       COALESCE(active_link.step_kind::text, '') AS step_kind,
-		       COALESCE(plan.approval_state::text, '')   AS approval_state,
+		       COALESCE(runtime.step_kind::text, '') AS step_kind,
+		       COALESCE(runtime.approval_state::text, '') AS approval_state,
 		       COUNT(*)                                  AS count
 		FROM `+issueFrom+`
-		LEFT JOIN todo_issue_prompt_runs AS active_link
-		  ON active_link.issue_id = issue.id
-		 AND active_link.prompt_run_id = issue.active_prompt_run_id
-		LEFT JOIN captain_plans AS plan ON plan.id = issue.selected_plan_id
 		WHERE issue.workspace_id IN ? AND `+inOrgWorkspace("issue.workspace_id")+` AND `+visible+`
 		  AND issue.parent_issue_id IS NULL
 		GROUP BY 1, 2, 3, 4, 5`,
@@ -70,7 +66,7 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceIDs []uui
 //     only for the ids this workspace actually links. Removing OFFSET 0 silently
 //     restores the full scan; measured on a developer database it cost 24.8ms
 //     and 7752 shared buffers against 3.8ms and 1192 for this shape.
-func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UUID) ([]IssuePhaseRun, error) {
+func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceIDs ...uuid.UUID) ([]IssuePhaseRun, error) {
 	const phaseColumns = `
 		link.issue_id,
 		link.prompt_run_id,
@@ -100,7 +96,7 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 			       link.prompt_run_id, issue.active_prompt_run_id
 			FROM todo_issue_prompt_runs AS link
 			JOIN todo_issues AS issue ON issue.id = link.issue_id
-			WHERE issue.workspace_id = ? AND `+inOrgWorkspace("issue.workspace_id")+`
+			WHERE issue.workspace_id IN ? AND `+inOrgWorkspace("issue.workspace_id")+`
 		),
 		workspace_runs AS MATERIALIZED (
 			SELECT run.id, run.state, run.phase, run.started_at, run.finished_at,
@@ -131,7 +127,7 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 		-- standalone verify at ordinal 0 would otherwise lose to an older run at
 		-- ordinal 3. Within one kind the two agree anyway.
 		ORDER BY issue_id, phase, queued_at DESC NULLS LAST, ordinal DESC`,
-		workspaceID, r.org,
+		workspaceIDs, r.org,
 	).Scan(&records)
 	if result.Error != nil {
 		return nil, result.Error
@@ -140,11 +136,15 @@ func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UU
 }
 
 func (r *Repository) ListIssues(ctx context.Context, workspaceID uuid.UUID) ([]Issue, error) {
+	return r.ListWorkspaceIssues(ctx, []uuid.UUID{workspaceID})
+}
+
+func (r *Repository) ListWorkspaceIssues(ctx context.Context, workspaceIDs []uuid.UUID) ([]Issue, error) {
 	var records []issueRecord
 	visible, visibleArgs := visibleIssue(ctx, "issue")
 	result := r.db.WithContext(ctx).Raw(
-		`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE issue.workspace_id = ? AND `+inOrgWorkspace("issue.workspace_id")+` AND `+visible+` ORDER BY issue.updated_at DESC, issue.id`,
-		append([]any{workspaceID, r.org}, visibleArgs...)...,
+		`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE issue.workspace_id IN ? AND `+inOrgWorkspace("issue.workspace_id")+` AND `+visible+` ORDER BY issue.updated_at DESC, issue.id`,
+		append([]any{workspaceIDs, r.org}, visibleArgs...)...,
 	).Scan(&records)
 	if result.Error != nil {
 		return nil, result.Error

@@ -18,6 +18,7 @@ import (
 )
 
 type issueRecord struct {
+	Overview          IssueOverview `gorm:"embedded"`
 	ID                uuid.UUID
 	WorkspaceID       uuid.UUID
 	Title             string
@@ -44,6 +45,7 @@ func (r issueRecord) issue() *Issue {
 		labels = []string{}
 	}
 	return &Issue{
+		Overview:          r.Overview,
 		ID:                r.ID,
 		WorkspaceID:       r.WorkspaceID,
 		Title:             r.Title,
@@ -70,11 +72,13 @@ const issueColumns = `
 	issue.labels, issue.priority, issue.status,
 	COALESCE(runtime.execution_state, 'idle') AS execution_state,
 	issue.active_prompt_run_id, issue.selected_plan_id, issue.parent_issue_id,
-	issue.version, issue.created_at, issue.updated_at, issue.created_by_user_id, issue.visibility`
+	issue.version, issue.created_at, issue.updated_at, issue.created_by_user_id, issue.visibility,
+ runtime.overview_run_id, runtime.provider_session_id, runtime.result_text, runtime.run_at,
+ runtime.step_kind, runtime.attempts, runtime.overview_plan_id, runtime.approval_state, runtime.plan_revision, runtime.session_summary`
 
 const issueFrom = `
 	todo_issues AS issue
-	LEFT JOIN todo_issue_runtime AS runtime ON runtime.issue_id = issue.id`
+	LEFT JOIN todo_issue_overview AS runtime ON runtime.issue_id = issue.id`
 
 func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*Issue, error) {
 	if err := input.PR.Validate(); err != nil {

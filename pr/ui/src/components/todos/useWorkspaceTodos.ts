@@ -135,9 +135,9 @@ export function useWorkspaceTodos(
   // One tag index per workspace, resolved here rather than in the rows: a row
   // component renders once per todo, and a subscription per row would be
   // hundreds of them.
-  const tagsByDir = useTodoTagIndexes(workspaceDirs, enabled);
   const queryClient = useQueryClient();
   const changes = useWorkspaceChanges(enabled);
+  const tagsByDir = useTodoTagIndexes(workspaceDirs, enabled && changes.ready);
   const combine = useCallback((results: UseQueryResult<TodoListResponse, Error>[]) => {
     const state = workspaceTodoBatchState(workspaceDirs, { results: results.map((query, index) => ({
       dir: workspaceDirs[index], counts: query.data?.counts ?? emptyCounts, items: query.data?.items ?? [],
@@ -273,19 +273,6 @@ export function useWorkspaceTodos(
     ? globalDetailQuery.isFetching
     : !!selected && selectedDetailQuery.isFetching && !selectedDetailQuery.data;
 
-  // Refresh the batch once when a polled run becomes terminal. React Query owns
-  // the visible-only interval and retains the last good detail on read errors.
-  const previousDetail = useRef<{ key: string; status?: TodoStatus }>({ key: '' });
-  useEffect(() => {
-    const key = selected ? `${selected.dir}\u0000${selected.ref}` : '';
-    const status = detail?.status;
-    const previous = previousDetail.current;
-    if (previous.key === key && previous.status === 'in_progress' && status && status !== 'in_progress') {
-      if (selected) void queryClient.invalidateQueries({ queryKey: todoQueryKeys.list(selected.dir), exact: true });
-    }
-    previousDetail.current = { key, status };
-  }, [detail?.status, queryClient, selected]);
-
   // Resolve a deep link independently of the batch. The global query accepts a
   // canonical ID, short ID, session ID, or imported alias; seed its canonical
   // workspace query so adopting the selection does not issue a duplicate read.
@@ -323,26 +310,22 @@ export function useWorkspaceTodos(
     setShowCreate(false);
     setTodoQueryData(queryClient, dir, todo);
     select({ dir, ref: todo.ref });
-    refresh();
-  }, [queryClient, refresh, select]);
+  }, [queryClient, select]);
 
   const updateItem = useCallback((todo: TodoItem) => {
     if (selected) setTodoQueryData(queryClient, selected.dir, todo);
-    refresh();
-  }, [queryClient, refresh, selected]);
+  }, [queryClient, selected]);
 
   const deleted = useCallback(() => {
     select(null);
-    refresh();
-  }, [refresh, select]);
+  }, [select]);
 
   // A transferred todo now lives in the target workspace: follow it there so the
   // detail pane keeps showing it after the move (the source list loses it).
   const transferred = useCallback((toDir: string, todo: TodoItem) => {
     setTodoQueryData(queryClient, toDir, todo);
     select({ dir: toDir, ref: todo.ref });
-    refresh();
-  }, [queryClient, refresh, select]);
+  }, [queryClient, select]);
 
   // This object is the todos data layer: App threads it as a prop into the
   // toolbar, the sidebar list, the detail pane and every navbar control. A

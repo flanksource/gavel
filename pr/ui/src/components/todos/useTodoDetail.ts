@@ -42,14 +42,10 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   const closed = todo?.status === 'completed';
   const body = todo?.body?.trim() ?? '';
   const events = todo?.events ?? [];
-  // One attempts poll feeds both tab badges and the Verification tab, so a
-  // failed check is visible before the tab is ever opened. It keeps polling
-  // while the tab is closed, just more slowly.
   const { detail: verificationDetail, error: verificationError } = useTodoSessionDetail(
     dir,
     todo?.ref ?? '',
     !!todo?.ref,
-    { intervalMs: tab === 'verification' ? 1500 : 15000 }
   );
   const sessionAttemptCount = verificationDetail?.attempts.length ?? 0;
   const verification = verificationBadge(verificationAttempts(verificationDetail));
