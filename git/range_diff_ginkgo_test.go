@@ -51,6 +51,18 @@ var _ = Describe("RangeDiffStat", func() {
 		Expect(gavelgit.RangeDiffStat(dir, head, head)).To(Equal(gavelgit.DiffStat{}))
 	})
 
+	It("keeps asset file counts while excluding their lines from a range", func() {
+		base := commit("main.go", "package main\n", "chore: base")
+		commit("image.svg", "<svg>\n</svg>\n", "feat: image")
+		commit("report.pdf", "%PDF-1.7\nbody\n", "feat: report")
+		commit("blob.go", "\x00binary\nbytes\n", "feat: binary")
+		head := commit("main.go", "package main\nfunc main() {}\n", "feat: main")
+
+		Expect(gavelgit.RangeDiffStat(dir, base, head)).To(Equal(gavelgit.DiffStat{
+			Commits: 4, Files: 4, Adds: 1,
+		}))
+	})
+
 	It("fails when a sha is not in the repository", func() {
 		head := commit("a.txt", "a\n", "feat: a")
 		_, err := gavelgit.RangeDiffStat(dir, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", head)

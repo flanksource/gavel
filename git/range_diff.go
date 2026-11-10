@@ -7,11 +7,13 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/flanksource/gavel/internal/linecounts"
 )
 
 // DiffStat is the change footprint of a run's work: the commits it made, and
 // the files and lines they changed. Files counts each touched path once;
-// Adds/Dels exclude binary files (git reports "-" for those).
+// Adds/Dels exclude binary files and non-SLOC assets.
 type DiffStat struct {
 	Commits int `json:"commits"`
 	Files   int `json:"files"`
@@ -46,12 +48,12 @@ func RangeDiffStat(path, from, to string) (DiffStat, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(numstat))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		adds, dels, _, isBinary, ok := parseNumstatLine(scanner.Text())
+		adds, dels, file, isBinary, ok := parseNumstatLine(scanner.Text())
 		if !ok {
 			continue
 		}
 		stat.Files++
-		if !isBinary {
+		if !isBinary && linecounts.Supported(file) {
 			stat.Adds += adds
 			stat.Dels += dels
 		}

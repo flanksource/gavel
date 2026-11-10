@@ -199,6 +199,7 @@ function SelectionCheckbox({ label, checked, partial, disabled, onChange }: {
 }
 
 function DiffSummary({ file }: { file: ProjectFileStatus }) {
+  if (file.adds === 0 && file.dels === 0) return null;
   return (
     <span className="flex shrink-0 gap-1 text-[11px]">
       <span className="text-green-600">+{file.adds}</span>
