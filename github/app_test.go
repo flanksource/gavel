@@ -84,6 +84,28 @@ func (f *fakeGitHubApp) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"id": 42, "account": map[string]any{"login": "acme", "id": 7, "type": "Organization"}}) //nolint:errcheck
+	case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+		if !f.appJWT(r) || r.URL.Query().Get("per_page") != "100" {
+			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+			return
+		}
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		installs := []map[string]any{}
+		for i := (page - 1) * 100; i < 130 && i < page*100; i++ {
+			install := map[string]any{"id": 6000 + i, "account": map[string]any{"login": fmt.Sprintf("org%d", i), "id": i, "type": "Organization"},
+				"created_at": "2026-10-01T09:00:00Z", "suspended_at": nil}
+			if i == 1 {
+				install["suspended_at"] = "2026-11-01T10:00:00Z"
+			}
+			installs = append(installs, install)
+		}
+		json.NewEncoder(w).Encode(installs) //nolint:errcheck
+	case r.Method == http.MethodGet && r.URL.Path == "/rate_limit":
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ghs_") {
+			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{"core": map[string]any{"limit": 5000, "remaining": 4990, "used": 10, "reset": 1762780000}}}) //nolint:errcheck
 	case r.Method == http.MethodGet && r.URL.Path == "/user/installations":
 		if r.Header.Get("Authorization") != "Bearer ghu_ada" {
 			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
@@ -168,6 +190,35 @@ func TestAppInstallationAndRepos(t *testing.T) {
 	require.Len(t, repos, 250, "every page is read")
 	assert.Equal(t, InstallationRepo{ID: 1000, FullName: "acme/repo-0", Private: true, DefaultBranch: "main"}, repos[0])
 	assert.Equal(t, "acme/repo-249", repos[249].FullName)
+}
+
+func TestAppInstallations(t *testing.T) {
+	fake := newFakeGitHubApp(t, 0)
+	app, err := LoadApp(123, "gavel", writeAppKey(t, fake.key))
+	require.NoError(t, err)
+
+	installations, err := app.Installations(context.Background())
+	require.NoError(t, err)
+	require.Len(t, installations, 130, "every page")
+	created := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	assert.Equal(t, AppInstallation{Installation: Installation{ID: 6000, Account: InstallationAccount{Login: "org0", ID: 0, Type: "Organization"}}, CreatedAt: created}, installations[0])
+	require.NotNil(t, installations[1].SuspendedAt, "a suspended installation")
+	assert.Equal(t, time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC), *installations[1].SuspendedAt)
+	assert.Equal(t, int64(6129), installations[129].ID)
+}
+
+func TestAppInstallationRateLimit(t *testing.T) {
+	fake := newFakeGitHubApp(t, 0)
+	app, err := LoadApp(123, "gavel", writeAppKey(t, fake.key))
+	require.NoError(t, err)
+
+	limit, err := app.InstallationRateLimit(context.Background(), 42)
+	require.NoError(t, err)
+	assert.Equal(t, RateLimit{Limit: 5000, Remaining: 4990, Used: 10, Reset: 1762780000, Resource: "core"}, limit)
+
+	_, err = app.InstallationRateLimit(context.Background(), 41)
+	require.Error(t, err, "no token for an unknown installation")
+	assert.Contains(t, err.Error(), "installation 41")
 }
 
 func TestLoadAppRejectsBadKeys(t *testing.T) {
