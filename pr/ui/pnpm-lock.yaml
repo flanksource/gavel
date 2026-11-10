@@ -48,6 +48,9 @@ catalogs:
     react-grab:
       specifier: ^0.1.47
       version: 0.1.47
+    recharts:
+      specifier: ^3.8.1
+      version: 3.8.1
     streamdown:
       specifier: ^2.5.0
       version: 2.5.0
@@ -108,6 +111,9 @@ importers:
       react-dom:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
+      recharts:
+        specifier: 'catalog:'
+        version: 3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@17.0.2)(react@19.2.7)(redux@5.0.1)
       streamdown:
         specifier: 'catalog:'
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(supports-color@8.1.1)
