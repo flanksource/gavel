@@ -2,11 +2,50 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/flanksource/gavel/api/clerktest"
 )
+
+func TestOrganizations(t *testing.T) {
+	clerk := clerktest.New(t, "cli", clerktest.User{ID: "user_123"})
+	created := time.UnixMilli(1760000000123).UTC()
+	var want []ClerkOrganization
+	for i := range 150 {
+		o := clerktest.Organization{ID: fmt.Sprintf("org_%d", i), Slug: fmt.Sprintf("team-%d", i), Name: fmt.Sprintf("Team %d", i), Members: i, CreatedAt: created}
+		clerk.Organizations = append(clerk.Organizations, o)
+		want = append(want, ClerkOrganization{ID: o.ID, Slug: o.Slug, Name: o.Name, Members: i, CreatedAt: created})
+	}
+	backend := ClerkOrganizations{SecretKey: clerktest.SecretKey, HTTPClient: clerk.BackendClient()}
+	ctx := context.Background()
+
+	got, err := backend.Organizations(ctx)
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("got %d organizations, %v", len(got), err)
+	}
+	wantRequests := []string{
+		"GET /v1/organizations?include_members_count=true&limit=100&offset=0",
+		"GET /v1/organizations?include_members_count=true&limit=100&offset=100",
+	}
+	if requests := clerk.BackendRequests(); !slices.Equal(requests, wantRequests) {
+		t.Fatalf("requests: %v", requests)
+	}
+
+	clerk.Organizations = nil
+	if got, err := backend.Organizations(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("no organizations: %v, %v", got, err)
+	}
+	wrongKey := ClerkOrganizations{SecretKey: "sk_test_wrong", HTTPClient: clerk.BackendClient()}
+	if _, err := wrongKey.Organizations(ctx); err == nil || !strings.Contains(err.Error(), "check the Clerk secret key") || strings.Contains(err.Error(), "sk_test_wrong") {
+		t.Fatalf("wrong key: %v", err)
+	}
+}
 
 type organizationTransport func(*http.Request) (*http.Response, error)
 
