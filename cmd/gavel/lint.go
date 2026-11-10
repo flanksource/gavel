@@ -205,13 +205,12 @@ func runLint(opts LintOptions) (any, error) {
 	return lintRunReturnValue(snap, opts), nil
 }
 
-// lintExitCode is 1 when a linter that ran reported violations or failed to
-// run (including timeouts), so CI fails on lint whether or not --ui is set.
+// lintExitCode is 1 when a linter that ran reported an error-severity
+// violation or failed to run (including timeouts), so CI fails on lint whether
+// or not --ui is set. Warnings and info stay amber, matching the report verdict.
 func lintExitCode(results []*linters.LinterResult) int {
-	for _, lr := range results {
-		if lr != nil && !lr.Skipped && (!lr.Success || len(lr.Violations) > 0) {
-			return 1
-		}
+	if linters.HasFailures(results) {
+		return 1
 	}
 	return 0
 }
