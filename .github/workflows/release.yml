@@ -39,6 +39,7 @@ jobs:
         run: |
           task test-ui
           task pr-ui
+          task editor-ui
 
       - uses: flanksource/deps@v1.0.46
         with:
@@ -63,7 +64,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f testrunner/ui/dist/testui.js testrunner/ui/dist/chunks pr/ui/dist/prui.js pr/ui/dist/prui.css pr/ui/dist/chunks
+          git add -f testrunner/ui/dist/testui.js testrunner/ui/dist/chunks pr/ui/dist/prui.js pr/ui/dist/prui.css pr/ui/dist/chunks editor/ui/dist
           if ! git diff --cached --quiet; then
             git commit -m "chore(embed): rebuild UI bundles for $next"
           fi

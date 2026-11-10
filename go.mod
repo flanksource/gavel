@@ -28,6 +28,7 @@ require (
 	github.com/flanksource/commons-db/tracing v0.1.67
 	github.com/flanksource/deps v1.0.49
 	github.com/flanksource/deps/start v0.0.0-20261020081806-49e7d4bacc50
+	github.com/flanksource/gavel/sdk v0.1.0
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/repomap v0.4.1
 	github.com/fsnotify/fsnotify v1.10.1
@@ -411,7 +412,7 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.4 // indirect
-	gocloud.dev v0.46.0 // indirect
+	gocloud.dev v0.46.0
 	golang.org/x/exp v0.0.0-20260527015227-08cc5374adb3 // indirect
 	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
 	golang.org/x/text v0.43.0 // indirect
@@ -445,3 +446,7 @@ require (
 )
 
 replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite v0.0.0-20240426202654-00ed082c0311
+
+// The sdk submodule lives in this repository; modules depending on gavel
+// resolve its sdk/vX tag instead.
+replace github.com/flanksource/gavel/sdk => ./sdk

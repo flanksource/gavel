@@ -13,19 +13,34 @@ task fmt         # format code
 task ci          # fmt + lint + test + build
 ```
 
+## Local editor frontend
+
+The editor uses `@flanksource/clicky-ui` from the sibling `../clicky-ui/packages/ui` checkout through a `workspace:*` dependency. Vite and TypeScript resolve the package's built exports. Build Clicky UI after changing its source.
+
+From the Gavel repository root, `make build` builds the local Clicky UI package, installs frontend dependencies, and embeds the editor assets in `.bin/gavel`. The sibling checkout is required; installation fails when it is absent.
+
+For frontend-only checks after Clicky UI has been built:
+
+```sh
+corepack pnpm --dir editor/ui install --frozen-lockfile
+corepack pnpm --dir editor/ui run check
+corepack pnpm --dir editor/ui test
+corepack pnpm --dir editor/ui run build
+```
+
 ## Documentation application
 
 ```bash
 cd docs
-npm install
+npm ci
 npm run dev          # http://localhost:5190
 npm run build        # type-check + production build into dist/
-npm run preview      # serve the built bundle
+npm run preview      # serve static pages at http://localhost:5190
 npm run test         # vitest unit tests
-npm run test:e2e     # playwright end-to-end
+npm run lint         # TypeScript checks
 ```
 
-Documentation lives in `docs/content/docs/**/*.mdx`; frontmatter `parent` creates the sidebar hierarchy and `order` sorts siblings. Filenames determine public slugs, including in nested folders. Parents must name an existing doc slug; missing parents, duplicates, and cycles fail validation. Parent pages list their children from the same metadata. Dedicated pages cover every framework, linter, and registered fixture kind. The configuration reference imports the canonical root `gavel.schema.json`, and fixture references use `docs/src/data/fixtures.schema.json`; service-entry definitions are included in the generated fixture bundle. Vite emits schema downloads from the same imports. `SchemaReference` from `@flanksource/clicky-ui/data` renders expandable objects, array items, maps, variants, constraints, and referenced types.
+The documentation application uses Rspress 2 and requires Node.js 22.12 or newer. `docs/rspress.config.ts` owns site configuration, search, and routing. Documentation lives in `docs/content/docs/**/*.mdx`; frontmatter `parent` creates the sidebar hierarchy and `order` sorts siblings. Service guides retain filename-based `/docs/service-*` URLs despite their nested source directory. Parents must name an existing doc slug; missing parents, duplicates, and cycles fail validation. Parent pages list their children through Rspress page metadata. Dedicated pages cover every framework, linter, and registered fixture kind. The configuration reference imports the canonical root `gavel.schema.json`, and fixture references use `docs/src/data/fixtures.schema.json`; service-entry definitions are included in the generated fixture bundle. Rspress emits schema downloads from the same imports. `SchemaViewer` from `@flanksource/clicky-ui/data` renders expandable objects, array items, maps, variants, constraints, and referenced types.
 
 When fixture kinds or command options change, regenerate the fixture bundle from the checked-out source. From the repository root:
 
@@ -35,15 +50,15 @@ go run ./cmd/gavel fixtures --schema > docs/src/data/fixtures.schema.json
 
 Regenerate `gavel.schema.json` using the repository's existing `go generate .` workflow when its configuration schema changes. Do not hand-edit either generated JSON artifact.
 
-The downloadable Markdown, YAML, and JSON smoke fixtures under `public/examples/` are runnable without a database, AI runtime, or network service. From the repository root:
+The downloadable Markdown, YAML, and JSON smoke fixtures under `docs/content/public/examples/` are runnable without a database, AI runtime, or network service. From the repository root:
 
 ```bash
-gavel fixtures docs/public/examples/smoke.fixture.md docs/public/examples/smoke.fixture.yaml docs/public/examples/smoke.fixture.json
+gavel fixtures docs/content/public/examples/smoke.fixture.md docs/content/public/examples/smoke.fixture.yaml docs/content/public/examples/smoke.fixture.json
 ```
 
 From `docs/`, run `npm run test` and `npm run build` to validate the documentation loader, schema rendering, TypeScript, and MDX compilation. Use `agent-browser` against the local development or preview server to check navigation, schema links/downloads, and table layout.
 
-Documentation screenshots and screencasts live in `public/media/`. Capture browser UI with `agent-browser`, use a replayed run for stable examples, and inspect the output for machine-specific paths or credentials before linking it from MDX.
+Documentation screenshots and screencasts live in `docs/content/public/media/`. Capture browser UI with `agent-browser`, use a replayed run for stable examples, and inspect the output for machine-specific paths or credentials before linking it from MDX.
 
 ## Website environment and deployment
 
@@ -111,6 +126,7 @@ field is left undocumented.
 - `testrunner/ui/` — the React/Vite test-runner dashboard, published as `@flanksource/gavel` (subpath
   export `./testrunner`). It produces **two** build outputs: `dist/testui.js` (the `//go:embed`-ed
   single bundle) and `dist/lib/*` (the consumable library: `index.js`, `testrunner.js`, `.d.ts`).
+- `fixtures/` — the fixture runner; `fixtures/kinds/*` and `fixtures/types/` are the step kinds. A kind records what its run produced on its `*fixtures.StepContext` as it goes: `Stdout()`/`Stderr()` for output (a process's pipes, a SQL program's PRINT messages), `SetDetail(key, value)` for structured detail the UI renders (a query step's `query` record), `SetCommand(command, cwd)` and `Progress(done, total)`. Each call is kept for the result, streamed to the live progress node, and mirrored onto the step's clicky task when it runs as one (the Runner's per-fixture tasks; `RunNodes` has none). The runner folds the record into every attempt's result, whether `Execute` returned an error or not, filling only what the kind left empty — so a kind does not rebuild its evidence on an error path.
 - `models/`, `linters/`, `service/`, `serve/`, `status/`, `cmd/`, `ai/`, `docs/` — data model, lint
   adapters, server, status reporting, CLI, AI helpers, and the landing site.
 
@@ -217,7 +233,7 @@ The full commit suite has four unrelated model-alias expectation failures. Concu
 
 ## Session architecture snapshot
 
-The following planning snapshot predates session unification. Defects, source line numbers, and proposed work describe that snapshot and require source verification before implementation. See the [rendered diagram](docs/public/diagrams/SessionDataModel.html) and [diagram source](docs/diagrams/SessionDataModel.tsx).
+The following planning snapshot predates session unification. Defects, source line numbers, and proposed work describe that snapshot and require source verification before implementation. See the [rendered diagram](docs/content/public/diagrams/SessionDataModel.html) and [diagram source](docs/diagrams/SessionDataModel.tsx).
 
 How a session travels from an agent process to the gavel Session tab, across captain's storage and projection layers.
 
@@ -358,9 +374,9 @@ The dashboard initializes its TODO workspace catalog before opening HTTP. Local 
 
 `GET /api/todos/changes` publishes workspace IDs and separate TODO, label and configuration generations through the existing `/api/events` hub. PostgreSQL notifications arrive after commit. The service fingerprints displayed state, coalesces bursts and changes the epoch after a listener reconnect, allowing clients to catch up without a polling fallback. Stream failures are visible errors. The heartbeat reads only the in-memory generation snapshot.
 
-React Query caches each workspace separately with indefinite freshness and batches concurrent reads through `POST /api/todos/batch`. A generation change invalidates the affected resource and waits for any in-flight read before scheduling another read. Configuration generations invalidate the scoped run catalog independently of session usage. Account or organization switches cancel and discard their QueryClient. List clocks tick locally; transcript streaming remains independent.
+React Query caches the todo list with indefinite freshness as a single query, `GET /api/todos?exclude=hidden-projects`, which returns one flat, database-only list across every workspace except those in the user's `hidden-projects` filter; the client groups it by each item's `dir`. A generation change invalidates the affected resource (the flat list is invalidated by any workspace's change) and waits for any in-flight read before scheduling another read. Configuration generations invalidate the scoped run catalog independently of session usage. Account or organization switches cancel and discard their QueryClient. List clocks tick locally; transcript streaming remains independent.
 
-The focused startup and query-bound regression is `go test -race ./pr/ui -run '^TestUI$' -ginkgo.focus='workspace startup and invalidation|workspace change API schema|todo batch API'`. It checks committed changes, rollback, catalog/config reloads and bounded, read-only batch queries against disposable PostgreSQL.
+The focused startup and query-bound regression is `go test -race ./pr/ui -run '^TestUI$' -ginkgo.focus='workspace startup and invalidation|workspace change API schema|todo org list API'`. It checks committed changes, rollback, catalog/config reloads, and the bounded, read-only queries of the flat `GET /api/todos?exclude=hidden-projects` list against disposable PostgreSQL.
 
 - `--dev` serves a UI from its Vite dev server instead of the bundle embedded in the binary, so source edits show up on a browser refresh. `gavel test --ui --dev`, `gavel fixtures --ui --dev` and `gavel ui serve --dev` start `pnpm dev` in `testrunner/ui` on port 5275, and `gavel pr list --ui --dev` / `gavel serve --dev` do the same in `pr/ui` on port 5273. A dev server already running on the port is reused. The Go server keeps every `/api/*` route and proxies everything else to Vite. It needs a source checkout of gavel, run from inside it, with the UI's `pnpm install` done.
 - In dev mode, `@flanksource/clicky-ui` resolves from the sibling checkout's source (`../clicky-ui/packages/ui/src`) when that checkout exists, so clicky-ui edits show up on a refresh too. The aliases follow the sibling's `package.json` exports. Its stylesheets come from the sibling's `dist/`, so build it once (`task clicky-ui:build`). `GAVEL_UI_WATCH_CLICKY=0` keeps resolving the sibling's source but stops watching it.

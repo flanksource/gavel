@@ -44,6 +44,12 @@ jobs:
       - name: Build gavel
         run: task build:prod
 
+      - name: Check editor frontend
+        working-directory: editor/ui
+        run: |
+          pnpm run check
+          pnpm test
+
       # Node + TypeScript for the jest/vitest/playwright test frameworks and
       # the tsc lint check live in these UI projects' devDependencies.
       - name: Install test runner dependencies
