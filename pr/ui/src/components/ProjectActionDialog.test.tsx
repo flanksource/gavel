@@ -42,6 +42,26 @@ function renderAction(action: ProjectAction, modelFailures = 0) {
 }
 
 describe('ProjectActionDialog sparse v2 options', () => {
+  it('inherits precommit configuration after clearing an override', async () => {
+    const view = renderAction('commit');
+    const choices = within(await screen.findByRole('radiogroup', { name: 'Precommit checks' }));
+    expect(choices.getByRole('radio', { name: 'Inherit' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(choices.getByRole('radio', { name: 'Fail' }));
+    fireEvent.click(choices.getByRole('radio', { name: 'Inherit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'] }));
+  });
+
+  it('remembers an explicitly selected prompt mode', async () => {
+    const view = renderAction('commit');
+    const choices = within(await screen.findByRole('radiogroup', { name: 'Precommit checks' }));
+    fireEvent.click(choices.getByRole('radio', { name: 'Prompt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], precommit: 'prompt' }));
+    view.reopen();
+    await waitFor(() => expect(within(screen.getByRole('radiogroup', { name: 'Precommit checks' })).getByRole('radio', { name: 'Prompt' }).getAttribute('aria-checked')).toBe('true'));
+  });
+
   it.each([
     { action: 'commit' as const, button: 'Commit selected', field: 'Commit message', expected: { files: ['one.go'] } },
     { action: 'lint' as const, button: 'Run lint', field: 'Files and directories', expected: { files: ['one.go'] } },

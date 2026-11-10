@@ -48,6 +48,11 @@ func (c *fakeCommitController) Control(_ context.Context, action clickytask.Cont
 }
 
 func newFakeCommitRuns(files ...string) *fakeCommitRuns {
+	originalCommit := executeProjectCommit
+	executeProjectCommit = func(_ *Server, ctx context.Context, dir string, args []string, group *clickytask.Group, opts ...clickytask.Option) clickytask.TypedTask[cexec.ExecResult] {
+		return executeProjectAction(ctx, dir, args, io.Discard, group, opts...)
+	}
+	DeferCleanup(func() { executeProjectCommit = originalCommit })
 	runs := &fakeCommitRuns{
 		gates:   map[string]chan struct{}{},
 		failing: map[string]bool{},

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
+	"io"
 )
 
 var _ = Describe("Commit repair configuration", func() {
@@ -33,7 +35,7 @@ var _ = Describe("Commit repair configuration", func() {
 	It("blocks the implicit -y repair when explicitly disabled", func() {
 		disabled := false
 		result := &commitpkg.Result{Lint: &commitpkg.LintGateResult{Violations: 1, Repair: verify.CommitLintConfig{AIFix: &disabled}}}
-		Expect(handleCommitLintFindings(GinkgoT().TempDir(), result, true)).To(Equal(lintFindingsBlocked))
+		Expect(handleCommitLintFindings(commitFeedback{Context: context.Background(), Output: io.Discard}, GinkgoT().TempDir(), result, true)).To(Equal(lintFindingsBlocked))
 	})
 	DescribeTable("rejects invalid repair configuration", func(options CommitOptions) {
 		_, err := commitRepairConfig(options, verify.CommitLintConfig{})

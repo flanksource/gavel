@@ -362,6 +362,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		return fixturesSchemaDocument()
 	})
 	srv.SetProjectActionOptionsProvider(projectActionCommandProvider{})
+	srv.SetProjectCommitRunner(runDashboardCommit)
 	launchService, err := newLaunchService(ctx, opts.LaunchRoot, opts.LaunchStore, opts.LaunchLocalRoots, 30*time.Second)
 	if err != nil {
 		return err

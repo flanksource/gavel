@@ -147,6 +147,7 @@ type Server struct {
 	// duplicate the CLI-owned fixture schema builder.
 	fixtureSchemaProvider        func() (any, error)
 	projectActionOptionsProvider ProjectActionOptionsProvider
+	projectCommitRunner          ProjectCommitRunner
 
 	// commitQueues holds one serialized commit queue per project so several
 	// selections can be committed back-to-back without overlapping git index

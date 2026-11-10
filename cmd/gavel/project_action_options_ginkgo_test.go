@@ -59,7 +59,7 @@ var _ = Describe("project action command options", func() {
 		Expect(properties).NotTo(HaveKey("fixup"))
 		Expect(properties).NotTo(HaveKey("since"))
 		Expect(properties).NotTo(HaveKey("work-dir"))
-		Expect(definition.Defaults).To(HaveKeyWithValue("precommit", "fail"))
+		Expect(definition.Defaults).NotTo(HaveKey("precommit"))
 		Expect(definition.Schema["description"]).To(ContainSubstring("selected project files"))
 
 		args, err := provider.Args("commit", map[string]any{
@@ -78,6 +78,12 @@ var _ = Describe("project action command options", func() {
 			"two.go",
 		}))
 	})
+
+	DescribeTable("preserves the selected precommit mode", func(mode string) {
+		args, err := provider.Args("commit", map[string]any{"files": []any{"one.go"}, "precommit": mode})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(args).To(Equal([]string{"--precommit=" + mode, "one.go"}))
+	}, Entry("inherit", ""), Entry("prompt", "prompt"), Entry("fail", "fail"), Entry("skip", "skip"))
 
 	It("rejects excluded, unknown, and invalid option values", func() {
 		_, err := provider.Args("lint", map[string]any{"fix": true})

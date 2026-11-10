@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -239,6 +240,28 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 }
 
 func runCommit(opts CommitOptions) (any, error) {
+	result, err := executeCommit(context.Background(), opts, os.Stderr)
+	for _, handled := range []error{
+		commitpkg.ErrNothingStaged, commitpkg.ErrSessionNoFiles, commitpkg.ErrGitIgnoreCancelled,
+		commitpkg.ErrLinkedDepsCancelled, commitpkg.ErrNothingToPush, commitpkg.ErrInteractiveWithCommitAll,
+		commitpkg.ErrInteractiveWithMessage, commitpkg.ErrBatchRequiresInteractive, commitpkg.ErrBatchWithSummary,
+		commitpkg.ErrInteractiveNonTTY, commitpkg.ErrInteractiveCancelled, commitpkg.ErrInteractiveEmpty,
+		commitpkg.ErrFilesWithInteractive, commitpkg.ErrFilesWithSince, commitpkg.ErrFilesWithFixup,
+		commitpkg.ErrFixupWithCommitAll, commitpkg.ErrFixupWithInteractive, commitpkg.ErrFixupWithMessage,
+		commitpkg.ErrFixupInvalidTarget, commitpkg.ErrFixupNoBase, commitpkg.ErrSinceInvalidRef,
+		commitpkg.ErrSincePushed, commitpkg.ErrSinceNeedsConfirm, commitpkg.ErrSinceWithMessage,
+		commitpkg.ErrSinceWithCommitAll, commitpkg.ErrSinceWithInteractive, commitpkg.ErrLintFindings,
+	} {
+		if errors.Is(err, handled) {
+			fmt.Fprintln(os.Stderr, err)
+			exitCode = 1
+			return nil, nil
+		}
+	}
+	return result, err
+}
+
+func executeCommit(ctx context.Context, opts CommitOptions, output io.Writer) (*commitpkg.Result, error) {
 	baseDir := opts.WorkDir
 	if baseDir == "" {
 		wd, err := getWorkingDir()
@@ -257,9 +280,7 @@ func runCommit(opts CommitOptions) (any, error) {
 
 	files, err := commitpkg.ResolveCommitFiles(workDir, baseDir, opts.Args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		exitCode = 1
-		return nil, nil
+		return nil, err
 	}
 
 	if opts.push, opts.pushMode, err = parsePushFlag(opts.Push); err != nil {
@@ -283,87 +304,25 @@ func runCommit(opts CommitOptions) (any, error) {
 	if err := runOptions.LoadAIConfig(); err != nil {
 		return nil, err
 	}
-	result, err := commitpkg.Run(context.Background(), runOptions)
+	result, err := commitpkg.Run(ctx, runOptions)
 	if result != nil && result.Lint != nil {
 		result.Lint.Repair, result.Lint.ConfigDir = repair, baseDir
 	}
 
 	if err != nil {
-		if errors.Is(err, commitpkg.ErrNothingStaged) {
-			fmt.Fprintln(os.Stderr, "nothing staged to commit")
-			exitCode = 1
-			return nil, nil
-		}
-		if errors.Is(err, commitpkg.ErrSessionNoFiles) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			exitCode = 1
-			return nil, nil
-		}
-		if errors.Is(err, commitpkg.ErrGitIgnoreCancelled) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			exitCode = 1
-			return nil, nil
-		}
-		if errors.Is(err, commitpkg.ErrLinkedDepsCancelled) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			exitCode = 1
-			return nil, nil
-		}
-		if errors.Is(err, commitpkg.ErrNothingToPush) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			exitCode = 1
-			return nil, nil
-		}
-		if errors.Is(err, commitpkg.ErrInteractiveWithCommitAll) ||
-			errors.Is(err, commitpkg.ErrInteractiveWithMessage) ||
-			errors.Is(err, commitpkg.ErrBatchRequiresInteractive) ||
-			errors.Is(err, commitpkg.ErrBatchWithSummary) ||
-			errors.Is(err, commitpkg.ErrInteractiveNonTTY) ||
-			errors.Is(err, commitpkg.ErrInteractiveCancelled) ||
-			errors.Is(err, commitpkg.ErrInteractiveEmpty) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			exitCode = 1
-			return nil, nil
-		}
-		if errors.Is(err, commitpkg.ErrFilesWithInteractive) ||
-			errors.Is(err, commitpkg.ErrFilesWithSince) ||
-			errors.Is(err, commitpkg.ErrFilesWithFixup) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			exitCode = 1
-			return nil, nil
-		}
-		if errors.Is(err, commitpkg.ErrFixupWithCommitAll) ||
-			errors.Is(err, commitpkg.ErrFixupWithInteractive) ||
-			errors.Is(err, commitpkg.ErrFixupWithMessage) ||
-			errors.Is(err, commitpkg.ErrFixupInvalidTarget) ||
-			errors.Is(err, commitpkg.ErrFixupNoBase) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			exitCode = 1
-			return nil, nil
-		}
 		if errors.Is(err, commitpkg.ErrSinceNoDuplicates) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			return nil, nil
-		}
-		if errors.Is(err, commitpkg.ErrSinceInvalidRef) ||
-			errors.Is(err, commitpkg.ErrSincePushed) ||
-			errors.Is(err, commitpkg.ErrSinceNeedsConfirm) ||
-			errors.Is(err, commitpkg.ErrSinceWithMessage) ||
-			errors.Is(err, commitpkg.ErrSinceWithCommitAll) ||
-			errors.Is(err, commitpkg.ErrSinceWithInteractive) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			exitCode = 1
+			fmt.Fprintln(output, err.Error())
 			return nil, nil
 		}
 		if errors.Is(err, commitpkg.ErrLintFindings) {
-			outcome := handleCommitLintFindings(workDir, result, opts.Yes)
+			outcome := handleCommitLintFindings(commitFeedback{Context: ctx, Output: output}, workDir, result, opts.Yes)
 			switch outcome {
 			case lintFindingsContinueOnce:
 				retry := runOptions
 				retry.LintFlag = "false"
 				retry.LintSecretsFlag = "false"
 				logger.Infof("lint: continuing this commit with lint gate disabled (one-time bypass)")
-				retryResult, retryErr := commitpkg.Run(context.Background(), retry)
+				retryResult, retryErr := commitpkg.Run(ctx, retry)
 				if retryErr != nil {
 					return retryResult, retryErr
 				}
@@ -371,14 +330,13 @@ func runCommit(opts CommitOptions) (any, error) {
 			case lintFindingsAIFixed:
 				retry := runOptions
 				logger.Infof("lint: ai-fix applied edits; re-running commit with lint gate enabled")
-				retryResult, retryErr := commitpkg.Run(context.Background(), retry)
+				retryResult, retryErr := commitpkg.Run(ctx, retry)
 				if retryErr != nil {
 					return retryResult, retryErr
 				}
 				return retryResult, nil
 			default:
-				exitCode = 1
-				return nil, nil
+				return result, err
 			}
 		}
 		return result, err
@@ -408,9 +366,9 @@ const (
 // (one-time bypass, no .gavel.yaml change), or cancel. Returns
 // lintFindingsContinueOnce when the caller should retry the commit with the
 // lint gate disabled; otherwise returns lintFindingsBlocked.
-func handleCommitLintFindings(workDir string, result *commitpkg.Result, assumeYes bool) lintFindingsOutcome {
+func handleCommitLintFindings(feedback commitFeedback, workDir string, result *commitpkg.Result, assumeYes bool) lintFindingsOutcome {
 	if result == nil || result.Lint == nil {
-		fmt.Fprintln(os.Stderr, "commit blocked: lint reported violations")
+		fmt.Fprintln(feedback.Output, "commit blocked: lint reported violations")
 		return lintFindingsBlocked
 	}
 	for _, lr := range result.Lint.Results {
@@ -418,24 +376,24 @@ func handleCommitLintFindings(workDir string, result *commitpkg.Result, assumeYe
 			continue
 		}
 		for _, v := range lr.Violations {
-			fmt.Fprintln(os.Stderr, formatCommitLintViolation(lr.Linter, v))
+			fmt.Fprintln(feedback.Output, formatCommitLintViolation(lr.Linter, v))
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\ncommit blocked: %d lint violation(s)\n", result.Lint.Violations)
+	fmt.Fprintf(feedback.Output, "\ncommit blocked: %d lint violation(s)\n", result.Lint.Violations)
 
 	if result.Lint.Repair.AIFix != nil && !*result.Lint.Repair.AIFix && assumeYes {
 		return lintFindingsBlocked
 	}
 	if assumeYes || result.Lint.Repair.AIFix != nil && *result.Lint.Repair.AIFix {
-		return runCommitAIFix(workDir, result)
+		return runCommitAIFix(feedback, workDir, result)
 	}
 
-	switch promptLintFindingsAction() {
+	switch feedback.lintAction() {
 	case lintActionAIFix:
 		if result.Lint.Repair.AIFix != nil && !*result.Lint.Repair.AIFix {
 			return lintFindingsBlocked
 		}
-		return runCommitAIFix(workDir, result)
+		return runCommitAIFix(feedback, workDir, result)
 	case lintActionContinueOnce:
 		return lintFindingsContinueOnce
 	case lintActionCancel:
@@ -444,7 +402,7 @@ func handleCommitLintFindings(workDir string, result *commitpkg.Result, assumeYe
 
 	newRules, triageErr := runTriage(result.Lint.Results, workDir)
 	if triageErr != nil {
-		fmt.Fprintf(os.Stderr, "triage failed: %v\n", triageErr)
+		fmt.Fprintf(feedback.Output, "triage failed: %v\n", triageErr)
 		return lintFindingsBlocked
 	}
 	if len(newRules) == 0 {
@@ -453,15 +411,15 @@ func handleCommitLintFindings(workDir string, result *commitpkg.Result, assumeYe
 	cfgPath := filepath.Join(workDir, ".gavel.yaml")
 	repoCfg, err := verify.LoadSingleGavelConfig(cfgPath)
 	if err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "failed to read %s: %v\n", cfgPath, err)
+		fmt.Fprintf(feedback.Output, "failed to read %s: %v\n", cfgPath, err)
 		return lintFindingsBlocked
 	}
 	repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRules...)
 	if err := verify.SaveGavelConfig(workDir, repoCfg); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save %s: %v\n", cfgPath, err)
+		fmt.Fprintf(feedback.Output, "failed to save %s: %v\n", cfgPath, err)
 		return lintFindingsBlocked
 	}
-	fmt.Fprintf(os.Stderr, "Saved %d new ignore rule(s) to %s. Re-run `gavel commit` to retry.\n", len(newRules), cfgPath)
+	fmt.Fprintf(feedback.Output, "Saved %d new ignore rule(s) to %s. Re-run `gavel commit` to retry.\n", len(newRules), cfgPath)
 	return lintFindingsBlocked
 }
 

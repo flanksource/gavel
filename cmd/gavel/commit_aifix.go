@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/commons/logger"
@@ -18,24 +17,24 @@ import (
 // runCommitAIFix is the lintActionAIFix branch of handleCommitLintFindings.
 // It resolves commit.fix independently from commit.message and checks the
 // original scope and gates after each repair. Residual findings block the commit.
-func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcome {
+func runCommitAIFix(feedback commitFeedback, workDir string, result *commitpkg.Result) lintFindingsOutcome {
 	if result == nil || result.Lint == nil {
-		fmt.Fprintln(os.Stderr, "ai-fix: no lint result to operate on")
+		fmt.Fprintln(feedback.Output, "ai-fix: no lint result to operate on")
 		return lintFindingsBlocked
 	}
 
 	if len(uniqueViolationFiles(result.Lint.Results)) == 0 {
-		fmt.Fprintln(os.Stderr, "ai-fix: no files reported violations")
+		fmt.Fprintln(feedback.Output, "ai-fix: no files reported violations")
 		return lintFindingsBlocked
 	}
 	files := result.Lint.Files
 	if len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "ai-fix: original commit lint scope is missing")
+		fmt.Fprintln(feedback.Output, "ai-fix: original commit lint scope is missing")
 		return lintFindingsBlocked
 	}
 
 	requested := commitGateRequest(result.Lint.Gates)
-	ctx := context.Background()
+	ctx := feedback.Context
 
 	configDir := result.Lint.ConfigDir
 	if configDir == "" {
@@ -43,18 +42,18 @@ func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcom
 	}
 	gavelCfg, err := verify.LoadGavelConfig(configDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
+		fmt.Fprintf(feedback.Output, "ai-fix: %v\n", err)
 		return lintFindingsBlocked
 	}
 	saved, _, err := captainconfig.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
+		fmt.Fprintf(feedback.Output, "ai-fix: %v\n", err)
 		return lintFindingsBlocked
 	}
 	runtime := lintFixRuntime{Prompt: aifix.ResolveOptions{Name: prompts.CommitFix, Base: gavelCfg.AI, Prompt: gavelCfg.CommitFixSpec(), Dir: workDir, Linters: requested}, Runtime: defaultAIRuntimeOptions(), Saved: saved}
 	resolved, err := runtime.Resolve(result.Lint.Results)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
+		fmt.Fprintf(feedback.Output, "ai-fix: %v\n", err)
 		return lintFindingsBlocked
 	}
 	for _, warning := range resolved.Resolution.Warnings {
@@ -78,11 +77,11 @@ func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcom
 		OnEvent: renderer.Handle,
 	})
 	if runErr := errors.Join(err, renderer.Flush()); runErr != nil {
-		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", runErr)
+		fmt.Fprintf(feedback.Output, "ai-fix: %v\n", runErr)
 		return lintFindingsBlocked
 	}
 
-	fmt.Fprintf(os.Stderr, "ai-fix: stop=%s iterations=%d cost=$%.4f\n",
+	fmt.Fprintf(feedback.Output, "ai-fix: stop=%s iterations=%d cost=$%.4f\n",
 		fixRes.StopReason, fixRes.Iterations, fixRes.TotalCostUSD)
 
 	residual := countViolations(fixRes.FinalResults)
@@ -90,13 +89,13 @@ func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcom
 		return lintFindingsAIFixed
 	}
 
-	fmt.Fprintf(os.Stderr, "ai-fix: %d residual violation(s) remain\n", residual)
+	fmt.Fprintf(feedback.Output, "ai-fix: %d residual violation(s) remain\n", residual)
 	for _, lr := range fixRes.FinalResults {
 		if lr == nil || lr.Skipped {
 			continue
 		}
 		for _, v := range lr.Violations {
-			fmt.Fprintln(os.Stderr, formatCommitLintViolation(lr.Linter, v))
+			fmt.Fprintln(feedback.Output, formatCommitLintViolation(lr.Linter, v))
 		}
 	}
 

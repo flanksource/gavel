@@ -275,7 +275,7 @@ var _ = Describe("project git", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(queued).To(Equal(commitQueueRequest{
 				action: projectActionCommit, files: []string{"b.txt"}, worktree: f.worktree, workDir: f.worktree,
-				args: []string{"commit", "--work-dir", f.worktree, "--precommit=fail", "b.txt"},
+				args: []string{"commit", "--work-dir", f.worktree, "b.txt"},
 			}))
 			worktreeQueue, primaryQueue := server.projectCommitQueue(project, f.worktree), server.projectCommitQueue(project, f.repo)
 			Expect(worktreeQueue).NotTo(BeIdenticalTo(primaryQueue))

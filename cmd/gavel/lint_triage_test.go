@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,7 +91,7 @@ func TestHandleCommitLintFindings_ContinueOnce(t *testing.T) {
 		},
 	}
 
-	got := handleCommitLintFindings(repo, result, false)
+	got := handleCommitLintFindings(commitFeedback{Context: context.Background(), Output: io.Discard}, repo, result, false)
 	assert.Equal(t, lintFindingsContinueOnce, got)
 
 	// Continue-once must NOT write any rules to .gavel.yaml.
@@ -116,7 +118,7 @@ func TestHandleCommitLintFindings_Cancel(t *testing.T) {
 		},
 	}
 
-	got := handleCommitLintFindings(repo, result, false)
+	got := handleCommitLintFindings(commitFeedback{Context: context.Background(), Output: io.Discard}, repo, result, false)
 	assert.Equal(t, lintFindingsBlocked, got)
 
 	_, err := os.Stat(filepath.Join(repo, ".gavel.yaml"))
@@ -148,15 +150,15 @@ func TestHandleCommitLintFindings_AssumeYesSkipsPrompt(t *testing.T) {
 		},
 	}
 
-	got := handleCommitLintFindings(t.TempDir(), result, true)
+	got := handleCommitLintFindings(commitFeedback{Context: context.Background(), Output: io.Discard}, t.TempDir(), result, true)
 	assert.Equal(t, lintFindingsBlocked, got)
 }
 
 func TestHandleCommitLintFindings_NilResultBlocks(t *testing.T) {
-	got := handleCommitLintFindings(t.TempDir(), nil, false)
+	got := handleCommitLintFindings(commitFeedback{Context: context.Background(), Output: io.Discard}, t.TempDir(), nil, false)
 	assert.Equal(t, lintFindingsBlocked, got)
 
-	got = handleCommitLintFindings(t.TempDir(), &commitpkg.Result{Lint: nil}, false)
+	got = handleCommitLintFindings(commitFeedback{Context: context.Background(), Output: io.Discard}, t.TempDir(), &commitpkg.Result{Lint: nil}, false)
 	assert.Equal(t, lintFindingsBlocked, got)
 }
 
