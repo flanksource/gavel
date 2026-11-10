@@ -57,6 +57,27 @@ it('shows the headline figures and each organization\'s runs', async () => {
   expect(within(beta).getAllByRole('cell').map(cell => cell.textContent)).toEqual(['Beta', '1', '1', '1m', '2']);
 });
 
+it('gives each chart a table of its numbers, for readers who can\'t tell its colors apart', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-10T12:00:00Z'));
+  try {
+    response = { status: 200, body: usage };
+    render(<SandboxUsagePanel />, { wrapper: queryTestWrapper() });
+
+    const runs = await screen.findByRole('table', { name: 'Runs per day' });
+    expect(within(runs).getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['Day', 'Test', 'Lint', 'Push check', 'Agent run', 'Total']);
+    const cells = (day: string) => within(within(runs).getByRole('row', { name: new RegExp(`^${day}`) })).getAllByRole('cell').map(cell => cell.textContent);
+    expect(cells('2026-11-08')).toEqual(['2026-11-08', '3', '0', '0', '0', '3']);
+    expect(cells('2026-11-09'), 'a day without runs').toEqual(['2026-11-09', '0', '0', '0', '0', '0']);
+    expect(cells('2026-11-10')).toEqual(['2026-11-10', '0', '0', '0', '1', '1']);
+    const minutes = screen.getByRole('table', { name: 'Sandbox minutes per day' });
+    expect(within(within(minutes).getByRole('row', { name: /^2026-11-08/ })).getAllByRole('cell').map(cell => cell.textContent))
+      .toEqual(['2026-11-08', '4', '0', '0', '0', '4']);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it('says why the usage is missing', async () => {
   response = { status: 500, body: { error: 'read the platform\'s sandbox runs: connection refused' } };
   render(<SandboxUsagePanel />, { wrapper: queryTestWrapper() });
