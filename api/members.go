@@ -75,7 +75,7 @@ func (m *Members) ForSession(ctx context.Context, claims SessionClaims) (tenant.
 	if err != nil {
 		return tenant.Scope{}, fmt.Errorf("record the session's organization: %w", err)
 	}
-	return tenant.Scope{OrgID: orgID, UserID: &user.id, Role: claims.OrgRole, GitHubLogin: user.githubLogin}, nil
+	return user.scope(orgID, claims.OrgRole), nil
 }
 
 // MemberOrg is an organization a user belongs to, with their role in it.
@@ -131,7 +131,7 @@ func (m *Members) ForAccessToken(ctx context.Context, clerkUserID, selector stri
 		names = append(names, membership.selector())
 		if selector != "" && (selector == membership.selector() || selector == membership.ClerkOrgID) ||
 			selector == "" && len(memberships) == 1 {
-			return tenant.Scope{OrgID: membership.ID, UserID: &user.id, Role: membership.Role, GitHubLogin: user.githubLogin}, nil
+			return user.scope(membership.ID, membership.Role), nil
 		}
 	}
 	switch {
@@ -145,23 +145,30 @@ func (m *Members) ForAccessToken(ctx context.Context, clerkUserID, selector stri
 }
 
 type member struct {
-	id          uuid.UUID
-	githubLogin string
+	id            uuid.UUID
+	githubLogin   string
+	platformAdmin bool
+}
+
+// scope is the member acting in org with role.
+func (u member) scope(org uuid.UUID, role string) tenant.Scope {
+	return tenant.Scope{OrgID: org, UserID: &u.id, Role: role, GitHubLogin: u.githubLogin, PlatformAdmin: u.platformAdmin}
 }
 
 // user returns clerkUserID's gavel user, re-reading its profile and memberships from
 // Clerk when gavel has none or they are older than maxAge.
 func (m *Members) user(ctx context.Context, clerkUserID string) (member, error) {
 	var row struct {
-		ID          uuid.UUID
-		GitHubLogin *string `gorm:"column:github_login"`
+		ID            uuid.UUID
+		GitHubLogin   *string `gorm:"column:github_login"`
+		PlatformAdmin bool    `gorm:"column:platform_admin"`
 	}
-	if err := m.db.WithContext(ctx).Raw(`SELECT id, github_login FROM users WHERE issuer = ? AND clerk_user_id = ?`,
+	if err := m.db.WithContext(ctx).Raw(`SELECT id, github_login, platform_admin FROM users WHERE issuer = ? AND clerk_user_id = ?`,
 		m.issuer, clerkUserID).Scan(&row).Error; err != nil {
 		return member{}, fmt.Errorf("read the user: %w", err)
 	}
 	if row.ID != uuid.Nil && !m.stale(row.ID) {
-		user := member{id: row.ID}
+		user := member{id: row.ID, platformAdmin: row.PlatformAdmin}
 		if row.GitHubLogin != nil {
 			user.githubLogin = *row.GitHubLogin
 		}
@@ -189,12 +196,13 @@ func (m *Members) refresh(ctx context.Context, clerkUserID string) (member, erro
 	}
 	var user struct{ ID uuid.UUID }
 	if err := m.db.WithContext(ctx).Raw(`
-		INSERT INTO users (issuer, clerk_user_id, name, email, email_verified, github_login)
-		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''))
+		INSERT INTO users (issuer, clerk_user_id, name, email, email_verified, github_login, platform_admin)
+		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?)
 		ON CONFLICT (issuer, clerk_user_id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email,
-			email_verified = EXCLUDED.email_verified, github_login = EXCLUDED.github_login, updated_at = now()
+			email_verified = EXCLUDED.email_verified, github_login = EXCLUDED.github_login,
+			platform_admin = EXCLUDED.platform_admin, updated_at = now()
 		RETURNING id`,
-		m.issuer, clerkUserID, profile.Name, profile.Email, profile.EmailVerified, profile.GitHubLogin).Scan(&user).Error; err != nil {
+		m.issuer, clerkUserID, profile.Name, profile.Email, profile.EmailVerified, profile.GitHubLogin, profile.PlatformAdmin).Scan(&user).Error; err != nil {
 		return member{}, fmt.Errorf("record the user: %w", err)
 	}
 	if err := (IdentityStore{DB: m.db}).SyncMemberships(ctx, user.ID, memberships); err != nil {
@@ -203,5 +211,5 @@ func (m *Members) refresh(ctx context.Context, clerkUserID string) (member, erro
 	m.mu.Lock()
 	m.synced[user.ID] = time.Now()
 	m.mu.Unlock()
-	return member{id: user.ID, githubLogin: profile.GitHubLogin}, nil
+	return member{id: user.ID, githubLogin: profile.GitHubLogin, platformAdmin: profile.PlatformAdmin}, nil
 }

@@ -35,6 +35,13 @@ table "users" {
     null = true
     type = text
   }
+  # Whether the user's Clerk public_metadata.gavel_role is platform_admin, for the
+  # platform dashboard that reads every organization.
+  column "platform_admin" {
+    null = false
+    type = boolean
+    default = false
+  }
   column "created_at" {
     null = false
     type = timestamptz

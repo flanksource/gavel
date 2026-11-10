@@ -95,4 +95,13 @@ func TestClerkUser(t *testing.T) {
 	if got, err := backend.User(ctx, "user_123"); err != nil || got.GitHubLogin != "" {
 		t.Fatalf("user without GitHub: %+v, %v", got, err)
 	}
+
+	clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+	if got, err := backend.User(ctx, "user_123"); err != nil || !got.PlatformAdmin {
+		t.Fatalf("platform admin: %+v, %v", got, err)
+	}
+	clerk.User.PublicMetadata = map[string]any{"gavel_role": "viewer", "plan": "pro"}
+	if got, err := backend.User(ctx, "user_123"); err != nil || got.PlatformAdmin {
+		t.Fatalf("other gavel_role: %+v, %v", got, err)
+	}
 }

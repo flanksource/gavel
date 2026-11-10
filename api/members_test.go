@@ -134,6 +134,29 @@ func TestMembersFollowClerkAfterMaxAge(t *testing.T) {
 	assert.Equal(t, f.orgID(t, "org_a"), scope.OrgID)
 }
 
+// A platform admin is marked in the user's Clerk public metadata. The mark follows Clerk
+// like the rest of the profile, for browser sessions and CLI calls alike.
+func TestMembersCarryPlatformAdmin(t *testing.T) {
+	f := newMembersFixture(t, 300*time.Millisecond)
+	ctx := context.Background()
+
+	scope, err := f.members.ForAccessToken(ctx, "user_ada", "beta")
+	require.NoError(t, err)
+	assert.False(t, scope.PlatformAdmin, "no gavel_role in Clerk")
+
+	f.clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+	time.Sleep(400 * time.Millisecond)
+	scope, err = f.members.ForSession(ctx, api.SessionClaims{UserID: "user_ada", OrgID: "org_a", OrgSlug: "alpha", OrgRole: "org:member"})
+	require.NoError(t, err)
+	assert.True(t, scope.PlatformAdmin, "re-read from Clerk once stale")
+	requests := len(f.clerk.BackendRequests())
+
+	scope, err = f.members.ForAccessToken(ctx, "user_ada", "beta")
+	require.NoError(t, err)
+	assert.True(t, scope.PlatformAdmin, "kept between Clerk reads")
+	assert.Len(t, f.clerk.BackendRequests(), requests, "a known user needs no Clerk call")
+}
+
 func TestMembersReportsClerkFailures(t *testing.T) {
 	f := newMembersFixture(t, 5*time.Minute)
 	broken := api.NewMembers(f.db, api.ClerkOrganizations{SecretKey: "sk_test_wrong", HTTPClient: f.clerk.BackendClient()}, f.clerk.URL, time.Minute)
