@@ -36,6 +36,13 @@ type Membership struct {
 	OrgID, OrgSlug, OrgName, Role string
 }
 
+// Organization is one organization of the Clerk instance, as the Backend API lists it.
+type Organization struct {
+	ID, Slug, Name string
+	Members        int
+	CreatedAt      time.Time
+}
+
 // TB is the part of testing.TB the server uses, so Ginkgo's GinkgoT() works as well.
 type TB interface {
 	Helper()
@@ -69,6 +76,8 @@ type Server struct {
 	// Memberships and GitHubToken back the Backend API's user endpoints.
 	Memberships []Membership
 	GitHubToken string
+	// Organizations backs the Backend API's organization list.
+	Organizations []Organization
 
 	key       *rsa.PrivateKey
 	t         TB
@@ -301,6 +310,8 @@ func (s *Server) serveBackend(w http.ResponseWriter, r *http.Request) {
 		s.verifyAccessToken(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == userPath+"organization_memberships":
 		s.listMemberships(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/organizations":
+		s.listOrganizations(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == userPath+"oauth_access_tokens/oauth_github":
 		tokens := []map[string]any{}
 		if s.GitHubToken != "" {
@@ -391,6 +402,32 @@ func (s *Server) listMemberships(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, map[string]any{"data": data, "total_count": len(s.Memberships)})
+}
+
+// listOrganizations pages Organizations like listMemberships, with members_count only
+// when include_members_count=true, and created_at in Unix milliseconds, like Clerk.
+func (s *Server) listOrganizations(w http.ResponseWriter, r *http.Request) {
+	limit, offset := 10, 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, _ = strconv.Atoi(raw)
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		offset, _ = strconv.Atoi(raw)
+	}
+	if limit < 1 || limit > 500 || offset < 0 {
+		writeBackendError(w, http.StatusBadRequest)
+		return
+	}
+	data := []map[string]any{}
+	for i := offset; i < len(s.Organizations) && i < offset+limit; i++ {
+		o := s.Organizations[i]
+		org := map[string]any{"object": "organization", "id": o.ID, "slug": o.Slug, "name": o.Name, "created_at": o.CreatedAt.UnixMilli()}
+		if r.URL.Query().Get("include_members_count") == "true" {
+			org["members_count"] = o.Members
+		}
+		data = append(data, org)
+	}
+	writeJSON(w, map[string]any{"data": data, "total_count": len(s.Organizations)})
 }
 
 func writeBackendError(w http.ResponseWriter, status int) {
