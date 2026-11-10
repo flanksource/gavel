@@ -3,6 +3,7 @@
 import { GitHubPanel } from './GitHubPanel';
 import { InfrastructurePanel } from './InfrastructurePanel';
 import { SandboxUsagePanel } from './SandboxUsagePanel';
+import { SubstrateMetricsPanel } from './SubstrateMetricsPanel';
 import { TenantsPanel } from './TenantsPanel';
 
 export function PlatformView() {
@@ -10,6 +11,7 @@ export function PlatformView() {
     <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto p-4 text-sm">
       <TenantsPanel />
       <SandboxUsagePanel />
+      <SubstrateMetricsPanel />
       <GitHubPanel />
       <InfrastructurePanel />
     </div>
