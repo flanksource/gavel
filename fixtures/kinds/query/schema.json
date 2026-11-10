@@ -56,6 +56,13 @@
       "description": "The most rows read; a query with more reports truncated: true.",
       "type": "integer",
       "minimum": 1
+    },
+    "autoDiagnose": {
+      "description": "How long a statement runs before its server session (Postgres pg_stat_activity, SQL Server sys.dm_exec_requests) is sampled every 2s for state, CPU, IO, waits and blocking, streamed onto the step's query record under diagnose. Defaults to 10s; \"0s\" turns it off; -1 samples from the start. SQL Server needs VIEW SERVER STATE to see the session.",
+      "oneOf": [
+        { "type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$|^0$|^-1$" },
+        { "const": -1 }
+      ]
     }
   }
 }

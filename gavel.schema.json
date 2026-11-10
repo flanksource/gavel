@@ -650,6 +650,12 @@
         },
         "kubeconfig": {
           "$ref": "#/$defs/EnvVar"
+        },
+        "kubeconfigPath": {
+          "type": "string"
+        },
+        "kubecontext": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -3865,6 +3871,52 @@
           "default": false,
           "description": "Disable the betterleaks linter even when the binary is on PATH. Sticky: once true in any layer it stays true.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "slots": {
+      "additionalProperties": false,
+      "description": "Machine-wide limits for concurrent test, lint and fixture command subprocesses. Worktrees share a project pool identified by their absolute git common directory. Waiting is logged with pool holders and excluded from subprocess timeouts. With no slots configured, no locks are taken.",
+      "properties": {
+        "global": {
+          "description": "Maximum across all projects; read only from ~/.gavel.yaml. Project configuration cannot override it. A positive integer or a percentage (1% through 100%) of CPU cores, rounded down with a minimum of 1. Omit to leave this pool unlimited.",
+          "oneOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([1-9][0-9]*|([1-9]|[1-9][0-9]|100)%)$",
+              "type": "string"
+            }
+          ]
+        },
+        "project": {
+          "description": "Project's maximum, overriding the home projectDefault; it never bypasses the global pool. A positive integer or a percentage (1% through 100%) of CPU cores, rounded down with a minimum of 1. Omit to leave this pool unlimited.",
+          "oneOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([1-9][0-9]*|([1-9]|[1-9][0-9]|100)%)$",
+              "type": "string"
+            }
+          ]
+        },
+        "projectDefault": {
+          "description": "Default maximum per repository; read only from ~/.gavel.yaml. A positive integer or a percentage (1% through 100%) of CPU cores, rounded down with a minimum of 1. Omit to leave this pool unlimited.",
+          "oneOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "pattern": "^([1-9][0-9]*|([1-9]|[1-9][0-9]|100)%)$",
+              "type": "string"
+            }
+          ]
         }
       },
       "type": "object"

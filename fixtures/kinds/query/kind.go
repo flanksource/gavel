@@ -16,16 +16,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/flanksource/clicky/api"
-	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/clicky/formatters"
 	"github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
+	cdbmodels "github.com/flanksource/commons-db/models"
 	cdbquery "github.com/flanksource/commons-db/query"
 	_ "github.com/flanksource/commons-db/query/providers"
 
@@ -58,6 +58,34 @@ type Config struct {
 	Params     map[string]any  `json:"params,omitempty"`
 	Findings   json.RawMessage `json:"findings,omitempty"`
 	Limit      int             `json:"limit,omitempty"`
+	// AutoDiagnose is how long a statement runs before its server session is
+	// sampled for CPU, IO, waits and blocking; nil is defaultAutoDiagnose, 0
+	// off, -1 from the start.
+	AutoDiagnose *autoDiagnose `json:"autoDiagnose,omitempty"`
+}
+
+// defaultAutoDiagnose is when an unset autoDiagnose starts sampling.
+const defaultAutoDiagnose = 10 * time.Second
+
+// autoDiagnose is a duration string ("10s", "0s"), or -1 (number or string)
+// for sampling from the start, which commons-db reads as a negative delay.
+type autoDiagnose time.Duration
+
+func (a *autoDiagnose) UnmarshalJSON(b []byte) error {
+	text := strings.Trim(string(b), `"`)
+	if text == "-1" {
+		*a = autoDiagnose(-1)
+		return nil
+	}
+	parsed, err := time.ParseDuration(text)
+	if err != nil {
+		return fmt.Errorf(`autoDiagnose must be a duration such as "10s", "0s" to turn it off, or -1 to sample from the start: %w`, err)
+	}
+	if parsed < 0 {
+		return fmt.Errorf("autoDiagnose %s is negative: use -1 to sample from the start", text)
+	}
+	*a = autoDiagnose(parsed)
+	return nil
 }
 
 // databaseOption is the SQL provider option that switches the connection to
@@ -70,26 +98,40 @@ type run struct {
 	params   map[string]any
 	resolved *dbconn.Resolved
 	findings *findingsSpec
+	// target is where a SQL connection points; zero for a non-SQL connection.
+	target connection.SQLTarget
+	// autoDiagnose is when the server session starts being sampled; 0 never.
+	autoDiagnose time.Duration
 }
 
+// Execute records the query on the step as it runs — the record under
+// QueryMetadataKey, the server's messages as stdout/stderr, the query as the
+// command — so a run that fails keeps the same detail one that passes does.
 func (Kind) Execute(ctx context.Context, step *fixtures.StepContext) (fixtures.StepOutcome, error) {
-	began := time.Now()
 	r, err := prepare(ctx, step)
 	if err != nil {
 		return fixtures.StepOutcome{}, fmt.Errorf("query step %s: %w", stepName(step), err)
 	}
-	diagnostics := cdbquery.NewDiagnostics(cdbquery.DiagnosticOptions{Provider: r.profile.Provider.Type, Walk: true})
-	live := cdbquery.WithDiagnosticSink(cdbquery.WithBatchObserver(r.resolved.Context, streamBatches(fixtures.OutputWriter(ctx))), diagnostics)
-	outputs, violations, view, err := r.execute(live, step)
-	if err != nil {
+	command := r.profile.Query
+	if r.profile.QueryFile != "" {
+		command = r.profile.QueryFile
+	}
+	step.SetCommand(command, "")
+	live := r.startLive(step)
+	diagnostics := cdbquery.NewDiagnostics(cdbquery.DiagnosticOptions{Provider: r.profile.Provider.Type, Walk: true, OnRequest: live.issued,
+		AutoDiagnose: r.autoDiagnose, OnSession: live.session, OnSample: live.sample, OnSampleError: live.sampleError})
+	outputs, violations, response, err := r.execute(cdbquery.WithDiagnosticSink(cdbquery.WithBatchObserver(r.resolved.Context, live.batch), diagnostics), step)
+	record, finalErr := live.final(diagnostics)
+	if err = errors.Join(err, finalErr); err != nil {
 		return fixtures.StepOutcome{}, fmt.Errorf("query step %s: %w", stepName(step), err)
 	}
-	result := findingsResult(step, violations)
-	result.Metadata = map[string]any{fixtures.ViewMetadataKey: formatters.NewClickyDocument(view), fixtures.QueryMetadataKey: r.queryRecord(diagnostics)}
-	result.Command, result.Duration = r.profile.Query, time.Since(began)
-	if r.profile.QueryFile != "" {
-		result.Command = r.profile.QueryFile
+	if session, ok := record["session"]; ok {
+		if outputs["session"], err = fixtures.PlainValue(session); err != nil {
+			return fixtures.StepOutcome{}, fmt.Errorf("query step %s: %w", stepName(step), err)
+		}
 	}
+	result := findingsResult(step, violations)
+	result.Metadata = map[string]any{fixtures.ViewMetadataKey: formatters.NewClickyDocument(responseView(r.profile, response))}
 	if step.Test.Step == nil && step.Test.Expected.CEL != "" && result.Status != task.StatusFAIL {
 		result = applyRowCEL(result, step, outputs)
 	}
@@ -106,25 +148,6 @@ func (Kind) Observe(_ context.Context, step *fixtures.StepContext, handle any) (
 	}
 	outputs, _, _, err := r.execute(r.resolved.Context, step)
 	return outputs, err
-}
-
-// streamBatches writes a SQL program's batch events to the step's live
-// output as `batch N: <message>` and `batch N done (k rows affected)` lines.
-func streamBatches(output io.Writer) func(cdbquery.BatchEvent) {
-	return func(event cdbquery.BatchEvent) {
-		label := fmt.Sprintf("batch %d", event.Batch)
-		if event.Run > 1 {
-			label += fmt.Sprintf(" run %d", event.Run)
-		}
-		switch {
-		case !event.Done:
-			fmt.Fprintf(output, "%s: %s\n", label, event.Message)
-		case event.RowsAffected != nil:
-			fmt.Fprintf(output, "%s done (%d rows affected)\n", label, *event.RowsAffected)
-		default:
-			fmt.Fprintf(output, "%s done\n", label)
-		}
-	}
 }
 
 func prepare(ctx context.Context, step *fixtures.StepContext) (*run, error) {
@@ -164,7 +187,32 @@ func prepare(ctx context.Context, step *fixtures.StepContext) (*run, error) {
 				resolved.Connection.Name, resolved.Connection.Type)
 		}
 	}
-	return &run{profile: profile, params: params, resolved: resolved, findings: findings}, nil
+	target, err := sqlTarget(resolved.Connection, cfg.Database)
+	if err != nil {
+		return nil, fmt.Errorf("connection %q: %w", resolved.Connection.Name, err)
+	}
+	autoDiagnose := defaultAutoDiagnose
+	if cfg.AutoDiagnose != nil {
+		autoDiagnose = time.Duration(*cfg.AutoDiagnose)
+	}
+	return &run{profile: profile, params: params, resolved: resolved, findings: findings, target: target, autoDiagnose: autoDiagnose}, nil
+}
+
+// sqlTarget is the host, port, user and database a SQL connection opens —
+// database being the step's `database:` when it switches to another one.
+func sqlTarget(c *cdbmodels.Connection, database string) (connection.SQLTarget, error) {
+	if _, ok := providerForConnection[c.Type]; !ok {
+		return connection.SQLTarget{}, nil
+	}
+	var sql connection.SQLConnection
+	if err := sql.FromModel(*c); err != nil {
+		return connection.SQLTarget{}, err
+	}
+	target, err := sql.Target()
+	if database != "" {
+		target.Database = database
+	}
+	return target, err
 }
 
 // loadConfig is a YAML step's config, or a markdown row's: its Query column,
@@ -194,9 +242,9 @@ func loadConfig(step *fixtures.StepContext) (Config, error) {
 	return cfg, nil
 }
 
-// execute runs the profile and builds the step outputs, findings included, and
-// the response as commons-db renders it (view).
-func (r *run) execute(ctx dbcontext.Context, step *fixtures.StepContext) (map[string]any, []models.Violation, api.Textable, error) {
+// execute runs the profile and builds the step outputs, findings included,
+// returning the response it read.
+func (r *run) execute(ctx dbcontext.Context, step *fixtures.StepContext) (map[string]any, []models.Violation, *cdbquery.Result, error) {
 	result, err := cdbquery.Execute(ctx, r.profile, r.params)
 	if err != nil {
 		return nil, nil, nil, err
@@ -205,13 +253,14 @@ func (r *run) execute(ctx dbcontext.Context, step *fixtures.StepContext) (map[st
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return outputs, violations, responseView(r.profile, result), nil
+	return outputs, violations, result, nil
 }
 
 // responseView is the query's response through commons-db's own clicky table
 // (Result.Table over the profile's declared columns), the same rendering the
 // CLI and a profile's /api/v1/profile/<key> give. A SQL program shows every
-// result set of every batch, under the batch it came from.
+// result set of every batch, under the batch it came from; its server
+// messages are the step's stdout and stderr (liveQuery.batch), not the response.
 func responseView(profile cdbquery.Profile, result *cdbquery.Result) api.Textable {
 	if len(result.Batches) == 0 {
 		return result.Table(profile.Columns)
@@ -225,13 +274,11 @@ func responseView(profile cdbquery.Profile, result *cdbquery.Result) api.Textabl
 		if batch.RowsAffected != nil {
 			heading += fmt.Sprintf(" · %d row(s) affected", *batch.RowsAffected)
 		}
-		view = view.Append(heading, "font-medium").NewLine()
-		for _, message := range batch.Messages {
-			view = view.Add(serverMessage(message)).NewLine()
-		}
+		body := api.Text{}
 		for _, set := range batch.ResultSets {
-			view = view.Add((&cdbquery.Result{Profile: result.Profile, Rows: set}).Table(nil)).NewLine()
+			body = body.Add((&cdbquery.Result{Profile: result.Profile, Rows: set}).Table(nil)).NewLine()
 		}
+		view = view.Add(api.Collapsed{Label: heading, Content: body}).NewLine()
 	}
 	return view
 }
@@ -269,44 +316,14 @@ func (r *run) outputs(step *fixtures.StepContext, result *cdbquery.Result) (map[
 	return outputs, violations, nil
 }
 
-// queryRecord is what the step ran, for the UI's Template / SQL view: the query
-// as authored (its `$(.params.x)` references intact), the statement commons-db
-// issued with them bound, the driver arguments, and the step's params by name.
-// Read once the run has finished, so the recorder is no longer written.
-func (r *run) queryRecord(diagnostics *cdbquery.ProviderDiagnostics) map[string]any {
-	record := map[string]any{"template": r.profile.Query, "params": r.params}
-	if r.profile.QueryFile != "" {
-		record["queryFile"] = r.profile.QueryFile
-	}
-	sql := diagnostics.Request.Query
-	if sql == "" {
-		sql = diagnostics.Request.Rendered
-	}
-	if sql != "" {
-		record["sql"] = sql
-	}
-	if len(diagnostics.Request.Arguments) > 0 {
-		record["arguments"] = diagnostics.Request.Arguments
-	}
-	return record
-}
-
-// serverMessage is one PRINT / RAISERROR / ANSI-warning message a batch
-// returned: SQL Server prefixes its ANSI warnings with "Warning:", which get the
-// warning icon; every other message is informational.
-func serverMessage(message string) api.Text {
-	if strings.HasPrefix(message, "Warning:") {
-		return api.Text{}.Add(icons.Warning).Append(" "+message, "text-amber-600")
-	}
-	return api.Text{}.Add(icons.Info).Append(" "+message, "text-muted-foreground")
-}
-
-// connectionOutput names the connection (and the database selected on it),
-// never its secrets.
+// connectionOutput names the connection and where it points — host, port,
+// user and the database queried — never its secrets.
 func (r *run) connectionOutput() map[string]any {
 	out := map[string]any{"name": r.resolved.Connection.Name, "type": r.resolved.Connection.Type}
-	if database, ok := r.profile.Provider.Options[databaseOption].(string); ok && database != "" {
-		out[databaseOption] = database
+	for key, value := range map[string]string{"host": r.target.Host, "port": r.target.Port, "user": r.target.User, databaseOption: r.target.Database} {
+		if value != "" {
+			out[key] = value
+		}
 	}
 	return out
 }

@@ -119,7 +119,7 @@ steps:
     connection: lab
     query: SELECT guid, size FROM activities WHERE size >= {{.params.min}} ORDER BY guid
     params: {min: 20}
-    cel: "rowCount == 2 && row.guid == 'a2' && columns == ['guid', 'size'] && connection == {'name': 'lab', 'type': 'sqlite'}"
+    cel: "rowCount == 2 && row.guid == 'a2' && columns == ['guid', 'size'] && connection.name == 'lab' && connection.type == 'sqlite' && connection.database.endsWith('/data.db') && !has(connection.host)"
 `, fixtures.RunOptions{})
 		Expect(result.Status).To(Equal(task.StatusPASS), result.Error+result.CELTrace)
 	})
@@ -311,8 +311,8 @@ steps:
 		Expect(fmt.Sprint(node["columns"])).To(And(ContainSubstring("guid"), ContainSubstring("size")))
 	})
 
-	It("records the query as authored, the SQL it issued and the params it bound", func() {
-		dir, _ := fixtureDir()
+	It("records the query as authored, the SQL it issued, the params it bound and the connection it ran on", func() {
+		dir, dbPath := fixtureDir()
 		const template = "SELECT guid FROM activities WHERE size >= $(.params.min) ORDER BY guid"
 		result := runYAML(dir, `
 kind: Fixture
@@ -332,6 +332,34 @@ steps:
 		Expect(record).To(HaveKeyWithValue("params", map[string]any{"min": float64(20)}))
 		Expect(record["sql"]).To(And(ContainSubstring("FROM activities"), Not(ContainSubstring("$(.params.min)"))))
 		Expect(record["arguments"]).To(ContainElement(BeNumerically("==", 20)))
+		Expect(record["connection"]).To(Equal(map[string]any{"name": "lab", "type": "sqlite", "database": dbPath}))
+	})
+
+	It("keeps the query it ran — template, SQL, params, bound arguments, connection — on a step the database rejects", func() {
+		dir, dbPath := fixtureDir()
+		const template = "SELECT guid FROM missing_table WHERE size >= $(.params.min)"
+		result := runYAML(dir, `
+kind: Fixture
+steps:
+  - id: missing
+    kind: query
+    connection: lab
+    query: "`+template+`"
+    params: {min: 20}
+`, fixtures.RunOptions{})
+		Expect(result.Status).To(Equal(task.StatusERR))
+		Expect(result.Error).To(ContainSubstring("no such table: missing_table"))
+		Expect(result.Command).To(Equal(template))
+		raw, err := json.Marshal(result.Metadata[fixtures.QueryMetadataKey])
+		Expect(err).NotTo(HaveOccurred())
+		var record map[string]any
+		Expect(json.Unmarshal(raw, &record)).To(Succeed())
+		Expect(record).To(HaveKeyWithValue("template", template))
+		Expect(record).To(HaveKeyWithValue("params", map[string]any{"min": float64(20)}))
+		Expect(record["sql"]).To(And(ContainSubstring("FROM missing_table"), Not(ContainSubstring("$(.params.min)"))))
+		Expect(record["arguments"]).To(Equal([]any{float64(20)}))
+		Expect(record["connection"]).To(Equal(map[string]any{"name": "lab", "type": "sqlite", "database": dbPath}))
+		Expect(result.Metadata).NotTo(HaveKey(fixtures.ViewMetadataKey), "a rejected query read no response")
 	})
 
 	It("runs an inline profile's GO-separated queryFile relative to the fixture", func() {
@@ -387,33 +415,30 @@ steps:
 		Expect(result.Error).To(ContainSubstring(`connection "connection://nowhere": connection not found`))
 	})
 
-	It("streams each batch's end to the running step's output", func() {
+	It("shows the running step its query record — connection target, query and params — before the query returns", func() {
+		dir, dbPath := fixtureDir()
+		const template = "SELECT guid FROM activities WHERE size >= $(.params.min)"
+		running, final := runLive(dir, "kind: Fixture\nsteps:\n  - id: big\n    kind: query\n    connection: lab\n"+
+			"    query: "+template+"\n    params: {min: 20}\n")
+		connection := map[string]any{"name": "lab", "type": "sqlite", "database": dbPath}
+		// The first report publishes at once; the issued SQL lands within the
+		// same burst, with the result.
+		Expect(running).To(Equal([]map[string]any{{"template": template, "params": map[string]any{"min": float64(20)}, "connection": connection}}))
+		Expect(final).To(And(HaveKeyWithValue("template", template), HaveKeyWithValue("connection", connection),
+			HaveKeyWithValue("sql", Not(ContainSubstring("$(.params.min)"))), HaveKeyWithValue("arguments", []any{float64(20)})))
+	})
+
+	It("ends a SQL program's live record with each batch's end, and keeps it as the result's", func() {
 		dir, _ := fixtureDir()
 		writeFile(filepath.Join(dir, "stage.sql"), "CREATE TABLE stage(guid TEXT);\nGO\nINSERT INTO stage SELECT guid FROM activities WHERE size >= 20;\n")
-		path := filepath.Join(dir, "stream.fixture.yaml")
-		writeFile(path, "kind: Fixture\nsteps:\n  - id: stage\n    kind: query\n    connection: lab\n    query: {queryFile: stage.sql}\n")
-		file, err := fixtures.ParseFixtureFile(path)
-		Expect(err).NotTo(HaveOccurred())
-		var running []string
-		sink := func(_ context.Context, snapshot fixtures.ExecutionSnapshot) error {
-			var walk func(*fixtures.ExecutionNode)
-			walk = func(node *fixtures.ExecutionNode) {
-				if node.State == fixtures.ExecutionRunning && node.Output != "" {
-					running = append(running, node.Output)
-				}
-				for _, child := range node.Children {
-					walk(child)
-				}
-			}
-			walk(snapshot.Root)
-			return nil
-		}
-		results, _, err := fixtures.RunNodes(fixtures.WithProgressSink(context.Background(), sink), []*fixtures.FixtureNode{file}, fixtures.RunOptions{WorkDir: dir})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(results).To(HaveLen(1))
-		Expect(results[0].Status).To(Equal(task.StatusPASS), results[0].Error)
-		// The first line publishes at once; the rest of the burst lands with the result.
-		Expect(running).To(Equal([]string{"batch 1 done (0 rows affected)\n"}))
+		running, final := runLive(dir, "kind: Fixture\nsteps:\n  - id: stage\n    kind: query\n    connection: lab\n    query: {queryFile: stage.sql}\n")
+		Expect(running).To(HaveLen(1))
+		Expect(running[0]).To(HaveKeyWithValue("queryFile", "stage.sql"))
+		Expect(running[0]).NotTo(HaveKey("batches"))
+		Expect(final["batches"]).To(Equal([]any{
+			map[string]any{"batch": float64(1), "run": float64(1), "rowsAffected": float64(0)},
+			map[string]any{"batch": float64(2), "run": float64(1), "rowsAffected": float64(2)},
+		}))
 	})
 
 	It("waits by re-running the query until its outputs satisfy until", func() {
@@ -454,3 +479,42 @@ steps:
 		Expect(childStatuses(results[0])).To(Equal([]task.Status{task.StatusWarning, task.StatusWarning}))
 	})
 })
+
+// runLive runs the fixture body and returns the live query record each
+// snapshot showed for its running step, and the record its result kept, both
+// as plain JSON. A query step writes no live text output of its own.
+func runLive(dir, body string) (running []map[string]any, final map[string]any) {
+	GinkgoHelper()
+	path := filepath.Join(dir, "stream.fixture.yaml")
+	writeFile(path, body)
+	file, err := fixtures.ParseFixtureFile(path)
+	Expect(err).NotTo(HaveOccurred())
+	var outputs []string
+	sink := func(_ context.Context, snapshot fixtures.ExecutionSnapshot) error {
+		var walk func(*fixtures.ExecutionNode)
+		walk = func(node *fixtures.ExecutionNode) {
+			if node.State == fixtures.ExecutionRunning && node.Metadata != nil {
+				record, ok := node.Metadata[fixtures.QueryMetadataKey].(map[string]any)
+				Expect(ok).To(BeTrue(), "live %s is %T", fixtures.QueryMetadataKey, node.Metadata[fixtures.QueryMetadataKey])
+				running = append(running, record)
+			}
+			if node.Output != "" {
+				outputs = append(outputs, node.Output)
+			}
+			for _, child := range node.Children {
+				walk(child)
+			}
+		}
+		walk(snapshot.Root)
+		return nil
+	}
+	results, _, err := fixtures.RunNodes(fixtures.WithProgressSink(context.Background(), sink), []*fixtures.FixtureNode{file}, fixtures.RunOptions{WorkDir: dir})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(results).To(HaveLen(1))
+	Expect(results[0].Status).To(Equal(task.StatusPASS), results[0].Error)
+	Expect(outputs).To(BeEmpty())
+	raw, err := json.Marshal(results[0].Metadata[fixtures.QueryMetadataKey])
+	Expect(err).NotTo(HaveOccurred())
+	Expect(json.Unmarshal(raw, &final)).To(Succeed())
+	return running, final
+}
