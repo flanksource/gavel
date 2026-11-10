@@ -52,12 +52,16 @@ type DashboardOptions struct {
 	SubstrateEgress      []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides gavel serve, the Go, npm and Python registries and GitHub; repeat for each (substrate)"`
 	SubstrateGavelName   string   `flag:"substrate-gavel-name" help:"The name substrate's credential provider knows this gavel by, in each run's model key URI, e.g. beta (substrate)"`
 	SubstrateTrustBundle string   `flag:"substrate-trust-bundle" help:"Path in the environment of the egress gateway's CA, which jobs trust for hosts with an injected credential (substrate)"`
+	MissionControlURL    string   `flag:"mission-control-url" help:"Mission Control backend the platform dashboard reads gavel's infrastructure from, e.g. https://mc.example.com/api (or GAVEL_MISSION_CONTROL_URL; its token is GAVEL_MISSION_CONTROL_TOKEN; --auth clerk)"`
+	MissionControlInfra  string   `flag:"mission-control-infra" help:"Mission Control resource search selecting gavel's infrastructure for the platform dashboard, e.g. namespace=gavel"`
 	PropertiesFile       string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
 
 	clerkSecretKey string
 	secretKey      string
 	// credentialProviderToken authenticates the credential provider in substrate's cluster.
 	credentialProviderToken string
+	// missionControlToken is the Mission Control access token the platform dashboard reads with.
+	missionControlToken string
 }
 
 // withEnv fills settings left empty by flags from getenv, and reads the secrets.
@@ -70,6 +74,7 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 		{&o.ClerkPublishableKey, "GAVEL_CLERK_PUBLISHABLE_KEY"},
 		{&o.ClerkClientID, "GAVEL_CLERK_CLIENT_ID"},
 		{&o.GitHubAppPrivateKey, "GAVEL_GITHUB_APP_PRIVATE_KEY_FILE"},
+		{&o.MissionControlURL, "GAVEL_MISSION_CONTROL_URL"},
 	} {
 		if *setting.value == "" {
 			*setting.value = getenv(setting.env)
@@ -78,6 +83,7 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 	o.clerkSecretKey = getenv("CLERK_SECRET_KEY")
 	o.secretKey = getenv("GAVEL_SECRET_KEY")
 	o.credentialProviderToken = getenv("GAVEL_CREDENTIAL_PROVIDER_TOKEN")
+	o.missionControlToken = getenv("GAVEL_MISSION_CONTROL_TOKEN")
 	return o
 }
 
@@ -110,6 +116,9 @@ func (o DashboardOptions) Validate() error {
 		}
 		if githubApp {
 			add("--github-app-* flags serve hosted orgs and need --auth clerk")
+		}
+		if o.MissionControlURL != "" || o.MissionControlInfra != "" {
+			add("--mission-control-* flags serve the platform dashboard and need --auth clerk")
 		}
 	case authClerk:
 		if o.PublicURL == "" {
@@ -148,6 +157,7 @@ func (o DashboardOptions) Validate() error {
 		if o.ClerkClientID == "" {
 			add("--auth clerk requires --clerk-client-id or GAVEL_CLERK_CLIENT_ID")
 		}
+		o.validateMissionControl(add)
 		switch o.Sandbox {
 		case "":
 		case "substrate":
@@ -220,3 +230,23 @@ var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // envName is what an environment variable may be named.
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateMissionControl checks the Mission Control the platform dashboard reads: a URL
+// needs its token and the search selecting gavel's infrastructure.
+func (o DashboardOptions) validateMissionControl(add func(format string, args ...any)) {
+	if o.MissionControlURL == "" {
+		if o.MissionControlInfra != "" {
+			add("--mission-control-infra needs --mission-control-url")
+		}
+		return
+	}
+	if u, err := url.Parse(o.MissionControlURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		add("--mission-control-url must be an http or https URL, got %q", o.MissionControlURL)
+	}
+	if o.missionControlToken == "" {
+		add("--mission-control-url requires the GAVEL_MISSION_CONTROL_TOKEN environment variable, a Mission Control access token with the viewer role")
+	}
+	if o.MissionControlInfra == "" {
+		add("--mission-control-url requires --mission-control-infra, the Mission Control search selecting gavel's infrastructure, e.g. namespace=gavel")
+	}
+}

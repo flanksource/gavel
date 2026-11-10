@@ -14,6 +14,7 @@ import (
 
 	"github.com/flanksource/gavel/api"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/missioncontrol"
 	"github.com/flanksource/gavel/platform"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
@@ -26,6 +27,8 @@ type PlatformAPI struct {
 	Clerk api.ClerkOrganizations
 	// App lists the GitHub App's installations; nil when serve runs without one.
 	App *github.App
+	// MissionControl reads gavel's infrastructure; nil when serve runs without one.
+	MissionControl *missioncontrol.Source
 }
 
 // platformSourceTimeout bounds how long one route waits for its source.
@@ -40,6 +43,7 @@ func (p *PlatformAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/platform/tenants", p.tenants)
 	mux.HandleFunc("GET /api/platform/sandbox-runs", p.sandboxRuns)
 	mux.HandleFunc("GET /api/platform/github", p.gitHubApp)
+	mux.HandleFunc("GET /api/platform/infrastructure", p.infrastructure)
 	return platformAdminsOnly(mux)
 }
 
@@ -234,4 +238,23 @@ func (p *PlatformAPI) gitHubApp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, result)
+}
+
+// errNoMissionControl answers the Mission Control routes when serve runs without one.
+var errNoMissionControl = errors.New("no Mission Control is configured: start gavel serve with --mission-control-url, --mission-control-infra and GAVEL_MISSION_CONTROL_TOKEN")
+
+// infrastructure answers what Mission Control knows about gavel's infrastructure.
+func (p *PlatformAPI) infrastructure(w http.ResponseWriter, r *http.Request) {
+	if p.MissionControl == nil {
+		writeJSONError(w, http.StatusNotFound, errNoMissionControl)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
+	defer cancel()
+	infrastructure, err := p.MissionControl.Infrastructure(ctx)
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, infrastructure)
 }

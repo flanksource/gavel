@@ -30,9 +30,11 @@ import (
 	"github.com/flanksource/gavel/github/githubtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/internal/logtest"
+	"github.com/flanksource/gavel/missioncontrol/missioncontroltest"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sshkeys"
+	"github.com/flanksource/incident-commander/clientapi"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -196,6 +198,28 @@ func TestHostedPlatformAPI(t *testing.T) {
 	}
 	assert.Equal(t, []string{"Alpha inGavel=true", "Beta inGavel=true", "Gamma inGavel=false"}, names,
 		"the user's organizations, synced on sign-in, and one only Clerk has")
+}
+
+func TestHostedPlatformReadsMissionControl(t *testing.T) {
+	mc := missioncontroltest.New(t)
+	mc.SetResources(clientapi.SearchResourcesResponse{Configs: []clientapi.SelectedResource{{ID: "c1", Name: "gavel"}}})
+	f := newHostedFixture(t, func(o *DashboardOptions) {
+		o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = mc.URL, "namespace=gavel", missioncontroltest.Token
+	})
+	f.clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+
+	req, err := http.NewRequest(http.MethodGet, f.server.URL+"/api/platform/infrastructure", nil)
+	require.NoError(t, err)
+	req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	assert.Contains(t, string(body), `"name":"gavel"`)
+	require.Len(t, mc.Searches(), 1)
+	assert.Equal(t, "namespace=gavel", mc.Searches()[0].Configs[0].Search)
 }
 
 func TestHostedPush(t *testing.T) {
