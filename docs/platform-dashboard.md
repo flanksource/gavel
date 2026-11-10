@@ -9,6 +9,7 @@ the panel says why and the other panels still load.
 | Tenants | gavel's organizations, with their members, repositories, GitHub installs and recent runs, merged with Clerk's organization list |
 | Sandbox usage | gavel's sandbox runs: runs and sandbox minutes per day by kind, failures, active runs, and each organization's share. Each chart can be shown as a table |
 | GitHub App | The App's installations on GitHub, the organization each is linked to, its repositories, core rate limit, and whether it is suspended or was uninstalled from GitHub |
+| Substrate metrics | The panels of a Mission Control View graphing substrate's Prometheus metrics: timeseries as line charts, each with its numbers as a table, and number and gauge panels as figures |
 | Infrastructure | The config items, health checks and config changes Mission Control has for gavel's infrastructure |
 
 Windows are limited to 60 days, because sandbox runs are kept for 60 days by default.
@@ -50,6 +51,7 @@ panel says which settings are missing. To set one up:
    | Backend URL, e.g. `https://mc.example.com/api` | `--mission-control-url` or `GAVEL_MISSION_CONTROL_URL` | `missionControl.url` |
    | The search | `--mission-control-infra` | `missionControl.infra` |
    | The token | `GAVEL_MISSION_CONTROL_TOKEN` (environment only) | `missionControl.token.secretName` / `.key` |
+| Optional: substrate's metrics View, as `namespace/name` | `--mission-control-substrate-view` | `missionControl.substrateView` |
 
 If Mission Control refuses the token, the panel shows the HTTP status and says to check
 `GAVEL_MISSION_CONTROL_TOKEN`.
@@ -58,5 +60,84 @@ To check a real Mission Control end to end:
 
 ```sh
 GAVEL_MISSION_CONTROL_TEST=1 GAVEL_MISSION_CONTROL_URL=… GAVEL_MISSION_CONTROL_TOKEN=… \
-  GAVEL_MISSION_CONTROL_INFRA=namespace=gavel go test ./missioncontrol/ -run RealMissionControl
+  GAVEL_MISSION_CONTROL_INFRA=namespace=gavel GAVEL_MISSION_CONTROL_SUBSTRATE_VIEW=substrate/capacity \
+  go test ./missioncontrol/ -run RealMissionControl
 ```
+
+## Substrate metrics
+
+Substrate runs in its own cluster, so gavel reads its metrics through Mission Control, from a View
+whose queries reach substrate's Prometheus. Create a Prometheus connection to it in Mission Control
+(below, `connection://substrate/prometheus`), apply a View like this one, and pass it to
+`--mission-control-substrate-view substrate/capacity`.
+
+The Substrate metrics panel draws `timeseries` panels as line charts (one line per label set),
+and shows `number` and `gauge` panels as figures. It lists other panel types by name without
+drawing them. A panel's query names the `timestamp` and `value` columns, or the panel's
+`timeseries.timeKey`/`valueKey` do; every other column is a label.
+
+```yaml
+apiVersion: mission-control.flanksource.com/v1
+kind: View
+metadata:
+  name: capacity
+  namespace: substrate
+spec:
+  display:
+    title: Substrate
+  panels:
+    - name: Ready workers
+      description: Per worker pool, last 12h
+      type: timeseries
+      query: SELECT timestamp, pool, value FROM ready_workers
+    - name: Running actors
+      description: Per template, last 12h
+      type: timeseries
+      query: SELECT timestamp, template, value FROM running_actors
+    - name: Actor memory working set (GiB)
+      description: Per template, last 12h
+      type: timeseries
+      query: SELECT timestamp, template, value FROM working_set
+    - name: Actor crashes, last 24h
+      type: number
+      query: SELECT value FROM crashes
+  queries:
+    ready_workers:
+      columns: { timestamp: datetime, pool: string, value: decimal }
+      prometheus:
+        connection: connection://substrate/prometheus
+        query: sum by (pool) (label_replace(ate_workerpool_ready_workers, "pool", "$1", "ate_workerpool_name", "(.*)"))
+        range: { start: now-12h, end: now, step: 5m }
+    running_actors:
+      columns: { timestamp: datetime, template: string, value: decimal }
+      prometheus:
+        connection: connection://substrate/prometheus
+        query: sum by (template) (label_replace(ate_actor_stats_sampled_actors, "template", "$1", "ate_template_name", "(.*)"))
+        range: { start: now-12h, end: now, step: 5m }
+    working_set:
+      columns: { timestamp: datetime, template: string, value: decimal }
+      prometheus:
+        connection: connection://substrate/prometheus
+        query: sum by (template) (label_replace(ate_actor_stats_memory_working_set_bytes, "template", "$1", "ate_template_name", "(.*)")) / 2^30
+        range: { start: now-12h, end: now, step: 5m }
+    crashes:
+      columns: { value: decimal }
+      prometheus:
+        connection: connection://substrate/prometheus
+        query: sum(increase(ate_actor_crashes_total[24h]))
+```
+
+The metric names are substrate's OpenTelemetry instruments as its Prometheus exporter renders
+them, from substrate's source; check them against your Prometheus before relying on a panel:
+
+| Metric | What it measures | Labels |
+|---|---|---|
+| `ate_workerpool_desired_workers`, `ate_workerpool_ready_workers` | Worker pods requested and ready, per WorkerPool | `ate_workerpool_namespace`, `ate_workerpool_name` |
+| `ate_workerpool_workers` | Workers by pool, state and sandbox class | `ate_workerpool_name`, `ate_worker_state`, `ate_sandbox_class` |
+| `ate_actor_crashes_total` | Actors that crashed | the failure reason |
+| `ate_actor_stats_sampled_actors` | Running actors with a resource sample | `ate_template_name`, `ate_sandbox_class`, `ate_workerpool_name` |
+| `ate_actor_stats_memory_working_set_bytes`, `ate_actor_stats_memory_usage_bytes` | Running actors' memory | as above |
+| `ate_actor_stats_cpu_time_seconds_total` | Running actors' CPU time | as above |
+
+If Mission Control can't refresh the View, for example because Prometheus is unreachable, the
+panel shows the last data it has and says why it is stale.
