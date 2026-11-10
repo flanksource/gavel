@@ -134,6 +134,24 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		{"GAVEL_SECRET_KEY not base64", func(o *DashboardOptions) { o.secretKey = "not base64!" }, []string{
 			"GAVEL_SECRET_KEY must be at least 32 random bytes, base64-encoded (it isn't valid base64)",
 		}},
+		{"mission control configured", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+		}, nil},
+		{"mission control without its token", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra = "https://mc.example.com/api", "namespace=gavel"
+		}, []string{"--mission-control-url requires the GAVEL_MISSION_CONTROL_TOKEN environment variable, a Mission Control access token with the viewer role"}},
+		{"mission control without a search", func(o *DashboardOptions) {
+			o.MissionControlURL, o.missionControlToken = "https://mc.example.com/api", "mc-token"
+		}, []string{"--mission-control-url requires --mission-control-infra, the Mission Control search selecting gavel's infrastructure, e.g. namespace=gavel"}},
+		{"mission control URL without a scheme", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "mc.example.com", "namespace=gavel", "mc-token"
+		}, []string{`--mission-control-url must be an http or https URL, got "mc.example.com"`}},
+		{"mission control search without its URL", func(o *DashboardOptions) { o.MissionControlInfra = "namespace=gavel" }, []string{
+			"--mission-control-infra needs --mission-control-url",
+		}},
+		{"mission control without clerk", func(o *DashboardOptions) {
+			*o = DashboardOptions{Auth: "none", MissionControlURL: "https://mc.example.com/api"}
+		}, []string{"--mission-control-* flags serve the platform dashboard and need --auth clerk"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			opts := clerkDashboardOptions()
@@ -148,6 +166,7 @@ func TestDashboardOptionsValidate(t *testing.T) {
 				assert.Contains(t, err.Error(), want)
 			}
 			assert.NotContains(t, err.Error(), "sk_test_abc", "errors must not echo secrets")
+			assert.NotContains(t, err.Error(), "mc-token", "errors must not echo secrets")
 		})
 	}
 }
@@ -160,6 +179,8 @@ func TestDashboardOptionsFromEnv(t *testing.T) {
 		"CLERK_SECRET_KEY":                  "sk_env",
 		"GAVEL_SECRET_KEY":                  testSecretKey,
 		"GAVEL_GITHUB_APP_PRIVATE_KEY_FILE": "/keys/app.pem",
+		"GAVEL_MISSION_CONTROL_URL":         "https://mc.example.com/api",
+		"GAVEL_MISSION_CONTROL_TOKEN":       "mc-token",
 	}
 	got := DashboardOptions{ClerkIssuer: "https://flag-clerk.example.com"}.withEnv(func(key string) string { return env[key] })
 	assert.Equal(t, "https://flag-clerk.example.com", got.ClerkIssuer, "a flag wins over its env var")
@@ -168,6 +189,8 @@ func TestDashboardOptionsFromEnv(t *testing.T) {
 	assert.Equal(t, "sk_env", got.clerkSecretKey)
 	assert.Equal(t, testSecretKey, got.secretKey)
 	assert.Equal(t, "/keys/app.pem", got.GitHubAppPrivateKey)
+	assert.Equal(t, "https://mc.example.com/api", got.MissionControlURL)
+	assert.Equal(t, "mc-token", got.missionControlToken, "the token comes from the environment only")
 }
 
 func TestServeCommandHasAuthFlags(t *testing.T) {

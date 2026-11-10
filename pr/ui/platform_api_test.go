@@ -13,8 +13,11 @@ import (
 	"github.com/flanksource/gavel/api/clerktest"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/githubtest"
+	"github.com/flanksource/gavel/missioncontrol"
+	"github.com/flanksource/gavel/missioncontrol/missioncontroltest"
 	"github.com/flanksource/gavel/platform"
 	"github.com/flanksource/gavel/tenant"
+	"github.com/flanksource/incident-commander/clientapi"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -183,4 +186,26 @@ func TestPlatformGitHubWithoutTheApp(t *testing.T) {
 	var failure map[string]string
 	assert.Equal(t, http.StatusNotFound, platformGet(t, servePlatform(t, p, org, true)+"/api/platform/github", &failure))
 	assert.Contains(t, failure["error"], "--github-app-id")
+}
+
+func TestPlatformInfrastructure(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	mc := missioncontroltest.New(t)
+	mc.SetResources(clientapi.SearchResourcesResponse{Configs: []clientapi.SelectedResource{{ID: "c1", Name: "gavel", Type: "Kubernetes::Deployment", Health: "healthy"}}})
+	store := platform.Store{DB: db, Issuer: "https://clerk.example"}
+
+	var failure map[string]string
+	unconfigured := servePlatform(t, &PlatformAPI{Store: store}, org, true)
+	assert.Equal(t, http.StatusNotFound, platformGet(t, unconfigured+"/api/platform/infrastructure", &failure))
+	assert.Contains(t, failure["error"], "--mission-control-url")
+
+	var got missioncontrol.Infrastructure
+	base := servePlatform(t, &PlatformAPI{Store: store, MissionControl: missioncontrol.New(mc.URL, missioncontroltest.Token, "namespace=gavel")}, org, true)
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/infrastructure", &got))
+	require.Len(t, got.Configs, 1)
+	assert.Equal(t, "gavel", got.Configs[0].Name)
+
+	refused := servePlatform(t, &PlatformAPI{Store: store, MissionControl: missioncontrol.New(mc.URL, "wrong-token", "namespace=gavel")}, org, true)
+	assert.Equal(t, http.StatusBadGateway, platformGet(t, refused+"/api/platform/infrastructure", &failure))
+	assert.Contains(t, failure["error"], "check GAVEL_MISSION_CONTROL_TOKEN")
 }

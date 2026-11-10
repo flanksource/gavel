@@ -27,6 +27,7 @@ import (
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/installations"
 	shared "github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/missioncontrol"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/platform"
 	"github.com/flanksource/gavel/pr/provider"
@@ -215,6 +216,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	// The platform dashboard reads across organizations, so it is served beside the
 	// per-org servers, not by them.
 	platformAPI := &ui.PlatformAPI{Store: platform.Store{DB: db, Issuer: issuer}, Clerk: backend, App: app}
+	if opts.MissionControlURL != "" {
+		platformAPI.MissionControl = missioncontrol.New(opts.MissionControlURL, opts.missionControlToken, opts.MissionControlInfra)
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/platform/", platformAPI.Handler())
 	if app != nil {
