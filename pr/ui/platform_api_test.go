@@ -103,3 +103,24 @@ func TestPlatformTenantsWithoutClerk(t *testing.T) {
 	assert.Equal(t, org, got.Tenants[0].ID)
 	assert.Contains(t, got.ClerkError, "check the Clerk secret key")
 }
+
+func TestPlatformSandboxRuns(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend, created_at) VALUES (?, ?, 'agent', 'running', 'substrate', now() - interval '2 days')`, uuid.New(), org).Error)
+	require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend, created_at) VALUES (?, ?, 'test', 'failed', 'substrate', now() - interval '20 days')`, uuid.New(), org).Error)
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}}
+	base := servePlatform(t, p, org, true)
+
+	var usage platform.SandboxUsage
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/sandbox-runs?days=7", &usage))
+	require.Len(t, usage.Days, 1, "only the runs in the window: %+v", usage.Days)
+	assert.Equal(t, "agent", usage.Days[0].Kind)
+	assert.Len(t, usage.Active, 1)
+
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/sandbox-runs", &usage))
+	assert.Len(t, usage.Days, 2, "the default window is 30 days")
+
+	var failure map[string]string
+	assert.Equal(t, http.StatusBadRequest, platformGet(t, base+"/api/platform/sandbox-runs?days=0", &failure))
+	assert.Contains(t, failure["error"], "days must be a whole number from 1 to 60")
+}
