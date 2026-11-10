@@ -421,6 +421,19 @@ func TestChartReachesSubstrateInAnotherCluster(t *testing.T) {
 }
 
 // substrateSandbox are the values every substrate sandbox needs.
+func TestChartReadsMissionControl(t *testing.T) {
+	requireHelm(t)
+	container := serveContainer(t, render(t,
+		"missionControl.url=https://mc.example.com/api", "missionControl.infra=namespace=gavel",
+		"missionControl.token.secretName=gavel-mission-control"))
+	assert.Contains(t, strings.Join(container.Args, " "), " --mission-control-url https://mc.example.com/api --mission-control-infra namespace=gavel")
+	assert.Equal(t, "secret:gavel-mission-control/token", env(container)["GAVEL_MISSION_CONTROL_TOKEN"])
+
+	container = serveContainer(t, render(t))
+	assert.NotContains(t, strings.Join(container.Args, " "), "--mission-control", "Mission Control is off unless its URL is set")
+	assert.NotContains(t, env(container), "GAVEL_MISSION_CONTROL_TOKEN")
+}
+
 func substrateSandbox() []string {
 	return []string{
 		"sandbox.enabled=true",
