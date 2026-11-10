@@ -140,4 +140,4 @@ them, from substrate's source; check them against your Prometheus before relying
 | `ate_actor_stats_cpu_time_seconds_total` | Running actors' CPU time | as above |
 
 If Mission Control can't refresh the View, for example because Prometheus is unreachable, the
-panel shows the last data it has and says why it is stale.
+panel says why, and shows whatever data Mission Control still has cached for it.
