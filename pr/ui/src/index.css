@@ -17,3 +17,18 @@ body,
 #root {
   height: 100%;
 }
+
+/* Sandbox run kinds on the platform dashboard's charts: the first four categorical slots,
+   in fixed order, stepped for each theme's surface. */
+:root {
+  --kind-test: #2a78d6;
+  --kind-lint: #eb6834;
+  --kind-push-check: #1baf7a;
+  --kind-agent: #eda100;
+}
+:root[data-theme="dark"] {
+  --kind-test: #3987e5;
+  --kind-lint: #d95926;
+  --kind-push-check: #199e70;
+  --kind-agent: #c98500;
+}
