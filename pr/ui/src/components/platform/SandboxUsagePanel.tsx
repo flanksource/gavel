@@ -91,7 +91,8 @@ function orgShares(usage: SandboxUsage): OrgShare[] {
   return [...shares.values()].sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name));
 }
 
-// KindBars stacks a day's totals by kind, each kind in its --kind-* color from index.css.
+// KindBars stacks a day's totals by kind, each kind in its --kind-* color from index.css,
+// with the same numbers as a table: two of the colors are faint on the light surface.
 function KindBars({ title, data, unit }: { title: string; data: KindTotals[]; unit: string }) {
   return (
     <figure className="flex flex-col gap-1">
@@ -111,6 +112,27 @@ function KindBars({ title, data, unit }: { title: string; data: KindTotals[]; un
           </BarChart>
         </ResponsiveContainer>
       </div>
+      <details className="text-xs">
+        <summary className="cursor-pointer text-muted-foreground">Show as a table</summary>
+        <table aria-label={title} className="mt-1 w-full border-collapse text-left">
+          <thead className="text-muted-foreground">
+            <tr>
+              {['Day', ...runKinds.map(kind => kindLabels[kind] ?? kind), 'Total'].map(heading => (
+                <th key={heading} className="border-b border-border px-2 py-1 font-medium">{heading}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {data.map(row => (
+              <tr key={row.day} className="border-b border-border">
+                <td className="px-2 py-1 font-mono">{row.day}</td>
+                {runKinds.map(kind => <td key={kind} className="px-2 py-1">{Math.round(row[kind])}</td>)}
+                <td className="px-2 py-1">{Math.round(runKinds.reduce((sum, kind) => sum + row[kind], 0))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
     </figure>
   );
 }
