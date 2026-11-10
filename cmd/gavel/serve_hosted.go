@@ -214,7 +214,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	}, orgIdleTTL)
 	// The platform dashboard reads across organizations, so it is served beside the
 	// per-org servers, not by them.
-	platformAPI := &ui.PlatformAPI{Store: platform.Store{DB: db, Issuer: issuer}, Clerk: backend}
+	platformAPI := &ui.PlatformAPI{Store: platform.Store{DB: db, Issuer: issuer}, Clerk: backend, App: app}
 	mux := http.NewServeMux()
 	mux.Handle("/api/platform/", platformAPI.Handler())
 	if app != nil {
