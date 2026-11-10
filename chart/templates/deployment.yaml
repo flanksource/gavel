@@ -64,6 +64,14 @@ spec:
             - --github-app-slug
             - {{ .Values.githubApp.slug | quote }}
             {{- end }}
+            {{- with .Values.missionControl }}
+            {{- if .url }}
+            - --mission-control-url
+            - {{ .url | quote }}
+            - --mission-control-infra
+            - {{ .infra | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.sandbox.enabled }}
             {{- with .Values.sandbox.substrate }}
             - --sandbox
@@ -122,6 +130,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "gavel.secretName" . }}
                   key: GAVEL_SECRET_KEY
+            {{- if .Values.missionControl.url }}
+            - name: GAVEL_MISSION_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.missionControl.token.secretName }}
+                  key: {{ .Values.missionControl.token.key }}
+            {{- end }}
             {{- if .Values.sandbox.enabled }}
             - name: GAVEL_CREDENTIAL_PROVIDER_TOKEN
               valueFrom:
