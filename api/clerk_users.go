@@ -17,9 +17,16 @@ type ClerkUser struct {
 	EmailVerified bool
 	// GitHubLogin is the username of the user's GitHub connection, empty without one.
 	GitHubLogin string
+	// PlatformAdmin reports a user whose public_metadata.gavel_role is platformAdminRole:
+	// one who may read every organization on the platform dashboard.
+	PlatformAdmin bool
 }
 
-// User reads clerkUserID's profile: name, primary email, and GitHub username.
+// platformAdminRole is the public_metadata.gavel_role of a platform admin.
+const platformAdminRole = "platform_admin"
+
+// User reads clerkUserID's profile: name, primary email, GitHub username, and whether
+// the user is a platform admin.
 func (c ClerkOrganizations) User(ctx context.Context, clerkUserID string) (ClerkUser, error) {
 	if err := validUserID(clerkUserID); err != nil {
 		return ClerkUser{}, err
@@ -40,11 +47,17 @@ func (c ClerkOrganizations) User(ctx context.Context, clerkUserID string) (Clerk
 			Provider string `json:"provider"`
 			Username string `json:"username"`
 		} `json:"external_accounts"`
+		PublicMetadata struct {
+			GavelRole string `json:"gavel_role"`
+		} `json:"public_metadata"`
 	}
 	if err := c.call(ctx, http.MethodGet, "/users/"+url.PathEscape(clerkUserID), nil, &user); err != nil {
 		return ClerkUser{}, err
 	}
-	profile := ClerkUser{Name: strings.TrimSpace(user.FirstName + " " + user.LastName)}
+	profile := ClerkUser{
+		Name:          strings.TrimSpace(user.FirstName + " " + user.LastName),
+		PlatformAdmin: user.PublicMetadata.GavelRole == platformAdminRole,
+	}
 	if profile.Name == "" {
 		profile.Name = user.Username
 	}

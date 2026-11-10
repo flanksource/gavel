@@ -54,6 +54,8 @@ type User struct {
 	OrgRole string
 	// GitHubLogin is the username of the user's GitHub connection; empty means none.
 	GitHubLogin string
+	// PublicMetadata is the user's public_metadata, e.g. {"gavel_role": "platform_admin"}.
+	PublicMetadata map[string]any
 }
 
 // Server is a TLS issuer. Use Client() as the HTTP client; its certificate is self-signed.
@@ -347,6 +349,10 @@ func (s *Server) verifyAccessToken(w http.ResponseWriter, r *http.Request) {
 // writeUser answers GET /v1/users/{id} with the fields gavel reads, shaped like Clerk's.
 func (s *Server) writeUser(w http.ResponseWriter) {
 	first, last, _ := strings.Cut(s.User.Name, " ")
+	metadata := s.User.PublicMetadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
 	accounts := []map[string]any{}
 	if s.User.GitHubLogin != "" {
 		accounts = append(accounts, map[string]any{"object": "external_account", "id": "eac_clerktest", "provider": "oauth_github", "username": s.User.GitHubLogin})
@@ -359,6 +365,7 @@ func (s *Server) writeUser(w http.ResponseWriter) {
 			{"object": "email_address", "id": "idn_primary", "email_address": s.User.Email, "verification": map[string]any{"status": "verified"}},
 		},
 		"external_accounts": accounts,
+		"public_metadata":   metadata,
 	})
 }
 

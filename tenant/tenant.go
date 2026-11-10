@@ -17,6 +17,9 @@ type Scope struct {
 	UserID      *uuid.UUID // nil for local mode and for system jobs
 	Role        string     // Clerk org role, e.g. "org:admin", "org:member"; "" in local mode
 	GitHubLogin string     // viewer login for the @me PR filter; "" when unknown
+	// PlatformAdmin is set for a user who may read every organization on the platform
+	// dashboard, whichever organization the request acts for.
+	PlatformAdmin bool
 }
 
 type scopeKey struct{}
