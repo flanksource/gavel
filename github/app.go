@@ -138,6 +138,52 @@ func (a *App) InstallationRepos(ctx context.Context, installationID int64) ([]In
 	}
 }
 
+// AppInstallation is one of the App's installations, with when it was made and suspended.
+type AppInstallation struct {
+	Installation
+	CreatedAt   time.Time  `json:"created_at"`
+	SuspendedAt *time.Time `json:"suspended_at"`
+}
+
+// Installations lists every installation of the App, page by page.
+func (a *App) Installations(ctx context.Context) ([]AppInstallation, error) {
+	appJWT, err := a.jwt()
+	if err != nil {
+		return nil, err
+	}
+	var installations []AppInstallation
+	for page := 1; ; page++ {
+		var body []AppInstallation
+		if err := a.call(ctx, http.MethodGet, "/app/installations?per_page=100&page="+strconv.Itoa(page), appJWT, &body); err != nil {
+			return nil, fmt.Errorf("list the GitHub App's installations: %w", err)
+		}
+		installations = append(installations, body...)
+		if len(body) < 100 {
+			return installations, nil
+		}
+	}
+}
+
+// InstallationRateLimit reads installationID's core REST API rate limit. Reading it does
+// not count against the limit.
+func (a *App) InstallationRateLimit(ctx context.Context, installationID int64) (RateLimit, error) {
+	token, err := a.InstallationToken(ctx, installationID)
+	if err != nil {
+		return RateLimit{}, err
+	}
+	var body struct {
+		Resources struct {
+			Core RateLimit `json:"core"`
+		} `json:"resources"`
+	}
+	if err := a.call(ctx, http.MethodGet, "/rate_limit", token, &body); err != nil {
+		return RateLimit{}, fmt.Errorf("read the rate limit of GitHub App installation %d: %w", installationID, err)
+	}
+	limit := body.Resources.Core
+	limit.Resource = "core"
+	return limit, nil
+}
+
 // UserInstallations lists this App's installations that userToken (a GitHub App user
 // token, e.g. from Clerk) can access, page by page.
 func (a *App) UserInstallations(ctx context.Context, userToken string) ([]Installation, error) {
