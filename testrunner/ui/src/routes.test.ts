@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildExportRoute, buildRoute, defaultStatusFilter, parseRoute, type RouteState } from './routes';
+import { buildExportRoute, buildRoute, parseRoute, type RouteState } from './routes';
 
 const at = (url: string) => parseRoute(new URL(`http://example.test${url}`));
 
@@ -22,7 +22,7 @@ describe('lint route grouping', () => {
     const baseState: Omit<RouteState, 'lintGrouping'> = {
       tab: 'lint',
       selectedPath: '',
-      filters: { status: defaultStatusFilter(), framework: new Map() },
+      filters: { status: new Map(), framework: new Map() },
       lintFilters: { severity: new Map(), linter: new Map() },
       problemFilters: { severity: new Map(), type: new Map() },
     };
@@ -42,18 +42,11 @@ describe('lint route grouping', () => {
 });
 
 describe('test status route', () => {
-  it('defaults to the failing-only filter and omits it from the URL', () => {
+  it('filters no status by default and omits it from the URL', () => {
     const route = at('/tests/pkg/test-foo');
     expect(route.selectedPath).toBe('pkg/test-foo');
-    expect(route.filters.status.get('passed')).toBe('exclude');
-    expect(route.filters.status.get('skipped')).toBe('exclude');
-    expect(buildRoute(route)).toBe('/tests/pkg/test-foo');
-  });
-
-  it('writes status=all for no filter and reads it back as no filter', () => {
-    const route = at('/tests?status=all');
     expect(route.filters.status.size).toBe(0);
-    expect(buildRoute(route)).toBe('/tests?status=all');
+    expect(buildRoute(route)).toBe('/tests/pkg/test-foo');
   });
 
   it('round trips an explicit status and framework filter', () => {
@@ -62,7 +55,7 @@ describe('test status route', () => {
   });
 
   it('builds the export URL for the same view with the format as the extension', () => {
-    expect(buildExportRoute(at('/tests/pkg?status=all'), 'md')).toBe('/tests/pkg.md?status=all');
+    expect(buildExportRoute(at('/tests/pkg?status=failed'), 'md')).toBe('/tests/pkg.md?status=failed');
   });
 });
 

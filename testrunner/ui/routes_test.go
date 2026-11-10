@@ -57,14 +57,13 @@ func TestFilesTabIsPageOnly(t *testing.T) {
 }
 
 // TestParseTestFiltersMatchesTheUIStatusParam mirrors src/routes.ts: no
-// status param is the failing-only default, `all` is no status filter.
+// status param filters no status.
 func TestParseTestFiltersMatchesTheUIStatusParam(t *testing.T) {
 	for _, tc := range []struct {
 		query string
 		want  []string
 	}{
-		{query: "", want: []string{"!passed", "!skipped"}},
-		{query: "?status=all", want: nil},
+		{query: "", want: nil},
 		{query: "?status=failed,!skipped", want: []string{"failed", "!skipped"}},
 	} {
 		got := parseTestFilters(httptest.NewRequest("GET", "/tests.json"+tc.query, nil)).Status

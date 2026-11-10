@@ -82,7 +82,7 @@ describe('App', () => {
     window.history.replaceState({}, '', '/');
   });
 
-  it('shows only the Tests tab for a plain test run and lists the tree under the failing-only default', async () => {
+  it('shows only the Tests tab for a plain test run and lists passed tests in the tree by default', async () => {
     serve(snapshot());
     open('/');
 
@@ -90,7 +90,7 @@ describe('App', () => {
     expect(screen.queryByRole('tab', { name: /Lint/ })).toBeNull();
     expect(screen.queryByRole('tab', { name: /Bench/ })).toBeNull();
     expect(screen.queryByRole('tab', { name: /Processes/ })).toBeNull();
-    expect(screen.queryByText('TestOk')).toBeNull();
+    expect(await screen.findByText(/TestOk/)).toBeTruthy();
   });
 
   it('adds a Lint tab for a run that linted, and switches to it with the URL', async () => {

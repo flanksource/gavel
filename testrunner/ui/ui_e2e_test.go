@@ -37,17 +37,10 @@ func startServer(srv *testui.Server) (string, func()) {
 	return url, func() { listener.Close() }
 }
 
-// showAll appends ?status=all so the page renders passed and skipped tests.
-// The UI defaults to a failures-only status filter (`!passed`, `!skipped`),
-// which hides those nodes; specs that click or assert on passed/skipped tests
-// must opt out of that default.
-func showAll(u string) string { return u + "/?status=all" }
-
 // clickTimeout bounds how long a single click waits for its target node.
 // chromedp.Click blocks until the selector matches, so a node that never
-// appears (e.g. one hidden by the default failures filter) would otherwise
-// hang until the suite-level deadline. Bounding each click surfaces the
-// offending selector instead of a generic suite timeout.
+// appears would otherwise hang until the suite-level deadline. Bounding each
+// click surfaces the offending selector instead of a generic suite timeout.
 const clickTimeout = 15 * time.Second
 
 // clickWithTimeout clicks the first node matching sel, failing the action with
@@ -313,7 +306,7 @@ var _ = Describe("Test UI E2E", func() {
 	It("renders the test tree with all frameworks", func() {
 		var treeText string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(showAll(url)),
+			chromedp.Navigate(url + "/"),
 			chromedp.WaitVisible(`body`, chromedp.ByQuery),
 			chromedp.Sleep(2*time.Second),
 			chromedp.Text(`body`, &treeText, chromedp.ByQuery),
@@ -462,7 +455,7 @@ var _ = Describe("Test UI E2E", func() {
 	It("shows Ginkgo suite path in detail panel", func() {
 		var detailText string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(showAll(url)),
+			chromedp.Navigate(url + "/"),
 			chromedp.Sleep(2*time.Second),
 			clickWithTimeout(`//span[contains(text(), "parses valid JSON")]`),
 			chromedp.Sleep(500*time.Millisecond),
@@ -504,7 +497,7 @@ var _ = Describe("Test UI E2E", func() {
 
 		var text1 string
 		err := chromedp.Run(streamCtx,
-			chromedp.Navigate(showAll(streamURL)),
+			chromedp.Navigate(streamURL + "/"),
 			chromedp.Sleep(3*time.Second),
 			chromedp.Text(`body`, &text1, chromedp.ByQuery),
 		)
@@ -614,7 +607,7 @@ var _ = Describe("Test UI E2E", func() {
 	It("shows passed Go test detail with stdout and file location", func() {
 		var detailText string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(showAll(url)),
+			chromedp.Navigate(url + "/"),
 			chromedp.Sleep(2*time.Second),
 			clickWithTimeout(`//span[contains(text(), "Parser")]`),
 			chromedp.Sleep(500*time.Millisecond),
@@ -636,7 +629,7 @@ var _ = Describe("Test UI E2E", func() {
 	It("shows passed Go subtest detail with parent test context", func() {
 		var detailText string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(showAll(url)),
+			chromedp.Navigate(url + "/"),
 			chromedp.Sleep(2*time.Second),
 			clickWithTimeout(`//span[contains(text(), "Registry / DetectsGinkgo")]`),
 			chromedp.Sleep(500*time.Millisecond),
@@ -652,7 +645,7 @@ var _ = Describe("Test UI E2E", func() {
 		// Load once to confirm it works
 		var text1 string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(showAll(url)),
+			chromedp.Navigate(url + "/"),
 			chromedp.Sleep(2*time.Second),
 			chromedp.Text(`body`, &text1, chromedp.ByQuery),
 		)
@@ -662,7 +655,7 @@ var _ = Describe("Test UI E2E", func() {
 		// Reload the page
 		var text2 string
 		err = chromedp.Run(ctx,
-			chromedp.Navigate(showAll(url)),
+			chromedp.Navigate(url + "/"),
 			chromedp.Sleep(2*time.Second),
 			chromedp.Text(`body`, &text2, chromedp.ByQuery),
 		)

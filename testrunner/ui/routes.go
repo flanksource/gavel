@@ -355,23 +355,13 @@ func routeRequestedFormat(r *http.Request, pathFormat string) string {
 	}
 }
 
-// Status filter values as the UI writes them (src/routes.ts): a URL without
-// `status` means the failing-only default, `status=all` means no filter.
-const statusFilterAll = "all"
-
-var defaultStatusFilter = []string{"!passed", "!skipped"}
-
+// parseTestFilters reads the filters as the UI writes them (src/routes.ts):
+// a URL without `status` filters no status.
 func parseTestFilters(r *http.Request) testRouteFilters {
-	filters := testRouteFilters{Framework: splitList(r.URL.Query().Get("framework"))}
-	status, present := r.URL.Query()["status"]
-	switch {
-	case !present:
-		filters.Status = append([]string(nil), defaultStatusFilter...)
-	case len(status) == 1 && status[0] == statusFilterAll:
-	default:
-		filters.Status = splitList(strings.Join(status, ","))
+	return testRouteFilters{
+		Framework: splitList(r.URL.Query().Get("framework")),
+		Status:    splitList(strings.Join(r.URL.Query()["status"], ",")),
 	}
-	return filters
 }
 
 func parseLintFilters(r *http.Request) lintRouteFilters {

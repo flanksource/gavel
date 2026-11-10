@@ -3,7 +3,6 @@ import {
   LINT_GROUPINGS,
   decodeFilterState,
   encodeFilterState,
-  type FilterState,
   type LintFilters,
   type LintGrouping,
   type LintSeverity,
@@ -11,21 +10,6 @@ import {
 } from '@flanksource/clicky-ui/data';
 import type { FileReviewView, ProblemFilters } from '@flanksource/clicky-ui/file-findings';
 import { basePath } from './config';
-
-const DEFAULT_STATUS_FILTER_TOKENS = ['!passed', '!skipped'];
-const STATUS_FILTER_ALL_SENTINEL = 'all';
-
-export function defaultStatusFilter(): FilterState<string> {
-  return decodeFilterState(DEFAULT_STATUS_FILTER_TOKENS);
-}
-
-function isDefaultStatusFilter(state: FilterState<string>): boolean {
-  const tokens = encodeFilterState(state);
-  if (tokens.length !== DEFAULT_STATUS_FILTER_TOKENS.length) return false;
-  const want = [...DEFAULT_STATUS_FILTER_TOKENS].sort();
-  const got = [...tokens].sort();
-  return want.every((token, i) => token === got[i]);
-}
 
 export type TabKey = 'tests' | 'lint' | 'files' | 'bench' | 'processes' | 'history';
 
@@ -84,20 +68,11 @@ export function parseRoute(location: Pick<Location, 'pathname' | 'search'>): Rou
   const sample = params.get('sample');
   const line = params.get('line');
   const dir = params.get('dir');
-  const rawStatus = params.get('status');
-  let status: FilterState<string>;
-  if (rawStatus === null) {
-    status = defaultStatusFilter();
-  } else if (rawStatus === STATUS_FILTER_ALL_SENTINEL) {
-    status = new Map();
-  } else {
-    status = decodeFilterState(splitCSV(rawStatus));
-  }
   return {
     tab,
     selectedPath,
     filters: {
-      status,
+      status: decodeFilterState(splitCSV(params.get('status'))),
       framework: decodeFilterState(splitCSV(params.get('framework'))),
     },
     lintGrouping: parseLintGrouping(params.get('grouping')),
@@ -124,14 +99,7 @@ export function buildRoute(state: RouteState): string {
 
   const params = new URLSearchParams();
   if (state.tab === 'tests') {
-    if (isDefaultStatusFilter(state.filters.status)) {
-      // Omit the param entirely — a URL without `status=` already means
-      // "apply defaults" under parseRoute.
-    } else if (state.filters.status.size === 0) {
-      params.set('status', STATUS_FILTER_ALL_SENTINEL);
-    } else {
-      params.set('status', encodeFilterState(state.filters.status).join(','));
-    }
+    if (state.filters.status.size > 0) params.set('status', encodeFilterState(state.filters.status).join(','));
     if (state.filters.framework.size > 0) params.set('framework', encodeFilterState(state.filters.framework).join(','));
   }
   if (state.tab === 'lint') {

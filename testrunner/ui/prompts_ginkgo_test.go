@@ -101,7 +101,7 @@ var _ = Describe("GET /api/v1/connection", func() {
 		Expect(json.Unmarshal(response.Body.Bytes(), &decoded)).To(Succeed())
 		Expect(decoded.Filters["connection"].Total).To(Equal(1))
 		Expect(decoded.Filters["connection"].Options).To(Equal(map[string]struct{ Plain string }{
-			"warehouse": {Plain: "warehouse (sql_server)"},
+			"connection://warehouse": {Plain: "warehouse (sql_server)"},
 		}))
 	})
 
