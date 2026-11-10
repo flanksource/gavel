@@ -47,8 +47,8 @@ type inlineJob struct {
 }
 
 // moveInlineJobLogs writes the logs of every job_log_caches row that still holds them inline
-// to the blob store and records their key, then drops logs_gz. A failed write fails the
-// migration, leaving the column and its logs in place.
+// to the blob store and records their key, then drops logs_gz, which the schema no longer
+// drops on its own. A failed write fails the migration, leaving the column and its logs in place.
 func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 	pool, err := commonsdb.NewDB(dsn)
 	if err != nil {

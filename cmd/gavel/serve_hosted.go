@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	commonssecret "github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/api"
@@ -26,12 +27,12 @@ import (
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/installations"
 	shared "github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/serve"
 	"github.com/flanksource/gavel/tenant"
-	"github.com/flanksource/gavel/todos/remote"
 	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -157,13 +158,30 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	if err != nil {
 		return hostedStack{}, fmt.Errorf("decode GAVEL_SECRET_KEY: %w", err)
 	}
-	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret)
+	// Organizations' model keys are encrypted with a local key derived from the secret.
+	commonssecret.KMSConnection = modelkeys.KeeperConnection(secret)
+	commonssecret.InvalidateKeeper()
+	// Sandbox jobs authenticate with their run token; runs on substrate reach it through serve,
+	// as their run.
+	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
+	if app != nil {
+		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
+			return ui.OrganizationPRs(store.TokenSource(org), cache.ForOrg(org))(ctx, url)
+		}
+	}
+	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret, sources, runs.Handler())
 	if err != nil {
 		return hostedStack{}, err
 	}
-	// An agent run's sandbox job sends its messages to the run API, which the relay hands to the
-	// run waiting for them.
-	relay := &remote.Relay{}
+	substrateBackend, err := substrateAgentBackend(opts)
+	if err != nil {
+		return hostedStack{}, err
+	}
+	if dispatcher != nil {
+		if sweeper, ok := dispatcher.Executor.(sandbox.Sweeper); ok {
+			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime())
+		}
+	}
 
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
 		cfg, err := ui.LoadOrgSearchConfig(ctx, db, scope.OrgID)
@@ -181,7 +199,10 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		srv.SetHostedWorkspaces(ui.HostedWorkspaces{DB: db, Sources: sources})
 		srv.SetFixtureSchemaProvider(func() (any, error) { return fixturesSchemaDocument() })
 		if dispatcher != nil {
-			srv.SetAgentRuns(ui.AgentRuns{Dispatcher: dispatcher, Relay: relay})
+			srv.SetAgentRuns(ui.AgentRuns{
+				Dispatcher: dispatcher, Substrate: substrateBackend, Sources: sources,
+				Transcripts: ui.RunTranscripts{DB: db, DataDir: sources.DataDir}, RunAPI: runs.Handler(),
+			})
 		}
 		srv.SetAuthConfig(authConfig)
 		if err := srv.StartWorkspaceData(ctx, db); err != nil {
@@ -217,16 +238,17 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		OIDC:  api.GitHubOIDCVerifier{Audience: opts.PublicURL, JWKS: api.NewJWKSCache(api.GitHubOIDCJWKSURL, &http.Client{Timeout: 10 * time.Second}, 10*time.Minute)},
 		Cache: cache,
 	}
-	// Sandbox jobs authenticate with their run token.
-	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources, Relay: relay}
-	if app != nil {
-		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
-			return ui.OrganizationPRs(store.TokenSource(org), cache.ForOrg(org))(ctx, url)
-		}
-	}
 	root := http.NewServeMux()
 	root.Handle("/api/ci/", ciResults.Handler())
 	root.Handle("/api/runs/", runs.Handler())
+	// Substrate's credential provider fetches organizations' model keys for their runs.
+	if dispatcher != nil && opts.Sandbox == "substrate" && opts.credentialProviderToken != "" {
+		credentials := &ui.CredentialsAPI{
+			DB: db, Keys: modelkeys.Store{DB: db}, Atespace: opts.SubstrateAtespace,
+			RunLifetime: dispatcher.RunLifetime(), Token: opts.credentialProviderToken,
+		}
+		root.Handle("/api/credentials/", credentials.Handler())
+	}
 	root.Handle("/", auth.Middleware(next, shell.Handler()))
 	return hostedStack{handler: root, members: auth.Members, stop: stop, dispatcher: dispatcher}, nil
 }

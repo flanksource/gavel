@@ -33,6 +33,7 @@ export function TodoTitleEditor({ value, busy, onChange, onSave, onCancel }: {
         className={inputClass}
         value={value}
         disabled={busy}
+        // react-doctor-disable-next-line react-doctor/no-autofocus -- focus the inline editor the user just opened
         autoFocus
         onChange={e => onChange(e.currentTarget.value)}
         onKeyDown={e => {
@@ -60,6 +61,7 @@ export function TodoBodyEditor({ value, busy, onChange, onSave, onCancel }: {
         className={`${inputClass} h-48 resize-y font-mono`}
         value={value}
         disabled={busy}
+        // react-doctor-disable-next-line react-doctor/no-autofocus -- focus the inline editor the user just opened
         autoFocus
         onChange={e => onChange(e.currentTarget.value)}
         placeholder="Markdown body"

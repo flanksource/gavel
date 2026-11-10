@@ -25,6 +25,7 @@ export function SqlStatements({ profile }: { profile: FixtureSQLProfile }) {
     <Section title={`${statements.length} ${statements.length === 1 ? 'query' : 'queries'}`} defaultOpen={false}>
       <div className="max-h-80 space-y-2 overflow-auto">
         {statements.map((statement, index) => (
+          // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- static recorded statements in execution order; the same SQL can repeat
           <div key={index} className="rounded border border-border bg-muted/50 p-2 text-xs">
             <div className="mb-1 text-muted-foreground">
               {statement.duration_ms.toFixed(1)} ms · {statement.rows} {statement.rows === 1 ? 'row' : 'rows'}{statement.slow ? ' · slow' : ''}{statement.error ? ' · error' : ''}

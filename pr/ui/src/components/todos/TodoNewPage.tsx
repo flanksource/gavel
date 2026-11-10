@@ -98,7 +98,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
   });
   const createTodo = useCreateTodoMutation(dir);
   const commentTodo = useUpdateTodoMutation(dir, `Failed to add comment to todo ${selectedRef}`);
-  const existingTodos = existingTodosQuery.data?.items ?? [];
+  const existingTodos = useMemo(() => existingTodosQuery.data?.items ?? [], [existingTodosQuery.data]);
   const loadingTodos = existingTodosQuery.isFetching;
   const busy = createTodo.isPending || commentTodo.isPending;
   const visibleError = error || projectError || (existingTodosQuery.error instanceof Error ? existingTodosQuery.error.message : '');
@@ -325,6 +325,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
                     className={inputClass}
                     value={todoSearch}
                     placeholder="Search issues"
+                    aria-label="Search issues"
                     onChange={e => setTodoSearch(e.currentTarget.value)}
                     autoFocus
                   />
@@ -362,6 +363,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
                   className={inputClass}
                   value={title}
                   placeholder="What needs doing?"
+                  aria-label="Title"
                   onChange={e => setTitle(e.currentTarget.value)}
                   autoFocus
                 />

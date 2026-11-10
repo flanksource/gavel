@@ -104,6 +104,9 @@ func (a *RunsAPI) handlePRPush(w http.ResponseWriter, r *http.Request, run sandb
 	_ = json.NewEncoder(w).Encode(map[string]string{"sha": sha})
 }
 
+// maxRunCommitsBytes bounds the bundle of the commits a run pushes to its PR.
+const maxRunCommitsBytes = 256 << 20
+
 // prHead is the PR's open source branch, answering the request itself when it can't read one.
 func prHead(ctx context.Context, w http.ResponseWriter, pr runPR) (*model.PRInfo, bool) {
 	snapshot, err := pr.client.Status(ctx, pr.number, model.StatusOptions{})

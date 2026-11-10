@@ -385,6 +385,7 @@ export function CreateTodoFromPRDialog({
               className={inputClass}
               value={title}
               placeholder="What needs doing?"
+              aria-label="Title"
               onChange={e => setTitle(e.currentTarget.value)}
               autoFocus
             />
@@ -481,6 +482,7 @@ export function CreateTodoFromPRDialog({
               className={`${inputClass} h-20 resize-none`}
               value={notes}
               placeholder="Extra context (optional)"
+              aria-label="Notes"
               onChange={e => setNotes(e.currentTarget.value)}
             />
           </Field>

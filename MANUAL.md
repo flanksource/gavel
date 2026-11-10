@@ -330,6 +330,19 @@ Framework pinning is available in two forms:
 
 Use the framework subcommands when you want the full `test` flag surface but do not want auto-detection to choose runners for you.
 
+Recording runs in uir:
+
+- `gavel test --uir-export results.json` also writes the run's Go and Ginkgo results as version 1 of [uir's test import contract](https://github.com/flanksource/uir/blob/feat/test-runs-coverage-flakiness/docs/tests.md), for `uir tests import results.json`. Gavel only writes the file. Packages are Go import paths and files are relative to the module that holds `--cwd`, with forward slashes. Gavel's run-cache hits are left out, since they did not run.
+- Each run names the code its tests ran on, all captured before the tests start so files they write do not change it:
+  - `git_commit` is the full SHA of the module's `HEAD`.
+  - `dirty` is true when the module's worktree differs from `HEAD`: a tracked file changed, staged or not, or an untracked, non-ignored `.go` file that uir indexes (one outside directories starting with `.` or `_`, `vendor` and `testdata`). The export file does not count; neither do nested modules, which the export leaves out.
+  - `git_tree`, only when `dirty` is true, is the Git tree hash of the repository's whole working tree: `HEAD` plus every tracked change and untracked, non-ignored file, less the export file. Gavel writes it with `git read-tree HEAD`, `git add -A` and `git write-tree` through a temporary index at the repository's top, so your index and worktree are untouched. uir computes the same tree at import time, excluding the import file, to check the code has not changed since the run.
+  - Gavel's own output never counts: every `.gavel` and `.tmp` directory gavel writes to holds a `.gitignore` of `*`, written when gavel creates the directory, and before the export's checks for ones at the repository top, the module root and `--cwd`.
+- Aggregate coverage: every `go test` batch runs with `-coverprofile`, and the merged blocks become the run's `coverage`. Blocks of files outside the module, including nested modules, are dropped.
+- `--uir-test-coverage` also reruns each Go test (`-run=^TestX$/^sub$`) and each Ginkgo spec (its bootstrap test with `-ginkgo.focus` on the spec's full text) alone with `-coverprofile`, as that test's own `coverage`. It is off by default because it costs one `go test` per test. Skipped tests get no rerun.
+- `environment` holds `GOOS`, `GOARCH` and `go` from `go env`, and `race`, `tags` and `count` from `GOFLAGS` and the `go test` command, so `--tags` and `--extra-args=-race`/`-count=N` are recorded.
+- `inputs_digest` covers the files tests can read that uir does not index. These are: every file `go list` reports as `EmbedFiles`, `TestEmbedFiles` or `XTestEmbedFiles` for the module's packages under `--tags`, even when git ignores it; every file under a `testdata` directory, `.go` included; and every file with the extension `.sql`, `.hcl`, `.yaml`, `.yml`, `.json`, `.toml`, `.ini`, `.conf`, `.cfg`, `.env`, `.properties`, `.xml`, `.csv`, `.tmpl`, `.tpl` or `.gotmpl`. The last two are found by walking the module as git sees it, so they skip git-ignored files, directories starting with `.` (including `.gavel` and `.tmp`), `vendor`, and nested modules or checkouts. The export file itself is never included. The value is `sha256:` plus the SHA-256 of one `<sha256 of content>  <path>` line per file, sorted by path, so renaming a file changes it too.
+
 `gavel test history` reads completed run snapshots from `.gavel/run-*.json` and shows a package/file/suite outline of executable tests. Leaf rows include execution count, pass rate, min/avg/max duration, last passed, last failed, and the date the test first appeared in local history. Optional paths filter by package or file relative to `--cwd`.
 
 ### `gavel lint`

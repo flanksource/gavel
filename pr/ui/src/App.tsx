@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useEffectEvent, useMemo, useCallback, useRef } from 'react';
 import type { PRItem, PRInfo, SearchConfig, Project } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
@@ -401,18 +401,18 @@ export function App() {
 
   // A project hidden while it is the scope (from the picker, the Projects
   // sidebar, or a deep link to one) drops back to All projects, like hideOrg.
+  const dropHiddenScope = useEffectEvent(() => {
+    updateScopeConfig({ project: '', repos: Array.from(new Set(visibleProjects.flatMap(project => project.repos))), org: '', all: false });
+  });
   useEffect(() => {
     if (!scopeProjectHidden) return;
-    updateScopeConfig({ project: '', repos: Array.from(new Set(visibleProjects.flatMap(project => project.repos))), org: '', all: false });
+    dropHiddenScope();
   }, [scopeProjectHidden]);
 
   // When PRs arrive (or the URL selection changes), reconcile `selected` with
   // the route's selectedPath. Fetches detail automatically for deep-linked PRs.
-  useEffect(() => {
-    // The native menubar webview drives PR selection through its own local
-    // state, not the route, so skip route→selection reconciliation there and
-    // let onSelect/onBack own it.
-    if (isMenubar || isProcessesPage || activeTab !== 'prs') return;
+  // Reads the current selection without re-running reconciliation whenever it changes.
+  const reconcileSelection = useEffectEvent(() => {
     if (!selectedPath) {
       if (selected) setSelected(null);
       return;
@@ -427,7 +427,14 @@ export function App() {
     if (direct) {
       loadPR(direct);
     }
-  }, [activeTab, selectedPath, prs]);
+  });
+  useEffect(() => {
+    // The native menubar webview drives PR selection through its own local
+    // state, not the route, so skip route→selection reconciliation there and
+    // let onSelect/onBack own it.
+    if (isMenubar || isProcessesPage || activeTab !== 'prs') return;
+    reconcileSelection();
+  }, [isMenubar, isProcessesPage, activeTab, selectedPath, prs]);
 
   const onProcChanged = useCallback(() => {
     void refreshProjectsAndProcesses();
@@ -455,16 +462,16 @@ export function App() {
       : current);
   }, [detail?.pr, selected?.number, selected?.repo]);
 
+  const selectedKey = selected ? prKey(selected) : '';
   useEffect(() => {
-    if (!selected || !detail?.gavelResults) return;
+    if (!selectedKey || !detail?.gavelResults) return;
     const aggregate = aggregateGavelShards(detail.gavelResults);
     if (!aggregate) return;
-    const key = prKey(selected);
     updateSnapshot(current => ({
       ...current,
-      gavelResults: { ...current.gavelResults, [key]: aggregate },
+      gavelResults: { ...current.gavelResults, [selectedKey]: aggregate },
     }));
-  }, [detail?.gavelResults, selected?.number, selected?.repo, updateSnapshot]);
+  }, [detail?.gavelResults, selectedKey, updateSnapshot]);
 
   function loadPR(pr: PRItem) {
     if (selected?.repo === pr.repo && selected.number === pr.number) refreshDetail();

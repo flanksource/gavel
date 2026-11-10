@@ -59,7 +59,7 @@ func TestTenancySchemaBundle(t *testing.T) {
 	}
 
 	tenancy := readEmbeddedSchemaFile(t, "schema/tenancy.hcl")
-	for _, name := range []string{"org_memberships", "user_ssh_keys", "repos", "github_installations", "org_settings", "sandbox_runs"} {
+	for _, name := range []string{"org_memberships", "user_ssh_keys", "repos", "github_installations", "org_settings", "org_model_keys", "sandbox_runs"} {
 		assert.Contains(t, tenancy, `table "`+name+`"`)
 	}
 }

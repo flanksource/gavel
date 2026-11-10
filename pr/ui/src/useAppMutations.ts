@@ -68,6 +68,7 @@ export function useAppMutations(): AppMutations {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: queryKeys.prSnapshot(), exact: true }),
     onError: reportError,
   });
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess writes the server-echoed flag into the prSnapshot cache via setSnapshot (setQueryData); the SSE stream pushes the rest
   const pauseMutation = useMutation({
     mutationFn: async () => requireBoolean(
       await mutationJSON({ url: '/api/prs/pause', method: 'POST', context: 'Toggle pull request polling' }),
@@ -105,6 +106,7 @@ export function useAppMutations(): AppMutations {
       reportError(cause);
     },
   });
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess writes the server-echoed flag into the prSnapshot cache via setSnapshot (setQueryData); the SSE stream pushes the rest
   const botsMutation = useMutation({
     mutationFn: async (include: boolean) => requireBoolean(
       await mutationJSON({
@@ -120,6 +122,7 @@ export function useAppMutations(): AppMutations {
     onSuccess: includeBots => setSnapshot(current => ({ ...current, includeBots })),
     onError: reportError,
   });
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess writes the server-echoed flag into the prSnapshot cache via setSnapshot (setQueryData); the SSE stream pushes the rest
   const closedMutation = useMutation({
     mutationFn: async (show: boolean) => requireBoolean(
       await mutationJSON({

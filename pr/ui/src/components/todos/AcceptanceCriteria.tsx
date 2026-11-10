@@ -50,6 +50,7 @@ export function AcceptanceCriteria({
     },
   });
   const busy = updateMutation.isPending;
+  const { reset: resetUpdate } = updateMutation;
 
   // Adopt the server's criteria whenever they change (a save returns the
   // re-parsed list); keep this independent of the verdict so showing a verdict
@@ -61,8 +62,8 @@ export function AcceptanceCriteria({
   // Reset transient view state only when switching to a different todo.
   useEffect(() => {
     setEditing(null);
-    updateMutation.reset();
-  }, [todo.ref]);
+    resetUpdate();
+  }, [todo.ref, resetUpdate]);
 
   // save persists the full criteria list and adopts the server's returned todo.
   async function save(next: AcceptanceCriterion[]): Promise<boolean> {
@@ -113,6 +114,7 @@ export function AcceptanceCriteria({
 
         <ul className="space-y-1">
           {criteria.map((c, i) => (
+            // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- criteria have no id (text may repeat); rows are fully controlled and edit state is index-addressed
             <li key={i} className="group flex items-start gap-2 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40">
               <input
                 type="checkbox"

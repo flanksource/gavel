@@ -22,7 +22,8 @@ export function buildDocTree(docs: DocNode["doc"][]): DocNode[] {
       if (!ancestor) throw new Error(`missing parent ${parent} for ${node.doc.slug}`);
       parent = ancestor.doc.frontmatter.parent;
     }
-    if (node.doc.frontmatter.parent) nodes.get(node.doc.frontmatter.parent)!.children.push(node);
+    const parentNode = node.doc.frontmatter.parent ? nodes.get(node.doc.frontmatter.parent) : undefined;
+    if (parentNode) parentNode.children.push(node);
     else roots.push(node);
   }
   return roots;

@@ -1,18 +1,12 @@
-// Tests the run API's transcripts endpoint: an agent run's job uploads its agent's transcript,
-// and serve stores and ingests it, owned by the run's organization and user.
+// Tests how serve keeps an agent run's transcript: stored under its data directory, ingested,
+// and owned by the run's organization and user.
 package ui
 
 import (
-	"bytes"
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
@@ -28,8 +22,8 @@ const sandboxTranscript = `{"type":"user","uuid":"u-1","sessionId":"` + sandboxS
 {"type":"assistant","uuid":"a-1","sessionId":"` + sandboxSessionID + `","timestamp":"2026-07-05T10:00:05Z","message":{"role":"assistant","model":"claude-sonnet-5","usage":{"input_tokens":100,"output_tokens":20},"content":[{"type":"text","text":"fixed it"}]}}
 `
 
-func TestRunsAPIIngestsAnAgentRunsTranscripts(t *testing.T) {
-	t.Setenv(database.EnvDSN, commonsdbtest.ForT(t, commonsdbtest.Options{Name: "gavel_runs_api_transcripts"}).DSN())
+func TestRunTranscriptsKeepsAndIngestsARunsTranscript(t *testing.T) {
+	t.Setenv(database.EnvDSN, commonsdbtest.ForT(t, commonsdbtest.Options{Name: "gavel_run_transcripts"}).DSN())
 	t.Setenv(database.EnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
 	opened, err := database.Open(t.Context(), database.WithMigrations())
@@ -39,34 +33,13 @@ func TestRunsAPIIngestsAnAgentRunsTranscripts(t *testing.T) {
 	org, user := uuid.New(), uuid.New()
 	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Acme')`, org, org.String()).Error)
 	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, user).Error)
-	agentRun, testRun := uuid.New(), uuid.New()
-	for id, kind := range map[uuid.UUID]string{agentRun: "agent", testRun: "test"} {
-		spec, err := json.Marshal(sandbox.RunSpec{Kind: kind})
-		require.NoError(t, err)
-		require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, user_id, kind, status, backend, spec) VALUES (?, ?, ?, ?, 'running', 'memory', ?)`, id, org, user, kind, string(spec)).Error)
-	}
-
-	key := []byte(strings.Repeat("k", 32))
+	run := sandbox.RunRecord{ID: uuid.New(), Org: org, User: &user, Spec: sandbox.RunSpec{Kind: "agent"}}
 	dataDir := t.TempDir()
-	server := httptest.NewServer((&RunsAPI{DB: db, TokenKey: key, Sources: &sandbox.Sources{DataDir: dataDir}}).Handler())
-	t.Cleanup(server.Close)
-	post := func(run uuid.UUID, query, body string) (int, string) {
-		t.Helper()
-		req, err := http.NewRequest(http.MethodPost, server.URL+"/api/runs/"+run.String()+"/transcripts?"+query, bytes.NewBufferString(body))
-		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+sandbox.SignRunToken(key, run, org, time.Now().Add(time.Hour)))
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		data, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		return resp.StatusCode, string(data)
-	}
+	transcripts := RunTranscripts{DB: db, DataDir: dataDir}
 
 	name := "-workspace-src/" + sandboxSessionID + ".jsonl"
-	status, body := post(agentRun, "source=claude&name="+name, sandboxTranscript)
-	require.Equal(t, http.StatusAccepted, status, body)
-	stored, err := os.ReadFile(filepath.Join(dataDir, "transcripts", org.String(), agentRun.String(), "claude", name))
+	require.NoError(t, transcripts.Keep(t.Context(), run, "claude", name, strings.NewReader(sandboxTranscript)))
+	stored, err := os.ReadFile(filepath.Join(dataDir, "transcripts", org.String(), run.ID.String(), "claude", name))
 	require.NoError(t, err)
 	assert.Equal(t, sandboxTranscript, string(stored))
 
@@ -82,20 +55,15 @@ func TestRunsAPIIngestsAnAgentRunsTranscripts(t *testing.T) {
 	assert.Equal(t, org, session.OrgID)
 	assert.Equal(t, user, session.UserID)
 
-	for query, want := range map[string]string{
-		"source=gemini&name=a.jsonl":            `transcript source "gemini" is not claude or codex`,
-		"source=claude&name=../../escape.jsonl": `transcript name "../../escape.jsonl" must be a relative .jsonl path inside the run's transcripts`,
-		"source=claude&name=/etc/passwd":        `transcript name "/etc/passwd" must be a relative .jsonl path inside the run's transcripts`,
-		"source=claude&name=sub/../a.jsonl":     `transcript name "sub/../a.jsonl" must be a relative .jsonl path inside the run's transcripts`,
-		"source=claude&name=notes.txt":          `transcript name "notes.txt" must be a relative .jsonl path inside the run's transcripts`,
+	for _, refused := range []struct{ source, name, want string }{
+		{"gemini", "a.jsonl", `transcript source "gemini" is not claude or codex`},
+		{"claude", "../../escape.jsonl", `transcript name "../../escape.jsonl" must be a relative .jsonl path inside the run's transcripts`},
+		{"claude", "/etc/passwd", `transcript name "/etc/passwd" must be a relative .jsonl path inside the run's transcripts`},
+		{"claude", "sub/../a.jsonl", `transcript name "sub/../a.jsonl" must be a relative .jsonl path inside the run's transcripts`},
+		{"claude", "notes.txt", `transcript name "notes.txt" must be a relative .jsonl path inside the run's transcripts`},
 	} {
-		status, body := post(agentRun, query, sandboxTranscript)
-		assert.Equal(t, http.StatusBadRequest, status, query)
-		var refused struct{ Error string }
-		require.NoError(t, json.Unmarshal([]byte(body), &refused), body)
-		assert.Equal(t, want, refused.Error, query)
+		err := transcripts.Keep(t.Context(), run, refused.source, refused.name, strings.NewReader(sandboxTranscript))
+		require.ErrorAs(t, err, new(*TranscriptRefusedError), refused.name)
+		assert.EqualError(t, err, refused.want)
 	}
-	status, body = post(testRun, "source=claude&name="+name, sandboxTranscript)
-	assert.Equal(t, http.StatusBadRequest, status)
-	assert.Contains(t, body, "only agent runs upload transcripts")
 }

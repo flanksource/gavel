@@ -1,35 +1,37 @@
-// Runs sandbox jobs on agent-substrate: each job is an environment created from the runner image,
-// whose one process is the job, with egress limited to an allowlist and model keys injected outside.
+// Runs sandbox jobs on agent-substrate through captain's substrate sandbox, as runs of the bash
+// model: the job's command runs in a checkout of its commit, reaching serve's run API over the run's
+// channel, with egress limited to an allowlist and model keys injected outside.
 package sandbox
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
-	"net/url"
-	"os"
+	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/flanksource/gavel/sandbox/internal/substrate/ateapipb"
-	"github.com/flanksource/gavel/sandbox/internal/substrate/ateenvv1alpha"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/durationpb"
+	"github.com/flanksource/captain/pkg/ai"
+	// The bash model a job runs on, and every provider an agent run's model may name.
+	_ "github.com/flanksource/captain/pkg/ai/provider"
+	"github.com/flanksource/captain/pkg/ai/provider/bash"
+	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/promptrun"
+	// The substrate sandbox a job's run executes in.
+	_ "github.com/flanksource/captain/pkg/sandbox/substraterun"
+	"github.com/flanksource/captain/pkg/substrate"
+	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/sandbox/runclient"
 )
 
-// DefaultSubstrateEgress are the hosts a job reaches besides gavel serve and the model APIs: the
-// Go, npm and Python registries, and GitHub. They are passed through without decryption.
+// DefaultSubstrateEgress are the hosts a job or agent run reaches besides its model APIs: the Go,
+// npm and Python registries, and GitHub. They are passed through without decryption.
 var DefaultSubstrateEgress = []string{
 	"proxy.golang.org", "sum.golang.org",
 	"registry.npmjs.org",
@@ -37,357 +39,278 @@ var DefaultSubstrateEgress = []string{
 	"github.com", "codeload.github.com", "objects.githubusercontent.com",
 }
 
-// substrateCredentialPlaceholder is what a job sends in a header the egress gateway replaces with
-// the real credential, which never enters the environment.
-const substrateCredentialPlaceholder = "injected-by-the-substrate-egress-gateway"
-
-// InjectedCredential is a credential the egress gateway puts into a job's requests to Host: it
-// replaces Header's value with Prefix and the credential URI names. Env is the variable the job's
-// client reads the credential from, set to a placeholder so the client sends the header.
-type InjectedCredential struct {
-	Host   string
-	Header string
-	Prefix string
-	// URI names the credential for Substrate's credential provider, such as
-	// ate-secret://k8s.io/default/<namespace>/<secret>/<key>.
-	URI string
-	Env string
-}
-
-// SubstrateOptions configures the agent-substrate executor.
+// SubstrateOptions configures the agent-substrate executor: the substrate it reaches, what jobs may
+// reach besides DefaultSubstrateEgress and their model APIs, and the run API that answers them.
 type SubstrateOptions struct {
-	// EnvAPI is the ate-env-api gRPC address, such as ate-env-api.ate-env.svc:7777.
-	EnvAPI string
-	// Control is the ate-api-server gRPC address, which egress policies are set through.
-	Control string
-	// ControlTokenFile holds the bearer token the control plane accepts, such as a projected
-	// ServiceAccount token with the api.ate-system.svc audience. It is read on every call.
-	ControlTokenFile string
-	// CAFile holds the CA substrate's certificates chain to. Without it or a client certificate,
-	// the control plane's certificate isn't verified, as a port-forwarded control plane needs.
-	CAFile string
-	// ClientCertFile and ClientKeyFile hold the client certificate the ingress in front of a
-	// substrate in another cluster requires. With them, both APIs are reached over TLS verified
-	// against the system roots, or CAFile. They are read on every handshake, so a renewed
-	// certificate is picked up without a restart.
-	ClientCertFile string
-	ClientKeyFile  string
-	// Atespace is the atespace environments are created in; empty is ate-env.
-	Atespace string
-	// Template is the ActorTemplate environments derive from, its container replaced by the job's
-	// image; empty is env's default-template.
-	Template string
+	substrate.Options
 	// Egress are hosts jobs may reach besides DefaultSubstrateEgress.
 	Egress []string
-	// Credentials are the model API keys the egress gateway injects.
-	Credentials []InjectedCredential
-	// TrustBundle is the path, inside the environment, of the egress gateway's CA, which a job
-	// must trust to reach a host whose requests carry an injected credential.
-	TrustBundle string
+	// RunAPI is serve's run API, which answers what a job's program asks of its run, its spec and
+	// its results, as the run, over the run's channel.
+	RunAPI http.Handler
+	// Program is the environment's program, which runs the job's run there; empty is gavel's.
+	Program []string
 }
+
+// substrateProgram is gavel's program in a substrate environment, which runs a whole run there.
+var substrateProgram = []string{"gavel", "runner", "run-task"}
 
 type substrateExecutor struct {
-	options   SubstrateOptions
-	envs      ateenvv1alpha.EnvironmentServiceClient
-	processes ateenvv1alpha.ProcessServiceClient
-	control   ateapipb.ControlClient
+	options SubstrateOptions
+	client  *substrate.Client
 }
 
-// NewSubstrate returns an executor that runs jobs as agent-substrate environments.
+// NewSubstrate returns an executor that runs jobs on agent-substrate through captain's substrate
+// sandbox.
 func NewSubstrate(options SubstrateOptions) (Executor, error) {
-	if options.EnvAPI == "" || options.Control == "" {
-		return nil, errors.New("the substrate executor needs the ate-env-api and ate-api-server addresses")
+	if options.RunAPI == nil {
+		return nil, errors.New("the substrate executor answers its jobs' run API requests over each run's channel: SubstrateOptions.RunAPI is required")
 	}
 	if options.Atespace == "" {
 		options.Atespace = "ate-env"
 	}
-	if (options.ClientCertFile == "") != (options.ClientKeyFile == "") {
-		return nil, errors.New("the substrate client certificate needs both its certificate and key files")
+	if len(options.Program) == 0 {
+		options.Program = substrateProgram
 	}
-	remote := options.ClientCertFile != ""
-	tlsConfig := &tls.Config{InsecureSkipVerify: options.CAFile == "" && !remote} //nolint:gosec // a port-forwarded control plane serves a cluster-internal certificate
-	if options.CAFile != "" {
-		pem, err := os.ReadFile(options.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read substrate's CA: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("substrate's CA file %s holds no certificate", options.CAFile)
-		}
-		tlsConfig.RootCAs = pool
-	}
-	// ate-env-api serves cleartext gRPC inside the cluster; from another cluster it is behind the
-	// ingress's TLS.
-	envCredentials := insecure.NewCredentials()
-	if remote {
-		if _, err := clientCertificate(options); err != nil {
-			return nil, err
-		}
-		tlsConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			return clientCertificate(options)
-		}
-		envCredentials = credentials.NewTLS(tlsConfig)
-	}
-	envConn, err := grpc.NewClient(options.EnvAPI, grpc.WithTransportCredentials(envCredentials))
+	client, err := substrate.Dial(options.Options)
 	if err != nil {
-		return nil, fmt.Errorf("connect to ate-env-api %s: %w", options.EnvAPI, err)
+		return nil, err
 	}
-	dial := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))}
-	if options.ControlTokenFile != "" {
-		dial = append(dial, grpc.WithPerRPCCredentials(tokenFile(options.ControlTokenFile)))
-	}
-	conn, err := grpc.NewClient(options.Control, dial...)
-	if err != nil {
-		return nil, fmt.Errorf("connect to ate-api-server %s: %w", options.Control, err)
-	}
-	return &substrateExecutor{
-		options:   options,
-		envs:      ateenvv1alpha.NewEnvironmentServiceClient(envConn),
-		processes: ateenvv1alpha.NewProcessServiceClient(envConn),
-		control:   ateapipb.NewControlClient(conn),
-	}, nil
+	return &substrateExecutor{options: options, client: client}, nil
 }
 
 func (e *substrateExecutor) Name() string { return "substrate" }
 
+// Submit starts job's run on the bash model in captain's substrate sandbox: its command runs in
+// environment JobName(run), in a checkout of its commit, with what its program asks of its run
+// answered by the executor's run API, as the run, over the run's channel. The environment holds
+// neither the run's token nor a route to serve.
 func (e *substrateExecutor) Submit(ctx context.Context, job Job) (Handle, error) {
-	if err := substrateImage(job.Image); err != nil {
-		return nil, err
+	if job.Source == nil {
+		return nil, fmt.Errorf("sandbox run %s names no source: a substrate job runs in a checkout of its commit, which its dispatcher's Sources finds", job.RunID)
 	}
-	process, err := substrateProcess(job, e.options)
+	env, token, err := substrateJobEnv(job)
 	if err != nil {
 		return nil, err
 	}
-	policy, err := substrateEgressPolicy(e.options, e.options.Atespace, job.Env["GAVEL_SERVER"])
-	if err != nil {
-		return nil, err
+	timeout := job.Limits.withDefaults().Timeout
+	options := SubstrateBackend(e.options.Options, e.options.Egress)
+	options["environment"] = JobName(job.RunID)
+	options["ref"] = job.Source.Commit
+	options["command"] = e.options.Program
+	options["env"] = env
+	options["credentials"] = SubstrateCredentialOptions(job.Credentials)
+	options["maxLifetime"] = (timeout + reportTime).String()
+	logger.Infof("sandbox run %s in substrate environment %s/%s: the egress gateway injects %s", job.RunID, e.options.Atespace, JobName(job.RunID), injections(job.Credentials))
+
+	handle := newSubstrateHandle(JobName(job.RunID))
+	spec := api.Spec{Model: api.Model{Name: "bash"}, Prompt: api.Prompt{User: shellCommand(job.Command)}, Sandbox: &api.SandboxRef{Mode: api.SandboxSubstrate}}
+	// The command runs at the top of the environment's checkout of the repository.
+	spec.SetCwd(job.Source.GitDir)
+	in := promptrun.Input{
+		Resolved:          api.ResolvedSpec{Spec: spec},
+		Config:            ai.Config{SandboxSelection: &api.SandboxConfig{Kind: api.SandboxSubstrate, Name: "gavel-jobs", Options: options}},
+		Repo:              job.Source.GitDir,
+		EnvironmentOutput: handle.log,
+		OnEvent: func(_ int, event ai.Event) {
+			if event.Kind == ai.EventText {
+				_, _ = handle.log.Write([]byte(event.Text))
+			}
+		},
+		// A job's run leaves no transcripts: a command is no agent.
+		OnTranscript: func(string, string, []byte) {},
+		HostCalls: map[string]func(context.Context, json.RawMessage) (json.RawMessage, error){
+			runclient.HostCallName: runclient.AnswerHostCall(e.options.RunAPI, job.RunID.String(), token, runclient.JobReach),
+		},
+		Timeout: timeout,
 	}
-	id := jobName(job.RunID)
-	create := &ateenvv1alpha.CreateEnvironmentRequest{Id: id, Atespace: e.options.Atespace, RootfsImage: job.Image}
-	if e.options.Template != "" {
-		create.Template = &ateenvv1alpha.Template{Name: e.options.Template, Atespace: e.options.Atespace}
-	}
-	if _, err := e.envs.CreateEnvironment(ctx, create); err != nil {
-		return nil, fmt.Errorf("create substrate environment %s: %w", id, err)
-	}
-	handle := &substrateHandle{id: id, atespace: e.options.Atespace, envs: e.envs, processes: e.processes}
-	if _, err := e.control.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: e.options.Atespace, Name: id}, EgressPolicy: policy,
-	}); err != nil {
-		_ = handle.remove(context.WithoutCancel(ctx))
-		return nil, fmt.Errorf("set the egress policy of substrate environment %s: %w", id, err)
-	}
-	started, err := e.processes.StartProcess(handle.guest(ctx), process)
-	if err != nil {
-		_ = handle.remove(context.WithoutCancel(ctx))
-		return nil, fmt.Errorf("start the job in substrate environment %s: %w", id, err)
-	}
-	handle.process = started.GetProcessId()
+	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	handle.cancel = cancel
+	go handle.run(runCtx, in)
 	return handle, nil
 }
 
-// substrateImage refuses an image that isn't pinned by digest, which Substrate requires.
-func substrateImage(image string) error {
-	if !regexp.MustCompile(`@sha256:[0-9a-f]{64}$`).MatchString(image) {
-		return fmt.Errorf("substrate runs images pinned by digest: %q must be repo@sha256:<digest>", image)
+// injections names each credential the egress gateway puts into a job's requests by its host,
+// header and URI, none of them secret, so a run missing its key shows whether gavel asked for it.
+func injections(credentials []substrate.Credential) string {
+	if len(credentials) == 0 {
+		return "no credentials"
 	}
-	return nil
+	named := make([]string, len(credentials))
+	for i, credential := range credentials {
+		named[i] = credential.Host + " " + credential.Header + " from " + credential.URI
+	}
+	return strings.Join(named, ", ")
 }
 
-// substrateProcess is the job's process: its command and settings, its run token, and a
-// placeholder for each injected credential. Any other secret would enter the environment, so it
-// is refused.
-func substrateProcess(job Job, options SubstrateOptions) (*ateenvv1alpha.StartProcessRequest, error) {
-	env := map[string]string{}
-	for key, value := range job.Env {
-		env[key] = value
-	}
-	for key, value := range job.SecretEnv {
+// substrateJobEnv is the job's settings for its environment, and the run token its run's channel
+// is answered with. The job reaches serve over that channel, never the network, so serve's address
+// and the token stay out of the environment; any other secret would enter it, so it is refused.
+func substrateJobEnv(job Job) (map[string]string, string, error) {
+	env := maps.Clone(job.Env)
+	delete(env, "GAVEL_SERVER")
+	for key := range job.SecretEnv {
 		if key != "GAVEL_RUN_TOKEN" {
-			return nil, fmt.Errorf("secret %s would enter the substrate environment; give it to substrate's egress gateway as an injected credential instead", key)
-		}
-		env[key] = value
-	}
-	for _, credential := range options.Credentials {
-		if credential.Env != "" {
-			env[credential.Env] = substrateCredentialPlaceholder
+			return nil, "", fmt.Errorf("secret %s would enter the substrate environment; give it to substrate's egress gateway as an injected credential instead", key)
 		}
 	}
-	if options.TrustBundle != "" && len(options.Credentials) > 0 {
-		env["NODE_EXTRA_CA_CERTS"] = options.TrustBundle
-	}
-	return &ateenvv1alpha.StartProcessRequest{
-		Command: job.Command,
-		Env:     env,
-		Timeout: durationpb.New(job.Limits.withDefaults().Timeout),
-	}, nil
+	return env, job.SecretEnv["GAVEL_RUN_TOKEN"], nil
 }
 
-// substrateEgressPolicy allows a job to reach gavel serve at server, the hosts it needs, and the
-// model APIs, whose credentials the gateway injects. Everything else is denied.
-func substrateEgressPolicy(options SubstrateOptions, atespace, server string) (*ateapipb.EgressPolicy, error) {
-	serve, err := url.Parse(server)
-	if err != nil || serve.Hostname() == "" {
-		return nil, fmt.Errorf("substrate egress names hosts: GAVEL_SERVER %q isn't a URL", server)
+// SubstrateBackend is the substrate backend runs execute on through captain's substrate sandbox, as
+// its options spell it: how to reach the substrate, the image template, and what a run may reach
+// besides its model APIs, DefaultSubstrateEgress and hosts, over TLS on 443, passed through. A run
+// doesn't reach serve: it asks serve over its own channel. Each run adds its own options.
+func SubstrateBackend(options substrate.Options, hosts []string) map[string]any {
+	egress := make([]string, 0, len(DefaultSubstrateEgress)+len(hosts))
+	for _, host := range append(append([]string{}, DefaultSubstrateEgress...), hosts...) {
+		egress = append(egress, net.JoinHostPort(host, "443"))
 	}
-	if net.ParseIP(serve.Hostname()) != nil {
-		return nil, fmt.Errorf("substrate egress names hosts: GAVEL_SERVER %q must name serve by DNS name, not an IP address", server)
-	}
-	port := uint64(80)
-	if serve.Scheme == "https" {
-		port = 443
-	}
-	if serve.Port() != "" {
-		// url.Parse checks a port is digits, not that it is a port.
-		port, err = strconv.ParseUint(serve.Port(), 10, 16)
-		if err != nil || port == 0 {
-			return nil, fmt.Errorf("substrate egress: GAVEL_SERVER %q has port %s, outside 1-65535", server, serve.Port())
+	backend := map[string]any{"egress": egress}
+	for key, value := range map[string]string{
+		"envAPI": options.EnvAPI, "control": options.Control, "tokenFile": options.ControlTokenFile,
+		"caFile": options.CAFile, "clientCert": options.ClientCertFile, "clientKey": options.ClientKeyFile,
+		"atespace": options.Atespace, "template": options.Template, "trustBundle": options.TrustBundle,
+	} {
+		if value != "" {
+			backend[key] = value
 		}
 	}
-	ports := &ateapipb.Ports{Numbers: []int32{int32(port)}} //nolint:gosec // at most 65535
-	rules := []*ateapipb.EgressRule{}
-	if serve.Scheme == "https" {
-		rules = append(rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{serve.Hostname()}, Ports: ports}})
-	} else {
-		rules = append(rules, &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: []string{serve.Hostname()}, Ports: ports}})
-	}
-	hosts := append(append([]string{}, DefaultSubstrateEgress...), options.Egress...)
-	rules = append(rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: hosts, Ports: &ateapipb.Ports{Numbers: []int32{443}}}})
-	for _, credential := range options.Credentials {
-		rules = append(rules, &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{
-			Hostnames: []string{credential.Host},
-			Effects: &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{{
-				Header: credential.Header, Prefix: credential.Prefix, CredentialUri: credential.URI,
-			}}},
-		}})
-	}
-	return &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: "default"},
-		Rules:    rules,
-	}, nil
+	return backend
 }
 
+// SubstrateCredentialOptions are credentials as captain's substrate sandbox takes a run's: each
+// named in full, with the URI its key is resolved from.
+func SubstrateCredentialOptions(credentials []substrate.Credential) []any {
+	named := make([]any, len(credentials))
+	for i, credential := range credentials {
+		named[i] = map[string]any{
+			"host": credential.Host, "header": credential.Header, "prefix": credential.Prefix, "env": credential.Env, "uri": credential.URI,
+		}
+	}
+	return named
+}
+
+// shellWord is an argument the shell takes as it is.
+var shellWord = regexp.MustCompile(`^[A-Za-z0-9_./:=@%+,-]+$`)
+
+// shellCommand is command as one bash command line, each argument quoted unless the shell takes
+// it as it is.
+func shellCommand(command []string) string {
+	words := make([]string, len(command))
+	for i, arg := range command {
+		if shellWord.MatchString(arg) {
+			words[i] = arg
+			continue
+		}
+		words[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+	}
+	return strings.Join(words, " ")
+}
+
+// Sweep deletes the environments of runs, gavel-run-<run>, created more than lifetime ago: what
+// jobs and agent runs left behind when serve died before their end.
+func (e *substrateExecutor) Sweep(ctx context.Context, lifetime time.Duration) ([]string, error) {
+	return e.client.Sweep(ctx, jobPrefix, time.Now().Add(-lifetime))
+}
+
+// substrateHandle is a job's run: its log as the run writes it, and how it ended.
 type substrateHandle struct {
-	id, atespace string
-	envs         ateenvv1alpha.EnvironmentServiceClient
-	processes    ateenvv1alpha.ProcessServiceClient
-	process      string
+	ref    string
+	log    *runLog
+	logs   *io.PipeReader
+	taken  sync.Once
+	done   chan struct{}
+	cancel context.CancelFunc
+	result Result
+	err    error
 }
 
-func (h *substrateHandle) Ref() string { return h.id }
-
-// guest addresses ctx's calls to the processes of h's environment, as ate-env-api routes them.
-func (h *substrateHandle) guest(ctx context.Context) context.Context {
-	return metadata.AppendToOutgoingContext(ctx, "x-env-id", h.id, "x-env-atespace", h.atespace)
-}
-
-// Logs follows the job's stdout and stderr until it exits. Substrate's router ends a long stream,
-// so it reconnects from the offsets it has read.
-func (h *substrateHandle) Logs(ctx context.Context) (io.ReadCloser, error) {
+func newSubstrateHandle(ref string) *substrateHandle {
 	reader, writer := io.Pipe()
-	go func() {
-		var stdout, stderr int64
-		for {
-			stream, err := h.processes.StreamProcessOutput(h.guest(ctx), &ateenvv1alpha.StreamProcessOutputRequest{
-				ProcessId: h.process, Follow: true, StdoutOffset: stdout, StderrOffset: stderr,
-			})
-			if err != nil {
-				writer.CloseWithError(fmt.Errorf("follow the output of %s: %w", h.id, err))
-				return
-			}
-			for {
-				message, err := stream.Recv()
-				if err != nil {
-					break
-				}
-				var chunk []byte
-				switch {
-				case message.GetExit() != nil:
-					writer.Close()
-					return
-				case message.GetStdout() != nil:
-					chunk = message.GetStdout()
-					stdout += int64(len(chunk))
-				default:
-					chunk = message.GetStderr()
-					stderr += int64(len(chunk))
-				}
-				if _, err := writer.Write(chunk); err != nil {
-					return
-				}
-			}
-			if ctx.Err() != nil {
-				writer.CloseWithError(ctx.Err())
-				return
-			}
-		}
-	}()
-	return reader, nil
+	return &substrateHandle{ref: ref, log: &runLog{to: writer}, logs: reader, done: make(chan struct{})}
 }
 
-// Wait returns the job's exit code once it exits, polling, since a single stream doesn't outlast
-// Substrate's router, then removes its environment.
+// run runs in, then ends the log and records how the job ended.
+func (h *substrateHandle) run(ctx context.Context, in promptrun.Input) {
+	defer close(h.done)
+	defer h.cancel()
+	result, err := promptrun.Run(ctx, in)
+	_ = h.log.to.Close()
+	h.result, h.err = jobResult(h.ref, result, err)
+}
+
+// jobResult is how the job's run ended: the exit code its bash command reported.
+func jobResult(env string, result promptrun.Result, err error) (Result, error) {
+	if err != nil {
+		return Result{}, fmt.Errorf("the job in substrate environment %s: %w", env, err)
+	}
+	if result.Response == nil || result.Response.StructuredData == nil {
+		return Result{}, fmt.Errorf("the job in substrate environment %s ended without reporting its exit code", env)
+	}
+	data, err := json.Marshal(result.Response.StructuredData)
+	if err != nil {
+		return Result{}, fmt.Errorf("read the outcome of the job in substrate environment %s: %w", env, err)
+	}
+	var outcome bash.Outcome
+	if err := json.Unmarshal(data, &outcome); err != nil {
+		return Result{}, fmt.Errorf("read the outcome of the job in substrate environment %s: %w", env, err)
+	}
+	return Result{ExitCode: outcome.ExitCode}, nil
+}
+
+func (h *substrateHandle) Ref() string { return h.ref }
+
+// Logs follows the job's output, and its environment's, until the job ends. It can be followed
+// once.
+func (h *substrateHandle) Logs(context.Context) (io.ReadCloser, error) {
+	taken := false
+	h.taken.Do(func() { taken = true })
+	if !taken {
+		return nil, fmt.Errorf("the log of the job in substrate environment %s is already followed", h.ref)
+	}
+	return h.logs, nil
+}
+
+// discardUnfollowedLog reads the job's log to the end when nothing follows it, so the run's writes
+// to it never block.
+func (h *substrateHandle) discardUnfollowedLog() {
+	h.taken.Do(func() { go func() { _, _ = io.Copy(io.Discard, h.logs) }() })
+}
+
+// Wait returns the job's exit code once its run ends, which deletes its environment. The job's run
+// stands when the environment can't be deleted, which captain warns of.
 func (h *substrateHandle) Wait(ctx context.Context) (Result, error) {
-	for {
-		process, err := h.processes.GetProcess(h.guest(ctx), &ateenvv1alpha.GetProcessRequest{ProcessId: h.process})
-		if err != nil && ctx.Err() != nil {
-			return Result{}, ctx.Err()
-		}
-		if err == nil && process.GetState() == ateenvv1alpha.ProcessState_PROCESS_STATE_EXITED {
-			result := Result{ExitCode: int(process.GetExitCode())}
-			return result, h.remove(context.WithoutCancel(ctx))
-		}
-		select {
-		case <-ctx.Done():
-			return Result{}, ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
+	h.discardUnfollowedLog()
+	select {
+	case <-h.done:
+		return h.result, h.err
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
 	}
 }
 
-// Cancel kills the job and removes its environment.
+// Cancel stops the job's run, which kills the job and deletes its environment, and waits for it
+// to end.
 func (h *substrateHandle) Cancel(ctx context.Context) error {
-	if h.process != "" {
-		_, err := h.processes.SignalProcess(h.guest(ctx), &ateenvv1alpha.SignalProcessRequest{ProcessId: h.process, Signal: ateenvv1alpha.Signal_SIGNAL_KILL})
-		if err != nil && !processExited(err) {
-			return fmt.Errorf("kill the job in substrate environment %s: %w", h.id, err)
-		}
+	h.discardUnfollowedLog()
+	h.cancel()
+	select {
+	case <-h.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return h.remove(ctx)
 }
 
-// processExited reports whether err refuses a signal because the process already exited, which
-// then needs no killing.
-func processExited(err error) bool {
-	return status.Code(err) == codes.FailedPrecondition && strings.Contains(status.Convert(err).Message(), "has exited")
+// runLog is a job's log, which its command's output and its environment's are written to at once.
+type runLog struct {
+	mu sync.Mutex
+	to *io.PipeWriter
 }
 
-func (h *substrateHandle) remove(ctx context.Context) error {
-	if _, err := h.envs.DeleteEnvironment(ctx, &ateenvv1alpha.DeleteEnvironmentRequest{Id: h.id, Atespace: h.atespace}); err != nil {
-		return fmt.Errorf("delete substrate environment %s: %w", h.id, err)
-	}
-	return nil
+func (l *runLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.to.Write(p)
 }
-
-// tokenFile sends the bearer token in a file, read on every call so a rotated token is used.
-// clientCertificate loads the client certificate a substrate in another cluster requires.
-func clientCertificate(options SubstrateOptions) (*tls.Certificate, error) {
-	cert, err := tls.LoadX509KeyPair(options.ClientCertFile, options.ClientKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load the substrate client certificate %s: %w", options.ClientCertFile, err)
-	}
-	return &cert, nil
-}
-
-type tokenFile string
-
-func (t tokenFile) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
-	token, err := os.ReadFile(string(t))
-	if err != nil {
-		return nil, fmt.Errorf("read the control plane token: %w", err)
-	}
-	return map[string]string{"authorization": "Bearer " + strings.TrimSpace(string(token))}, nil
-}
-
-func (tokenFile) RequireTransportSecurity() bool { return true }

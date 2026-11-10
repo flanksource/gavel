@@ -6,16 +6,19 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -140,7 +143,9 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 
 	record, err := LoadRun(ctx, db, run.ID)
 	require.NoError(t, err)
-	assert.Equal(t, RunRecord{ID: run.ID, Org: org, Spec: RunSpec{Kind: "test", Args: []string{"./..."}, RepoID: repo, Ref: "refs/heads/main", SHA: "abc123"}}, record)
+	assert.WithinDuration(t, time.Now(), record.CreatedAt, time.Minute)
+	record.CreatedAt = time.Time{}
+	assert.Equal(t, RunRecord{ID: run.ID, Org: org, Status: "failed", Spec: RunSpec{Kind: "test", Args: []string{"./..."}, RepoID: repo, Ref: "refs/heads/main", SHA: "abc123"}}, record)
 	_, err = LoadRun(ctx, db, uuid.New())
 	assert.ErrorIs(t, err, ErrRunNotFound)
 
@@ -150,6 +155,7 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, org, job.Scope.OrgID)
 	assert.Equal(t, "ghcr.io/flanksource/gavel-runner:1", job.Image)
 	assert.Equal(t, []string{"gavel", "runner", "exec", "--run", run.ID.String()}, job.Command)
+	assert.Nil(t, job.Source, "an executor that brings no source in leaves the job to download it")
 	assert.Equal(t, map[string]string{"GAVEL_SERVER": "https://gavel.example", "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"}, job.Env)
 	tokenRun, tokenOrg, err := VerifyRunToken(dispatcher.TokenKey, job.SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(44*time.Minute))
 	require.NoError(t, err, "the token outlives the timeout by 15 minutes")
@@ -157,6 +163,115 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, org, tokenOrg)
 	_, _, err = VerifyRunToken(dispatcher.TokenKey, job.SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(46*time.Minute))
 	assert.Error(t, err, "and no longer")
+}
+
+func TestDispatcherGivesAJobItsSourceForAnExecutorThatBringsItIn(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	dispatcher.Sources = &Sources{DataDir: t.TempDir()}
+	ctx := context.Background()
+	var repoRow struct{ ID uuid.UUID }
+	require.NoError(t, db.Raw(`INSERT INTO repos (org_id, name, source) VALUES (?, 'app', 'push') RETURNING id`, org).Scan(&repoRow).Error)
+	gitDir := filepath.Join(dispatcher.Sources.DataDir, "repos", org.String(), repoRow.ID.String()+".git")
+
+	for name, tc := range map[string]struct {
+		spec   RunSpec
+		commit string
+	}{
+		"at its SHA":         {RunSpec{Kind: "test", RepoID: repoRow.ID, Ref: "refs/heads/main", SHA: "abc123"}, "abc123"},
+		"at its ref without": {RunSpec{Kind: "push-check", RepoID: repoRow.ID, Ref: "refs/heads/main"}, "refs/heads/main"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor.submitted = nil
+			run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, tc.spec, nil)
+			require.NoError(t, err)
+			_, err = run.Wait(ctx)
+			require.NoError(t, err)
+			require.Len(t, executor.submitted, 1)
+			job := executor.submitted[0]
+			assert.Equal(t, &JobSource{GitDir: gitDir, Commit: tc.commit}, job.Source)
+			assert.Equal(t, []string{"gavel", "runner", "exec", "--run", run.ID.String(), "--source", "."}, job.Command,
+				"the job's runner clones the source from the checkout it starts in")
+		})
+	}
+
+	other := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Other')`, other, other.String()).Error)
+	var theirs struct{ ID uuid.UUID }
+	require.NoError(t, db.Raw(`INSERT INTO repos (org_id, name, source) VALUES (?, 'theirs', 'push') RETURNING id`, other).Scan(&theirs).Error)
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "test", RepoID: theirs.ID, SHA: "abc123"}, nil)
+	require.ErrorIs(t, err, ErrRepoNotFound, "another organization's repository is none of the job's")
+	assert.Equal(t, "failed", readRun(t, db, run.ID).Status)
+}
+
+func TestDispatcherRunLifetimeIsTheTimeoutPlusTheRunTokensGrace(t *testing.T) {
+	assert.Equal(t, 45*time.Minute, (&Dispatcher{Limits: Limits{Timeout: 30 * time.Minute}}).RunLifetime())
+	assert.Equal(t, 75*time.Minute, (&Dispatcher{}).RunLifetime(), "the default 60m timeout")
+}
+
+// withModelKeys gives the dispatcher org keys and per-run credential URIs, as --sandbox
+// substrate does, with commons-db's local secret keeper.
+func withModelKeys(t *testing.T, dispatcher *Dispatcher) {
+	t.Helper()
+	previous := secret.KMSConnection
+	secret.KMSConnection = modelkeys.KeeperConnection([]byte(strings.Repeat("s", 32)))
+	secret.InvalidateKeeper()
+	t.Cleanup(func() { secret.KMSConnection = previous; secret.InvalidateKeeper() })
+	dispatcher.Keys = modelkeys.Store{DB: dispatcher.DB}
+	dispatcher.CredentialURI = func(run uuid.UUID, provider string) string {
+		return "ate-secret://gavel/beta/" + run.String() + "/" + provider
+	}
+}
+
+func TestDispatcherGivesEachRunItsOrganizationsKeys(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	withModelKeys(t, dispatcher)
+	require.NoError(t, dispatcher.Keys.Set(t.Context(), org, nil, "claude-code-oauth-token", "sk-ant-oat01-dispatch-test"))
+
+	run, err := dispatcher.Start(t.Context(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"}, nil)
+	require.NoError(t, err)
+	_, err = run.Wait(t.Context())
+	require.NoError(t, err)
+	require.Len(t, executor.submitted, 1)
+	assert.Equal(t, []substrate.Credential{{
+		Host: "api.anthropic.com", Header: "Authorization", Prefix: "Bearer ", Env: "CLAUDE_CODE_OAUTH_TOKEN",
+		URI: "ate-secret://gavel/beta/" + run.ID.String() + "/anthropic",
+	}}, executor.submitted[0].Credentials)
+	assert.NotContains(t, executor.submitted[0].SecretEnv, "CLAUDE_CODE_OAUTH_TOKEN", "the key itself never reaches the job")
+
+	other := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Other')`, other, other.String()).Error)
+	run, err = dispatcher.Start(t.Context(), tenant.Scope{OrgID: other}, RunSpec{Kind: "test"}, nil)
+	require.NoError(t, err, "a test run starts without a model key")
+	_, err = run.Wait(t.Context())
+	require.NoError(t, err)
+	require.Len(t, executor.submitted, 2)
+	assert.Empty(t, executor.submitted[1].Credentials, "another org's keys aren't used")
+}
+
+func TestDispatcherRefusesAnAgentRunWithoutAModelKey(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	withModelKeys(t, dispatcher)
+
+	_, err := dispatcher.Start(t.Context(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"}, nil)
+	require.ErrorIs(t, err, ErrNoModelKey)
+	assert.EqualError(t, err, "this organization has no model key: an organization admin adds one under Model keys in the organization's settings")
+	assert.Empty(t, executor.submitted)
+	var runs int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM sandbox_runs WHERE org_id = ?`, org).Scan(&runs).Error)
+	assert.Zero(t, runs, "a refused run isn't recorded")
+}
+
+func TestDispatcherWithoutCredentialURIsUsesNoOrganizationKeys(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, _, _, org := newDispatcher(t, executor)
+	run, err := dispatcher.Start(t.Context(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"}, nil)
+	require.NoError(t, err, "only substrate needs organization keys")
+	_, err = run.Wait(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, executor.submitted[0].Credentials)
 }
 
 func TestDispatcherRecordsASuccess(t *testing.T) {
@@ -202,9 +317,8 @@ func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
 	dispatcher, _, _, org := newDispatcher(t, executor)
 	dispatcher.SecretEnv = map[string]string{"ANTHROPIC_API_KEY": "model-key", "GAVEL_RUN_TOKEN": "forged"}
 	id, todo := uuid.New(), uuid.New()
-	job := json.RawMessage(`{"root":"/srv/repo"}`)
 
-	run, err := dispatcher.StartRun(context.Background(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run", Agent: job}, nil)
+	run, err := dispatcher.StartRun(context.Background(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, id, run.ID)
 	require.Len(t, executor.submitted, 1)
@@ -213,11 +327,54 @@ func TestDispatcherStartsAnAgentRunUnderTheCallersID(t *testing.T) {
 
 	record, err := LoadRun(context.Background(), dispatcher.DB, id)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(job), string(record.Spec.Agent))
 	assert.Equal(t, "run", record.Spec.Step)
 
 	require.NoError(t, run.Cancel(context.Background()))
 	assert.Equal(t, []string{"memory-" + id.String()}, executor.cancelled)
 	_, err = run.Wait(context.Background())
 	require.NoError(t, err)
+}
+
+func TestDispatcherRecordsARunThatExecutesElsewhere(t *testing.T) {
+	executor := &memoryExecutor{output: "ok\n"}
+	dispatcher, _, logs, org := newDispatcher(t, executor)
+	withModelKeys(t, dispatcher)
+	require.NoError(t, dispatcher.Keys.Set(t.Context(), org, nil, "anthropic-api-key", "sk-ant-api03-dispatch-test"))
+	id, todo := uuid.New(), uuid.New()
+
+	run, err := dispatcher.RecordRun(t.Context(), id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent", TodoID: &todo, Step: "run"})
+	require.NoError(t, err)
+	assert.Empty(t, executor.submitted, "the run executes elsewhere than a job of the dispatcher's")
+	tokenRun, tokenOrg, err := VerifyRunToken(dispatcher.TokenKey, run.Token, time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{id, org}, []uuid.UUID{tokenRun, tokenOrg}, "the token is the run's")
+	assert.Equal(t, []substrate.Credential{{
+		Host: "api.anthropic.com", Header: "x-api-key", Env: "ANTHROPIC_API_KEY",
+		URI: "ate-secret://gavel/beta/" + id.String() + "/anthropic",
+	}}, run.Credentials)
+	record, err := LoadRun(t.Context(), dispatcher.DB, id)
+	require.NoError(t, err)
+	assert.Equal(t, "running", record.Status)
+
+	_, err = io.WriteString(run.Log, "the environment's output\n")
+	require.NoError(t, err)
+	run.Finish(false)
+
+	record, err = LoadRun(t.Context(), dispatcher.DB, id)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", record.Status)
+	stored, err := logs.Read(t.Context(), "orgs/"+org.String()+"/runs/"+id.String()+"/log.txt")
+	require.NoError(t, err)
+	defer stored.Close()
+	data, err := io.ReadAll(stored)
+	require.NoError(t, err)
+	assert.Equal(t, "the environment's output\n", string(data))
+}
+
+func TestDispatcherRecordsNoAgentRunWithoutAModelKey(t *testing.T) {
+	dispatcher, _, _, org := newDispatcher(t, &memoryExecutor{})
+	withModelKeys(t, dispatcher)
+
+	_, err := dispatcher.RecordRun(t.Context(), uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
+	require.ErrorIs(t, err, ErrNoModelKey)
 }

@@ -95,6 +95,9 @@ func openShared() (*Store, error) {
 		return &Store{db: db, disabled: true}, nil
 	}
 	s := newStore(db)
+	if s.blobs, err = database.OpenBlobs(context.Background()); err != nil {
+		return nil, err
+	}
 	s.pruneOnOpen()
 	return s, nil
 }

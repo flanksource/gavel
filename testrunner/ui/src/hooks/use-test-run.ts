@@ -92,22 +92,6 @@ export interface ActionResult {
 const DEFAULT_POLL_MS = 2_000;
 const IDLE_STATUS: SnapshotStatus = { running: false };
 
-// Resolves after ms, or as soon as signal aborts.
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
 function defaultCreateEventSource(url: string): EventSourceLike {
   return new EventSource(url);
 }
@@ -148,6 +132,33 @@ export function deriveStatusText(snap: Snapshot): string {
   return 'Running tests...';
 }
 
+/** Polls `${base}/api/tests` until the run is no longer running; the returned function stops polling and aborts the request in flight. */
+function pollSnapshots(base: string, pollMs: number, onSnapshot: (snap: Snapshot) => void, onError: () => void): () => void {
+  const controller = new AbortController();
+  const { signal } = controller;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = async () => {
+    try {
+      const res = await fetch(`${base}/api/tests`, { headers: { Accept: 'application/json' }, signal });
+      if (signal.aborted) return;
+      if (res.ok) {
+        const snap = (await res.json()) as Snapshot;
+        if (signal.aborted) return;
+        onSnapshot(snap);
+        if (!snap.status?.running) return; // terminal: stop polling
+      }
+    } catch {
+      if (!signal.aborted) onError();
+    }
+    if (!signal.aborted) timer = setTimeout(tick, pollMs);
+  };
+  void tick();
+  return () => {
+    controller.abort();
+    clearTimeout(timer);
+  };
+}
+
 export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
   const {
     baseUrl,
@@ -175,7 +186,7 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
   const createEventSourceRef = useRef(createEventSource ?? defaultCreateEventSource);
   useEffect(() => {
     createEventSourceRef.current = createEventSource ?? defaultCreateEventSource;
-  });
+  }, [createEventSource]);
 
   const apply = useCallback((snap: Snapshot) => {
     const running = !!(snap.status && snap.status.running);
@@ -191,6 +202,7 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
     }
   }, []);
 
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- both branches return a cleanup: polling stops its timer, SSE closes the EventSource, which drops its listeners
   useEffect(() => {
     if (!enabled) return;
     doneRef.current = false;
@@ -198,31 +210,21 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
 
     // Polling fallback transport.
     if (forcePoll || !hasEventSource()) {
-      const controller = new AbortController();
-      void (async () => {
-        while (!controller.signal.aborted) {
-          try {
-            const res = await fetch(`${base}/api/tests`, { headers: { Accept: 'application/json' }, signal: controller.signal });
-            if (controller.signal.aborted) return;
-            if (res.ok) {
-              const snap = (await res.json()) as Snapshot;
-              if (controller.signal.aborted) return;
-              apply(snap);
-              if (!snap.status?.running) return; // terminal: stop polling
-            }
-          } catch {
-            if (!controller.signal.aborted && !doneRef.current) setError('Connection lost — retrying...');
-          }
-          await sleep(pollMs, controller.signal);
-        }
-      })();
-      return () => controller.abort();
+      return pollSnapshots(base, pollMs, apply, () => {
+        if (!doneRef.current) setError('Connection lost — retrying...');
+      });
     }
 
     // SSE transport (default): seed once via /api/tests then follow the stream.
+    let closed = false;
     fetch(`${base}/api/tests`, { headers: { Accept: 'application/json' } })
-      .then((r) => r.json())
-      .then((snap: Snapshot) => apply(snap))
+      .then((r) => {
+        if (!r.ok) throw new Error(`GET /api/tests: ${r.status}`);
+        return r.json();
+      })
+      .then((snap: Snapshot) => {
+        if (!closed) apply(snap);
+      })
       .catch(() => {});
 
     const es = createEventSourceRef.current(`${base}/api/tests/stream`);
@@ -243,6 +245,7 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
       if (!doneRef.current) setError('Connection lost — retrying...');
     };
     return () => {
+      closed = true;
       es.removeEventListener('message', onMessage);
       es.removeEventListener('done', onDone);
       es.close();

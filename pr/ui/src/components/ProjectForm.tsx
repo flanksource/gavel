@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Field, Combobox } from '@flanksource/clicky-ui/components';
 import type { ComboboxOption } from '@flanksource/clicky-ui/components';
@@ -88,6 +88,7 @@ export function useProjectRegistration(options: ProjectRegistrationOptions): Pro
     setDir(project ? project.dir : (defaults?.dir ?? ''));
     setRepos([...(project ? project.repos : (defaults?.repos ?? []))]);
     setError('');
+  // react-doctor-disable-next-line react-doctor/exhaustive-deps -- repos are tracked via the joined *ReposKey strings so a new array identity with the same contents does not reset the form
   }, [
     open,
     project?.name,
@@ -139,6 +140,8 @@ export function useProjectRegistration(options: ProjectRegistrationOptions): Pro
 // The caller owns the surrounding dialog chrome (title, footer, save/delete
 // buttons) so this component stays layout-agnostic.
 export function ProjectFields({ reg, repoOptions }: { reg: ProjectRegistration; repoOptions: string[] }) {
+  const nameId = useId();
+  const dirId = useId();
   const options: ComboboxOption[] = repoOptions.map(r => ({ value: r, label: r }));
   for (const r of reg.repos) {
     if (!options.some(o => o.value === r)) options.push({ value: r, label: r });
@@ -147,12 +150,12 @@ export function ProjectFields({ reg, repoOptions }: { reg: ProjectRegistration; 
   return (
     <div className="space-y-3">
       {reg.error && <div role="alert" className="text-sm text-destructive">{reg.error}</div>}
-      <Field label="Name" helper={reg.editing ? 'The name identifies the project and cannot be changed' : undefined}>
-        <input className={inputClass} value={reg.name} placeholder="my-project" readOnly={reg.editing}
+      <Field label="Name" htmlFor={nameId} helper={reg.editing ? 'The name identifies the project and cannot be changed' : undefined}>
+        <input id={nameId} className={inputClass} value={reg.name} placeholder="my-project" readOnly={reg.editing}
           onChange={(e) => reg.setName(e.currentTarget.value)} />
       </Field>
-      <Field label="Directory" helper="Absolute path to the local checkout containing a Procfile">
-        <input className={inputClass} value={reg.dir} placeholder="/Users/me/src/project"
+      <Field label="Directory" htmlFor={dirId} helper="Absolute path to the local checkout containing a Procfile">
+        <input id={dirId} className={inputClass} value={reg.dir} placeholder="/Users/me/src/project"
           onChange={(e) => reg.setDir(e.currentTarget.value)} />
       </Field>
       <Field label="Repos" helper="GitHub repos this directory backs (optional)">

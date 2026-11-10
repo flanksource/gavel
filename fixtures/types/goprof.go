@@ -16,6 +16,7 @@ import (
 	"github.com/google/pprof/profile"
 
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/utils"
 )
 
 // preparedGoProfiles are where a command writes its `goProfiles:` under
@@ -34,7 +35,7 @@ func prepareGoProfiles(workDir string, outputs map[string]fixtures.GoProfileOutp
 		return nil, fmt.Errorf("resolve fixture profile working directory: %w", err)
 	}
 	base := filepath.Join(absoluteWorkDir, ".gavel", "profiles", "fixtures")
-	if err := os.MkdirAll(base, 0o755); err != nil {
+	if err := utils.MkdirOutput(base, 0o755); err != nil {
 		return nil, fmt.Errorf("create fixture profile store: %w", err)
 	}
 	root, err := os.MkdirTemp(base, "run-")

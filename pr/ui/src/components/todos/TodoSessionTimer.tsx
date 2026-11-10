@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import { UiChevronDown, UiClock, UiCollapseAll, UiDebugStepOver, UiError, UiEye, UiHubot, UiUnknown, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { SessionStats } from '../../types';
@@ -230,6 +230,7 @@ export function CmuxSessionButton(props: CmuxSessionButtonProps) {
 function CmuxSessionMenu({ dir, sessionId, agent, onResume, resumeDisabled }: CmuxSessionButtonProps) {
   const [open, setOpen] = useState(false);
   const { surface, loading } = useCmuxSurface(dir, sessionId, agent, open);
+  const queryClient = useQueryClient();
   const focusMutation = useMutation({
     mutationKey: ['todos', 'session', 'focus', { dir: dir.trim(), agent: agent ?? '' }],
     mutationFn: () => {
@@ -242,6 +243,8 @@ function CmuxSessionMenu({ dir, sessionId, agent, onResume, resumeDisabled }: Cm
         'Could not focus cmux session',
       );
     },
+    // Focusing proves (or disproves) the surface is live, so refresh the caption.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: todoQueryKeys.cmuxSurface(dir, agent) }),
   });
   const focusBusy = focusMutation.isPending;
   const focusError = focusMutation.error?.message ?? '';

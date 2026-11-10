@@ -6,17 +6,28 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
+	"github.com/flanksource/commons/logger"
 	ghcache "github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/sandbox"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// newSandboxDispatcher returns nil when --sandbox is unset.
-func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.DB, cache *ghcache.Store, secret []byte) (*sandbox.Dispatcher, error) {
+// newSandboxDispatcher returns nil when --sandbox is unset. On substrate, jobs run in a checkout of
+// their commit from sources, and runAPI answers what they ask of their runs over each run's
+// channel.
+func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.DB, cache *ghcache.Store, secret []byte, sources *sandbox.Sources, runAPI http.Handler) (*sandbox.Dispatcher, error) {
+	if warning := sandboxKeysWarning(opts); warning != "" {
+		logger.Warnf("%s", warning)
+	}
 	var executor sandbox.Executor
 	switch opts.Sandbox {
 	case "":
@@ -44,23 +55,15 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		executor = kubernetes
 	case "substrate":
 		if len(opts.SandboxSecretEnv) > 0 {
-			return nil, fmt.Errorf("--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env and give model keys to substrate's egress gateway with --substrate-credential")
+			return nil, fmt.Errorf("--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env; organizations set their own model keys, which substrate's egress gateway injects")
 		}
-		credentials, err := substrateCredentials(opts.SubstrateCredential)
-		if err != nil {
-			return nil, err
-		}
-		substrate, err := sandbox.NewSubstrate(sandbox.SubstrateOptions{
-			EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
-			ControlTokenFile: opts.SubstrateTokenFile, CAFile: opts.SubstrateCAFile,
-			ClientCertFile: opts.SubstrateClientCert, ClientKeyFile: opts.SubstrateClientKey,
-			Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
-			Egress: opts.SubstrateEgress, Credentials: credentials, TrustBundle: opts.SubstrateTrustBundle,
+		var err error
+		executor, err = sandbox.NewSubstrate(sandbox.SubstrateOptions{
+			Options: substrateOptions(opts), Egress: opts.SubstrateEgress, RunAPI: runAPI,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("--sandbox substrate: %w", err)
 		}
-		executor = substrate
 	default:
 		return nil, fmt.Errorf("--sandbox must be docker, podman, kubernetes or substrate, got %q", opts.Sandbox)
 	}
@@ -75,38 +78,83 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 	if cache != nil {
 		dispatcher.Logs = cache.OrgBlobs
 	}
+	if opts.Sandbox == "substrate" {
+		dispatcher.Sources = sources
+		// Each run's requests carry its organization's keys, which the credential provider in
+		// substrate's cluster fetches from this gavel by the run.
+		dispatcher.Keys = modelkeys.Store{DB: db}
+		dispatcher.CredentialURI = func(run uuid.UUID, provider string) string {
+			return "ate-secret://gavel/" + opts.SubstrateGavelName + "/" + run.String() + "/" + provider
+		}
+	}
 	return dispatcher, nil
 }
 
-// substrateCredentials parses --substrate-credential values: host=,header=,env=,uri= and an
-// optional prefix=, the model keys substrate's egress gateway injects.
-func substrateCredentials(values []string) ([]sandbox.InjectedCredential, error) {
-	credentials := make([]sandbox.InjectedCredential, 0, len(values))
-	for _, value := range values {
-		var credential sandbox.InjectedCredential
-		for _, pair := range strings.Split(value, ",") {
-			key, field, _ := strings.Cut(pair, "=")
-			switch key {
-			case "host":
-				credential.Host = field
-			case "header":
-				credential.Header = field
-			case "prefix":
-				credential.Prefix = field
-			case "env":
-				credential.Env = field
-			case "uri":
-				credential.URI = field
-			default:
-				return nil, fmt.Errorf("--substrate-credential %q: unknown key %q; keys are host, header, prefix, env and uri", value, key)
-			}
+// sandboxSweepInterval is how often serve sweeps what runs left behind.
+const sandboxSweepInterval = 10 * time.Minute
+
+// sweepSandboxEvery sweeps what runs older than lifetime left behind, every sandboxSweepInterval
+// until ctx ends.
+func sweepSandboxEvery(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration) {
+	ticker := time.NewTicker(sandboxSweepInterval)
+	defer ticker.Stop()
+	for {
+		sweepSandbox(ctx, sweeper, lifetime)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
-		if credential.Host == "" || credential.Header == "" || credential.Env == "" || credential.URI == "" {
-			return nil, fmt.Errorf("--substrate-credential %q needs host, header, env and uri", value)
-		}
-		credentials = append(credentials, credential)
 	}
-	return credentials, nil
+}
+
+// sweepSandbox deletes the environments runs older than lifetime left behind, logging what it
+// deleted. A sweep that fails is a warning; the next one tries again.
+func sweepSandbox(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration) {
+	swept, err := sweeper.Sweep(ctx, lifetime)
+	if len(swept) > 0 {
+		logger.Infof("deleted %d sandbox environments that runs older than %s left behind: %s", len(swept), lifetime, strings.Join(swept, ", "))
+	}
+	if err != nil && ctx.Err() == nil {
+		logger.Warnf("sweep the sandbox environments runs left behind: %v", err)
+	}
+}
+
+// substrateOptions is how the --substrate-* flags reach the substrate jobs and agent runs execute
+// on.
+func substrateOptions(opts DashboardOptions) substrate.Options {
+	return substrate.Options{
+		EnvAPI: opts.SubstrateEnvAPI, Control: opts.SubstrateControl,
+		ControlTokenFile: opts.SubstrateTokenFile, CAFile: opts.SubstrateCAFile,
+		ClientCertFile: opts.SubstrateClientCert, ClientKeyFile: opts.SubstrateClientKey,
+		Atespace: opts.SubstrateAtespace, Template: opts.SubstrateTemplate,
+		TrustBundle: opts.SubstrateTrustBundle,
+	}
+}
+
+// substrateAgentBackend is the substrate backend hosted agent runs execute on through captain's
+// substrate sandbox, as its options spell it, from the --substrate-* flags jobs use too, reaching
+// what jobs reach; nil without --sandbox substrate, since agent runs need it.
+func substrateAgentBackend(opts DashboardOptions) (map[string]any, error) {
+	if opts.Sandbox != "substrate" {
+		return nil, nil
+	}
+	return sandbox.SubstrateBackend(substrateOptions(opts), opts.SubstrateEgress), nil
+}
+
+// sandboxKeysWarning says which model keys a container or Kubernetes sandbox's runs use: serve's
+// --sandbox-secret-env keys, the same for every organization, since organization keys need
+// substrate's egress gateway. Those sandboxes are for development.
+func sandboxKeysWarning(opts DashboardOptions) string {
+	switch opts.Sandbox {
+	case "", "substrate":
+		return ""
+	}
+	if len(opts.SandboxSecretEnv) == 0 {
+		return fmt.Sprintf("--sandbox %s: runs get no model keys, since --sandbox-secret-env is unset; organization model keys need --sandbox substrate", opts.Sandbox)
+	}
+	return fmt.Sprintf("--sandbox %s: every organization's runs use serve's --sandbox-secret-env keys (%s), not their own; organization model keys need --sandbox substrate",
+		opts.Sandbox, strings.Join(opts.SandboxSecretEnv, ", "))
 }
 
 // sandboxSecrets reads the --sandbox-secret-env variables from serve's environment. A variable

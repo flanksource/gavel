@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/fixtures"
 	_ "github.com/flanksource/gavel/fixtures/kinds/all"
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
@@ -27,6 +29,8 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/testrunner/ui/queryapp"
+	"github.com/flanksource/gavel/testrunner/uirexport"
+	"github.com/flanksource/gavel/testrunner/uirplan"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
@@ -46,6 +50,24 @@ var (
 func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error) {
 	if opts.Dev && !opts.UI {
 		return nil, fmt.Errorf("--dev serves the --ui dashboard from Vite; it needs --ui")
+	}
+	if opts.UIRTestCoverage && opts.UIRExport == "" {
+		return nil, fmt.Errorf("--uir-test-coverage adds per-test coverage to the --uir-export file; it needs --uir-export")
+	}
+	if opts.UIRSkip {
+		framework, parseErr := parsers.ParseFramework(strings.Join(opts.Frameworks, ""))
+		if len(opts.Frameworks) != 1 || parseErr != nil || framework != parsers.GoTest {
+			return nil, fmt.Errorf("--uir-skip currently requires exactly --framework go")
+		}
+		if opts.UIRExport == "" {
+			return nil, fmt.Errorf("--uir-skip requires --uir-export so the partial or full run can be imported")
+		}
+		if opts.DryRun {
+			return nil, fmt.Errorf("--uir-skip cannot be combined with --dry-run because skipping requires an imported execution result")
+		}
+		if len(opts.StartingPaths) > 0 || len(opts.Ignore) > 0 || opts.Cache || opts.Changed || opts.Since != "" || len(opts.ChangedFiles) > 0 || opts.Failed != "" || opts.PR != "" || opts.Bench != "" || len(opts.ExtraArgs) > 0 || len(opts.PassThroughArgs) > 0 {
+			return nil, fmt.Errorf("--uir-skip cannot be combined with other test selectors, paths, ignore rules, benchmarks or extra arguments")
+		}
 	}
 	diagnostics := newRunDiagnosticsReporter(runDiagnosticsOptions{Output: logger.GetOutput()})
 	runCtx, cancelRun := newMonitoredStopContext(opts.Context, monitoredStopOptions{
@@ -124,6 +146,12 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		return nil, err
 	}
 	defer func() { runErr = errors.Join(runErr, reporter.Stop()) }()
+	// In a GitHub Actions job with GAVEL_CI_SERVER, the same in-flight
+	// snapshots, and every diagnostics capture, are uploaded while the run is
+	// in progress.
+	stream := startCIStream(os.Getenv)
+	defer stream.Stop()
+	diagnostics.streamTo(stream)
 
 	// Load .gavel.yaml once at the top — previously the lint path loaded it
 	// lazily, but the push-hook support needs Pre/Post from the same config
@@ -163,7 +191,8 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	// the end. The stream adapter (below) forwards testrunner updates to
 	// the UI while keeping hook pseudo-tests pinned at the top.
 	var (
-		attachUIUpdates func() chan []parsers.Test
+		attachUIUpdates          func() chan []parsers.Test
+		attachSafetyRerunUpdates func(testrunner.RunOptions) chan<- []parsers.Test
 	)
 	if opts.UI {
 		var err error
@@ -205,6 +234,10 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			}()
 			return testrunnerUpdates
 		}
+		attachSafetyRerunUpdates = func(rerunOpts testrunner.RunOptions) chan<- []parsers.Test {
+			uiServer.BeginRun("rerun")
+			return attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Stream: stream, Options: rerunOpts, Started: runStarted, Downstream: attachUIRerunUpdates()})
+		}
 		uiServer.BeginRun("initial")
 		opts.FixturePrompter, opts.FixtureRunID = uiServer.Prompter(), uiServer.PromptOwner()
 		uiServer.SetConnectionCatalog(opts.WorkDir)
@@ -217,7 +250,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 				}
 			}
 		}
-		opts.Updates = attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Options: opts, Started: runStarted, Downstream: attachUIUpdates()})
+		opts.Updates = attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Stream: stream, Options: opts, Started: runStarted, Downstream: attachUIUpdates()})
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			clicky.ClearGlobalTasks()
 			rerunCtx, cancelRerun := newStopContext(opts.Context, opts.Timeout)
@@ -266,7 +299,13 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	// In non-UI mode the recorder still needs a feed of test updates; attach
 	// a tee with no downstream so each batch reaches the recorder.
 	if opts.Updates == nil {
-		opts.Updates = attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Options: opts, Started: runStarted})
+		opts.Updates = attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Stream: stream, Options: opts, Started: runStarted})
+	}
+	freshSafetyRerunUpdates := func(rerunOpts testrunner.RunOptions) chan<- []parsers.Test {
+		if attachSafetyRerunUpdates != nil {
+			return attachSafetyRerunUpdates(rerunOpts)
+		}
+		return attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Stream: stream, Options: rerunOpts, Started: runStarted})
 	}
 
 	if !opts.SkipHooks && len(gavelCfg.Pre) > 0 {
@@ -320,8 +359,138 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	var fullSummary parsers.TestSummary
 	opts.SummaryOut = &fullSummary
 
-	result, err := testrunner.Run(opts)
-
+	// The export's coverage and flat results go only to this run, not to UI reruns.
+	runOpts := opts
+	var uirTests []parsers.Test
+	var uirInputs string
+	var uirProvenance uirexport.Provenance
+	var uirEnvironment map[string]string
+	var uirInventory uirplan.InventoryResult
+	var uirPlan uirplan.Response
+	var uirPlanValid bool
+	var uirExportReady = opts.UIRExport != ""
+	if opts.UIRExport != "" {
+		// Record the code and digest the inputs before the tests run, so files they write do not change them.
+		var err error
+		if uirProvenance, err = uirexport.CaptureProvenance(opts.WorkDir, opts.UIRExport); err != nil {
+			if !opts.UIRSkip {
+				return nil, fmt.Errorf("--uir-export: %w", err)
+			}
+			logger.Warnf("--uir-skip identity capture failed open; running the ordinary full test command without export: %v", err)
+			uirExportReady = false
+			runOpts.UIRRunAll = true
+		}
+		if uirExportReady {
+			if uirInputs, err = uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport); err != nil {
+				if !opts.UIRSkip {
+					return nil, fmt.Errorf("--uir-export: %w", err)
+				}
+				logger.Warnf("--uir-skip input inventory failed open; running the ordinary full test command without export: %v", err)
+				uirExportReady = false
+				runOpts.UIRRunAll = true
+			}
+		}
+		if opts.UIRSkip && uirExportReady {
+			planErr := error(nil)
+			if uirEnvironment, planErr = uirexport.Environment(opts.WorkDir, "-tags="+strings.Join(opts.Tags, ",")); planErr == nil {
+				uirEnvironment["gavel.timeout"] = opts.Timeout.String()
+				uirEnvironment["gavel.test_timeout"] = opts.TestTimeout.String()
+				uirInventory, planErr = uirplan.Inventory(opts.WorkDir, opts.Tags)
+			}
+			uirInputs = uirplan.InputsDigest(uirInputs, opts.UIRInputContext)
+			if planErr == nil {
+				request := uirplan.Request{Version: uirplan.ContractVersion, Environment: uirEnvironment, InputsDigest: uirInputs,
+					InputContext: opts.UIRInputContext, Inventory: uirInventory.Tests}
+				uirplan.Provenance(&request, uirProvenance)
+				uirPlan, planErr = uirplan.Execute(opts.Context, opts.UIRBinary, opts.WorkDir, request)
+			}
+			current, captureErr := uirexport.CaptureProvenance(opts.WorkDir, opts.UIRExport)
+			filesDigest, digestErr := uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport)
+			if planErr == nil && (captureErr != nil || digestErr != nil || current != uirProvenance || uirplan.InputsDigest(filesDigest, opts.UIRInputContext) != uirInputs) {
+				planErr = errors.Join(captureErr, digestErr, fmt.Errorf("indexed inputs changed between planning and execution"))
+			}
+			if planErr != nil {
+				logger.Warnf("--uir-skip planning failed open; running the ordinary full test command: %v", planErr)
+				runOpts.UIRRunAll = true
+				if captureErr == nil && digestErr == nil {
+					uirProvenance = current
+					uirInputs = uirplan.InputsDigest(filesDigest, opts.UIRInputContext)
+				}
+			} else {
+				uirPlanValid = true
+				if len(uirPlan.Skippable) > 0 {
+					runOpts.UIRSkippable = map[string][]string{}
+					for _, target := range uirInventory.Targets {
+						runOpts.UIRSkippable[target] = nil
+					}
+					skippable := map[string]bool{}
+					for _, id := range uirPlan.Skippable {
+						skippable[id] = true
+					}
+					for _, test := range uirInventory.Tests {
+						if skippable[test.ID] {
+							runOpts.UIRSkippable[test.Target] = append(runOpts.UIRSkippable[test.Target], test.Name)
+						}
+					}
+					runOpts.UIRAllowEmpty = true
+				} else {
+					runOpts.UIRRunAll = true
+				}
+				logger.Infof("UIR plan %s: %d of %d ordinary Go tests skippable", uirPlan.Mode, len(uirPlan.Skippable), len(uirInventory.Tests))
+			}
+		}
+		coverDir, err := os.MkdirTemp("", "gavel-uir-cover-")
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err := safefs.SafeRemove(coverDir, safefs.RemoveContext{AllowedRoot: os.TempDir()}); err != nil {
+				logger.Warnf("remove %s: %v", coverDir, err)
+			}
+		}()
+		runOpts.CoverDir, runOpts.ResultsOut = coverDir, &uirTests
+	}
+	result, err := testrunner.Run(runOpts)
+	testsFinished := time.Now().UTC()
+	if opts.UIRSkip && uirPlanValid && uirExportReady {
+		current, identityErr := uirexport.CaptureProvenance(opts.WorkDir, opts.UIRExport)
+		filesDigest, inputsErr := uirexport.InputsDigest(opts.WorkDir, opts.Tags, opts.UIRExport)
+		verified := identityErr == nil && inputsErr == nil && current == uirProvenance && uirplan.InputsDigest(filesDigest, opts.UIRInputContext) == uirInputs
+		if !verified {
+			verificationErr := errors.Join(identityErr, inputsErr, fmt.Errorf("indexed or declared file inputs changed during execution"))
+			logger.Warnf("--uir-skip evidence invalidated; no affected-test baseline was imported: %v", verificationErr)
+			uirExportReady = false
+			if len(uirPlan.Skippable) > 0 && err == nil && fullSummary.Failed == 0 {
+				logger.Warnf("--uir-skip rerunning the ordinary full test command because the successful partial result is no longer safe to accept")
+				fullSummary = parsers.TestSummary{}
+				uirTests = nil
+				fallbackOpts := opts
+				fallbackOpts.UIRRunAll = true
+				fallbackOpts.UIRSkippable = nil
+				fallbackOpts.UIRAllowEmpty = false
+				fallbackOpts.CoverDir = ""
+				fallbackOpts.ResultsOut = nil
+				fallbackOpts.SummaryOut = &fullSummary
+				fallbackOpts.Updates = freshSafetyRerunUpdates(fallbackOpts)
+				result, err = testrunner.Run(fallbackOpts)
+				testsFinished = time.Now().UTC()
+			}
+		} else {
+			selection := "full"
+			if len(uirPlan.Skippable) > 0 {
+				selection = "partial"
+			}
+			metadata := uirRunMetadata{Environment: uirEnvironment, SelectionMode: selection, InventoryDigest: uirPlan.InventoryDigest,
+				Complete:         completedUIRSelection(opts.WorkDir, uirInventory.Tests, uirPlan.Skippable, uirTests),
+				IdentityVerified: true, PlanID: uirPlan.PlanID}
+			metadata.Inventory = uirInventory.Tests
+			if exportErr := writeUIRExport(runOpts, uirTests, uirInputs, uirProvenance, runStarted, testsFinished, metadata); exportErr != nil {
+				logger.Warnf("--uir-skip could not write verified execution evidence; test status is unchanged and no baseline was imported: %v", exportErr)
+			} else if importErr := importUIRRun(opts.Context, opts.UIRBinary, opts.WorkDir, opts.UIRExport); importErr != nil {
+				logger.Warnf("--uir-skip could not import verified execution evidence; test status is unchanged and no baseline was imported: %v", importErr)
+			}
+		}
+	}
 	// Post-hooks run after tests, regardless of pass/fail. A failing post
 	// hook does NOT mask the main exit code — it's logged as a warning.
 	if !opts.SkipHooks && len(gavelCfg.Post) > 0 {
@@ -333,6 +502,18 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 	// Wait for lint to finish
 	wg.Wait()
 
+	if opts.UIRExport != "" && !uirExportReady {
+		logger.Warnf("--uir-export: safe input identity was unavailable; %s not written", opts.UIRExport)
+	} else if opts.UIRExport != "" && (!opts.UIRSkip || !uirPlanValid) && len(uirTests) == 0 {
+		logger.Warnf("--uir-export: no tests ran; %s not written", opts.UIRExport)
+	} else if opts.UIRExport != "" && (!opts.UIRSkip || !uirPlanValid) {
+		if exportErr := writeUIRExport(runOpts, uirTests, uirInputs, uirProvenance, runStarted, testsFinished, uirRunMetadata{}); exportErr != nil {
+			if err == nil {
+				return nil, fmt.Errorf("--uir-export: %w", exportErr)
+			}
+			logger.Warnf("--uir-export: %v", exportErr)
+		}
+	}
 	if lintErr != nil {
 		err = errors.Join(err, fmt.Errorf("lint: %w", lintErr))
 	}
@@ -467,6 +648,91 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		return testRunReturnValue(snapshot), nil
 	}
 	return result, nil
+}
+
+// writeUIRExport writes the run's flat results, with the coverage its go test batches profiled into
+// opts.CoverDir, as the `uir tests import` file --uir-export names.
+type uirRunMetadata struct {
+	Environment      map[string]string
+	SelectionMode    string
+	InventoryDigest  string
+	Complete         bool
+	IdentityVerified bool
+	PlanID           string
+	Inventory        []uirplan.Test
+}
+
+func completedUIRSelection(root string, inventory []uirplan.Test, skippable []string, results []parsers.Test) bool {
+	skipped := map[string]bool{}
+	for _, id := range skippable {
+		skipped[id] = true
+	}
+	terminal := map[string]bool{}
+	for _, result := range results {
+		rootResult := result.WorkDir == "" || filepath.Clean(result.WorkDir) == filepath.Clean(root)
+		if rootResult && (result.Failed || result.Aborted) {
+			return false
+		}
+		if rootResult && (result.Passed || result.Skipped) && !result.Failed && !result.Aborted && !strings.Contains(result.Name, "/") {
+			terminal[result.Package+"\x00"+result.Name] = true
+		}
+	}
+	for _, test := range inventory {
+		if !skipped[test.ID] && !terminal[test.Package+"\x00"+test.Name] {
+			return false
+		}
+	}
+	return true
+}
+
+func writeUIRExport(opts testrunner.RunOptions, tests []parsers.Test, inputsDigest string, provenance uirexport.Provenance, started, finished time.Time, metadata uirRunMetadata) error {
+	profiles, err := filepath.Glob(filepath.Join(opts.CoverDir, "batch-*.out"))
+	if err != nil {
+		return err
+	}
+	options := uirexport.Options{
+		WorkDir: opts.WorkDir, InputsDigest: inputsDigest, Provenance: provenance,
+		StartedAt: started, FinishedAt: finished, CoverProfiles: profiles, CoverDir: opts.CoverDir,
+		Environment: metadata.Environment, SelectionMode: metadata.SelectionMode, InventoryDigest: metadata.InventoryDigest,
+		Complete: metadata.Complete, IdentityVerified: metadata.IdentityVerified, PlanID: metadata.PlanID,
+	}
+	if metadata.SelectionMode != "" {
+		options.ContractVersion = uirexport.ContractVersion
+		for _, test := range metadata.Inventory {
+			options.Inventory = append(options.Inventory, uirexport.InventoryTest{
+				ID: test.ID, Framework: test.Framework, Package: test.Package, Suite: test.Suite,
+				Name: test.Name, File: test.File, Line: test.Line,
+			})
+		}
+	}
+	if opts.UIRTestCoverage {
+		options.CoverTest = func(test parsers.Test, profile string) error {
+			return testrunner.CoverTest(opts, test, profile)
+		}
+	}
+	imported, err := uirexport.Build(tests, options)
+	if err != nil {
+		return err
+	}
+	if err := uirexport.Write(opts.UIRExport, imported); err != nil {
+		return err
+	}
+	logger.Infof("Wrote %d tests for `uir tests import` to %s", len(imported.Runs[0].Tests), opts.UIRExport)
+	return nil
+}
+
+func importUIRRun(ctx context.Context, binary, workDir, path string) error {
+	if binary == "" {
+		binary = "uir"
+	}
+	command := exec.CommandContext(ctx, binary, "--format", "json", "tests", "import", path, "--location", workDir)
+	command.Dir = workDir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("uir tests import: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	logger.Infof("Imported UIR test run")
+	return nil
 }
 
 // printDryRunHooks renders each hook as a `sh -c` invocation using the

@@ -144,7 +144,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   const ref = current?.ref ?? '';
   const sessionId = current?.sessionId ?? '';
   const status = current?.status;
-  const questions = current?.questions ?? [];
+  const questions = useMemo(() => current?.questions ?? [], [current?.questions]);
 
   const onApprove = useCallback(
     async (run: boolean, options?: TodoRunOptions) => {
@@ -258,7 +258,9 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
       }
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+    };
   }, [review, status, onApprove, onReject]);
 
   if (!review.active) return null;

@@ -144,13 +144,13 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 				return installed, "", nil
 			}
 			binDir := lintToolBinDir(gitRoot)
-			if err := os.MkdirAll(binDir, 0o755); err != nil {
+			if err := utils.MkdirOutput(binDir, 0o755); err != nil {
 				return "", "", fmt.Errorf("create golangci bin dir %s: %w", binDir, err)
 			}
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			result, err := installGolangciLint(ctx, "golangci/golangci-lint", "stable", deps.WithBinDir(binDir))
+			result, err := installGolangciLint(ctx, "golangci-lint", "stable", deps.WithBinDir(binDir))
 			if err != nil {
 				return "", "", fmt.Errorf("install golangci-lint in %s: %w", binDir, err)
 			}

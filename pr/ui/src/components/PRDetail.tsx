@@ -538,7 +538,15 @@ function CommentView({ comment }: { comment: PRComment }) {
     <div className={`text-xs border-b border-border ${resolved ? 'opacity-50' : ''}`}>
       <div
         className="flex items-start gap-1.5 py-1.5 cursor-pointer hover:bg-muted rounded px-1 -mx-1"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
+        onKeyDown={e => {
+          if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+          e.preventDefault();
+          setExpanded(!expanded);
+        }}
       >
         <span className="shrink-0 mt-0.5">{severityIcon(comment.severity)}</span>
         <div className="flex-1 min-w-0">
@@ -865,8 +873,8 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
     >
       {headerCards.length > 0 ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2">
-          {headerCards.map((c, i) => (
-            <MetricCard key={i} {...c} />
+          {headerCards.map((c) => (
+            <MetricCard key={c.label} {...c} />
           ))}
         </div>
       ) : errored.length > 0 ? (
@@ -1116,8 +1124,8 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
           iconColor="text-red-600"
           shown={brokenLinters.length}
         >
-          {brokenLinters.map((lr, i) => (
-            <div key={i} className="px-2 py-1.5 text-xs">
+          {brokenLinters.map((lr) => (
+            <div key={lr.linter} className="px-2 py-1.5 text-xs">
               <div className="font-medium text-foreground">
                 {lr.linter}
                 {lr.timed_out && <span className="ml-1 text-muted-foreground">timed out</span>}
@@ -1174,10 +1182,10 @@ function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
   if (items.length === 0) return null;
   return (
     <span className="inline-flex items-center gap-1 tabular-nums">
-      {items.map((it, i) => {
+      {items.map((it) => {
         const Icon = it.icon;
         return (
-        <span key={i} className={`inline-flex items-center ${it.color} leading-none`} title={it.title}>
+        <span key={it.title} className={`inline-flex items-center ${it.color} leading-none`} title={it.title}>
           <Icon className="text-[12px]" />
           <span className="text-[11px] font-medium">{it.count}</span>
         </span>
@@ -1220,8 +1228,8 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
           ) : (
             <>
               <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2">
-                {cards.map((c, i) => (
-                  <MetricCard key={i} {...c} />
+                {cards.map((c) => (
+                  <MetricCard key={c.label} {...c} />
                 ))}
               </div>
               <ShardExtras results={results} />

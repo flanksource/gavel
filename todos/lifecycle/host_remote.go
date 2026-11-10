@@ -24,9 +24,6 @@ type RemoteRun struct {
 	// files the run under Input.Record itself.
 	Input promptrun.Input
 	Hooks RunHooks
-	// Admitted is called once Captain has admitted the run and before it is set up, as the hook
-	// a local recorded run carries is. Nil for an unrecorded run.
-	Admitted func() error
 }
 
 // remoteRunnable refuses a step a remote runner can't run: one that resumes an agent session,

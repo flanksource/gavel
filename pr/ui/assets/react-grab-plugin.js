@@ -331,8 +331,12 @@
     form.append("attachment", blob, "screenshot.png");
     return fetch(GAVEL_ORIGIN + "/api/todos/attachments", { method: "POST", body: form })
       .then(function (res) {
+        if (!res.ok) {
+          return res.json().catch(function () { return {}; }).then(function (data) {
+            throw new Error(data.error || "screenshot upload failed");
+          });
+        }
         return res.json().catch(function () { return {}; }).then(function (data) {
-          if (!res.ok) throw new Error(data.error || "screenshot upload failed");
           var attachment = data.attachments && data.attachments[0];
           if (!attachment || !attachment.url) throw new Error("screenshot upload returned no URL");
           attachment.url = absoluteGavelURL(attachment.url);

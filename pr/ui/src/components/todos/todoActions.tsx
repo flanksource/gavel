@@ -394,7 +394,7 @@ export function useTodoSelectionActions({
     // first-appearance order, so this ordering is the one the menu shows.
     return descriptors.sort((a, b) =>
       Number(a.section === 'Danger') - Number(b.section === 'Danger'));
-  }, [catalog, selection, todos, openChildren, runAction, onResult, onError]);
+  }, [catalog, selection, todos, tags, labelCounts, openChildren, runAction, onResult, onError]);
 }
 
 /**

@@ -49,6 +49,21 @@ func (w HostedWorkspaces) repos(ctx context.Context, org uuid.UUID, id *uuid.UUI
 	return repos, nil
 }
 
+// GitHubWorkspace is the workspace of org's GitHub repository named repo (owner/name, in any
+// case), or "" when org doesn't have that repository.
+func (w HostedWorkspaces) GitHubWorkspace(ctx context.Context, org uuid.UUID, repo string) (string, error) {
+	var ids []uuid.UUID
+	if err := w.DB.WithContext(ctx).Table("repos").
+		Where("org_id = ? AND source = 'github' AND lower(name) = ?", org, strings.ToLower(repo)).
+		Limit(1).Pluck("id", &ids).Error; err != nil {
+		return "", fmt.Errorf("find repository %s of organization %s: %w", repo, org, err)
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	return RepoWorkspace(ids[0]), nil
+}
+
 // Projects lists org's repositories as the dashboard's projects.
 func (w HostedWorkspaces) Projects(ctx context.Context, org uuid.UUID) ([]projectInfo, error) {
 	repos, err := w.repos(ctx, org, nil)

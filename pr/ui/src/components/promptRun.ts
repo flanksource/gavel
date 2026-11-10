@@ -37,10 +37,12 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
   });
   const runId = state.status === 'running' ? state.runId : '';
 
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream, which drops its listeners
   useEffect(() => {
     if (!runId) return;
     const settle = () => callbacks.current.onSettled?.();
     const stream = openEventStream(`/api/captain/prompt/runs/${encodeURIComponent(runId)}/stream`);
+    let closed = false;
     const onRun = (event: Event) => {
       const { sessionId } = parseFrame<PromptRunFrame>(event);
       if (sessionId) setState(current => current.status === 'running' ? { ...current, sessionId } : current);
@@ -64,7 +66,7 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
       const data = (event as MessageEvent<string>).data;
       if (!data) {
         void fetch(`/api/captain/prompt/runs/${encodeURIComponent(runId)}`).then(response => {
-          if (response.status !== 404) return;
+          if (closed || response.status !== 404) return;
           stream.close();
           setState({ status: 'failed', runId, error: `Captain no longer knows this ${callbacks.current.label}; check its result before retrying.` });
           settle();
@@ -80,6 +82,7 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
     stream.addEventListener('done', onDone);
     stream.addEventListener('error', onError);
     return () => {
+      closed = true;
       stream.removeEventListener('run', onRun);
       stream.removeEventListener('done', onDone);
       stream.removeEventListener('error', onError);

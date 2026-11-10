@@ -42,8 +42,11 @@ export function RuntimePresetsView({ scopeQuery, families, tools, runtimeError, 
     [drafts, library.data?.presets],
   );
   const client = useMemo(() => runtimePresetClient(scopeQuery, tools), [scopeQuery, tools]);
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- callers invalidate the preset library after mutateAsync (batched once per save)
   const create = useMutation({ mutationFn: ({ target, preset }: { target: string; preset: RuntimePreset }) => createRuntimePreset(scopeQuery, target, preset) });
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- callers invalidate the preset library after mutateAsync (batched once per save)
   const update = useMutation({ mutationFn: (preset: RuntimePreset) => updateRuntimePreset(scopeQuery, preset) });
+  // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- callers invalidate the preset library after mutateAsync (batched once per save)
   const remove = useMutation({ mutationFn: (preset: StoredRuntimePreset) => deleteRuntimePreset(scopeQuery, preset) });
 
   useEffect(() => {

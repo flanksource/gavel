@@ -210,7 +210,9 @@ function TagRow({ def, usage, busy, draft = false, onSave, onDelete }: {
   onSave: (input: { name: string; color?: string; icon?: string; description?: string; global?: boolean }) => void;
   onDelete: () => void;
 }) {
+  // react-doctor-disable-next-line react-doctor/no-derived-useState -- edit buffer seeded from def; dirty compares it against def and the row remounts per scope:name key
   const [name, setName] = useState(def.name);
+  // react-doctor-disable-next-line react-doctor/no-derived-useState -- edit buffer seeded from def; dirty compares it against def and the row remounts per scope:name key
   const [color, setColor] = useState(def.color);
   const [icon, setIcon] = useState(def.icon ?? '');
   const [description, setDescription] = useState(def.description ?? '');

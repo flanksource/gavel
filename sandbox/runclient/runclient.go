@@ -1,5 +1,5 @@
-// Package runclient calls gavel serve's run API from inside a sandbox job, authenticated with the
-// job's run token for its own run.
+// Package runclient calls a run's run API from where the run executes: gavel serve's, over HTTP
+// from a sandbox job with the job's run token, or the run's caller's, over a host call.
 package runclient
 
 import (
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -24,23 +25,38 @@ type Client struct {
 	HTTP   *http.Client
 }
 
-// FromEnv is the client for the run the job's environment names.
+// requestTimeout bounds one run API request.
+const requestTimeout = 10 * time.Minute
+
+// FromEnv is the client for the run the job's environment names: through the socket its
+// environment's program serves the run API on, which needs no token, or else over HTTP to serve
+// with the run's token.
 func FromEnv(getenv func(string) string) (*Client, error) {
-	server, token, run := getenv("GAVEL_SERVER"), getenv("GAVEL_RUN_TOKEN"), getenv("GAVEL_RUN_ID")
-	if server == "" || token == "" || run == "" {
-		return nil, fmt.Errorf("%w: GAVEL_SERVER, GAVEL_RUN_TOKEN and GAVEL_RUN_ID must be set", ErrNotInAJob)
+	run := getenv("GAVEL_RUN_ID")
+	if socket := getenv(SocketEnv); socket != "" && run != "" {
+		dialer := &net.Dialer{}
+		transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", socket)
+		}}
+		return &Client{Server: "http://run-api", Run: run, HTTP: &http.Client{Timeout: requestTimeout, Transport: transport}}, nil
 	}
-	return &Client{Server: strings.TrimRight(server, "/"), Token: token, Run: run, HTTP: &http.Client{Timeout: 10 * time.Minute}}, nil
+	server, token := getenv("GAVEL_SERVER"), getenv("GAVEL_RUN_TOKEN")
+	if server == "" || token == "" || run == "" {
+		return nil, fmt.Errorf("%w: GAVEL_RUN_ID, and %s or GAVEL_SERVER and GAVEL_RUN_TOKEN, must be set", ErrNotInAJob, SocketEnv)
+	}
+	return &Client{Server: strings.TrimRight(server, "/"), Token: token, Run: run, HTTP: &http.Client{Timeout: requestTimeout}}, nil
 }
 
-// Do sends method to /api/runs/<run>/<path>. A response that isn't 2xx is an error carrying
-// serve's reason.
+// Do sends method to /api/runs/<run>/<path>, with the run's token when the client has one. A
+// response that isn't 2xx is an error carrying serve's reason.
 func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.Server+"/api/runs/"+c.Run+"/"+path, body)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, err
@@ -48,13 +64,19 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 	if resp.StatusCode/100 != 2 {
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		var failure struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(data, &failure) == nil && failure.Error != "" {
-			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, failure.Error)
-		}
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, failed(resp.StatusCode, data)
 	}
 	return resp, nil
+}
+
+// failed is the error of a response that isn't 2xx: its status, and the run API's reason when
+// its body gives one.
+func failed(status int, body []byte) error {
+	var failure struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &failure) == nil && failure.Error != "" {
+		return fmt.Errorf("HTTP %d: %s", status, failure.Error)
+	}
+	return fmt.Errorf("HTTP %d", status)
 }

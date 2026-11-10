@@ -15,6 +15,7 @@ import (
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/gavel/blob"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/utils"
 )
 
 const (
@@ -69,7 +70,16 @@ func Save(workDir string, snap *testui.Snapshot) (string, error) {
 			return "", err
 		}
 	}
+	if err := ignoreLocalStore(workDir); err != nil {
+		return "", err
+	}
 	return Location(workDir, fileName), nil
+}
+
+// ignoreLocalStore makes workDir's .gavel directory, where a local store writes, ignore itself, so
+// Git never lists gavel's snapshots. A store elsewhere leaves no directory to ignore.
+func ignoreLocalStore(workDir string) error {
+	return utils.IgnoreOutputDir(filepath.Join(workDir, Dir))
 }
 
 // LoadPointer reads the <name>.json pointer from workDir's snapshot store. A missing pointer

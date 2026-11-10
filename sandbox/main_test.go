@@ -1,5 +1,6 @@
 // Runs the package's tests with a git configuration of their own, which turns off git's automatic
 // maintenance: a fetch or push starts it detached, and its repack races a test's TempDir cleanup.
+// The test binary also stands in for the substrate environment's program and its job.
 package sandbox
 
 import (
@@ -12,6 +13,16 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// The substrate executor's tests run the test binary as the environment's program and as the
+	// job.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case substrateRunTaskArg:
+			os.Exit(runSubstrateTask())
+		case substrateJobArg:
+			os.Exit(runSubstrateJob(os.Args[2:]))
+		}
+	}
 	dir, err := os.MkdirTemp("", "sandbox-gitconfig-")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create a test git configuration: %v\n", err)

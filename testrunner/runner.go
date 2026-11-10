@@ -172,6 +172,16 @@ type RunOptions struct {
 	OutputTee                io.Writer                        `json:"-" yaml:"-"`                                                       // Optional writer that receives a copy of raw process stdout/stderr
 	RunKind                  string                           `json:"run_kind,omitempty" yaml:"run-kind,omitempty"`                     // "initial" (default) or "rerun" — tagged onto each TestAttempt produced
 	SummaryOut               *parsers.TestSummary             `json:"-" yaml:"-"`                                                       // If non-nil, the runner writes the aggregate pass/fail/skip/total/duration counts here before returning, so CLI callers can print an end-of-run summary even when the run errors mid-way and returns a partial tree.
+	ResultsOut               *[]parsers.Test                  `json:"-" yaml:"-"`                                                       // If non-nil, the runner appends every test it parsed here, flat and before the display tree is built, so exporters see each test's own File, Package and Attempts. Filled even when the run errors mid-way.
+	CoverDir                 string                           `json:"-" yaml:"-"`                                                       // If set, every go test batch writes its -coverprofile into this directory, one batch-<n>.out per batch.
+	UIRExport                string                           `json:"uir_export,omitempty" yaml:"-" flag:"uir-export" help:"Write the run's results, coverage and inputs digest as a uir tests import (v1 normally; v2 with --uir-skip)"`
+	UIRTestCoverage          bool                             `json:"uir_test_coverage,omitempty" yaml:"-" flag:"uir-test-coverage" help:"With --uir-export, also rerun each Go test and Ginkgo spec alone to record its own coverage (slow)"`
+	UIRSkip                  bool                             `json:"uir_skip,omitempty" yaml:"-" flag:"uir-skip" help:"Opt in to UIR-proved ordinary Go test skipping; requires --framework go, --uir-export and --uir-input-context"`
+	UIRBinary                string                           `json:"uir_binary,omitempty" yaml:"-" flag:"uir-binary" default:"uir" help:"UIR executable used by --uir-skip"`
+	UIRInputContext          string                           `json:"uir_input_context,omitempty" yaml:"-" flag:"uir-input-context" help:"Identity of declared service, environment and other runtime inputs for --uir-skip"`
+	UIRSkippable             map[string][]string              `json:"-" yaml:"-"`
+	UIRRunAll                bool                             `json:"-" yaml:"-"`
+	UIRAllowEmpty            bool                             `json:"-" yaml:"-"`
 
 	PassThroughArgs []string `json:"pass_through_args,omitempty" yaml:"-"` // CLI-only arguments supplied after --. Focus aliases are normalized; remaining args require one selected framework.
 
@@ -485,7 +495,7 @@ func Run(opts RunOptions) (any, error) {
 		opts.StartingPaths = groups[0].paths
 		result, err = runSingleRoot(opts)
 	}
-	return requireExecutedTests(result, err, opts.DryRun || opts.hasChangeSelector())
+	return requireExecutedTests(result, err, opts.DryRun || opts.hasChangeSelector() || opts.UIRAllowEmpty)
 }
 
 func requireExecutedTests(result any, err error, allowEmpty bool) (any, error) {
@@ -506,13 +516,22 @@ func runMultiRoot(base RunOptions, groups []testGroup) (any, error) {
 		defer close(base.Updates)
 	}
 
-	baseWorkDir := base.WorkDir
+	baseWorkDir, err := filepath.Abs(base.WorkDir)
+	if err != nil {
+		return nil, err
+	}
 	var allTree []parsers.Test
 	var streamedTree []parsers.Test
 	for _, g := range groups {
 		opts := base
 		opts.WorkDir = g.workDir
 		opts.StartingPaths = g.paths
+		if opts.UIRSkippable != nil && filepath.Clean(g.workDir) != filepath.Clean(baseWorkDir) {
+			// UIRSkippable keys are relative to the planned module. A child module can have the same
+			// package path, so it must run normally rather than inherit another module's evidence.
+			opts.UIRSkippable = nil
+			opts.UIRAllowEmpty = false
+		}
 
 		var result any
 		var err error
@@ -684,6 +703,16 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	// CLI can still print an end-of-run summary when a subprocess failed.
 	if opts.SummaryOut != nil {
 		*opts.SummaryOut = opts.SummaryOut.Add(results.All().Sum())
+	}
+	if opts.ResultsOut != nil {
+		for _, result := range results {
+			for _, test := range result.Tests {
+				if test.WorkDir == "" {
+					test.WorkDir = opts.WorkDir
+				}
+				*opts.ResultsOut = append(*opts.ResultsOut, test)
+			}
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -1110,6 +1139,19 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			}
 			argsByFramework[fw] = append(argsByFramework[fw], mapper.FocusArgs(pattern)...)
 		}
+	}
+
+	if o.UIRSkippable != nil {
+		seen := map[string]bool{}
+		for _, pkg := range packagesByFramework[parsers.GoTest] {
+			seen[pkg] = true
+		}
+		for pkg := range o.UIRSkippable {
+			if !seen[pkg] {
+				packagesByFramework[parsers.GoTest] = append(packagesByFramework[parsers.GoTest], pkg)
+			}
+		}
+		sort.Strings(packagesByFramework[parsers.GoTest])
 	}
 
 	// If dry-run mode, display what would be executed and return early

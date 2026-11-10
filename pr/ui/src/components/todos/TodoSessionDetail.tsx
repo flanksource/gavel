@@ -138,16 +138,17 @@ export function AttemptWorkspaceSummary({ attempt }: { attempt: TodoSessionAttem
 }
 
 export function AttemptStopAction({ attempt, onStop }: { attempt: TodoSessionAttempt; onStop: (attempt: TodoSessionAttempt) => Promise<void> }) {
-  const [stopping, setStopping] = useState(attempt.stopping);
+  const [stopRequested, setStopRequested] = useState(false);
+  const stopping = !!attempt.stopping || stopRequested;
   const [error, setError] = useState('');
   if (!attempt.canStop) return null;
   const stop = async () => {
-    setStopping(true);
+    setStopRequested(true);
     setError('');
     try {
       await onStop(attempt);
     } catch (reason) {
-      setStopping(false);
+      setStopRequested(false);
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   };

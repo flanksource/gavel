@@ -91,7 +91,7 @@ function usePolled<T>(enabled: boolean, poll: boolean, load: () => Promise<T>, k
   const loadRef = useRef(load);
   useEffect(() => {
     loadRef.current = load;
-  });
+  }, [load]);
 
   const reload = useCallback(async () => {
     try {
@@ -115,10 +115,15 @@ function usePolled<T>(enabled: boolean, poll: boolean, load: () => Promise<T>, k
       });
     };
     run();
-    const timer = poll ? window.setInterval(run, POLL_INTERVAL_MS) : undefined;
+    if (!poll) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const timer = window.setInterval(run, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
-      if (timer !== undefined) window.clearInterval(timer);
+      window.clearInterval(timer);
     };
   }, [enabled, poll, key]);
 

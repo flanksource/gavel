@@ -114,12 +114,10 @@ export function useWorkspaceTodos(
   // un-hide it. The FilterBar's own chips drive the full tri-state through
   // setFilters.
   const toggleStatus = useCallback((status: TodoStatus) => {
-    setFiltersState(prev => {
-      const next = { ...prev, statuses: toggleStatusFilter(prev.statuses, status) };
-      saveTodoFilters(next);
-      return next;
-    });
-  }, []);
+    const next = { ...filters, statuses: toggleStatusFilter(filters.statuses, status) };
+    setFiltersState(next);
+    saveTodoFilters(next);
+  }, [filters]);
 
   const setDensity = useCallback((next: TodoDensity) => {
     setDensityState(next);

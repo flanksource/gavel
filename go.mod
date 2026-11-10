@@ -18,16 +18,16 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
-	github.com/flanksource/captain v0.0.73
+	github.com/flanksource/captain v0.0.77
 	github.com/flanksource/clicky v1.21.90
-	github.com/flanksource/clicky/aichat v1.21.85
+	github.com/flanksource/clicky/aichat v1.21.88
 	github.com/flanksource/commons v1.63.0
 	github.com/flanksource/commons-db v0.1.70
 	github.com/flanksource/commons-db/cmd/query v0.1.67
 	github.com/flanksource/commons-db/recordstore v0.1.67
 	github.com/flanksource/commons-db/tracing v0.1.67
-	github.com/flanksource/deps v1.0.49
-	github.com/flanksource/deps/start v0.0.0-20261020081806-49e7d4bacc50
+	github.com/flanksource/deps v1.0.51
+	github.com/flanksource/deps/start v0.0.0-20261103114210-92d640aba10a
 	github.com/flanksource/gavel/sdk v0.1.0
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/repomap v0.4.1

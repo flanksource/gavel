@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -144,4 +145,12 @@ func TestRunsAPIProxiesARunsPR(t *testing.T) {
 	status, body = call(otherRun, http.MethodGet, "pr/head", nil)
 	assert.Equal(t, http.StatusBadRequest, status)
 	assert.Contains(t, body, "run "+otherRun.String()+" works on no PR")
+}
+
+// gitOutput is git's output in dir, trimmed.
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	require.NoError(t, err, "git %v", args)
+	return strings.TrimSpace(string(out))
 }

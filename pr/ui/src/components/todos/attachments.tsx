@@ -115,6 +115,7 @@ export function useAttachments({ pasteAnywhere = false }: { pasteAnywhere?: bool
   const [previews, setPreviews] = useState<AttachmentPreview[]>([]);
 
   useEffect(() => {
+    // react-doctor-disable-next-line react-doctor/no-create-object-url-without-revoke -- every URL is revoked by this effect's cleanup below
     const urls = attachments.map(a => ({ name: a.name, url: URL.createObjectURL(a.blob) }));
     setPreviews(urls);
     return () => urls.forEach(u => URL.revokeObjectURL(u.url));

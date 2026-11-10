@@ -218,6 +218,7 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
   const lintRun = !!snapshotStatus.lint_run;
   const history = useRunHistory();
 
+  // react-doctor-disable-next-line react-doctor/prefer-use-sync-external-store -- route is app state mirrored to the URL; it keeps per-tab filters the URL omits, so it is not derivable from location
   const [route, setRoute] = useState<RouteState>(() => parseRoute(window.location));
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
   const [rerunBusy, setRerunBusy] = useState(false);

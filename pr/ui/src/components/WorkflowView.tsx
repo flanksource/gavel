@@ -67,16 +67,20 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
 
   return (
     <div className="mb-3">
-      <div
-        className="flex items-center gap-1.5 text-sm font-medium cursor-pointer hover:bg-muted rounded px-1 -mx-1 py-0.5"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <ChevronIcon className="text-muted-foreground text-[10px]" />
-        <span className={statusColor(run.status, run.conclusion)}>
-          {statusIcon(run.status, run.conclusion)}
-        </span>
-        <span>{run.name}</span>
-        {summary && <span className="text-muted-foreground text-xs font-normal">· {summary}</span>}
+      <div className="flex items-center gap-1.5 text-sm font-medium">
+        <button
+          type="button"
+          className="flex items-center gap-1.5 text-left cursor-pointer hover:bg-muted rounded px-1 -mx-1 py-0.5"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          <ChevronIcon className="text-muted-foreground text-[10px]" />
+          <span className={statusColor(run.status, run.conclusion)}>
+            {statusIcon(run.status, run.conclusion)}
+          </span>
+          <span>{run.name}</span>
+          {summary && <span className="text-muted-foreground text-xs font-normal">· {summary}</span>}
+        </button>
         {run.url && (
           <a
             href={run.url}
@@ -132,18 +136,29 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
   }
 
   const hasSteps = failed && job.steps && job.steps.some(s => s.conclusion?.toLowerCase() === 'failure');
+  const jobLabel = (
+    <>
+      <span className={statusColor(job.status, job.conclusion)}>
+        {statusIcon(job.status, job.conclusion)}
+      </span>
+      <span className={failed ? 'text-red-700 font-medium' : 'text-foreground'}>{job.name}</span>
+      <JobDuration startedAt={job.startedAt} completedAt={job.completedAt} />
+    </>
+  );
 
   return (
     <div className="ml-4 mt-1">
-      <div
-        className={`flex items-center gap-1.5 text-xs ${failed && !hasSteps ? 'cursor-pointer hover:bg-muted rounded px-1 -mx-1' : ''}`}
-        onClick={failed && !hasSteps ? toggleJobFallback : undefined}
-      >
-        <span className={statusColor(job.status, job.conclusion)}>
-          {statusIcon(job.status, job.conclusion)}
-        </span>
-        <span className={failed ? 'text-red-700 font-medium' : 'text-foreground'}>{job.name}</span>
-        <JobDuration startedAt={job.startedAt} completedAt={job.completedAt} />
+      <div className="flex items-center gap-1.5 text-xs">
+        {failed && !hasSteps ? (
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-left cursor-pointer hover:bg-muted rounded px-1 -mx-1"
+            aria-expanded={expandedJobFallback}
+            onClick={toggleJobFallback}
+          >
+            {jobLabel}
+          </button>
+        ) : jobLabel}
         {job.url && (
           <a
             href={job.url}
@@ -166,8 +181,10 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
         const ChevronIcon = isOpen ? UiChevronDown : UiChevronRight;
         return (
           <div key={step.number} className="ml-4 mt-0.5 text-xs">
-            <div
+            <button
+              type="button"
               className="cursor-pointer hover:bg-muted rounded px-1 -mx-1 inline-flex items-center gap-1"
+              aria-expanded={isOpen}
               onClick={() => toggleStep(step.number)}
             >
               <ChevronIcon className="text-muted-foreground text-[9px]" />
@@ -175,7 +192,7 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
                 {statusIcon(step.status, step.conclusion)}
               </span>
               <span className="text-red-600">{step.name}</span>
-            </div>
+            </button>
             {isOpen && loading && !loaded && <IndeterminateProgress />}
             {isOpen && loaded && logs && (
               <>

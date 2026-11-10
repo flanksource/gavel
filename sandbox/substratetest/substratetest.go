@@ -1,5 +1,6 @@
 // Package substratetest reads the live Substrate cluster the substrate e2e tests run against: its
-// API addresses, gavel's token, the runner image, and where jobs reach the test's stand-in for serve.
+// API addresses, gavel's token, the runner's image template, and where jobs reach the test's
+// stand-in for serve.
 package substratetest
 
 import (
@@ -15,15 +16,18 @@ type Cluster struct {
 	EnvAPI    string
 	Control   string
 	TokenFile string
-	Template  string
-	// Image is the runner image, pinned by digest, in a registry the cluster pulls from.
-	Image string
+	// Template is the runner's image template, registered with ate-env manifest template
+	// --rootfs-image.
+	Template string
 	// Listen is the host address a test serves on; ServeURL is how jobs in the cluster reach it.
 	Listen   string
 	ServeURL string
 	// Credential is the value of the Secret CredentialURI names, which the gateway injects.
 	Credential    string
 	CredentialURI string
+	// AgentCredentialURI names the Secret holding a Claude Code OAuth token, which the gateway
+	// injects into an agent run's requests to the model API.
+	AgentCredentialURI string
 }
 
 // FromEnv skips t unless GAVEL_SANDBOX_SUBSTRATE_TEST=1, and returns the cluster's settings.
@@ -42,14 +46,14 @@ func FromEnv(t testing.TB) Cluster {
 		return fallback
 	}
 	return Cluster{
-		EnvAPI:        setting("GAVEL_SUBSTRATE_ENV_API", "localhost:7777"),
-		Control:       setting("GAVEL_SUBSTRATE_CONTROL", "localhost:8443"),
-		TokenFile:     setting("GAVEL_SUBSTRATE_TOKEN_FILE", ""),
-		Template:      setting("GAVEL_SUBSTRATE_TEMPLATE", "gavel-runner"),
-		Image:         setting("GAVEL_SUBSTRATE_IMAGE", ""),
-		Listen:        setting("GAVEL_SUBSTRATE_SERVE_LISTEN", "172.18.0.1:18080"),
-		ServeURL:      setting("GAVEL_SUBSTRATE_SERVE_URL", "http://gavel-host.default.svc.cluster.local:18080"),
-		Credential:    setting("GAVEL_SUBSTRATE_CREDENTIAL", "gavel-e2e-injected-credential"),
-		CredentialURI: setting("GAVEL_SUBSTRATE_CREDENTIAL_URI", "ate-secret://k8s.io/default/gavel-e2e/model/key"),
+		EnvAPI:             setting("GAVEL_SUBSTRATE_ENV_API", "localhost:7777"),
+		Control:            setting("GAVEL_SUBSTRATE_CONTROL", "localhost:8443"),
+		TokenFile:          setting("GAVEL_SUBSTRATE_TOKEN_FILE", ""),
+		Template:           setting("GAVEL_SUBSTRATE_TEMPLATE", "gavel-runner"),
+		Listen:             setting("GAVEL_SUBSTRATE_SERVE_LISTEN", "172.18.0.1:18080"),
+		ServeURL:           setting("GAVEL_SUBSTRATE_SERVE_URL", "http://gavel-host.default.svc.cluster.local:18080"),
+		Credential:         setting("GAVEL_SUBSTRATE_CREDENTIAL", "gavel-e2e-injected-credential"),
+		CredentialURI:      setting("GAVEL_SUBSTRATE_CREDENTIAL_URI", "ate-secret://k8s.io/default/gavel-e2e/model/key"),
+		AgentCredentialURI: setting("GAVEL_SUBSTRATE_AGENT_CREDENTIAL_URI", "ate-secret://k8s.io/default/gavel-e2e/claude-oauth/key"),
 	}
 }

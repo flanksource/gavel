@@ -1062,7 +1062,8 @@
             "off",
             "native",
             "docker",
-            "git-agent"
+            "git-agent",
+            "substrate"
           ],
           "type": "string"
         },
@@ -1114,7 +1115,8 @@
                 "off",
                 "native",
                 "docker",
-                "git-agent"
+                "git-agent",
+                "substrate"
               ],
               "type": "string"
             },

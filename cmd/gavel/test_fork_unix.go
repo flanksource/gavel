@@ -14,6 +14,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/utils"
 	"golang.org/x/sys/unix"
 )
 
@@ -47,7 +48,7 @@ func handoffDetachedUI(listener net.Listener, snapshot testui.Snapshot, opts det
 	port := tcpListener.Addr().(*net.TCPAddr).Port
 
 	baseDir := filepath.Join(".tmp", "gavel-ui")
-	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+	if err := utils.MkdirOutput(baseDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", baseDir, err)
 	}
 

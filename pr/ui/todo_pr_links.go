@@ -197,16 +197,30 @@ func (s *Server) withIndexedPRs(links []todos.PRLink) ([]todoPRLinkItem, error) 
 	return items, nil
 }
 
-// handlePRTodos lists the TODOs in dir's workspace (the server's own when dir is
-// empty) that link the PR at url.
+// handlePRTodos lists the TODOs in dir's workspace that link the PR at url. With no dir, the
+// workspace is the server's own, or in hosted mode the organization's repository the PR is in.
 func (s *Server) handlePRTodos(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	query := r.URL.Query()
-	if _, err := types.PRRefFromURL(query.Get("url")); err != nil {
+	ref, err := types.PRRefFromURL(query.Get("url"))
+	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	linker, err := s.prTodosLinker(r.Context(), query.Get("dir"))
+	dir := strings.TrimSpace(query.Get("dir"))
+	if dir == "" && s.workspaces != nil {
+		if ref.Provider == types.PRProviderGitHub {
+			if dir, err = s.workspaces.GitHubWorkspace(r.Context(), s.orgID(), ref.Repo); err != nil {
+				writeTodoError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		if dir == "" {
+			writeTodoJSON(w, http.StatusOK, []todos.PRLinkedTODO{})
+			return
+		}
+	}
+	linker, err := s.prTodosLinker(r.Context(), dir)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return

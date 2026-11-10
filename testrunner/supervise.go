@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
+	"time"
 
 	"github.com/flanksource/clicky/exec"
 	commonsCtx "github.com/flanksource/commons/context"
@@ -43,11 +44,23 @@ func (s *packageSupervision) Dumped() []goTestBinary {
 // under a context the supervisor cancels only after that, and with no timer of
 // its own, so nothing kills it before its dump is taken.
 func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *exec.Process, label string) (commonsCtx.Context, context.CancelFunc, *packageSupervision) {
-	supervision := &packageSupervision{settled: make(chan struct{})}
+	return o.superviseProcess(parent, process, label, o.packageTimeout(process))
+}
+
+// packageTimeout is the deadline one test package gets: --test-timeout, else
+// the timeout its runtime set on the process.
+func (o *TestOrchestrator) packageTimeout(process *exec.Process) time.Duration {
 	if o.TestTimeout > 0 {
-		process.WithTimeout(o.TestTimeout)
+		return o.TestTimeout
 	}
-	timeout := process.Timeout
+	return process.Timeout
+}
+
+// superviseProcess is supervisePackage with an explicit deadline; 0 leaves
+// only the run's --timeout. A go test batch passes 0 and holds each of its
+// packages to its own deadline instead (goPackageDeadlines).
+func (o *TestOrchestrator) superviseProcess(parent commonsCtx.Context, process *exec.Process, label string, timeout time.Duration) (commonsCtx.Context, context.CancelFunc, *packageSupervision) {
+	supervision := &packageSupervision{settled: make(chan struct{})}
 	process.WithTimeout(0)
 
 	base := context.Context(parent)

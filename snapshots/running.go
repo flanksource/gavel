@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/blob"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/traces"
+	"github.com/flanksource/gavel/utils"
 )
 
 // RunningName is the in-flight pointer file written periodically while a
@@ -159,7 +160,7 @@ func writeRunningJSON(workDir string, snap *testui.Snapshot) error {
 		return errors.New("snapshots: workDir is required")
 	}
 	dir := filepath.Join(workDir, Dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := utils.MkdirOutput(dir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 	return writeJSON(filepath.Join(dir, RunningName), snap)
@@ -202,6 +203,9 @@ func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time, label 
 		return "", err
 	}
 	if err := putJSON(store, key, snap); err != nil {
+		return "", err
+	}
+	if err := ignoreLocalStore(workDir); err != nil {
 		return "", err
 	}
 	return Location(workDir, key), nil

@@ -25,6 +25,7 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
     staleTime: Infinity,
   });
 
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream unless done/onerror already closed it
   useEffect(() => {
     if (!pr) {
       setLoading(false);

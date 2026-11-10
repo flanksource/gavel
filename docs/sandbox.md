@@ -1,7 +1,8 @@
 # Sandboxed runs on a container host
 
-Hosted `gavel serve` runs tests, lint and push checks in sandbox jobs. On a single host, those jobs
-are docker (or rootful podman) containers. Each job runs:
+Hosted `gavel serve` runs tests, lint and push checks in sandbox jobs, and agent runs on
+agent-substrate (see [agent-substrate](#agent-substrate)). On a single host, those jobs are docker
+(or rootful podman) containers. Each job runs:
 
 - read-only, as uid 1000, with every capability dropped and `no-new-privileges`;
 - with a pids limit, its CPU and memory limits, and tmpfs for `/tmp`, `/workspace` and
@@ -69,11 +70,14 @@ been run against a live firewall. To check a host from inside a job, run
 
 ## The runner image
 
-Sandbox jobs start from the image `--sandbox-image` names. `make runner-image` builds it from
+Sandbox jobs start from the runner image: the one `--sandbox-image` names for docker, podman and
+kubernetes, and for substrate the one `--substrate-template`'s image template runs. `make runner-image` builds it from
 `sandbox/runner.Dockerfile` (set `RUNNER_IMAGE` to tag it). It holds gavel, Go, Node with pnpm,
 Python, git, yq and the Claude Code and Codex CLIs, all at pinned versions, and runs as uid 1000
-with `GAVEL_DB=off`. Each release publishes it as `ghcr.io/flanksource/gavel-runner:<tag>`, and the
-release's Helm chart (`chart/`) pins it by digest as `sandbox.image`.
+with `GAVEL_DB=off`. Each release publishes it as `ghcr.io/flanksource/gavel-runner:<tag>`; on substrate, register it
+by digest as an image template (`ate-env manifest template --rootfs-image
+ghcr.io/flanksource/gavel-runner@sha256:<digest>`) and name that template in the Helm chart's
+`sandbox.substrate.template`.
 
 ## Podman
 
@@ -90,27 +94,59 @@ NetworkPolicy with the same egress rules.
 `--sandbox substrate` runs each job as an environment of
 [agent-substrate/env](https://github.com/agent-substrate/env) on an
 [agent-substrate](https://github.com/agent-substrate/substrate) cluster: a gVisor sandbox
-created from the runner image, whose one process is the job. The environment is deleted once the
-job exits or is cancelled.
+created from the runner image. The environment is deleted once the job exits or is cancelled.
 
-- **Image.** Substrate runs images pinned by digest, so `--sandbox-image` must be
-  `repo@sha256:<digest>`. Environments derive from `--substrate-template` (env's
-  `default-template` when empty), which sets their CPU, memory and volumes.
+- **Jobs.** A test, lint or push-check job runs through captain's substrate sandbox as a run of
+  captain's `bash` model, whose prompt is the job's command: serve hands captain the job, the
+  environment checks the job's commit out of serve's copy of the repository, and runs
+  `gavel runner run-task`, which runs `gavel runner exec --run <id> --source .` there. The job
+  clones its source from that checkout, so what it writes stays out of it, asks serve for its spec
+  and posts its results over the environment's stdout and stdin, which serve answers with its run
+  API as the run, and exits with the job's code, which the run reports. `gavel runner run-task`
+  serves the run API on a socket, named in `GAVEL_RUN_API_SOCKET`, to what the run starts; serve
+  answers a job's spec and results only. The job's output, and the environment's, are its log.
+  The environment holds neither the run token nor serve's address, and can't reach serve.
+
+- **Agent runs.** A hosted todo's steps need `--sandbox substrate`; under docker, podman or
+  kubernetes they're refused. Each runs whole in its own environment, `gavel-run-<run id>`,
+  through captain's substrate sandbox: serve hands captain the step, the environment checks the
+  todo's commit (or its PR's head) out of serve's copy of the repository, and runs
+  `gavel runner run-task`, which rebuilds the step's hooks there and runs it. Its events, tool
+  calls and approvals come back to serve over the environment's stdout and stdin; its log is the
+  run's log, its transcripts are ingested as it works, and its commits come back on its own
+  branch, `gavel/<todo>-<run>`, which goes to GitHub for a GitHub repository. A step on a linked
+  PR reads, pushes to and resolves threads on it by asking serve over that same channel, which
+  serve answers with its run API as the run, for its PR's endpoints only; the environment holds
+  no run token and can't reach serve, as a job's can't.
+- **Cleanup.** A run works at most its timeout, an hour, whatever its step's own budget. Every
+  ten minutes serve deletes `gavel-run-` environments older than a run can live (its timeout
+  plus 15 minutes), left behind when serve stopped mid-run. Substrate's access
+  policy must let serve's identity list the atespace's actors for this.
+- **Image.** Environments are created from `--substrate-template`, which is required: an image
+  template an operator registered with `ate-env manifest template --rootfs-image
+  <image@sha256:…>`, which sets the image they run and their CPU, memory and volumes.
+  `--sandbox-image` is refused, since env creates no environment from an image of its own.
+- **Versions.** gavel speaks Substrate 1.0.0-rc.2 and env `56424de` or later.
 - **Egress.** Substrate denies every destination an actor's egress policy doesn't allow. gavel
-  gives each environment a policy that allows gavel serve (`--public-url`, which must be a DNS
-  name), proxy.golang.org, sum.golang.org, registry.npmjs.org, pypi.org, files.pythonhosted.org,
-  github.com, codeload.github.com and objects.githubusercontent.com, plus any
-  `--substrate-egress` hosts.
-- **Model keys.** They never enter the environment, and `--sandbox-secret-env` is refused.
-  Substrate's egress gateway injects them into requests instead: each `--substrate-credential`
-  names the host, the header to replace (and an optional `prefix`, such as `Bearer `), the
-  variable the agent reads (set to a placeholder in the job), and the credential's `ate-secret://`
-  URI, for example
-  `host=api.anthropic.com,header=x-api-key,env=ANTHROPIC_API_KEY,uri=ate-secret://k8s.io/default/gavel/anthropic/key`.
-  The job must trust the gateway's CA for those hosts: mount Substrate's `egress-mitm.ate.dev`
-  trust bundle through the template's `systemInfo` volume and pass its path as
-  `--substrate-trust-bundle`. Grant the atespace the Secret's namespace in Substrate's
-  credential provider.
+  gives each environment, a job's or an agent run's, a policy that allows proxy.golang.org,
+  sum.golang.org, registry.npmjs.org, pypi.org, files.pythonhosted.org, github.com,
+  codeload.github.com and objects.githubusercontent.com, plus any `--substrate-egress` hosts,
+  over TLS on 443, and never gavel serve, which a run asks over its own channel.
+- **Model keys.** Each organization sets its own under Model keys in its settings; they never
+  enter the environment, and `--sandbox-secret-env` is refused. Substrate's egress gateway
+  injects them into requests instead: each run's policy names, for every key its organization
+  has, the model API host, the header to replace and the URI
+  `ate-secret://gavel/<--substrate-gavel-name>/<run id>/<provider>`, and the job gets a
+  placeholder in the variable the agent reads. Substrate's credential provider resolves the URI
+  by asking this gavel's `/api/credentials/fetch` with `GAVEL_CREDENTIAL_PROVIDER_TOKEN`; gavel
+  answers only for an active run, asked for by that run's own environment. An agent run whose
+  organization has no key is refused. gavel serve logs what each run's policy injects
+  (`sandbox run <id> in substrate environment …: the egress gateway injects <host> <header> from
+  <URI>`, or `no credentials`) and each key it hands out (`credential fetch for run <id>`), so a
+  run that reaches the model API without its key shows whether gavel asked for the key and
+  whether the gateway fetched it. The job must trust the gateway's CA for those hosts: mount
+  Substrate's `egress-mitm.ate.dev` trust bundle through the template's `systemInfo` volume and
+  pass its path as `--substrate-trust-bundle`.
 - **Control plane.** gavel serve sets egress policies through ate-api-server
   (`--substrate-control`), authenticating with `--substrate-token-file`, such as a projected
   ServiceAccount token with the `api.ate-system.svc` audience, which Substrate's access policy must
@@ -122,51 +158,75 @@ job exits or is cancelled.
   every connection and call, so renewed ones are picked up without a restart. The token is then
   minted in Substrate's cluster for a ServiceAccount there, since this cluster's tokens aren't
   trusted by it.
-- **API.** gavel carries copies of Substrate's and env's generated gRPC packages in
-  `sandbox/internal/substrate`, refreshed by its `sync.sh`, rather than depending on their Go
-  modules.
+- **API.** gavel reaches Substrate only through captain's `pkg/substrate`: its client, and the
+  CredentialProvider API `gavel credential-provider` serves through
+  `substrate.RegisterCredentialProvider`. captain generates Substrate's and env's gRPC packages at
+  the versions it pins, so following a Substrate release is a captain bump.
 
-- **User.** env's guest starts the job as root, whatever user the image names; gVisor is what
+- **User.** A job runs as the user its image names, uid 1000 in the runner image; gVisor is what
   isolates it.
 
 ### Running the substrate e2e
 
-Two tests run on a live cluster. `TestPushChecksRunOnSubstrate` (`pr/ui`) runs a failing and a
-passing push check through the dispatcher: each job fetches the pushed source from a run API on
-the host and exits with the check's verdict. `TestSubstrateExecutorAgainstACluster`
-(`sandbox/substrate_e2e_test.go`) runs a job directly. It checks the job's output and exit code, that it reaches serve and proxy.golang.org but
-can't resolve example.com, that it holds only a placeholder for its model key while
-httpbin.org receives the real one, and that its environment is deleted afterwards. On a kind
-cluster with Substrate installed (`ate-setup deploy ate-system`):
+Two tests run on a live cluster, whose runner image must be this gavel's, since the environment
+runs its `gavel runner run-task`. `TestPushChecksRunOnSubstrate` (`pr/ui`) runs a failing and a
+passing push check through the dispatcher: each job runs in a checkout of the pushed commit, asks
+a run API on the host over its run's channel and exits with the check's verdict.
+`TestSubstrateExecutorAgainstACluster` (`sandbox/substrate_e2e_test.go`) runs a job directly. It
+checks the job's output and exit code, that it runs at its commit and reads its spec over its
+run's channel while holding no run token, that it reaches proxy.golang.org but neither serve's
+address nor example.com, which it can't resolve, that it holds only a placeholder for its model
+key while httpbin.org receives the real one, and that its environment is deleted afterwards. On a kind
+cluster running Substrate 1.0.0-rc.2 and env `56424de`:
 
-1. Deploy env (`ate-env manifest --worker-image <ateworker-gvisor@sha256:…> --api-image
-   <ate-env-api@sha256:…> | kubectl apply -f -`), and make its ServiceAccount
-   `system:serviceaccount:ate-env:default` a global `owner` in Substrate's access policy so it
-   can create its atespace.
-2. Register `default-template` (`ate-env manifest template`), then a `gavel-runner` template:
-   the same, plus a `systemInfo` volume holding the `egress-mitm.ate.dev` trust bundle as
-   `trust-bundle.pem`, mounted on the guest container at `/run/ate/egress-trust-bundle`. A
-   Substrate that no longer has `ActorTemplate.sandboxConfig` (removed in agent-substrate#2780)
-   rejects the field `ate-env manifest template` writes; delete it from the manifest.
-3. Create a Secret `model` with key `key` (value `gavel-e2e-injected-credential`) in namespace
-   `gavel-e2e`, and allow atespace `ate-env` that namespace in the
+1. From a Substrate `v1.0.0-rc.2` checkout, create the cluster
+   (`KIND_CLUSTER_NAME=gavel-substrate-rc2 hack/create-kind-cluster.sh`) and install the release's
+   images, letting env's API through the router:
+   `ATE_INSTALL_KIND=true go run ./cmd/ate-setup deploy ate-system --rollout-timeout 5m
+   --image-repo ghcr.io/agent-substrate/substrate --image-tag v1.0.0-rc.2 --sandbox-classes=gvisor
+   --credential-provider='{"name":"k8s.io"}'
+   --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client,spiffe://cluster.local/ns/ate-env/sa/default`.
+2. From an env `56424de` checkout, build `ate-env-api` and `ate-env-guest` into the cluster's
+   registry (`KO_DOCKER_REPO=localhost:5001/<name> ko build --bare ./cmd/<name>`), deploy env with
+   the release's worker (`go run ./cmd/ate-env manifest --api-image <ate-env-api@sha256:…>
+   --worker-image ghcr.io/agent-substrate/substrate/ateworker-gvisor@sha256:<v1.0.0-rc.2's> |
+   kubectl apply -f -`), make `system:serviceaccount:ate-env:default` a global `owner`
+   (`kubectl ate create access-policy --global`) so it can create its atespace, and restart
+   `ate-env-api`.
+3. Register the image templates with `go run ./cmd/ate-env manifest template --guest-image
+   <ate-env-guest@sha256:…> --snapshots-bucket gs://ate-snapshots/ate-env/ | kubectl ate create
+   actor-template -f -`: `default-template` as it is, and `gavel-runner` with `--template
+   gavel-runner --rootfs-image localhost:5001/gavel-runner@sha256:<digest>`, plus a `systemInfo`
+   volume holding the `trustBundle` named `egress-mitm.ate.dev` as `trust-bundle.pem`, mounted on
+   the guest container at `/run/ate/egress-trust-bundle`. rc.2 refuses a template's own
+   `snapshotConfig.storageLocation`, which `ate-env manifest template` writes: delete it.
+4. Create a Secret `model` with key `key` (value `gavel-e2e-injected-credential`) in namespace
+   `gavel-e2e`, and, for the hosted agent run, a Secret `claude-oauth` with key `key` holding a
+   Claude Code OAuth token. Allow atespace `ate-env` that namespace in the
    `k8s-credential-provider-namespace-policy` ConfigMap (restart the provider).
-4. Create ServiceAccount `gavel-e2e/gavel`, make it an `editor` of atespace `ate-env`, and mint its
-   token: `kubectl -n gavel-e2e create token gavel --audience api.ate-system.svc > gavel.token`.
-5. Point a Service at the host so jobs reach the test's stand-in for serve: Service
+5. Create ServiceAccount `gavel-e2e/gavel`, make it an `editor` of atespace `ate-env`
+   (`kubectl ate create access-policy -a ate-env`), and mint its token:
+   `kubectl -n gavel-e2e create token gavel --audience api.ate-system.svc > gavel.token`.
+6. Point a Service at the host so jobs reach the test's stand-in for serve: Service
    `default/gavel-host` on port 18080 with an EndpointSlice holding the kind network's gateway
    (`172.18.0.1`).
-6. Push a runner image to the cluster's registry and port-forward the APIs:
-   `kubectl port-forward -n ate-env svc/ate-env-api 7777:7777` and
+7. Port-forward the APIs: `kubectl port-forward -n ate-env svc/ate-env-api 7777:7777` and
    `kubectl port-forward -n ate-system svc/api 8443:443`.
 
 Then run:
 
 ```sh
-GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_IMAGE=localhost:5001/gavel-runner@sha256:<digest> \
-  GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate'
+GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui \
+  -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate|TestHostedTodoRunsOnSubstrate'
 ```
 
+`TestHostedTodoRunsOnSubstrate` runs a hosted todo's plan step whole in an environment against the
+real model, so the `gavel-runner` template's image must hold this tree's gavel; on failure it logs the environment's
+output and the tool calls that failed. After the kind node restarts, recreate env's worker pods
+(`kubectl delete pods -n ate-env -l pod-template-hash=<hash>`): Substrate keeps their old
+addresses, and an environment then starts but never answers.
+
 `GAVEL_SUBSTRATE_ENV_API`, `GAVEL_SUBSTRATE_CONTROL`, `GAVEL_SUBSTRATE_TEMPLATE`,
-`GAVEL_SUBSTRATE_SERVE_LISTEN`, `GAVEL_SUBSTRATE_SERVE_URL`, `GAVEL_SUBSTRATE_CREDENTIAL` and
-`GAVEL_SUBSTRATE_CREDENTIAL_URI` override the defaults the steps above set up.
+`GAVEL_SUBSTRATE_SERVE_LISTEN`, `GAVEL_SUBSTRATE_SERVE_URL`, `GAVEL_SUBSTRATE_CREDENTIAL`,
+`GAVEL_SUBSTRATE_CREDENTIAL_URI` and `GAVEL_SUBSTRATE_AGENT_CREDENTIAL_URI` override the defaults
+the steps above set up.

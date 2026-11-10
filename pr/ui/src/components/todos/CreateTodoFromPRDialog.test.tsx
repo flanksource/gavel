@@ -54,7 +54,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     const selection = useContext(SelectionContext);
     if (!selection) throw new Error('ListMenuItem requires selection context');
     return (
-      <label>
+      <div>
         <input
           type="checkbox"
           aria-label={`Include ${itemKey}`}
@@ -63,7 +63,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
         />
         {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky ListMenuItem itself. */}
         <button type="button" onClick={onClick}>{children}</button>
-      </label>
+      </div>
     );
   },
   Modal: ({ open, title, children, footer }: { open: boolean; title: string; children: React.ReactNode; footer?: React.ReactNode }) => open ? <section aria-label={title}>{children}{footer}</section> : null,

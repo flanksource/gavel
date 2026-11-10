@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,33 +14,25 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
-	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/snapshots"
-	"github.com/flanksource/gavel/todos/remote"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
 
 func init() {
 	runnerCmd := &cobra.Command{Use: "runner", Short: "Runs inside gavel's sandbox jobs", Hidden: true}
-	var run, workspace string
+	var run, workspace, source string
 	execCmd := &cobra.Command{
 		Use:    "exec",
 		Short:  "Run a sandbox job: fetch its spec and source, run it, post its results",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return fmt.Errorf("find the home directory the agent writes its transcripts under: %w", err)
-			}
 			code, err := runnerExec(cmd.Context(), runnerOptions{
-				Run: run, Workspace: workspace, Home: home, Getenv: os.Getenv, Command: runCommandIn, Output: cmd.OutOrStdout(),
+				Run: run, Workspace: workspace, Source: source, Getenv: os.Getenv, Command: runCommandIn, Output: cmd.OutOrStdout(),
 			})
 			if err != nil {
 				return err
@@ -54,21 +45,36 @@ func init() {
 	}
 	execCmd.Flags().StringVar(&run, "run", "", "The sandbox run's ID")
 	execCmd.Flags().StringVar(&workspace, "workspace", "/workspace", "Scratch directory for the source")
+	execCmd.Flags().StringVar(&source, "source", "", "A checkout of the job's commit to clone the source from, instead of downloading it")
 	runnerCmd.AddCommand(execCmd)
+	var taskDir string
+	runTaskCmd := &cobra.Command{
+		Use:    "run-task",
+		Short:  "Run a step's whole run in a substrate environment, relaying it on stdout",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Stdout is the run's channel to its caller, so everything else goes to stderr, the
+			// environment's log.
+			channel := os.Stdout
+			os.Stdout = os.Stderr
+			return runnerRunTask(cmd.Context(), runTaskOptions{Dir: taskDir}, channel, os.Stdin)
+		},
+	}
+	runTaskCmd.Flags().StringVar(&taskDir, "dir", ".", "The run's directory, holding its task and workspace bundle")
+	runnerCmd.AddCommand(runTaskCmd)
 	rootCmd.AddCommand(runnerCmd)
 }
 
 type runnerOptions struct {
 	Run       string
 	Workspace string
-	// Home is the home directory an agent run's agent writes its transcripts under.
-	Home   string
+	// Source is a checkout of the run's commit to clone the source from; empty downloads it.
+	Source string
 	Getenv func(string) string
 	// Command runs name with args in dir, streaming its output, and returns its exit code.
 	Command func(ctx context.Context, dir, name string, args []string, output io.Writer) (int, error)
 	Output  io.Writer
-	// Agent is the provider an agent run's turns go to; nil builds it from the job's model.
-	Agent captainai.Provider
 }
 
 // runnerExec runs the sandbox job and returns its exit code.
@@ -89,12 +95,12 @@ func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
 	if err := api.getJSON(ctx, "spec", &spec); err != nil {
 		return 0, err
 	}
-	src, err := checkout(ctx, api, spec, opts.Workspace)
+	src, err := checkout(ctx, api, spec, opts.Workspace, opts.Source)
 	if err != nil {
 		return 0, err
 	}
 	if spec.Kind == "agent" {
-		return 0, runAgentJob(ctx, api, spec, src, opts)
+		return 0, errors.New("an agent run runs whole on substrate, through `gavel runner run-task`, not as a sandbox job")
 	}
 	name, args, err := jobCommand(spec, src)
 	if err != nil {
@@ -121,13 +127,22 @@ func runnerExec(ctx context.Context, opts runnerOptions) (int, error) {
 	return code, nil
 }
 
-// checkout fetches the run's source bundle and checks out its commit in <workspace>/src.
-func checkout(ctx context.Context, api runAPI, spec sandbox.RunSpec, workspace string) (string, error) {
+// checkout checks out the run's commit in <workspace>/src: cloned from source, a checkout of it,
+// when there is one, or else from the run's source bundle, fetched first. The job runs in a clone
+// of its own, so what it writes stays out of source.
+func checkout(ctx context.Context, api runAPI, spec sandbox.RunSpec, workspace, source string) (string, error) {
+	src := filepath.Join(workspace, "src")
+	if source != "" {
+		// A clone starts at source's head, the run's commit.
+		if out, err := exec.CommandContext(ctx, "git", "clone", "--quiet", source, src).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("clone the source from %s: %w: %s", source, err, strings.TrimSpace(string(out)))
+		}
+		return src, detach(ctx, src, spec.SHA, spec.SHA)
+	}
 	bundle := filepath.Join(workspace, "src.bundle")
 	if err := api.download(ctx, "source", bundle); err != nil {
 		return "", err
 	}
-	src := filepath.Join(workspace, "src")
 	if out, err := exec.CommandContext(ctx, "git", "clone", "--quiet", bundle, src).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("clone the source bundle: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -140,12 +155,19 @@ func checkout(ctx context.Context, api runAPI, spec sandbox.RunSpec, workspace s
 		}
 		target, name = "FETCH_HEAD", spec.Ref
 	}
-	if target != "" {
-		if out, err := exec.CommandContext(ctx, "git", "-C", src, "checkout", "--quiet", "--detach", target).CombinedOutput(); err != nil {
-			return "", fmt.Errorf("check out %s: %w: %s", name, err, strings.TrimSpace(string(out)))
-		}
+	return src, detach(ctx, src, target, name)
+}
+
+// detach checks target, which name names, out in src, detached; an empty target leaves src as
+// it is.
+func detach(ctx context.Context, src, target, name string) error {
+	if target == "" {
+		return nil
 	}
-	return src, nil
+	if out, err := exec.CommandContext(ctx, "git", "-C", src, "checkout", "--quiet", "--detach", target).CombinedOutput(); err != nil {
+		return fmt.Errorf("check out %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // jobCommand is what the run's kind runs in src.
@@ -169,81 +191,6 @@ func jobCommand(spec sandbox.RunSpec, src string) (string, []string, error) {
 	default:
 		return "", nil, fmt.Errorf("run kind %q is not one of test, lint, push-check, agent", spec.Kind)
 	}
-}
-
-// runAgentJob runs an agent run's step in src and reports it to serve as it goes: its messages,
-// its agent's transcripts, and once it ends, its commits and then its result.
-func runAgentJob(ctx context.Context, api runAPI, spec sandbox.RunSpec, src string, opts runnerOptions) error {
-	var job remote.Job
-	if err := json.Unmarshal(spec.Agent, &job); err != nil {
-		return fmt.Errorf("decode the agent job of run %s: %w", api.Run, err)
-	}
-	if opts.Home == "" {
-		return fmt.Errorf("agent run %s has no home directory to find its agent's transcripts under", api.Run)
-	}
-	output := opts.Output
-	transcripts := &transcriptUploader{api: api, home: opts.Home, since: time.Now()}
-	uploading, stopUploading := context.WithCancel(ctx)
-	uploaderDone := make(chan struct{})
-	go func() {
-		defer close(uploaderDone)
-		transcripts.every(uploading, transcriptInterval, output)
-	}()
-
-	send := func(message remote.Message) error { return api.postMessage(ctx, message) }
-	finished, err := remote.Execute(ctx, job, src, opts.Agent, remote.Serve{Send: send, Call: func(message remote.Message) (remote.Reply, error) {
-		return api.call(ctx, message)
-	}})
-	stopUploading()
-	<-uploaderDone
-	if err != nil {
-		return err
-	}
-	if err := transcripts.sync(ctx); err != nil {
-		fmt.Fprintf(output, "gavel runner: %s\n", err)
-	}
-	if err := pushRunCommits(ctx, api, finished.Result); err != nil {
-		finished.Err = errors.Join(finished.Err, err)
-	}
-	return send(remote.ResultMessage(finished.Result, finished.Err))
-}
-
-// pushRunCommits uploads the commits the run made on its worktree's branch, if it made any, and
-// points the result's worktree at the branch serve put them on.
-func pushRunCommits(ctx context.Context, api runAPI, result promptrun.Result) error {
-	if result.Response == nil || result.Response.Workspace == nil || result.Response.Workspace.Worktree == nil {
-		return nil
-	}
-	worktree := result.Response.Workspace.Worktree
-	if worktree.BranchDeleted || worktree.Head == "" || worktree.Head == worktree.Setup {
-		return nil
-	}
-	file, err := os.CreateTemp("", "gavel-run-*.bundle")
-	if err != nil {
-		return fmt.Errorf("bundle the run's commits: %w", err)
-	}
-	_ = file.Close()
-	defer os.Remove(file.Name())
-	if out, err := exec.CommandContext(ctx, "git", "-C", worktree.Repo, "bundle", "create", "--quiet", file.Name(),
-		"refs/heads/"+worktree.Branch, "^"+worktree.Setup).CombinedOutput(); err != nil {
-		return fmt.Errorf("bundle the run's commits on %s: %w: %s", worktree.Branch, err, strings.TrimSpace(string(out)))
-	}
-	data, err := os.Open(file.Name())
-	if err != nil {
-		return fmt.Errorf("read the bundle of the run's commits: %w", err)
-	}
-	defer data.Close()
-	resp, err := api.Do(ctx, http.MethodPost, "commits", data)
-	if err != nil {
-		return fmt.Errorf("push the commits of run %s: %w", api.Run, err)
-	}
-	defer resp.Body.Close()
-	var pushed struct{ Branch, SHA string }
-	if err := json.NewDecoder(resp.Body).Decode(&pushed); err != nil {
-		return fmt.Errorf("read where run %s's commits were pushed: %w", api.Run, err)
-	}
-	worktree.Branch, worktree.Head = pushed.Branch, pushed.SHA
-	return nil
 }
 
 // runSnapshots lists the per-run snapshots in src's .gavel directory.
@@ -301,36 +248,6 @@ func (a runAPI) download(ctx context.Context, path, to string) error {
 		return fmt.Errorf("save the %s of run %s: %w", path, a.Run, err)
 	}
 	return file.Close()
-}
-
-func (a runAPI) postMessage(ctx context.Context, message remote.Message) error {
-	data, err := json.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("encode a %s message of run %s: %w", message.Kind, a.Run, err)
-	}
-	resp, err := a.Do(ctx, http.MethodPost, "messages", bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("send a %s message of run %s: %w", message.Kind, a.Run, err)
-	}
-	return resp.Body.Close()
-}
-
-// call asks serve for its reply to message, a tool call or an approval request.
-func (a runAPI) call(ctx context.Context, message remote.Message) (remote.Reply, error) {
-	data, err := json.Marshal(message)
-	if err != nil {
-		return remote.Reply{}, fmt.Errorf("encode a %s call of run %s: %w", message.Kind, a.Run, err)
-	}
-	resp, err := a.Do(ctx, http.MethodPost, "calls", bytes.NewReader(data))
-	if err != nil {
-		return remote.Reply{}, fmt.Errorf("send a %s call of run %s: %w", message.Kind, a.Run, err)
-	}
-	defer resp.Body.Close()
-	var reply remote.Reply
-	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
-		return remote.Reply{}, fmt.Errorf("decode the reply to a %s call of run %s: %w", message.Kind, a.Run, err)
-	}
-	return reply, nil
 }
 
 func (a runAPI) postResults(ctx context.Context, path string) error {

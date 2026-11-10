@@ -61,6 +61,7 @@ function GinkgoContextFields({ ctx, failureLocation, suiteAbove }: { ctx: Ginkgo
         <Field title="Report entries">
           <div className="space-y-2">
             {ctx.report_entries.map((entry, index) => (
+              // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- static report entries in recorded order; names can repeat
               <div key={`${entry.name}-${index}`} className="rounded border border-border bg-muted/50 p-2">
                 <div className="text-sm font-medium">{entry.name}</div>
                 {entry.file && <div className="font-mono text-xs text-muted-foreground">{entry.file}{entry.line ? `:${entry.line}` : ''}</div>}

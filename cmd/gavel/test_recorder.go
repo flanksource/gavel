@@ -13,7 +13,9 @@ import (
 type recorderTee struct {
 	Recorder *snapshots.Recorder
 	// Reporter publishes the run's test counts in its status.
-	Reporter   *runstatus.Reporter
+	Reporter *runstatus.Reporter
+	// Stream, when the run streams to a hosted gavel, receives the same snapshots.
+	Stream     *ciStream
 	Options    testrunner.RunOptions
 	Started    time.Time
 	Downstream chan<- []parsers.Test
@@ -22,9 +24,9 @@ type recorderTee struct {
 // attachRecorderTee inserts the recorder and status reporter between the
 // runner and any downstream consumer of opts.Updates. Each batch of test
 // results from the runner is funneled into a fresh Snapshot
-// (Status.Running=true) and fed to the recorder, and its counts to the
-// reporter. The batch is also forwarded unchanged to downstream so the UI
-// server (when --ui) keeps receiving its updates.
+// (Status.Running=true) and fed to the recorder and the CI stream, and its
+// counts to the reporter. The batch is also forwarded unchanged to downstream
+// so the UI server (when --ui) keeps receiving its updates.
 //
 // Returns the new send channel that should replace opts.Updates. When the
 // runner closes the new channel (single-root via Done(); multi-root via the
@@ -39,7 +41,9 @@ func attachRecorderTee(t recorderTee) chan<- []parsers.Test {
 			}
 		}()
 		for batch := range tee {
-			t.Recorder.Update(buildRunningSnapshot(t.Options, batch, t.Started))
+			snap := buildRunningSnapshot(t.Options, batch, t.Started)
+			t.Recorder.Update(snap)
+			t.Stream.Update(snap)
 			t.Reporter.SetTests(batch)
 			if t.Downstream != nil {
 				t.Downstream <- batch

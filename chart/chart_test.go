@@ -355,20 +355,20 @@ func TestChartReadsBlobStorageFromABroughtSecret(t *testing.T) {
 func TestChartRunsSandboxJobsOnSubstrate(t *testing.T) {
 	requireHelm(t)
 	m := render(t,
-		"sandbox.enabled=true",
-		"sandbox.image=ghcr.io/flanksource/gavel-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		"sandbox.substrate.template=gavel-runner",
-		"sandbox.substrate.egress={api.anthropic.com,api.openai.com}",
-		"sandbox.substrate.credentials[0]=host=api.anthropic.com\\,header=x-api-key\\,env=ANTHROPIC_API_KEY\\,uri=ate-secret://k8s.io/gavel/model/key",
-		"sandbox.substrate.trustBundle=/run/ate/egress-trust-bundle/trust-bundle.pem",
+		append(substrateSandbox(),
+			"sandbox.substrate.egress={api.anthropic.com,api.openai.com}",
+			"sandbox.substrate.trustBundle=/run/ate/egress-trust-bundle/trust-bundle.pem",
+		)...,
 	)
 	container := serveContainer(t, m)
 	args := strings.Join(container.Args, " ")
-	assert.Contains(t, args, " --sandbox substrate --sandbox-image ghcr.io/flanksource/gavel-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	assert.Contains(t, args, " --substrate-env-api ate-env-api.ate-env.svc.cluster.local:7777 --substrate-control api.ate-system.svc.cluster.local:443")
+	assert.Contains(t, args, " --sandbox substrate --substrate-env-api ate-env-api.ate-env.svc.cluster.local:7777 --substrate-control api.ate-system.svc.cluster.local:443")
 	assert.Contains(t, args, " --substrate-token-file /var/run/secrets/substrate/token --substrate-atespace ate-env --substrate-template gavel-runner")
 	assert.Contains(t, args, " --substrate-egress api.anthropic.com --substrate-egress api.openai.com")
-	assert.Contains(t, args, " --substrate-credential host=api.anthropic.com,header=x-api-key,env=ANTHROPIC_API_KEY,uri=ate-secret://k8s.io/gavel/model/key")
+	assert.Contains(t, args, " --substrate-gavel-name beta")
+	assert.NotContains(t, args, "--substrate-credential")
+	assert.NotContains(t, args, "--sandbox-image", "the template sets the image")
+	assert.Equal(t, "secret:gavel-credential-provider/token", env(container)["GAVEL_CREDENTIAL_PROVIDER_TOKEN"])
 	assert.Contains(t, args, " --substrate-trust-bundle /run/ate/egress-trust-bundle/trust-bundle.pem")
 	assert.NotContains(t, args, "--substrate-ca-file", "an unset CA is not passed")
 
@@ -382,9 +382,7 @@ func TestChartRunsSandboxJobsOnSubstrate(t *testing.T) {
 	assert.Equal(t, "gavel", m.deployment(t).Spec.Template.Spec.ServiceAccountName)
 	require.Contains(t, m["ServiceAccount"], "gavel")
 
-	m = render(t, "sandbox.enabled=true",
-		"sandbox.image=ghcr.io/flanksource/gavel-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		"sandbox.substrate.ca.secretName=ate-ca", "sandbox.substrate.ca.key=ca.crt")
+	m = render(t, append(substrateSandbox(), "sandbox.substrate.ca.secretName=ate-ca", "sandbox.substrate.ca.key=ca.crt")...)
 	container = serveContainer(t, m)
 	assert.Contains(t, strings.Join(container.Args, " "), " --substrate-ca-file /etc/gavel/substrate-ca/ca.crt")
 	mount, ok = mountAt(container, "/etc/gavel/substrate-ca")
@@ -396,11 +394,10 @@ func TestChartRunsSandboxJobsOnSubstrate(t *testing.T) {
 
 func TestChartReachesSubstrateInAnotherCluster(t *testing.T) {
 	requireHelm(t)
-	m := render(t, "sandbox.enabled=true",
-		"sandbox.image=ghcr.io/flanksource/gavel-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	m := render(t, append(substrateSandbox(),
 		"sandbox.substrate.envAPI=substrate-env.flanksource.com:443", "sandbox.substrate.control=substrate-api.flanksource.com:443",
 		"sandbox.substrate.clientCert.secretName=substrate-client",
-		"sandbox.substrate.token.secretName=substrate-token", "sandbox.substrate.token.key=token")
+		"sandbox.substrate.token.secretName=substrate-token", "sandbox.substrate.token.key=token")...)
 	container := serveContainer(t, m)
 	args := strings.Join(container.Args, " ")
 	assert.Contains(t, args, " --substrate-env-api substrate-env.flanksource.com:443 --substrate-control substrate-api.flanksource.com:443")
@@ -419,17 +416,30 @@ func TestChartReachesSubstrateInAnotherCluster(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "substrate-client", volume(t, m, mount.Name).Secret.SecretName)
 
-	assert.NotContains(t, strings.Join(serveContainer(t, render(t, "sandbox.enabled=true",
-		"sandbox.image=ghcr.io/flanksource/gavel-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")).Args, " "),
+	assert.NotContains(t, strings.Join(serveContainer(t, render(t, substrateSandbox()...)).Args, " "),
 		"--substrate-client-cert", "an unset client certificate is not passed")
 }
 
-func TestChartRefusesASandboxWithoutAPinnedRunnerImage(t *testing.T) {
+// substrateSandbox are the values every substrate sandbox needs.
+func substrateSandbox() []string {
+	return []string{
+		"sandbox.enabled=true",
+		"sandbox.substrate.template=gavel-runner",
+		"sandbox.substrate.gavelName=beta",
+		"sandbox.substrate.credentialProviderToken.secretName=gavel-credential-provider",
+	}
+}
+
+func TestChartRefusesASandboxWithoutItsCredentialProvider(t *testing.T) {
 	requireHelm(t)
-	for _, image := range []string{"", "ghcr.io/flanksource/gavel-runner:v1"} {
-		_, err := helmTemplate(t, append(append([]string{}, clerkValues...), "sandbox.enabled=true", "sandbox.image="+image)...)
-		require.Error(t, err, image)
-		assert.Contains(t, err.Error(), "sandbox.image must be pinned by digest, as repo@sha256:<digest>", image)
+	for value, want := range map[string]string{
+		"sandbox.substrate.template=":                           "sandbox.substrate.template is required with sandbox.enabled: the image template its environments are created from, registered with ate-env manifest template --rootfs-image",
+		"sandbox.substrate.gavelName=":                          "sandbox.substrate.gavelName is required with sandbox.enabled",
+		"sandbox.substrate.credentialProviderToken.secretName=": "sandbox.substrate.credentialProviderToken.secretName is required with sandbox.enabled",
+	} {
+		_, err := helmTemplate(t, append(append(append([]string{}, clerkValues...), substrateSandbox()...), value)...)
+		require.Error(t, err, value)
+		assert.Contains(t, err.Error(), want, value)
 	}
 }
 

@@ -15,30 +15,21 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
-	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/sandbox"
-	"github.com/flanksource/gavel/sandbox/runclient"
-	"github.com/flanksource/gavel/todos/remote"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type fakeRunAPI struct {
-	spec     sandbox.RunSpec
-	bundle   []byte
-	token    string
-	mu       sync.Mutex
-	results  []string
-	messages []remote.Message
-	commits  [][]byte
-	// pushedSHA is the commit the commits endpoint says it pushed.
-	pushedSHA   string
-	transcripts map[string]string
+	spec    sandbox.RunSpec
+	bundle  []byte
+	token   string
+	mu      sync.Mutex
+	results []string
 }
 
 func (f *fakeRunAPI) handler(run uuid.UUID) http.Handler {
@@ -62,35 +53,6 @@ func (f *fakeRunAPI) handler(run uuid.UUID) http.Handler {
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"runId":"run-x"}`))
-	}))
-	mux.HandleFunc("POST "+prefix+"/commits", auth(func(w http.ResponseWriter, r *http.Request) {
-		data, _ := io.ReadAll(r.Body)
-		f.mu.Lock()
-		f.commits = append(f.commits, data)
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"branch":"gavel/todo1234-run56789","sha":"` + f.pushedSHA + `"}`))
-	}))
-	mux.HandleFunc("POST "+prefix+"/transcripts", auth(func(w http.ResponseWriter, r *http.Request) {
-		data, _ := io.ReadAll(r.Body)
-		f.mu.Lock()
-		if f.transcripts == nil {
-			f.transcripts = map[string]string{}
-		}
-		f.transcripts[r.URL.Query().Get("source")+":"+r.URL.Query().Get("name")] = string(data)
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	mux.HandleFunc("POST "+prefix+"/messages", auth(func(w http.ResponseWriter, r *http.Request) {
-		var message remote.Message
-		if err := json.NewDecoder(r.Body).Decode(&message); err != nil {
-			http.Error(w, `{"error":"bad message"}`, http.StatusBadRequest)
-			return
-		}
-		f.mu.Lock()
-		f.messages = append(f.messages, message)
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusAccepted)
 	}))
 	return mux
 }
@@ -156,6 +118,60 @@ func TestRunnerExecRunsTheJobAndPostsItsResults(t *testing.T) {
 	assert.Equal(t, []string{`{"tests":[]}`}, api.results)
 }
 
+// sourceCheckout is a checkout, on a branch of its own, of the first of two commits of README.md,
+// as captain's substrate sandbox checks a job's commit out, and returns it and the commit.
+func sourceCheckout(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("first"), 0o644))
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-q", "-m", "first")
+	first := gitIn(t, dir, "rev-parse", "HEAD")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("second"), 0o644))
+	gitIn(t, dir, "commit", "-q", "-am", "second")
+	gitIn(t, dir, "switch", "-q", "-c", "substrate-run", first)
+	return dir, first
+}
+
+func TestRunnerExecClonesItsSourceFromALocalCheckout(t *testing.T) {
+	for name, spec := range map[string]func(first string) sandbox.RunSpec{
+		"at the spec's commit": func(first string) sandbox.RunSpec {
+			return sandbox.RunSpec{Kind: "test", Ref: "refs/heads/main", SHA: first}
+		},
+		"at the checkout's head without one": func(string) sandbox.RunSpec { return sandbox.RunSpec{Kind: "test", Ref: "refs/heads/main"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			run := uuid.New()
+			source, first := sourceCheckout(t)
+			api := &fakeRunAPI{spec: spec(first), token: "run-token"}
+			handler := api.handler(run)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/source") {
+					t.Errorf("runner exec downloaded its source, which the local checkout has")
+				}
+				handler.ServeHTTP(w, r)
+			}))
+			t.Cleanup(server.Close)
+			workspace := t.TempDir()
+
+			command := func(_ context.Context, dir string, _ string, _ []string, _ io.Writer) (int, error) {
+				assert.Equal(t, filepath.Join(workspace, "src"), dir, "the job runs in a clone of its own, so what it writes stays out of the checkout")
+				readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
+				require.NoError(t, err)
+				assert.Equal(t, "first", string(readme), "the job's commit is checked out")
+				return 0, nil
+			}
+			code, err := runnerExec(context.Background(), runnerOptions{
+				Run: run.String(), Workspace: workspace, Source: source, Getenv: runnerEnv(server.URL, "run-token", run), Command: command, Output: io.Discard,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 0, code)
+			assert.Equal(t, "", gitIn(t, source, "status", "--porcelain"), "the checkout is left as it was")
+		})
+	}
+}
+
 func TestRunnerExecPushCheckRunsTheRepositorysSSHCommand(t *testing.T) {
 	// A clone of the bundle, which has no HEAD, makes a local branch only for the default branch
 	// name git guesses; one other than the ref's leaves the ref only under refs/remotes.
@@ -188,7 +204,7 @@ func TestRunnerExecRefusesAnUnsafeEnvironment(t *testing.T) {
 		want   string
 	}{
 		"a database":       {func(env map[string]string) { env["GAVEL_DB"] = "" }, run.String(), "gavel runner exec needs GAVEL_DB=off: a sandbox job never reaches a database"},
-		"no token":         {func(env map[string]string) { delete(env, "GAVEL_RUN_TOKEN") }, run.String(), "GAVEL_SERVER, GAVEL_RUN_TOKEN and GAVEL_RUN_ID must be set"},
+		"no token":         {func(env map[string]string) { delete(env, "GAVEL_RUN_TOKEN") }, run.String(), "GAVEL_RUN_ID, and GAVEL_RUN_API_SOCKET or GAVEL_SERVER and GAVEL_RUN_TOKEN, must be set"},
 		"another run's id": {func(map[string]string) {}, uuid.NewString(), "--run "},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -232,168 +248,15 @@ func (a scriptedRunnerAgent) ExecuteStream(context.Context, api.Spec) (<-chan ca
 	return ch, nil
 }
 
-func TestRunnerExecRunsAnAgentJobAndReportsIt(t *testing.T) {
+func TestRunnerExecRefusesAnAgentRun(t *testing.T) {
 	run := uuid.New()
 	bundle, first := sourceBundle(t, map[string]string{"README.md": "first"})
-	spec := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}, Prompt: api.Prompt{User: "fix the build"}}
-	spec.SetCwd("/srv/gavel/workspaces/org/repo")
-	job, err := json.Marshal(remote.Job{Resolved: api.ResolvedSpec{Spec: spec}, Config: remote.JobConfig{Model: spec.Model}, Timeout: time.Minute, Root: "/srv/gavel/workspaces/org/repo"})
-	require.NoError(t, err)
-	fake := &fakeRunAPI{spec: sandbox.RunSpec{Kind: "agent", Ref: "refs/heads/main", SHA: first, Agent: job}, bundle: bundle, token: "run-token"}
+	fake := &fakeRunAPI{spec: sandbox.RunSpec{Kind: "agent", Ref: "refs/heads/main", SHA: first}, bundle: bundle, token: "run-token"}
 	server := httptest.NewServer(fake.handler(run))
 	t.Cleanup(server.Close)
-	workspace := t.TempDir()
 
-	code, err := runnerExec(context.Background(), runnerOptions{
-		Run: run.String(), Workspace: workspace, Home: t.TempDir(), Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
-		Agent: scriptedRunnerAgent{text: "done"},
+	_, err := runnerExec(context.Background(), runnerOptions{
+		Run: run.String(), Workspace: t.TempDir(), Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
 	})
-	require.NoError(t, err)
-	assert.Equal(t, 0, code)
-
-	require.NotEmpty(t, fake.messages)
-	assert.Equal(t, remote.KindStarted, fake.messages[0].Kind)
-	assert.Equal(t, filepath.Join(workspace, "src"), fake.messages[0].Spec.Cwd(), "the agent works in the job's checkout")
-	last := fake.messages[len(fake.messages)-1]
-	require.Equal(t, remote.KindResult, last.Kind)
-	assert.Empty(t, last.Error)
-	assert.Equal(t, "done", last.Result.Unwrap().Response.Text)
-}
-
-// committingAgent writes a file in the run's directory and commits it, as an agent that commits
-// its own work does.
-type committingAgent struct{ t *testing.T }
-
-func (a committingAgent) GetModel() string        { return "claude-sonnet-5" }
-func (a committingAgent) GetRuntime() api.Runtime { return api.RuntimeOf(api.Anthropic, api.ModeAgent) }
-func (a committingAgent) Execute(context.Context, api.Spec) (*api.Response, error) {
-	return nil, fmt.Errorf("the committing agent only streams")
-}
-func (a committingAgent) ExecuteStream(_ context.Context, req api.Spec) (<-chan captainai.Event, error) {
-	dir := req.Cwd()
-	require.NoError(a.t, os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("fixed"), 0o644))
-	gitIn(a.t, dir, "add", "fix.txt")
-	gitIn(a.t, dir, "commit", "-q", "-m", "fix the build")
-	ch := make(chan captainai.Event, 2)
-	ch <- captainai.Event{Kind: captainai.EventText, Text: "fixed"}
-	ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
-	close(ch)
-	return ch, nil
-}
-
-func TestRunnerExecPushesTheCommitsAnAgentRunMade(t *testing.T) {
-	run := uuid.New()
-	bundle, first := sourceBundle(t, map[string]string{"README.md": "first"})
-	spec := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}, Prompt: api.Prompt{User: "fix the build"}}
-	spec.Setup = &shell.Setup{Cwd: "/srv/gavel/workspaces/org/repo", Checkout: &shell.Checkout{Mode: shell.CheckoutLocal, Worktree: &shell.Worktree{Mode: shell.WorktreeNew}}}
-	job, err := json.Marshal(remote.Job{Resolved: api.ResolvedSpec{Spec: spec}, Config: remote.JobConfig{Model: spec.Model}, Timeout: time.Minute, Root: "/srv/gavel/workspaces/org/repo"})
-	require.NoError(t, err)
-	fake := &fakeRunAPI{spec: sandbox.RunSpec{Kind: "agent", Ref: "refs/heads/main", SHA: first, Agent: job}, bundle: bundle, token: "run-token", pushedSHA: "abc123"}
-	server := httptest.NewServer(fake.handler(run))
-	t.Cleanup(server.Close)
-	t.Setenv("GIT_AUTHOR_NAME", "t")
-	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "t")
-	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
-
-	code, err := runnerExec(context.Background(), runnerOptions{
-		Run: run.String(), Workspace: t.TempDir(), Home: t.TempDir(), Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
-		Agent: committingAgent{t: t},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 0, code)
-
-	require.Len(t, fake.commits, 1, "the run's commits were uploaded")
-	pushed := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(pushed, "run.bundle"), fake.commits[0], 0o644))
-	heads := gitIn(t, pushed, "bundle", "list-heads", "run.bundle")
-	assert.Equal(t, 1, strings.Count(heads, "\n")+1, "one branch: %s", heads)
-
-	last := fake.messages[len(fake.messages)-1]
-	require.Equal(t, remote.KindResult, last.Kind)
-	result := last.Result.Unwrap()
-	require.NotNil(t, result.Response.Workspace)
-	require.NotNil(t, result.Response.Workspace.Worktree)
-	assert.Equal(t, "gavel/todo1234-run56789", result.Response.Workspace.Worktree.Branch, "the result names the branch serve pushed")
-	assert.Equal(t, "abc123", result.Response.Workspace.Worktree.Head)
-}
-
-// transcribingAgent writes a Claude transcript under home, as the Claude CLI does under $HOME.
-type transcribingAgent struct {
-	t    *testing.T
-	home string
-}
-
-func (a transcribingAgent) GetModel() string { return "claude-sonnet-5" }
-func (a transcribingAgent) GetRuntime() api.Runtime {
-	return api.RuntimeOf(api.Anthropic, api.ModeAgent)
-}
-func (a transcribingAgent) Execute(context.Context, api.Spec) (*api.Response, error) {
-	return nil, fmt.Errorf("the transcribing agent only streams")
-}
-func (a transcribingAgent) ExecuteStream(context.Context, api.Spec) (<-chan captainai.Event, error) {
-	dir := filepath.Join(a.home, ".claude", "projects", "-workspace-src")
-	require.NoError(a.t, os.MkdirAll(dir, 0o755))
-	require.NoError(a.t, os.WriteFile(filepath.Join(dir, "session-1.jsonl"), []byte(`{"type":"user"}`+"\n"), 0o644))
-	ch := make(chan captainai.Event, 2)
-	ch <- captainai.Event{Kind: captainai.EventText, Text: "done"}
-	ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
-	close(ch)
-	return ch, nil
-}
-
-func TestRunnerExecUploadsTheAgentsTranscripts(t *testing.T) {
-	home := t.TempDir()
-	earlier := filepath.Join(home, ".claude", "projects", "-elsewhere", "earlier-session.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(earlier), 0o755))
-	require.NoError(t, os.WriteFile(earlier, []byte(`{"type":"user"}`+"\n"), 0o644))
-	lastWeek := time.Now().Add(-7 * 24 * time.Hour)
-	require.NoError(t, os.Chtimes(earlier, lastWeek, lastWeek))
-	run := uuid.New()
-	bundle, first := sourceBundle(t, map[string]string{"README.md": "first"})
-	spec := api.Spec{Model: api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent}, Prompt: api.Prompt{User: "fix the build"}}
-	spec.SetCwd("/srv/repo")
-	job, err := json.Marshal(remote.Job{Resolved: api.ResolvedSpec{Spec: spec}, Config: remote.JobConfig{Model: spec.Model}, Timeout: time.Minute, Root: "/srv/repo"})
-	require.NoError(t, err)
-	fake := &fakeRunAPI{spec: sandbox.RunSpec{Kind: "agent", Ref: "refs/heads/main", SHA: first, Agent: job}, bundle: bundle, token: "run-token"}
-	server := httptest.NewServer(fake.handler(run))
-	t.Cleanup(server.Close)
-
-	code, err := runnerExec(context.Background(), runnerOptions{
-		Run: run.String(), Workspace: t.TempDir(), Home: home, Getenv: runnerEnv(server.URL, "run-token", run), Output: io.Discard,
-		Agent: transcribingAgent{t: t, home: home},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 0, code)
-	assert.Equal(t, map[string]string{"claude:-workspace-src/session-1.jsonl": `{"type":"user"}` + "\n"}, fake.transcripts,
-		"only the transcripts the job's agent wrote are uploaded, not ones already under the home before the job started")
-	assert.Equal(t, remote.KindResult, fake.messages[len(fake.messages)-1].Kind, "the transcripts are up before the result")
-}
-
-func TestTranscriptUploaderUploadsOnlyWhatChanged(t *testing.T) {
-	home := t.TempDir()
-	run := uuid.New()
-	fake := &fakeRunAPI{token: "run-token"}
-	server := httptest.NewServer(fake.handler(run))
-	t.Cleanup(server.Close)
-	uploader := &transcriptUploader{api: runAPI{&runclient.Client{Server: server.URL, Token: "run-token", Run: run.String(), HTTP: http.DefaultClient}}, home: home}
-	dir := filepath.Join(home, ".codex", "sessions", "2026", "10", "16")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	path := filepath.Join(dir, "rollout-1.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("one\n"), 0o644))
-
-	require.NoError(t, uploader.sync(context.Background()))
-	assert.Equal(t, map[string]string{"codex:2026/10/16/rollout-1.jsonl": "one\n"}, fake.transcripts)
-
-	fake.transcripts = nil
-	require.NoError(t, uploader.sync(context.Background()))
-	assert.Empty(t, fake.transcripts, "an unchanged transcript isn't uploaded again")
-
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = file.WriteString("two\n")
-	require.NoError(t, err)
-	require.NoError(t, file.Close())
-	require.NoError(t, uploader.sync(context.Background()))
-	assert.Equal(t, map[string]string{"codex:2026/10/16/rollout-1.jsonl": "one\ntwo\n"}, fake.transcripts, "a grown transcript is uploaded whole")
+	require.EqualError(t, err, "an agent run runs whole on substrate, through `gavel runner run-task`, not as a sandbox job")
 }

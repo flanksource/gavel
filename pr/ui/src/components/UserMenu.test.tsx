@@ -12,10 +12,16 @@ vi.mock('@clerk/react', () => {
   UserButton.UserProfilePage = ({ label, url }: { label: string; url: string }) => (
     <div data-testid="profile-page" data-label={label} data-url={url} />
   );
+  const OrganizationSwitcher = (props: { hidePersonal?: boolean; afterSelectOrganizationUrl?: string; children?: ReactNode }) => (
+    <div data-testid="organization-switcher" data-hide-personal={String(props.hidePersonal)} data-after={props.afterSelectOrganizationUrl}>
+      {props.children}
+    </div>
+  );
+  OrganizationSwitcher.OrganizationProfilePage = ({ label, url }: { label: string; url: string }) => (
+    <div data-testid="organization-profile-page" data-label={label} data-url={url} />
+  );
   return {
-    OrganizationSwitcher: (props: { hidePersonal?: boolean; afterSelectOrganizationUrl?: string }) => (
-      <div data-testid="organization-switcher" data-hide-personal={String(props.hidePersonal)} data-after={props.afterSelectOrganizationUrl} />
-    ),
+    OrganizationSwitcher,
     UserButton,
     useAuth: () => ({ getToken: async () => 'fresh-token' }),
   };
@@ -69,6 +75,9 @@ describe('UserMenu', () => {
     const page = screen.getByTestId('profile-page');
     expect(page.dataset.label).toBe('SSH keys');
     expect(page.dataset.url).toBe('ssh-keys');
+    const orgPage = screen.getByTestId('organization-profile-page');
+    expect(orgPage.dataset.label).toBe('Model keys');
+    expect(orgPage.dataset.url).toBe('model-keys');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

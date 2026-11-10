@@ -89,6 +89,7 @@ export function ActivityView() {
   // Stream the activity feed only while visible: a hidden window has no reason to
   // hold the SSE open. The per-row 'Xs ago' timestamps refresh themselves via the
   // shared useNow() clock inside <RelativeTime/>, so no app-level tick is needed.
+  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream, which drops its listeners
   useEffect(() => {
     if (!visible) return;
     const es = openEventStream('/api/activity/stream');
@@ -228,6 +229,7 @@ export function ActivityView() {
                 </tr>
               )}
               {filtered.map((e, i) => (
+                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- log entries have no unique id and ActivityRow is stateless
                 <ActivityRow key={`${e.timestamp}-${i}`} entry={e} />
               ))}
             </tbody>

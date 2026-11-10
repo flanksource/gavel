@@ -2,13 +2,16 @@ package testrunner
 
 import (
 	"fmt"
+	"io"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	goruntime "runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/flanksource/clicky/exec"
@@ -30,11 +33,16 @@ type goBatchPlan struct {
 	targets     []string
 	skipEmpty   []string
 	framework   Framework
+	// coverProfile, when set, is the -coverprofile the batch writes.
+	coverProfile string
 }
 
+// goBatchCount numbers the batches' coverage profiles under CoverDir.
+var goBatchCount atomic.Int64
+
 func (o *TestOrchestrator) unfocusedGoRun(startingPaths []string) bool {
-	return !o.configurationScoped && len(startingPaths) == 0 && len(o.Frameworks) == 0 && len(o.Ignore) == 0 &&
-		!o.hasChangeSelector() && o.Failed == "" && len(o.PassThroughArgs) == 0
+	return !o.configurationScoped && len(startingPaths) == 0 && (len(o.Frameworks) == 0 || o.UIRRunAll) && len(o.Ignore) == 0 &&
+		!o.hasChangeSelector() && o.Failed == "" && len(o.PassThroughArgs) == 0 && o.UIRSkippable == nil
 }
 
 func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string, unfocused bool) ([]goBatchPlan, error) {
@@ -88,6 +96,15 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 	for _, base := range bases {
 		for _, pkg := range base.packages {
 			args := o.augmentBenchArgs(runner, pkg, base.args)
+			if base.framework == parsers.GoTest {
+				if skippable := o.UIRSkippable[pkg]; len(skippable) > 0 {
+					quoted := make([]string, len(skippable))
+					for i, name := range skippable {
+						quoted[i] = regexp.QuoteMeta(name)
+					}
+					args = append(args, "-skip=^(?:"+strings.Join(quoted, "|")+")$")
+				}
+			}
 			index := -1
 			for i := range plans {
 				if plans[i].framework == base.framework && reflect.DeepEqual(plans[i].runtime, base.runtime) && slices.Equal(plans[i].runtimeArgs, base.runtimeArgs) && slices.Equal(plans[i].args, args) {
@@ -172,6 +189,9 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 			logger.Errorf("release test slots: %v", err)
 		}
 	}()
+	if o.CoverDir != "" {
+		plan.coverProfile = filepath.Join(o.CoverDir, fmt.Sprintf("batch-%d.out", goBatchCount.Add(1)))
+	}
 	process, err := o.buildGoBatchCommand(plan, parallel)
 	if err != nil {
 		return packageResult{}, err
@@ -183,8 +203,16 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 	t.SetName(formatRunningCommand(process.Cmd, process.Args))
 	process.WithEnv(lease.Env())
 	started := time.Now()
-	runContext, cancel, supervision := o.supervisePackage(ctx, process, strings.Join(plan.targets, " "))
+	// --test-timeout bounds each package, not the batch: the process itself
+	// is held only to the run's --timeout.
+	budget := o.packageTimeout(process)
+	runContext, cancel, supervision := o.superviseProcess(ctx, process, strings.Join(plan.targets, " "), 0)
 	defer cancel()
+	var deadlines *goPackageDeadlines
+	if budget > 0 {
+		deadlines = newGoPackageDeadlines(budget, process, func() { _ = process.KillTree() })
+		process.Stream(deadlines, io.Discard)
+	}
 	if o.SigquitDumper != nil {
 		defer o.SigquitDumper.watch(process)()
 	}
@@ -195,6 +223,14 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 	result := process.WithContext(runContext).Run().Result()
 	if err := lease.Close(); err != nil {
 		return packageResult{}, err
+	}
+	var dumped []goTestBinary
+	if deadlines != nil {
+		deadlines.stop()
+		dumped = deadlines.Dumped()
+	}
+	if supervision.TimedOut() {
+		dumped = append(dumped, supervision.Dumped()...)
 	}
 	if result == nil {
 		return packageResult{}, fmt.Errorf("go test produced no process result")
@@ -244,7 +280,10 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 				packageSuites[i].Tests[j].Command = packageSuites[i].Command
 			}
 		}
-		if supervision.TimedOut() {
+		packageTimedOut := deadlines != nil && deadlines.TimedOut(importPath)
+		if packageTimedOut {
+			markTimedOutTests(packageSuites, budget, result.Stdout, result.Stderr, parsers.GoTest)
+		} else if supervision.TimedOut() {
 			markTimedOutTests(packageSuites, time.Since(started), result.Stdout, result.Stderr, parsers.GoTest)
 		}
 		dedupeGinkgoBootstraps(packageSuites)
@@ -254,8 +293,8 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 				ExitCode: packageSuites[i].ExitCode, Usage: usage, SharedProcess: len(paths) > 1,
 			})
 		}
-		if supervision.TimedOut() {
-			o.checkpointTimeoutDump(pkgPath, packageSuites, supervision.Dumped())
+		if packageTimedOut || supervision.TimedOut() {
+			o.checkpointTimeoutDump(pkgPath, packageSuites, dumped)
 		}
 		suites = append(suites, packageSuites...)
 		if o.streamer != nil {
@@ -349,22 +388,27 @@ func resolveGoBatchPaths(workDir string, packages, importPaths []string, allowEx
 		paths[remainingImports[0]] = remainingPackages[0]
 		return paths, nil
 	}
-	if allowExtras && len(remainingImports) > 0 {
+	if len(remainingImports) > 0 {
 		prefix, err := goImportPrefix(workDir)
 		if err != nil {
 			return nil, err
 		}
+		var unmapped []string
 		for _, importPath := range remainingImports {
 			rel, ok := strings.CutPrefix(importPath, prefix+"/")
 			if !ok || rel == "" || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "..") {
-				return nil, fmt.Errorf("go test package %s is outside %s", importPath, prefix)
+				// A dependency outside the module only reaches here when its
+				// build failed without go test naming the package it broke.
+				paths[importPath] = "build-failure:" + importPath
+			} else if allowExtras {
+				paths[importPath] = "./" + rel
+			} else {
+				unmapped = append(unmapped, importPath)
 			}
-			paths[importPath] = "./" + rel
 		}
-		remainingImports = nil
-	}
-	if len(remainingImports) > 0 {
-		return nil, fmt.Errorf("cannot map go test packages %v to requested paths %v", remainingImports, remainingPackages)
+		if len(unmapped) > 0 {
+			return nil, fmt.Errorf("cannot map go test packages %v to requested paths %v", unmapped, remainingPackages)
+		}
 	}
 	for _, pkg := range remainingPackages {
 		paths["gavel-unreported:"+pkg] = pkg
@@ -455,6 +499,9 @@ func (o *TestOrchestrator) buildGoBatchCommand(plan goBatchPlan, parallel int) (
 	}
 	if subTimeout := subprocessTimeoutFor(timeout); subTimeout > 0 {
 		args = append(args, subprocessTimeoutArgs(parsers.GoTest, subTimeout)...)
+	}
+	if plan.coverProfile != "" {
+		args = append(args, "-coverprofile="+plan.coverProfile)
 	}
 	if plan.framework == parsers.Ginkgo {
 		runtimeArgs, err = runners.GinkgoGoTestArgs(runtimeArgs)
