@@ -48,6 +48,28 @@ var _ = Describe("Editor comment boundaries", func() {
 		_, err = host.Resolve(ctx, p, target)
 		Expect(err).To(MatchError(comments.ErrConflict))
 	})
+	It("places a file opened through a symlinked directory under the project registered at its real path", func() {
+		real := filepath.Join(GinkgoT().TempDir(), "envs", "base")
+		Expect(os.MkdirAll(filepath.Join(real, "schemas"), 0700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(real, "schemas", "pickers.json"), []byte("{}\n"), 0600)).To(Succeed())
+		link := filepath.Join(GinkgoT().TempDir(), "envs")
+		Expect(os.Symlink(filepath.Dir(real), link)).To(Succeed())
+		useProject(real)
+		store, err := NewStore([]string{filepath.Join(link, "base")})
+		Expect(err).NotTo(HaveOccurred())
+		doc, err := store.Read(store.Files()[0].ID)
+		Expect(err).NotTo(HaveOccurred())
+
+		place := mustTarget(doc)
+		edited, err := store.editedFile(place.Scope, place.URI)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]string{doc.Path, place.URI, edited.ID}).To(Equal([]string{
+			filepath.Join(link, "base", "schemas", "pickers.json"),
+			"gavel://project/demo/files/schemas/pickers.json",
+			doc.ID,
+		}))
+	})
 	It("answers a file outside every project with a project to create for its directory", func() {
 		useProject(GinkgoT().TempDir())
 		outside := filepath.Join(GinkgoT().TempDir(), "notes.md")

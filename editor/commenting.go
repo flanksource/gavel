@@ -98,6 +98,12 @@ func (s *Server) OpenComments(ctx context.Context) (*comments.Service, error) {
 	return comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 10 << 20})
 }
 
+// me serves GET /api/me: the actor this editor authors comments as.
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	principal, err := commentHost{store: s.Store}.Principal(r.Context())
+	respond(w, principal.Actor, err)
+}
+
 // fileComments pages every comment on a file, with the caller's read version of each.
 func fileComments(ctx context.Context, service *comments.Service, target fileTarget) ([]comments.Comment, map[string]int64, error) {
 	rows := []comments.Comment{}

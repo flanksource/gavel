@@ -45,11 +45,15 @@ func targetOf(ctx context.Context, path string) (fileTarget, error) {
 	if err != nil {
 		return fileTarget{}, err
 	}
-	root, err := filepath.Abs(project.ResolvedDir())
+	root, err := ui.CanonicalPath(project.ResolvedDir())
 	if err != nil {
 		return fileTarget{}, fmt.Errorf("resolve project %q directory: %w", project.Name, err)
 	}
-	rel, err := filepath.Rel(root, path)
+	resolved, err := ui.CanonicalPath(path)
+	if err != nil {
+		return fileTarget{}, fmt.Errorf("resolve %s: %w", path, err)
+	}
+	rel, err := filepath.Rel(root, resolved)
 	if err != nil {
 		return fileTarget{}, fmt.Errorf("place %s under project %q: %w", path, project.Name, err)
 	}
@@ -99,9 +103,13 @@ func (s *Store) editedFile(scope, uri string) (Document, error) {
 	if err != nil {
 		return Document{}, err
 	}
-	path := filepath.Join(project.ResolvedDir(), filepath.FromSlash(rel))
-	for _, file := range s.Files() {
-		if file.Path == path {
+	root, err := ui.CanonicalPath(project.ResolvedDir())
+	if err != nil {
+		return Document{}, fmt.Errorf("resolve project %q directory: %w", project.Name, err)
+	}
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	for _, file := range s.files {
+		if filepath.Join(file.root, file.name) == path {
 			return s.Read(file.ID)
 		}
 	}

@@ -8,8 +8,8 @@ import {
   type DropdownMenuItem,
   type JsonSchemaObject,
 } from "@flanksource/clicky-ui/components";
-import { UiChatDots, UiDotsVertical } from "@flanksource/clicky-ui/icons";
-import gavelLockup from "../../../assets/brand/gavel-logo.svg";
+import { UiChatDots, UiDotsVertical, UiFolder, UiListChecks } from "@flanksource/clicky-ui/icons";
+import gavelLockup from "../../../assets/brand/gavel-logo-mono.svg";
 import {
   DocumentForm,
   DocumentRichEditor,
@@ -45,6 +45,8 @@ import { commentCountsAt, useCommentSummary } from "./comment-summary";
 import { RecentComments } from "./RecentComments";
 import { useFileComments } from "./file-comments";
 import { CreateProjectDialog } from "./CreateProjectDialog";
+import { CurrentUser } from "./CurrentUser";
+import { NewAgentSessionDialog } from "./NewAgentSessionDialog";
 
 type Run = {
   running: boolean;
@@ -81,7 +83,8 @@ function writeCommentFilter(filter: CommentFilter) {
   history.replaceState(null, "", url);
 }
 
-function writeRoute(route: Route) {
+/** The page URL of a route, keeping the comment filter that outlives navigation. */
+function routeHref(route: Route): string {
   const url = new URL(location.href);
   const comments = url.searchParams.get("comments");
   url.search = "";
@@ -90,8 +93,10 @@ function writeRoute(route: Route) {
   if (route.selection) url.searchParams.set(route.selection.kind, route.selection.ref.file);
   url.searchParams.set("view", route.view);
   if (route.line) url.searchParams.set("line", String(route.line));
-  history.pushState(null, "", url);
+  return `${url.pathname}${url.search}`;
 }
+
+const writeRoute = (route: Route) => history.pushState(null, "", routeHref(route));
 
 export function App() {
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -131,7 +136,7 @@ export function App() {
   const active = route.selection?.kind === "file" ? byRef.get(fileRefKey(route.selection.ref)) : undefined;
   const activeRef = active ? { file: relativePath(active) } : null;
   const draft = active ? queues.current.get(active.id)?.state() : undefined;
-  const { comments, missingProject, createProject } = useFileComments({
+  const { comments, missingProject, createProject, newSession } = useFileComments({
     fileId: active?.kind === "document" ? active.id : null,
     queue: active ? queues.current.get(active.id) : undefined,
     view: route.view,
@@ -453,7 +458,39 @@ export function App() {
 
   return (
     <AppShell
-      brand={<img src={gavelLockup} alt="gavel" className="h-7" />}
+      // The mono lockup as a mask takes the rail's foreground colour, which an <img> of it cannot.
+      brand={
+        <span
+          role="img"
+          aria-label="gavel"
+          className="block aspect-[140/32] h-7 bg-current"
+          style={{ mask: `url("${gavelLockup}") no-repeat left center / contain`, WebkitMask: `url("${gavelLockup}") no-repeat left center / contain` }}
+        />
+      }
+      // The rail (logo, Files, Tasks) collapses; the breadcrumb stays in the top bar beside it.
+      navSections={[
+        {
+          items: [
+            {
+              key: "files",
+              label: "Files",
+              icon: UiFolder,
+              to: routeHref({ selection: route.selection, view: route.view, ...(route.line ? { line: route.line } : {}) }),
+              active: route.tasks === undefined,
+              ...(unreadComments ? { badge: unreadComments } : {}),
+            },
+            {
+              key: "tasks",
+              label: "Tasks",
+              icon: UiListChecks,
+              to: routeHref({ selection: null, view: route.view, tasks: "" }),
+              active: route.tasks !== undefined,
+            },
+          ],
+        },
+      ]}
+      collapsible
+      collapsedStorageKey="gavel-edit:rail-collapsed"
       // Lint runs as a clicky task group; the indicator follows it (and any other task) live,
       // and its links open the full task manager below.
       actions={
@@ -482,6 +519,7 @@ export function App() {
             }
           }}
         />
+        <CurrentUser onError={setError} />
         </div>
       }
       nav={
@@ -634,6 +672,15 @@ export function App() {
       />
       {missingProject && active && skippedProject !== active.id && (
         <CreateProjectDialog missing={missingProject} onCreate={createProject} onClose={() => setSkippedProject(active.id)} />
+      )}
+      {newSession && (
+        <NewAgentSessionDialog
+          thread={newSession.thread}
+          fileId={newSession.fileId}
+          onPreview={newSession.preview}
+          onStart={newSession.start}
+          onClose={newSession.cancel}
+        />
       )}
     </AppShell>
   );

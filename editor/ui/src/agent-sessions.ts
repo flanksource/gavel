@@ -23,12 +23,12 @@ export function agentOf(session: AgentSession): CommentMentionable {
 /**
  * The Assign menu's agent entries for an open thread: "Send to <session>" per
  * live session (except the one already holding it, unless its last hand-off
- * failed), then "Run new agent session", which `send` gets without a session.
+ * failed), then "Run new agent session…", which opens the new-session dialog.
  */
 export function sendToItems(
   comment: Comment,
   sessions: readonly AgentSession[],
-  send: (sessionId?: string) => Promise<void>,
+  { send, startNew }: { send: (sessionId: string) => Promise<void>; startNew: () => void },
 ): DropdownMenuItem[] {
   if (comment.parentId) return [];
   const run = comment.agentRun;
@@ -45,12 +45,12 @@ export function sendToItems(
   });
   const working = run !== undefined && run.state !== "error" && comment.status === "in_progress";
   items.push({
-    label: "Run new agent session",
+    label: "Run new agent session…",
     icon: UiRobotAi,
     group: "Agent sessions",
     disabled: working,
-    title: working ? "An agent session is already working this thread" : "Start a new agent session in this file's project to work the thread",
-    onSelect: () => void send(),
+    title: working ? "An agent session is already working this thread" : "Choose a runtime and start a new agent session in this file's project to work the thread",
+    onSelect: startNew,
   });
   return items;
 }

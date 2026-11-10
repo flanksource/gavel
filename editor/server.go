@@ -51,6 +51,7 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/files", func(w http.ResponseWriter, r *http.Request) { respond(w, s.Store.Files(), nil) })
+	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/file/{id}/comments", s.listComments)
 	mux.HandleFunc("POST /api/file/{id}/comments/read", s.markFileCommentsRead)
 	mux.HandleFunc("GET /api/comments", s.commentSummary)
@@ -58,7 +59,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/agent-sessions", s.agentSessions)
 	mux.HandleFunc("POST /api/projects", s.createProject)
 	mux.HandleFunc("POST /api/file/{id}/comments/{cid}/run", s.runComment)
+	mux.HandleFunc("POST /api/file/{id}/comments/{cid}/run/preview", s.previewRun)
+	mux.HandleFunc("GET /api/file/{id}/agent-run/context", s.agentRunContextOf)
+	mux.HandleFunc("GET /api/file/{id}/agent-run/permissions", s.permissionCatalog)
 	mux.Handle("/api/captain/prompt/runs/", captainPromptRuns())
+	catalog := runtimeCatalog()
+	mux.Handle("GET /api/chat/models", catalog)
+	mux.Handle("GET /api/chat/runtimes", catalog)
 	// Captain in-process: a sent thread's session is read and followed over SSE
 	// (GET /{id}?follow=1) here, with no captain serve.
 	mux.Handle("/api/captain/sessions/", captainSessions())

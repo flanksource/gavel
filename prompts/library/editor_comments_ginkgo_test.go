@@ -13,7 +13,7 @@ import (
 )
 
 var _ = Describe("editor-comments.prompt", func() {
-	It("runs in the project and gives the session thread tools that act through gavel comments as its agent", func() {
+	It("runs in the project and declares no tools of its own, since the editor attaches the thread tools to every session", func() {
 		tpl, err := promptlib.LoadFS(library.FS, "editor-comments.prompt")
 		Expect(err).NotTo(HaveOccurred())
 		spec, _, err := tpl.Render(promptlib.RenderOptions{Declared: true, Data: map[string]any{
@@ -28,17 +28,7 @@ var _ = Describe("editor-comments.prompt", func() {
 		Expect(spec.Setup.Cwd).To(Equal("/src/acme's repo"))
 		Expect(spec.Model.Mode).To(Equal(api.ModeAgent))
 		Expect(spec.Prompt.User).To(Equal("Rename {{x}} to y"))
-		Expect(spec.Tools).To(HaveLen(3))
-		list := spec.Tools["list_threads"]
-		Expect(list.ReadOnly).To(BeTrue())
-		Expect(list.Exec).To(ContainSubstring(`export GAVEL_COMMENT_ACTOR='eyJraW5kIjoiYWdlbnQifQ'`))
-		Expect(list.Exec).To(ContainSubstring(`'/bin/gavel' comments list --scope 'gavel://project/acme' --target 'gavel://project/acme/files/docs/a.md' --json`))
-		for name, command := range map[string]string{"reply_to_thread": "comments reply", "resolve_thread": "comments resolve"} {
-			tool := spec.Tools[name]
-			Expect(tool.Permission).To(Equal(api.ToolPolicy("allow")), name)
-			Expect(tool.Exec).To(ContainSubstring(`'/bin/gavel' `+command+` "$id" --expectedVersion "$version"`), name)
-			Expect(tool.Exec).To(ContainSubstring(`export GAVEL_COMMENT_ACTOR=`), name)
-		}
+		Expect(spec.Tools).To(BeEmpty())
 	})
 
 	It("is discoverable with valid unrendered frontmatter", func() {

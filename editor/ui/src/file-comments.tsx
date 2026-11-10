@@ -7,6 +7,7 @@ import type { Autosave } from "./autosave";
 import { ApiError, request } from "./api";
 import { sendToItems, useAgentSessions } from "./agent-sessions";
 import { anchorOf, selectorOf, type Selector } from "./comment-anchors";
+import type { RunPreview, RunRequest } from "./run-request";
 
 type Author = { label?: string; id: string; kind: "user" | "agent" };
 export type NativeComment = {
@@ -36,6 +37,14 @@ export type FileCommentsState = {
   comments?: FileReviewComments;
   missingProject?: MissingProject;
   createProject: (project: ProjectInput) => Promise<void>;
+  /** The thread "Run new agent session…" was chosen for, while its dialog is open. */
+  newSession?: {
+    thread: string;
+    fileId: string;
+    preview: (run: RunRequest) => Promise<RunPreview>;
+    start: (run: RunRequest) => Promise<void>;
+    cancel: () => void;
+  };
 };
 
 export function missingProjectOf(cause: unknown): MissingProject | undefined {
@@ -102,6 +111,7 @@ export function useFileComments({
 }): FileCommentsState {
   const [listing, setListing] = useState<Listing>(EMPTY_LISTING);
   const [missingProject, setMissingProject] = useState<MissingProject | undefined>(undefined);
+  const [newSessionFor, setNewSessionFor] = useState<Comment | undefined>(undefined);
   const generation = useRef(0);
   const pending = useRef<{ key: string; requestId: string; created?: NativeComment } | undefined>(undefined);
 
@@ -151,15 +161,30 @@ export function useFileComments({
   };
 
   // A failed hand-off is recorded on the thread (agentRun.state "error") as well as reported.
-  // Without a session it starts a new managed one in the file's project.
-  const send = async (commentId: string, sessionId?: string) => {
+  const send = async (commentId: string, sessionId: string) => {
     try {
-      await request(`/api/file/${fileId}/comments/${commentId}/${sessionId ? "send" : "run"}`, sessionId ? { sessionId } : {});
+      await request(`/api/file/${fileId}/comments/${commentId}/send`, { sessionId });
     } catch (cause) {
       onError(String(cause));
     } finally {
       await refresh();
     }
+  };
+  // A new managed session in the file's project; the dialog reports a failed launch itself.
+  const startRun = async (commentId: string, run: RunRequest) => {
+    try {
+      await request(`/api/file/${fileId}/comments/${commentId}/run`, run);
+      setNewSessionFor(undefined);
+    } finally {
+      await refresh();
+    }
+  };
+  const newSession = newSessionFor && {
+    thread: newSessionFor.body,
+    fileId,
+    preview: (run: RunRequest) => request<RunPreview>(`/api/file/${fileId}/comments/${newSessionFor.id}/run/preview`, run),
+    start: (run: RunRequest) => startRun(newSessionFor.id, run),
+    cancel: () => setNewSessionFor(undefined),
   };
 
   const uploadScreenshot = async (created: NativeComment, dataUrl: string) => {
@@ -195,7 +220,7 @@ export function useFileComments({
     pending.current = undefined;
   };
 
-  return { createProject, comments: {
+  return { createProject, ...(newSession ? { newSession } : {}), comments: {
     items,
     anchoring: "patch",
     targets: { element: true, document: true, screenshot: true },
@@ -211,7 +236,8 @@ export function useFileComments({
         if (window.confirm("Delete this comment and its replies?")) await act(id, "delete");
       },
     },
-    extraAssignItems: (comment) => sendToItems(comment, sessions, (sessionId) => send(comment.id, sessionId)),
+    extraAssignItems: (comment) =>
+      sendToItems(comment, sessions, { send: (sessionId) => send(comment.id, sessionId), startNew: () => setNewSessionFor(comment) }),
     renderRootDetails: (comment) => {
       const row = listing.comments.find((candidate) => candidate.id === comment.id);
       if (!row) return null;

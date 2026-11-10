@@ -50,6 +50,8 @@ type AgentBridge struct {
 	Deliver func(ctx context.Context, sessionID, text string) (deliver.Result, error)
 	// Launch starts a managed session from a library prompt, as captaincli.LaunchPrompt.
 	Launch func(context.Context, captaincli.PromptInvocation) (captaincli.PromptRunResult, error)
+	// Render resolves a session's prompt without starting it, as captaincli.RenderPrompt.
+	Render func(context.Context, captaincli.PromptInvocation) (captaincli.PromptRenderResult, error)
 }
 
 // openCaptain opens gavel's process database first, which hands its pool to

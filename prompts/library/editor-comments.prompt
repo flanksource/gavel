@@ -26,36 +26,5 @@ permissions:
     Edit: allow
     Write: allow
     Bash: allow
-tools:
-  list_threads:
-    description: List the comment threads on this session's file, with their replies and current versions.
-    input: {}
-    readonly: true
-    exec: |
-      set -euo pipefail
-      export GAVEL_COMMENT_ACTOR={{shq actor}}
-      {{shq gavelExecutable}} comments list --scope {{shq scope}} --target {{shq target}} --json
-  reply_to_thread:
-    description: Reply to a comment thread as this session's agent. Say what you changed and how you verified it.
-    input: {id: "string, the thread's comment id", body: "string, the reply in Markdown"}
-    permission: allow
-    exec: |
-      set -euo pipefail
-      export GAVEL_COMMENT_ACTOR={{shq actor}}
-      input=$(cat)
-      id=$(jq -r .id <<<"$input")
-      version=$({{shq gavelExecutable}} comments get "$id" --json | jq -r .version)
-      {{shq gavelExecutable}} comments reply "$id" --expectedVersion "$version" --bodyMarkdown "$(jq -r .body <<<"$input")" --json
-  resolve_thread:
-    description: Resolve a comment thread once its change is made, verified and replied to. A human then reviews it.
-    input: {id: "string, the thread's comment id", summary: "string, one line on what was done"}
-    permission: allow
-    exec: |
-      set -euo pipefail
-      export GAVEL_COMMENT_ACTOR={{shq actor}}
-      input=$(cat)
-      id=$(jq -r .id <<<"$input")
-      version=$({{shq gavelExecutable}} comments get "$id" --json | jq -r .version)
-      {{shq gavelExecutable}} comments resolve "$id" --expectedVersion "$version" --summary "$(jq -r .summary <<<"$input")" --json
 ---
 {{{message}}}

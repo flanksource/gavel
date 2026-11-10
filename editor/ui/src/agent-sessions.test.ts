@@ -4,6 +4,8 @@ import { agentOf, sendToItems, type AgentSession } from "./agent-sessions";
 import { ApiError } from "./api";
 import { missingProjectOf, threadItems, type NativeComment } from "./file-comments";
 
+const noop = { send: async () => {}, startNew: () => {} };
+
 const fixer: AgentSession = { id: "s-1", source: "claude", title: "rename-pass", model: "claude-opus", cwd: "/repo", inCmux: false };
 const reviewer: AgentSession = { id: "s-2", source: "codex", title: "review", inCmux: true };
 const agent = { kind: "agent" as const, id: "claude:s-1", label: "claude-opus" };
@@ -20,25 +22,26 @@ describe("agentOf", () => {
 
 describe("sendToItems", () => {
   it("offers every live session and a new one, disabling those while a session works the thread", () => {
-    const items = sendToItems(root({ sessionId: "s-1", requestedAt: "2026-11-08T10:01:00Z", state: "sent" }), [fixer, reviewer], async () => {});
+    const items = sendToItems(root({ sessionId: "s-1", requestedAt: "2026-11-08T10:01:00Z", state: "sent" }), [fixer, reviewer], noop);
     expect(items.map((item) => [item.label, Boolean(item.disabled)])).toEqual([
       ["Send to rename-pass", true],
       ["Send to review", false],
-      ["Run new agent session", true],
+      ["Run new agent session…", true],
     ]);
   });
 
-  it("re-offers the session whose last send failed, and sends to the chosen session or a new one", () => {
-    const send = vi.fn(async (_sessionId?: string) => {});
-    const items = sendToItems(root({ sessionId: "s-1", requestedAt: "2026-11-08T10:01:00Z", state: "error", error: "socket gone" }), [fixer], send);
+  it("re-offers the session whose last send failed, sends to it, and opens the new-session dialog instead of starting one", () => {
+    const send = vi.fn(async (_sessionId: string) => {});
+    const startNew = vi.fn();
+    const items = sendToItems(root({ sessionId: "s-1", requestedAt: "2026-11-08T10:01:00Z", state: "error", error: "socket gone" }), [fixer], { send, startNew });
     expect(items.map((item) => Boolean(item.disabled))).toEqual([false, false]);
     items[0]?.onSelect();
     items[1]?.onSelect();
-    expect(send.mock.calls).toEqual([["s-1"], []]);
+    expect([send.mock.calls, startNew.mock.calls.length]).toEqual([[["s-1"]], 1]);
   });
 
   it("offers nothing on a reply", () => {
-    expect(sendToItems({ ...root(), parentId: "c-0" }, [fixer], async () => {})).toEqual([]);
+    expect(sendToItems({ ...root(), parentId: "c-0" }, [fixer], noop)).toEqual([]);
   });
 });
 

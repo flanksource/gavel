@@ -9,6 +9,8 @@ import (
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
 	commonsContext "github.com/flanksource/commons/context"
+	"github.com/flanksource/gavel/comments"
+	commentapi "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -33,6 +35,18 @@ var _ = Describe("Editor HTTP API", func() {
 		doc, err = store.Read(store.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())
 		handler = (&Server{Store: store, Context: context.Background(), Assets: fstest.MapFS{"index.html": {Data: []byte("Editor")}}}).Handler()
+	})
+	It("GET /api/me answers the actor an asserted comment is authored as", func() {
+		author := comments.Actor{Kind: "agent", ID: "claude:session-1", Label: "Acme Reviewer"}
+		request := httptest.NewRequest("GET", "/api/me", nil).WithContext(commentapi.WithActor(context.Background(), author))
+		response := httptest.NewRecorder()
+
+		handler.ServeHTTP(response, request)
+
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		var me comments.Actor
+		Expect(json.Unmarshal(response.Body.Bytes(), &me)).To(Succeed())
+		Expect(me).To(Equal(author))
 	})
 	Describe("POST /api/lint/ignore", func() {
 		var server *Server
