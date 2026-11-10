@@ -33,6 +33,7 @@ const maxWindowDays = 60
 func (p *PlatformAPI) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/platform/tenants", p.tenants)
+	mux.HandleFunc("GET /api/platform/sandbox-runs", p.sandboxRuns)
 	return platformAdminsOnly(mux)
 }
 
@@ -114,4 +115,20 @@ func (p *PlatformAPI) tenants(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.SortStableFunc(result.Tenants, func(a, b PlatformTenant) int { return strings.Compare(a.Name, b.Name) })
 	writeJSON(w, result)
+}
+
+func (p *PlatformAPI) sandboxRuns(w http.ResponseWriter, r *http.Request) {
+	since, err := windowStart(r, 30)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
+	defer cancel()
+	usage, err := p.Store.SandboxUsage(ctx, since)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, usage)
 }
