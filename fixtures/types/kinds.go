@@ -90,7 +90,7 @@ func (execKind) run(ctx context.Context, step *fixtures.StepContext) (fixtures.F
 			return fixtures.FixtureResult{}, fmt.Errorf("exec step %q: %w", step.Spec.ID, err)
 		}
 	}
-	return (&ExecFixture{}).Run(ctx, test, step.Opts), nil
+	return (&ExecFixture{Stdout: step.Stdout(), Stderr: step.Stderr()}).Run(ctx, test, step.Opts), nil
 }
 
 // execStepConfig is a YAML/JSON exec step. `script` runs under bash -c (or
@@ -218,6 +218,7 @@ func (k runnerKind) Execute(ctx context.Context, step *fixtures.StepContext) (fi
 	}
 	opts := step.Opts
 	opts.Context = ctx
+	opts.Progress = step.Progress
 	result := k.run(test, opts)
 	outputs := map[string]any{}
 	if result.Run != nil {

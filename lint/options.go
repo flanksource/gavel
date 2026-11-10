@@ -53,6 +53,10 @@ type Options struct {
 	PassThroughArgs []string        `flag:"-" json:"-" yaml:"-"`
 	OutputTee       io.Writer       `json:"-" yaml:"-"`
 	Context         context.Context `json:"-" yaml:"-"`
+	// Progress, when set, is told done of total linter runs each time one
+	// finishes (total grows while runs are still being scheduled), and once
+	// more when all have finished. Its first error fails the run.
+	Progress func(done, total int) error `flag:"-" json:"-" yaml:"-"`
 	// Registry, when set, is the full set of linters a run may select from in
 	// place of DefaultRegistry; an embedder registers its in-process linters
 	// on DefaultRegistry's result and passes it here.

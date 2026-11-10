@@ -100,7 +100,7 @@ func (t *executionTracker) complete(ctx context.Context, fixture *FixtureNode, r
 		completeNode(node, executionState(result), result.Error, result.Duration, now)
 		node.Traces = slices.Clone(result.Traces)
 		node.Result = progressResult(fixture, result)
-		node.Output, node.OutputTruncated = "", false
+		node.Output, node.OutputTruncated, node.Metadata = "", false, nil
 		return nil
 	})
 }
@@ -502,6 +502,7 @@ func cloneExecutionNode(node *ExecutionNode) *ExecutionNode {
 	clone.FinishedAt = cloneTime(node.FinishedAt)
 	clone.PIDs = slices.Clone(node.PIDs)
 	clone.Traces = slices.Clone(node.Traces)
+	clone.Metadata = maps.Clone(node.Metadata)
 	clone.Children = make([]*ExecutionNode, len(node.Children))
 	for i, child := range node.Children {
 		clone.Children[i] = cloneExecutionNode(child)

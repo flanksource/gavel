@@ -65,7 +65,8 @@ func (r *ExecutionReporter) SetFixtureWaiting(ctx context.Context, node *Fixture
 	return r.tracker.SetWaiting(ctx, node, waiting)
 }
 
-// OutputWriter is the stream node's live output lands on (see OutputWriter).
+// OutputWriter is the stream node's live output lands on (see
+// executionTracker.OutputWriter).
 func (r *ExecutionReporter) OutputWriter(ctx context.Context, node *FixtureNode) io.Writer {
 	if r == nil {
 		return io.Discard

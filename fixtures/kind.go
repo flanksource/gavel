@@ -155,7 +155,9 @@ type StepOutcome struct {
 	Cleanup func(context.Context) error
 }
 
-// StepContext is everything a kind sees when it runs.
+// StepContext is everything a kind sees when it runs, and where it records
+// what the run produced (Stdout, Stderr, SetDetail, SetCommand, Progress): the
+// runner folds that into the step's result whether Execute succeeded or not.
 type StepContext struct {
 	Test    FixtureTest
 	Spec    StepSpec
@@ -163,6 +165,9 @@ type StepContext struct {
 	Scope   *StepScope
 	WorkDir string
 	TmpDir  string
+	// evidence is the current attempt's record; the runner starts a fresh one
+	// before each Execute.
+	evidence *stepEvidence
 }
 
 // Template renders text as a gomplate template against the fixture scope:

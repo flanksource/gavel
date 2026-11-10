@@ -287,6 +287,28 @@ steps:
 		}}
 		Expect(projectTests(snapshot)[0].Stdout).To(Equal("batch 1: purging\n"))
 	})
+
+	It("carries a running query step's live record into its detail under query, as a finished step's", func() {
+		record := map[string]any{
+			"template":   "EXEC dbo.purge @Days=$(.params.days)",
+			"sql":        "EXEC dbo.purge @Days=@p1",
+			"arguments":  []any{float64(30)},
+			"connection": map[string]any{"name": "lab", "type": "sql_server", "host": "db.example.com", "port": "1433", "user": "reporter", "database": "app"},
+			"messages":   []any{map[string]any{"batch": float64(1), "run": float64(1), "message": "purging"}},
+		}
+		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+			Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionRunning,
+			Children: []*fixtures.ExecutionNode{{
+				Key: "purge", Name: "purge", Kind: fixtures.ExecutionKindCommand, State: fixtures.ExecutionRunning,
+				Metadata: map[string]any{fixtures.QueryMetadataKey: record},
+			}},
+		}}
+		raw, err := json.Marshal(projectTests(snapshot)[0].Detail)
+		Expect(err).NotTo(HaveOccurred())
+		var detail map[string]any
+		Expect(json.Unmarshal(raw, &detail)).To(Succeed())
+		Expect(detail).To(HaveKeyWithValue("query", record))
+	})
 })
 
 // projectTests is executionSnapshotToTests for a snapshot that must project.

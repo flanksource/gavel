@@ -30,8 +30,13 @@ const FormMetadataKey = "form"
 const ViolationMetadataKey = "violation"
 
 // QueryMetadataKey is the result Metadata key under which a query step
-// publishes what it ran: {template, sql, arguments, params, queryFile}. The UI
-// shows the template and the issued SQL as tabs, with the params beside them.
+// publishes what it ran: {template, sql, arguments, params, queryFile,
+// connection, batches} — connection being its name, type, host, port, user
+// and database, never its password; batches the ends of a SQL program's
+// batches. The step records it on its StepContext (SetDetail) as it grows, so
+// a running step shows it live and a failed one keeps it; its server messages
+// are its stdout/stderr. The UI shows the template and the issued SQL as tabs,
+// with the params beside them.
 const QueryMetadataKey = "query"
 
 // VerifyNodeFrom maps one fixture result onto a verify node. A result with children is

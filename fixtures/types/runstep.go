@@ -96,6 +96,11 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	raw, runErr := testrunner.Run(ro)
 	if progressDone != nil {
 		<-progressDone
+		// The engine drops an update its consumer has not taken yet, so the
+		// last one may be lost: the summary is the final count.
+		if err := opts.Progress(summary.Total-summary.Pending-summary.Running, summary.Total); err != nil && progressErr == nil {
+			progressErr = err
+		}
 	}
 	tests, _ := raw.([]parsers.Test)
 
@@ -103,9 +108,6 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	result.Duration = time.Since(now)
 	result.Metadata = map[string]interface{}{"summary": summary}
 	result.Children, result.Summary = runnerStepChildren(tests, disp)
-	if progressErr != nil {
-		return result.Errorf(progressErr, "report test progress")
-	}
 
 	artifact, err := saveRunArtifact(runArtifactOptions{
 		WorkDir: ro.WorkDir,
@@ -119,6 +121,9 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 		return result.Errorf(err, "record run artifact")
 	}
 	result.Run = artifact
+	if progressErr != nil {
+		return result.Errorf(progressErr, "report test progress")
+	}
 
 	if runErr != nil && summary.Total == 0 {
 		return result.Errorf(runErr, "test run failed")
@@ -166,6 +171,7 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 		ctx = context.Background()
 	}
 	lo.Context = ctx
+	lo.Progress = opts.Progress
 	runtime, err := fixtureStepRuntime(opts)
 	if err != nil {
 		return result.Errorf(err, "fixture environment")

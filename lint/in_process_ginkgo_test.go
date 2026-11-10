@@ -3,6 +3,7 @@ package lint
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,6 +114,53 @@ var _ = Describe("In-process linters", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(results).To(BeEmpty())
 		Expect(linter.runs).To(BeZero())
+	})
+})
+
+// namedEntityLinter is an entityLinter registered under its own name, so a run
+// can schedule several.
+type namedEntityLinter struct {
+	entityLinter
+	name string
+}
+
+func (l *namedEntityLinter) Name() string { return l.name }
+
+var _ = Describe("lint progress", func() {
+	var (
+		root  string
+		reg   *linters.Registry
+		names = []string{"fake-copybooks", "fake-entities", "fake-rules"}
+	)
+	BeforeEach(func() {
+		clicky.ClearGlobalTasks()
+		DeferCleanup(clicky.ClearGlobalTasks)
+		root = GinkgoT().TempDir()
+		Expect(os.Mkdir(filepath.Join(root, ".git"), 0o755)).To(Succeed())
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		reg = linters.NewRegistry()
+		for _, name := range names {
+			reg.Register(&namedEntityLinter{entityLinter: entityLinter{finding: "entities/" + name}, name: name})
+		}
+	})
+
+	It("reports done of total as each linter finishes, then the final count", func() {
+		var reports [][2]int
+		_, err := Run(context.Background(), Options{WorkDir: root, Registry: reg, Linters: names, Timeout: "5s",
+			Progress: func(done, total int) error {
+				reports = append(reports, [2]int{done, total})
+				return nil
+			}})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reports).To(Equal([][2]int{{1, 3}, {2, 3}, {3, 3}, {3, 3}}))
+	})
+
+	It("fails the run with the first progress report that failed", func() {
+		_, err := Run(context.Background(), Options{WorkDir: root, Registry: reg, Linters: names, Timeout: "5s",
+			Progress: func(done, total int) error { return fmt.Errorf("sink closed at %d/%d", done, total) }})
+
+		Expect(err).To(MatchError("report lint progress: sink closed at 1/3"))
 	})
 })
 

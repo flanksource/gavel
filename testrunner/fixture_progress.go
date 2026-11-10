@@ -248,6 +248,10 @@ type executionDetail struct {
 	PIDs       []int                   `json:"pids,omitempty"`
 	Traces     []parsers.TraceResult   `json:"traces,omitempty"`
 	Source     *parsers.SourceSnippet  `json:"source,omitempty"`
+	// Query is a running query step's live record (ExecutionNode.Metadata),
+	// under the key a finished step's detail carries it, so the UI renders the
+	// same Query section while the step runs and updates it in place.
+	Query any `json:"query,omitempty"`
 }
 
 func executionNodeToTest(node *fixtures.ExecutionNode) (parsers.Test, error) {
@@ -261,6 +265,7 @@ func executionNodeToTest(node *fixtures.ExecutionNode) (parsers.Test, error) {
 			Name: node.Name, Kind: node.Kind, State: node.State, Origin: node.Origin,
 			StartedAt: node.StartedAt, FinishedAt: node.FinishedAt, Duration: node.Duration,
 			Done: node.Done, Total: node.Total, Error: node.Error, PIDs: node.PIDs, Traces: node.Traces, Source: node.Source,
+			Query: node.Metadata[fixtures.QueryMetadataKey],
 		},
 	}
 	if node.Origin != nil {

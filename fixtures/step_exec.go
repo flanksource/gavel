@@ -225,7 +225,12 @@ func executeStep(ctx context.Context, kind Kind, step *StepContext) FixtureResul
 			vars["env"], vars["steps"] = scope.Env.Map(), scope.StepOutputs()
 			return vars
 		}}
-	outcome, attempts := retry.run(ctx, func(ctx context.Context) (StepOutcome, error) { return kind.Execute(ctx, step) })
+	outcome, attempts := retry.run(ctx, func(ctx context.Context) (StepOutcome, error) {
+		step.evidence = newStepEvidence(ctx, step.Opts.Progress)
+		outcome, err := kind.Execute(ctx, step)
+		outcome.Result = step.evidence.fill(outcome.Result)
+		return outcome, err
+	})
 	finalStarted := time.Now()
 	result := normalizeResult(outcome.Result, step)
 	if outcome.Cleanup != nil {
@@ -373,6 +378,7 @@ func startBackground(ctx context.Context, kind Kind, step *StepContext) FixtureR
 	if !ok {
 		return stepError(step, fmt.Errorf("kind %q cannot run in the background: it does not implement Start", kind.Name()))
 	}
+	step.evidence = newStepEvidence(ctx, step.Opts.Progress)
 	handle, err := background.Start(ctx, step)
 	if err != nil {
 		return stepError(step, fmt.Errorf("start background step %s: %w", stepLabel(step), err))

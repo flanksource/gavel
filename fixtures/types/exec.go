@@ -24,7 +24,12 @@ import (
 
 // ExecFixture runs a command fixture: a markdown fence or table row, or a
 // YAML/JSON `kind: exec` step once its config is applied (see execKind).
-type ExecFixture struct{}
+type ExecFixture struct {
+	// Stdout and Stderr, when set, receive the command's output as it runs
+	// (a step's StepContext.Stdout/Stderr, which keep it and stream it live);
+	// a PTY run, whose output is one terminal stream, streams to neither.
+	Stdout, Stderr io.Writer
+}
 
 // Run executes the command test with gomplate template support
 func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
@@ -192,8 +197,10 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if exec.Terminal == "pty" || terminalTrace != nil {
 		p = runWithPTY(ctx, ptyRun{exec: exec, workDir: workDir, env: childEnv, terminal: terminalTrace, runtime: opts.ProcessRuntime})
 	} else {
-		live := fixtures.OutputWriter(ctx)
-		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir).WithProcessGroup().WithExactEnv(childEnv).Stream(live, live)
+		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir).WithProcessGroup().WithExactEnv(childEnv)
+		if e.Stdout != nil && e.Stderr != nil {
+			process = process.Stream(e.Stdout, e.Stderr)
+		}
 		if err := opts.ProcessRuntime.Apply(process); err != nil {
 			return result.Errorf(err, "fixture runtime")
 		}

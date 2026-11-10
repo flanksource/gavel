@@ -63,6 +63,7 @@ func (Browser) Execute(ctx context.Context, step *fixtures.StepContext) (fixture
 		return fixtures.StepOutcome{}, fmt.Errorf("browser step %q: %w", step.Spec.ID, err)
 	}
 	args := chromeArgs(cfg, profile.Dir)
+	step.SetCommand(binary+" "+strings.Join(args, " "), "")
 	process, err := startManagedProcess(ctx, binary, args, "", environ(step), nil)
 	if err != nil {
 		return fixtures.StepOutcome{}, fmt.Errorf("browser step %q: %w", step.Spec.ID, err)
@@ -78,7 +79,6 @@ func (Browser) Execute(ctx context.Context, step *fixtures.StepContext) (fixture
 	}
 
 	result := newResult(step, start)
-	result.Command = binary + " " + strings.Join(args, " ")
 	return fixtures.StepOutcome{
 		Result: finish(result),
 		Outputs: map[string]any{

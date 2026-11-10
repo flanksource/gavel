@@ -81,13 +81,13 @@ func (r *Runner) fixtureTask(node *FixtureNode, env fixtureEnv) func(flanksource
 		if err := r.progress.Start(ctx, node); err != nil {
 			return FixtureResult{}, fmt.Errorf("start fixture progress: %w", err)
 		}
-		runContext := flanksourceContext.NewContext(withFixtureOutput(withFixtureWaiting(withFixtureProcess(withFixtureProgress(ctx, func(done, total int) error {
+		runContext := flanksourceContext.NewContext(withFixtureTask(withFixtureOutput(withFixtureWaiting(withFixtureProcess(withFixtureProgress(ctx, func(done, total int) error {
 			return r.progress.Update(ctx, node, done, total)
 		}), func(pid int) error {
 			return r.progress.AddProcess(ctx, node, pid)
 		}), func(waiting bool) error {
 			return r.progress.SetWaiting(ctx, node, waiting)
-		}), r.progress.OutputWriter(ctx, node)))
+		}), r.progress.OutputWriter(ctx, node)), t))
 		// Read at run time, not queue time: a params-reading setup is prepared
 		// only after the file's params step (afterParams).
 		env.setup = r.setups.get(env.file)

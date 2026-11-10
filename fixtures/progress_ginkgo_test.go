@@ -235,6 +235,37 @@ var _ = Describe("fixture execution progress", func() {
 		Consistently(read).WithTimeout(2 * outputPublishInterval).Should(HaveLen(3))
 	})
 
+	It("publishes a running fixture's live metadata, copied, and drops it once the fixture finishes", func() {
+		root := &FixtureNode{Name: "Fixtures", Type: SectionNode}
+		node := &FixtureNode{Name: "inspect", Type: TestNode, Test: &FixtureTest{Name: "inspect"}}
+		root.AddChild(node)
+		var mu sync.Mutex
+		var live []map[string]any
+		tracker := newExecutionTracker(root, "", nil, func(_ context.Context, snapshot ExecutionSnapshot) error {
+			mu.Lock()
+			defer mu.Unlock()
+			live = append(live, snapshot.Root.Children[0].Metadata)
+			return nil
+		})
+		ctx := context.Background()
+		Expect(tracker.Start(ctx, node)).To(Succeed())
+		step := &StepContext{evidence: newStepEvidence(withFixtureOutput(ctx, tracker.OutputWriter(ctx, node)), nil)}
+		record := map[string]any{"template": "SELECT 1", "connection": map[string]any{"name": "lab", "host": "db.example.com"}}
+		Expect(step.SetDetail(QueryMetadataKey, record)).To(Succeed())
+		record["sql"] = "SELECT 1"
+
+		mu.Lock()
+		first := live[len(live)-1]
+		mu.Unlock()
+		Expect(first).To(Equal(map[string]any{QueryMetadataKey: map[string]any{"template": "SELECT 1",
+			"connection": map[string]any{"name": "lab", "host": "db.example.com"}}}), "the first change publishes at once, as reported then")
+
+		Expect(tracker.Complete(ctx, node, FixtureResult{Name: "inspect", Status: task.StatusPASS})).To(Succeed())
+		Expect(tracker.Snapshot().Root.Children[0].Metadata).To(BeNil(), "a finished node's detail is its result's")
+		Expect(step.SetDetail(QueryMetadataKey, record)).To(Succeed())
+		Expect(tracker.Snapshot().Root.Children[0].Metadata).To(BeNil(), "detail reported after the fixture finished is dropped")
+	})
+
 	It("keeps only the tail of a large output, flagged truncated", func() {
 		root := &FixtureNode{Name: "Fixtures", Type: SectionNode}
 		node := &FixtureNode{Name: "loud", Type: TestNode, Test: &FixtureTest{Name: "loud"}}
@@ -262,7 +293,7 @@ var _ = Describe("fixture execution progress", func() {
 	})
 
 	It("discards output written outside a tracked fixture", func() {
-		Expect(OutputWriter(context.Background())).To(BeIdenticalTo(io.Discard))
+		Expect(fixtureOutput(context.Background())).To(BeIdenticalTo(io.Discard))
 	})
 
 	It("records the pid of a fixture's command on its progress node", func() {

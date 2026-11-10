@@ -140,6 +140,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		ctx = context.Background()
 	}
 	groupGitRoot := lintGitRoot(opts.WorkDir)
+	progress := &lintProgress{report: opts.Progress}
 	for _, name := range requestedLinters {
 		linter, ok := registry.Get(name)
 		if !ok {
@@ -223,6 +224,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 			invCopy := inv
 			optsCopy := runOpts
 			parentCtx := opts.Context
+			progress.scheduled()
 			lintTasks = append(lintTasks, group.Add(linter.Name(), func(ctx commonsContext.Context, t *clickytask.Task) (*linters.LinterResult, error) {
 				runCtx := mergeContexts(ctx, parentCtx)
 				result := linters.RunLinterWithTask(runCtx, t, invCopy.linter, optsCopy)
@@ -230,6 +232,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				if invCopy.configDir != "" {
 					linters.FilterViolationsByUserScope([]*linters.LinterResult{result}, invCopy.projectRoot, configScopes(invCopy, nil))
 				}
+				progress.finished()
 				return result, nil
 			}))
 			scheduledRoots = append(scheduledRoots, inv.projectRoot)
@@ -250,6 +253,9 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 	// Wait for the entire group (handles dynamically queued tasks and the
 	// concurrency semaphore correctly) before harvesting individual results.
 	group.WaitFor()
+	if err := progress.done(); err != nil {
+		return nil, err
+	}
 	for _, task := range lintTasks {
 		result, err := task.GetResult()
 		if err != nil {
