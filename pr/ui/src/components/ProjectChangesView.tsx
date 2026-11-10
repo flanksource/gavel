@@ -3,6 +3,8 @@ import { Button, SplitPane } from '@flanksource/clicky-ui/components';
 import { UiArrowLeft, UiChevronRight } from '@flanksource/clicky-ui/icons';
 import { useIsMobile } from '../useIsMobile';
 import type { ProjectFileStatus } from './ProjectStatusView';
+import { isProjectFileCommittable } from './projectFileSelection';
+import { ProjectLinkedDepsBadge } from './ProjectLinkedDepsBadge';
 
 export interface ProjectChangesViewProps {
   files: ProjectFileStatus[];
@@ -33,8 +35,9 @@ export function ProjectChangesView({ files, selected, locked, disabled, diffPath
           <Button type="button" variant="ghost" size="icon" aria-label="Next file" disabled={index >= ordered.length - 1} onClick={() => onDiffPathChange(ordered[index + 1].path)} className="min-h-11 min-w-11"><UiChevronRight /></Button>
         </nav>
         {file && <label className="flex min-h-11 items-center gap-2 text-sm">
-          <input type="checkbox" aria-label={`Include ${file.path} in commit`} checked={selected.has(file.path)} disabled={disabled || file.state === 'conflict' || locked.has(file.path)} onChange={() => onToggleFile(file.path)} />
+          <input type="checkbox" aria-label={`Include ${file.path} in commit`} checked={selected.has(file.path)} disabled={disabled || !isProjectFileCommittable(file) || locked.has(file.path)} onChange={() => onToggleFile(file.path)} />
           Include in commit
+          <ProjectLinkedDepsBadge file={file} />
           {file.state === 'conflict' && <span className="text-xs text-destructive">Resolve conflicts first</span>}
           {locked.has(file.path) && <span className="text-xs text-muted-foreground">Already queued</span>}
         </label>}

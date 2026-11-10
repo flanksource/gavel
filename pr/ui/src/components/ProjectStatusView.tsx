@@ -34,6 +34,7 @@ import {
 } from './projectFileFilter';
 import { projectApiUrl } from './projectApiUrl';
 import { projectDiffQueryKey } from './projectMutations';
+import { isProjectFileCommittable } from './projectFileSelection';
 
 export type FileState = 'staged' | 'unstaged' | 'both' | 'untracked' | 'conflict';
 
@@ -54,6 +55,7 @@ export interface ProjectFileStatus {
   resultsStale: boolean;
   repomapError?: string;
   conflictReason?: string;
+  linkedDependencies?: { name: string; target: string }[];
 }
 
 interface ProjectStatusResponse {
@@ -151,7 +153,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   useEffect(() => {
     if (!status) return;
     const available = new Set(status.files
-      .filter(file => file.state !== 'conflict' && !commitTaskError && !lockedFiles.has(file.path))
+      .filter(file => isProjectFileCommittable(file) && !commitTaskError && !lockedFiles.has(file.path))
       .map(file => file.path));
     setSelected(current => new Set([...current].filter(path => available.has(path))));
   }, [commitTaskError, lockedFiles, status]);
@@ -167,7 +169,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   // Select-all acts on the files the filter shows; selections of hidden files are
   // left alone so the commit count still covers them.
   const selectable = useMemo(
-    () => commitTaskError ? [] : visibleFiles.filter(file => file.state !== 'conflict' && !lockedFiles.has(file.path)),
+    () => commitTaskError ? [] : visibleFiles.filter(file => isProjectFileCommittable(file) && !lockedFiles.has(file.path)),
     [commitTaskError, lockedFiles, visibleFiles],
   );
   const allSelected = selectable.length > 0 && selectable.every(file => selected.has(file.path));

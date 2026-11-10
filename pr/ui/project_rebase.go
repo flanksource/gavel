@@ -16,7 +16,7 @@ type projectRebaseRequest struct {
 }
 
 func (s *Server) rebaseWorktree(w http.ResponseWriter, r *http.Request, path string) (string, bool) {
-	project, err := getVisibleProject(r.PathValue("name"))
+	project, err := s.visibleProject(r.Context(), r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return "", false
