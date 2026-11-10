@@ -63,6 +63,9 @@ missionControl:
   url: ""
   # Mission Control resource search selecting gavel's infrastructure, e.g. namespace=gavel.
   infra: ""
+  # Optional: namespace/name of the Mission Control View whose panels graph substrate's metrics,
+  # e.g. substrate/capacity (docs/platform-dashboard.md has an example View).
+  substrateView: ""
   # Secret holding a Mission Control access token with the viewer role.
   token:
     secretName: ""

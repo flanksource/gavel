@@ -420,13 +420,18 @@ func TestChartReachesSubstrateInAnotherCluster(t *testing.T) {
 		"--substrate-client-cert", "an unset client certificate is not passed")
 }
 
-// substrateSandbox are the values every substrate sandbox needs.
 func TestChartReadsMissionControl(t *testing.T) {
 	requireHelm(t)
 	container := serveContainer(t, render(t,
 		"missionControl.url=https://mc.example.com/api", "missionControl.infra=namespace=gavel",
 		"missionControl.token.secretName=gavel-mission-control"))
 	assert.Contains(t, strings.Join(container.Args, " "), " --mission-control-url https://mc.example.com/api --mission-control-infra namespace=gavel")
+	assert.NotContains(t, strings.Join(container.Args, " "), "--mission-control-substrate-view", "substrate's metrics View is optional")
+
+	container = serveContainer(t, render(t,
+		"missionControl.url=https://mc.example.com/api", "missionControl.infra=namespace=gavel",
+		"missionControl.substrateView=substrate/capacity", "missionControl.token.secretName=gavel-mission-control"))
+	assert.Contains(t, strings.Join(container.Args, " "), " --mission-control-substrate-view substrate/capacity")
 	assert.Equal(t, "secret:gavel-mission-control/token", env(container)["GAVEL_MISSION_CONTROL_TOKEN"])
 
 	container = serveContainer(t, render(t))
@@ -434,6 +439,7 @@ func TestChartReadsMissionControl(t *testing.T) {
 	assert.NotContains(t, env(container), "GAVEL_MISSION_CONTROL_TOKEN")
 }
 
+// substrateSandbox are the values every substrate sandbox needs.
 func substrateSandbox() []string {
 	return []string{
 		"sandbox.enabled=true",

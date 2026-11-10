@@ -203,23 +203,30 @@ func TestHostedPlatformAPI(t *testing.T) {
 func TestHostedPlatformReadsMissionControl(t *testing.T) {
 	mc := missioncontroltest.New(t)
 	mc.SetResources(clientapi.SearchResourcesResponse{Configs: []clientapi.SelectedResource{{ID: "c1", Name: "gavel"}}})
+	mc.SetView("substrate", "capacity", map[string]any{"panels": []map[string]any{{"name": "Crashes", "type": "number", "rows": []map[string]any{{"value": 3}}}}})
 	f := newHostedFixture(t, func(o *DashboardOptions) {
 		o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = mc.URL, "namespace=gavel", missioncontroltest.Token
+		o.MissionControlSubstrateView = "substrate/capacity"
 	})
 	f.clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+	get := func(path string) string {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, f.server.URL+path, nil)
+		require.NoError(t, err)
+		req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+		return string(body)
+	}
 
-	req, err := http.NewRequest(http.MethodGet, f.server.URL+"/api/platform/infrastructure", nil)
-	require.NoError(t, err)
-	req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
-	assert.Contains(t, string(body), `"name":"gavel"`)
+	assert.Contains(t, get("/api/platform/infrastructure"), `"name":"gavel"`)
 	require.Len(t, mc.Searches(), 1)
 	assert.Equal(t, "namespace=gavel", mc.Searches()[0].Configs[0].Search)
+	assert.Contains(t, get("/api/platform/substrate/metrics"), `"name":"Crashes","type":"number","value":3`)
 }
 
 func TestHostedPush(t *testing.T) {

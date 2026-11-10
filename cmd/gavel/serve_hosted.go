@@ -218,6 +218,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	platformAPI := &ui.PlatformAPI{Store: platform.Store{DB: db, Issuer: issuer}, Clerk: backend, App: app}
 	if opts.MissionControlURL != "" {
 		platformAPI.MissionControl = missioncontrol.New(opts.MissionControlURL, opts.missionControlToken, opts.MissionControlInfra)
+		platformAPI.SubstrateView = opts.MissionControlSubstrateView
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/platform/", platformAPI.Handler())
