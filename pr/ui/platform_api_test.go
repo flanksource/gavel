@@ -188,6 +188,35 @@ func TestPlatformGitHubWithoutTheApp(t *testing.T) {
 	assert.Contains(t, failure["error"], "--github-app-id")
 }
 
+func TestPlatformSubstrateMetrics(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	mc := missioncontroltest.New(t)
+	mc.SetView("substrate", "capacity", map[string]any{
+		"panels": []map[string]any{{"name": "Crashes", "type": "number", "rows": []map[string]any{{"value": 3}}}},
+	})
+	store := platform.Store{DB: db, Issuer: "https://clerk.example"}
+	source := missioncontrol.New(mc.URL, missioncontroltest.Token, "namespace=gavel")
+
+	var failure map[string]string
+	unconfigured := servePlatform(t, &PlatformAPI{Store: store}, org, true)
+	assert.Equal(t, http.StatusNotFound, platformGet(t, unconfigured+"/api/platform/substrate/metrics", &failure))
+	assert.Contains(t, failure["error"], "--mission-control-url")
+
+	noView := servePlatform(t, &PlatformAPI{Store: store, MissionControl: source}, org, true)
+	assert.Equal(t, http.StatusNotFound, platformGet(t, noView+"/api/platform/substrate/metrics", &failure))
+	assert.Equal(t, "no View graphs substrate's metrics: start gavel serve with --mission-control-substrate-view namespace/name", failure["error"])
+
+	var got missioncontrol.View
+	base := servePlatform(t, &PlatformAPI{Store: store, MissionControl: source, SubstrateView: "substrate/capacity"}, org, true)
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/substrate/metrics", &got))
+	require.Len(t, got.Panels, 1)
+	assert.Equal(t, 3.0, *got.Panels[0].Value)
+
+	missing := servePlatform(t, &PlatformAPI{Store: store, MissionControl: source, SubstrateView: "substrate/missing"}, org, true)
+	assert.Equal(t, http.StatusBadGateway, platformGet(t, missing+"/api/platform/substrate/metrics", &failure))
+	assert.Contains(t, failure["error"], "view substrate/missing not found in Mission Control")
+}
+
 func TestPlatformInfrastructure(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	mc := missioncontroltest.New(t)

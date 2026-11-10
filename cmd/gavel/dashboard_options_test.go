@@ -149,6 +149,17 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		{"mission control search without its URL", func(o *DashboardOptions) { o.MissionControlInfra = "namespace=gavel" }, []string{
 			"--mission-control-infra needs --mission-control-url",
 		}},
+		{"mission control with substrate's metrics view", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+			o.MissionControlSubstrateView = "substrate/capacity"
+		}, nil},
+		{"substrate's metrics view without its namespace", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+			o.MissionControlSubstrateView = "capacity"
+		}, []string{`--mission-control-substrate-view must name a View as namespace/name, got "capacity"`}},
+		{"substrate's metrics view without its URL", func(o *DashboardOptions) { o.MissionControlSubstrateView = "substrate/capacity" }, []string{
+			"--mission-control-substrate-view needs --mission-control-url",
+		}},
 		{"mission control without clerk", func(o *DashboardOptions) {
 			*o = DashboardOptions{Auth: "none", MissionControlURL: "https://mc.example.com/api"}
 		}, []string{"--mission-control-* flags serve the platform dashboard and need --auth clerk"}},

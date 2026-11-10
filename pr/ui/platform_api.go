@@ -29,6 +29,9 @@ type PlatformAPI struct {
 	App *github.App
 	// MissionControl reads gavel's infrastructure; nil when serve runs without one.
 	MissionControl *missioncontrol.Source
+	// SubstrateView is the namespace/name of the Mission Control View graphing substrate's
+	// metrics; empty when serve runs without one.
+	SubstrateView string
 }
 
 // platformSourceTimeout bounds how long one route waits for its source.
@@ -44,6 +47,7 @@ func (p *PlatformAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/platform/sandbox-runs", p.sandboxRuns)
 	mux.HandleFunc("GET /api/platform/github", p.gitHubApp)
 	mux.HandleFunc("GET /api/platform/infrastructure", p.infrastructure)
+	mux.HandleFunc("GET /api/platform/substrate/metrics", p.substrateMetrics)
 	return platformAdminsOnly(mux)
 }
 
@@ -257,4 +261,27 @@ func (p *PlatformAPI) infrastructure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, infrastructure)
+}
+
+// errNoSubstrateView answers the substrate metrics route when serve runs without its View.
+var errNoSubstrateView = errors.New("no View graphs substrate's metrics: start gavel serve with --mission-control-substrate-view namespace/name")
+
+// substrateMetrics answers the panels of the Mission Control View graphing substrate's metrics.
+func (p *PlatformAPI) substrateMetrics(w http.ResponseWriter, r *http.Request) {
+	if p.MissionControl == nil {
+		writeJSONError(w, http.StatusNotFound, errNoMissionControl)
+		return
+	}
+	if p.SubstrateView == "" {
+		writeJSONError(w, http.StatusNotFound, errNoSubstrateView)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
+	defer cancel()
+	view, err := p.MissionControl.View(ctx, p.SubstrateView)
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, view)
 }

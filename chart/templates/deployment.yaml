@@ -70,6 +70,10 @@ spec:
             - {{ .url | quote }}
             - --mission-control-infra
             - {{ .infra | quote }}
+            {{- if .substrateView }}
+            - --mission-control-substrate-view
+            - {{ .substrateView | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.sandbox.enabled }}
