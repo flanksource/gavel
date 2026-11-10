@@ -54,6 +54,10 @@ func (s *Server) handleTodoItem(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTodosList(w http.ResponseWriter, r *http.Request) {
 	source := todoSourceFromRequest(r)
+	if source.Dir == "" && r.URL.Query().Has("exclude") {
+		s.handleOrgTodosList(w, r)
+		return
+	}
 	provider, source, err := s.todoReadProviderContext(r.Context(), source)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)

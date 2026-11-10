@@ -82,10 +82,33 @@ export function meQuery() {
   });
 }
 
+// A named per-user filter: a kind-tagged list of values (project dirs, GitHub
+// org logins) that list endpoints can exclude by name.
+export interface UserFilter {
+  name: string;
+  kind: string;
+  values: string[];
+}
+
+export const HIDDEN_GITHUB_ORGS_FILTER = 'hidden-github-orgs';
+
+export function userFilterQuery(name: string) {
+  return queryOptions({
+    queryKey: queryKeys.filter(name),
+    queryFn: async ({ signal }) => {
+      const context = `Failed to load the ${name} filter`;
+      const filter = await fetchJSON<UserFilter>(`/api/filters/${encodeURIComponent(name)}`, signal, context);
+      if (!Array.isArray(filter?.values)) throw new Error(`${context}: response omitted its values`);
+      return filter;
+    },
+    staleTime: oneShotStaleTime,
+  });
+}
+
 export function orgsQuery() {
   return queryOptions({
-    queryKey: ['orgs', { includeIgnored: true }] as const,
-    queryFn: ({ signal }) => fetchJSON<Org[]>('/api/orgs?include-ignored=1', signal, 'Failed to load organizations'),
+    queryKey: [...queryKeys.orgs(), { includeIgnored: true }] as const,
+    queryFn: ({ signal }) => fetchJSON<Org[]>('/api/orgs', signal, 'Failed to load organizations'),
     staleTime: oneShotStaleTime,
   });
 }

@@ -70,7 +70,7 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.lastProcPoll = time.Now()
 	s.mu.Unlock()
-	ps, err := LoadProjects(LoadProjectsOptions{})
+	ps, err := visibleProjects(r.Context(), s)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -112,7 +112,7 @@ func procStatusByKey(ctx gavelctx.Context, projects []Project) map[string]procSt
 // streamProcStatusByKey is procStatusByKey projected for the SSE stream — see
 // leanProcStatus for why the resource fields are dropped.
 func streamProcStatusByKey(ctx gavelctx.Context) (map[string]procStatus, error) {
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := visibleProjects(ctx, nil)
 	if err != nil {
 		return nil, err
 	}

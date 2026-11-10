@@ -8,7 +8,9 @@ import (
 	"html"
 	"html/template"
 	"io/fs"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +27,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/blob"
 	gavelctx "github.com/flanksource/gavel/context"
+	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/launch"
@@ -39,11 +42,10 @@ import (
 )
 
 type SearchConfig struct {
-	Repos       []string `json:"repos"`
-	All         bool     `json:"all,omitempty"`
-	Org         string   `json:"org,omitempty"`
-	Project     string   `json:"project,omitempty"`
-	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
+	Repos   []string `json:"repos"`
+	All     bool     `json:"all,omitempty"`
+	Org     string   `json:"org,omitempty"`
+	Project string   `json:"project,omitempty"`
 }
 
 type repoInfo struct {
@@ -168,6 +170,8 @@ type Server struct {
 	org         uuid.UUID
 	orgDB       *gorm.DB
 	githubCache *cache.Store
+	// filters holds the callers' named filters (see filters.go).
+	filters *filters.Store
 
 	// blobs is the storage: store from ~/.gavel.yaml; nil keeps attachments in
 	// attachmentsDir.
@@ -186,7 +190,7 @@ type Server struct {
 // SetOrg scopes the Server's stores to org, whose settings live in db. Call it
 // before serving.
 func (s *Server) SetOrg(org uuid.UUID, db *gorm.DB) {
-	s.org, s.orgDB = org, db
+	s.org, s.orgDB, s.filters = org, db, filters.NewStore(db)
 }
 
 // SetHostedWorkspaces serves the organization's repositories as its todo workspaces.
@@ -600,7 +604,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests/run", s.handleTestRun)
 	mux.Handle(testRunTracesPrefix+"/", s.testRunTraces())
 	mux.HandleFunc("/api/todos", s.handleTodos)
-	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
 	mux.HandleFunc("POST /api/todos/labels/batch", s.handleTodoLabelsBatch)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
@@ -650,6 +653,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ssh-keys", s.handleSSHKeyList)
 	mux.HandleFunc("POST /api/ssh-keys", s.handleSSHKeyAdd)
 	mux.HandleFunc("DELETE /api/ssh-keys/{id}", s.handleSSHKeyDelete)
+	mux.HandleFunc("GET /api/filters", s.handleFilterList)
+	mux.HandleFunc("GET /api/filters/{name}", s.handleFilterGet)
+	mux.HandleFunc("POST /api/filters/{name}/values", s.handleFilterAdd)
+	mux.HandleFunc("DELETE /api/filters/{name}/values", s.handleFilterRemove)
 	mux.HandleFunc("GET /api/sandbox-runs", s.handleSandboxRuns)
 	mux.HandleFunc("GET /api/sandbox-runs/{id}/log", s.handleSandboxRunLog)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
@@ -681,7 +688,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("PUT /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("DELETE /api/projects/{name}", s.handleProjectByName)
-	mux.HandleFunc("POST /api/projects/{name}/hidden", s.handleProjectHidden)
 	mux.HandleFunc("GET /api/projects/{name}/status", s.handleProjectStatus)
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
@@ -1229,9 +1235,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.SetConfig(cfg)
 			go SaveSettings(UISettings{
-				Repos:       cfg.Repos,
-				Project:     cfg.Project,
-				IgnoredOrgs: cfg.IgnoredOrgs,
+				Repos:   cfg.Repos,
+				Project: cfg.Project,
 			})
 		}
 		select {
@@ -1266,19 +1271,22 @@ func (s *Server) handleRepos(w http.ResponseWriter, _ *http.Request) {
 // snappy — org membership changes rarely enough that a 5-minute staleness
 // ceiling is fine.
 //
-// By default the response is filtered through SearchConfig.IgnoredOrgs so
-// the dropdown only shows orgs the user cares about. Pass
-// ?include-ignored=1 to get the full list — used by the chooser's "manage
-// hidden orgs" expansion so the user can unhide.
+// Every org is returned; ?exclude=hidden-github-orgs drops the orgs that
+// filter holds, so the dropdown only shows orgs the user cares about while the
+// chooser's "manage hidden orgs" view still lists the hidden ones to unhide.
 //
 // On fetch failure we return whatever we had cached even if expired; an
 // empty slice rather than an error keeps the chooser functional (it can
 // still offer "All" / "@me" modes).
 func (s *Server) handleOrgs(w http.ResponseWriter, r *http.Request) {
+	excluded, err := s.excludedValues(r, filters.KindGitHubOrg)
+	if err != nil {
+		writeJSONError(w, filterErrorStatus(err), err)
+		return
+	}
 	s.mu.RLock()
 	cached := s.orgs
 	fresh := time.Since(s.orgsCachedAt) < orgsCacheTTL
-	ignored := s.config.IgnoredOrgs
 	s.mu.RUnlock()
 
 	if !fresh {
@@ -1297,9 +1305,7 @@ func (s *Server) handleOrgs(w http.ResponseWriter, r *http.Request) {
 	if cached == nil {
 		cached = []github.Org{}
 	}
-	if r.URL.Query().Get("include-ignored") != "1" {
-		cached = filterIgnoredOrgs(cached, ignored)
-	}
+	cached = filterIgnoredOrgs(cached, slices.Collect(maps.Keys(excluded)))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cached) //nolint:errcheck
 }

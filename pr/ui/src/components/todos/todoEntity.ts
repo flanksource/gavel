@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { todoMutationJSON } from './todoMutations';
-import { todoQueryKeys } from './todoQueries';
+import { HIDDEN_PROJECTS_FILTER, todoQueryKeys } from './todoQueries';
 
 /**
  * The todo action catalog, read from the server rather than declared here.
@@ -192,6 +192,7 @@ async function invalidateBulkTodoCaches(
   const applied = result.results.filter(item => !item.error);
   const tasks: Promise<unknown>[] = [];
   if (applied.some(item => !item.dir)) tasks.push(client.invalidateQueries({ queryKey: ['todos', 'list'] }));
+  else if (applied.length) tasks.push(client.invalidateQueries({ queryKey: todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER), exact: true }));
   for (const dir of new Set(applied.map(item => item.dir ?? ''))) {
     tasks.push(client.invalidateQueries({ queryKey: todoQueryKeys.list(dir), exact: true }));
   }

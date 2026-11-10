@@ -23,6 +23,8 @@ const (
 	// session rows are read: Captain and gavel admission rows interleave with
 	// the agent sessions, so the scan is wider than the page.
 	sessionSummaryScan = 400
+	// sessionProjectConcurrency bounds how many projects' todo providers are read at once.
+	sessionProjectConcurrency = 4
 )
 
 // sessionsResponse is GET /api/sessions. Errors lists the projects whose git
@@ -58,7 +60,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := visibleProjects(r.Context(), s)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -122,7 +124,7 @@ func loadSessionProjectSources(ctx context.Context, tracker *gitstate.Tracker, p
 	states, gitErrs := tracker.States(ctx, dirs)
 	sources := make([]sessionProjectSources, len(projects))
 	var group errgroup.Group
-	group.SetLimit(todoBatchConcurrency)
+	group.SetLimit(sessionProjectConcurrency)
 	for i, project := range projects {
 		group.Go(func() error {
 			source := sessionProjectSources{project: sessionProject{Project: project}}

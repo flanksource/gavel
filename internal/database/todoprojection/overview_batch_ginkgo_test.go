@@ -2,11 +2,16 @@ package todoprojection
 
 import (
 	"context"
-	"github.com/flanksource/clicky/task"
+	"strings"
 	"time"
 
+	"github.com/flanksource/clicky/task"
+	"github.com/flanksource/gavel/tenant"
+	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
+	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -44,19 +49,13 @@ var _ = Describe("TODO overview batches", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(indexes[0].Err).NotTo(HaveOccurred())
 		Expect(indexes[1].Counts).To(Equal(map[string]int{"bug": 1}))
-		firstProvider, err := todoruntime.New(ctx, db, todoruntime.WorkspaceOptions{Name: "First", RootPath: "/work/first"})
-		Expect(err).NotTo(HaveOccurred())
-		secondProvider, err := todoruntime.New(ctx, db, todoruntime.WorkspaceOptions{Name: "Second", RootPath: "/work/second"})
+		global, err := todoruntime.NewGlobal(db)
 		Expect(err).NotTo(HaveOccurred())
 		tracked := len(task.RunsRaw(task.RunFilter{}))
-		lists, err := todoruntime.ListWorkspaces(ctx, []*todoruntime.Provider{firstProvider, secondProvider})
+		listed, err := global.ListOrg(ctx, todos.DiscoveryFilters{}, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(task.RunsRaw(task.RunFilter{})).To(HaveLen(tracked), "routine workspace reads must not register background tasks")
-		Expect(lists[first.ID].Err).NotTo(HaveOccurred())
-		Expect(lists[first.ID].Items).To(BeEmpty())
-		Expect(lists[second.ID].Err).NotTo(HaveOccurred())
-		Expect(lists[second.ID].Items).To(HaveLen(1))
-		Expect(lists[second.ID].Items[0].Title).To(Equal("Counted"))
+		Expect(listedTodos(listed)).To(Equal([]listedTodo{{Title: "Counted", CWD: "/work/second", Labels: "bug=red"}}))
 		for i, color := range []string{"blue", "red"} {
 			found := false
 			for _, definition := range indexes[i].Definitions {
@@ -68,4 +67,52 @@ var _ = Describe("TODO overview batches", func() {
 			Expect(found).To(BeTrue())
 		}
 	})
+	It("lists the org's todos outside the excluded workspaces as the viewer sees them", func() {
+		db := openMigratedDatabase()
+		repository, err := native.NewRepository(db)
+		Expect(err).NotTo(HaveOccurred())
+		ctx := context.Background()
+		creator, member := uuid.New(), uuid.New()
+		for name, id := range map[string]uuid.UUID{"ada": creator, "grace": member} {
+			Expect(db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error).To(Succeed())
+		}
+		asCreator := tenant.WithScope(ctx, tenant.Scope{OrgID: tenant.LocalOrgID, UserID: &creator})
+		asMember := tenant.WithScope(ctx, tenant.Scope{OrgID: tenant.LocalOrgID, UserID: &member})
+		roots := map[string]string{"alpha": "/work/alpha", "beta": "/work/beta", "hidden": "/work/hidden"}
+		for name, root := range roots {
+			workspace, err := repository.CreateWorkspace(ctx, native.CreateWorkspaceInput{RootPath: root, DisplayName: name})
+			Expect(err).NotTo(HaveOccurred())
+			for _, visibility := range []native.Visibility{native.VisibilityPublic, native.VisibilityPrivate} {
+				_, err = repository.CreateIssue(asCreator, native.CreateIssueInput{WorkspaceID: workspace.ID, Title: name + " " + string(visibility), Visibility: visibility})
+				Expect(err).NotTo(HaveOccurred())
+			}
+		}
+		global, err := todoruntime.NewGlobal(db)
+		Expect(err).NotTo(HaveOccurred())
+
+		listed, err := global.ListOrg(asMember, todos.DiscoveryFilters{}, []string{roots["hidden"] + "/"})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listedTodos(listed)).To(Equal([]listedTodo{
+			{Title: "alpha public", CWD: roots["alpha"]},
+			{Title: "beta public", CWD: roots["beta"]},
+		}))
+	})
 })
+
+// listedTodo is the part of a listed TODO the org list specs assert on.
+type listedTodo struct {
+	Title, CWD, Labels string
+}
+
+func listedTodos(items types.TODOS) []listedTodo {
+	out := make([]listedTodo, 0, len(items))
+	for _, item := range items {
+		var labels []string
+		for _, definition := range item.LabelDefinitions {
+			labels = append(labels, definition.Name+"="+string(definition.Color))
+		}
+		out = append(out, listedTodo{Title: item.Title, CWD: item.CWD, Labels: strings.Join(labels, ",")})
+	}
+	return out
+}

@@ -65,6 +65,9 @@ export interface TodoItem {
   status: TodoStatus;
   priority: TodoPriority;
   cwd?: string;
+  // Root of the workspace the todo belongs to. Set on every item of the flat
+  // all-workspace list, which is grouped client-side by it.
+  dir?: string;
   // The user who created a hosted org's todo; absent locally.
   createdBy?: string;
   // Who in a hosted org sees the todo: only its creator (private, the default) or

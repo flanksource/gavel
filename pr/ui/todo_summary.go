@@ -45,19 +45,22 @@ type todoSummary struct {
 	ShortID        string                `json:"shortId,omitempty"`
 	Version        int64                 `json:"version,omitempty"`
 	WorkspaceID    string                `json:"workspaceId,omitempty"`
-	ParentID       string                `json:"parentId,omitempty"`
-	ExecutionState string                `json:"executionState,omitempty"`
-	Title          string                `json:"title"`
-	Status         types.Status          `json:"status"`
-	Priority       types.Priority        `json:"priority"`
-	CWD            string                `json:"cwd,omitempty"`
-	CreatedBy      string                `json:"createdBy,omitempty"`
-	Visibility     string                `json:"visibility,omitempty"`
-	Labels         []string              `json:"labels,omitempty"`
-	Attempts       int                   `json:"attempts,omitempty"`
-	Created        *time.Time            `json:"created,omitempty"`
-	LastRun        *time.Time            `json:"lastRun,omitempty"`
-	SessionID      string                `json:"sessionId,omitempty"`
+	// Dir is the todo's workspace, as the projects list names it: set on the flat
+	// list of every workspace's todos, which the dashboard groups by it.
+	Dir            string         `json:"dir,omitempty"`
+	ParentID       string         `json:"parentId,omitempty"`
+	ExecutionState string         `json:"executionState,omitempty"`
+	Title          string         `json:"title"`
+	Status         types.Status   `json:"status"`
+	Priority       types.Priority `json:"priority"`
+	CWD            string         `json:"cwd,omitempty"`
+	CreatedBy      string         `json:"createdBy,omitempty"`
+	Visibility     string         `json:"visibility,omitempty"`
+	Labels         []string       `json:"labels,omitempty"`
+	Attempts       int            `json:"attempts,omitempty"`
+	Created        *time.Time     `json:"created,omitempty"`
+	LastRun        *time.Time     `json:"lastRun,omitempty"`
+	SessionID      string         `json:"sessionId,omitempty"`
 	// LookupSessionID is set only when a global detail request used a Captain
 	// session UUID instead of an issue reference. The client uses it to open the
 	// exact historical session without replacing the Todo's active SessionID.

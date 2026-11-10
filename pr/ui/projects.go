@@ -31,22 +31,10 @@ type Project struct {
 	Name  string   `json:"name"`
 	Dir   string   `json:"dir"`
 	Repos []string `json:"repos"`
-	// Hidden keeps the project out of every list but the project picker's
-	// "Manage hidden" view, and out of background git tracking. Only
-	// SetProjectHidden changes it; a form update keeps it.
-	Hidden bool `json:"hidden,omitempty"`
 	// ReposInferred marks Repos as derived from the directory's GitHub remotes
 	// because none were registered. Inferred repos are never written back, so
 	// they keep following the checkout's remotes.
 	ReposInferred bool `json:"reposInferred,omitempty"`
-}
-
-// LoadProjectsOptions selects which catalog entries LoadProjects returns.
-// Hidden projects are left out unless IncludeHidden is set: only the surfaces
-// that list projects for the user to manage, and the store's own mutations,
-// need them.
-type LoadProjectsOptions struct {
-	IncludeHidden bool
 }
 
 var projectsPath = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "projects.json")
@@ -96,16 +84,9 @@ func sortProjects(ps []Project) []Project {
 // LoadProjects reads ~/.config/gavel/projects.json, sorted by name. A missing
 // file is the normal "no projects configured yet" state. Read and parse
 // failures name the exact catalog file instead of being mistaken for an empty
-// configuration.
-func LoadProjects(opts LoadProjectsOptions) ([]Project, error) {
-	ps, err := readProjects()
-	if err != nil || opts.IncludeHidden {
-		return ps, err
-	}
-	return slices.DeleteFunc(ps, func(p Project) bool { return p.Hidden }), nil
-}
-
-func readProjects() ([]Project, error) {
+// configuration. Every project is returned; the surfaces that leave out the
+// projects a user hides consult the hidden-projects filter (see filters.go).
+func LoadProjects() ([]Project, error) {
 	data, err := os.ReadFile(projectsPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -284,7 +265,7 @@ func deleteProject(ps []Project, name string) ([]Project, bool) {
 
 // GetProject returns the stored project with the given name.
 func GetProject(name string) (Project, error) {
-	projects, err := LoadProjects(LoadProjectsOptions{IncludeHidden: true})
+	projects, err := LoadProjects()
 	if err != nil {
 		return Project{}, err
 	}
@@ -294,34 +275,40 @@ func GetProject(name string) (Project, error) {
 	return Project{}, fmt.Errorf("%w: %q was not found in %s", ErrProjectNotFound, name, projectsPath)
 }
 
-// getVisibleProject is GetProject for the surfaces that would start tracking a
-// project's git state: a hidden project is reported as not found.
-func getVisibleProject(name string) (Project, error) {
-	project, err := GetProject(name)
-	if err == nil && project.Hidden {
-		return Project{}, fmt.Errorf("%w: %q is hidden in %s", ErrProjectNotFound, name, projectsPath)
+// CanonicalPath is path made absolute with its symlinks resolved, so a checkout
+// reached through a link and one registered at its real location compare equal.
+// A path that does not exist (a moved or deleted project) is only made absolute.
+func CanonicalPath(path string) (string, error) {
+	absolute, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return "", err
 	}
-	return project, err
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if errors.Is(err, os.ErrNotExist) {
+		return absolute, nil
+	}
+	return resolved, err
 }
 
-// ProjectForDir resolves dir to the most-specific configured project root.
+// ProjectForDir resolves dir to the most-specific configured project root,
+// comparing both through their symlinks.
 func ProjectForDir(dir string) (Project, error) {
-	absolute, err := filepath.Abs(strings.TrimSpace(dir))
+	absolute, err := CanonicalPath(dir)
 	if err != nil {
 		return Project{}, fmt.Errorf("resolve project directory %q using %s: %w", dir, projectsPath, err)
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{IncludeHidden: true})
+	projects, err := LoadProjects()
 	if err != nil {
 		return Project{}, err
 	}
 	var match Project
 	matchLength := -1
 	for _, project := range projects {
-		root, err := filepath.Abs(project.ResolvedDir())
+		root, err := CanonicalPath(project.ResolvedDir())
 		if err != nil {
 			return Project{}, fmt.Errorf("resolve project %q directory %q from %s: %w", project.Name, project.Dir, projectsPath, err)
 		}
-		relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(absolute))
+		relative, err := filepath.Rel(root, absolute)
 		if err != nil {
 			return Project{}, fmt.Errorf("compare project %q directory %q using %s: %w", project.Name, root, projectsPath, err)
 		}
@@ -336,7 +323,7 @@ func ProjectForDir(dir string) (Project, error) {
 	if matchLength >= 0 {
 		return match, nil
 	}
-	return Project{}, fmt.Errorf("%w: project for directory %q was not found in %s", ErrProjectNotFound, filepath.Clean(absolute), projectsPath)
+	return Project{}, fmt.Errorf("%w: project for directory %q was not found in %s", ErrProjectNotFound, absolute, projectsPath)
 }
 
 // CreateProject persists a new project, failing if required fields are missing
@@ -345,7 +332,7 @@ func CreateProject(p Project) error {
 	if p.Name == "" || p.Dir == "" {
 		return ErrProjectInvalid
 	}
-	ps, err := LoadProjects(LoadProjectsOptions{IncludeHidden: true})
+	ps, err := LoadProjects()
 	if err != nil {
 		return err
 	}
@@ -359,7 +346,7 @@ func CreateProject(p Project) error {
 // path/argument is authoritative and the body cannot rename it. Missing project
 // → ErrProjectNotFound; empty dir → ErrProjectInvalid.
 func UpdateProject(name string, p Project) error {
-	ps, err := LoadProjects(LoadProjectsOptions{IncludeHidden: true})
+	ps, err := LoadProjects()
 	if err != nil {
 		return err
 	}
@@ -367,7 +354,7 @@ func UpdateProject(name string, p Project) error {
 	if !ok {
 		return fmt.Errorf("%w: %q was not found in %s", ErrProjectNotFound, name, projectsPath)
 	}
-	p.Name, p.Hidden = name, existing.Hidden
+	p.Name = name
 	// A form or CLI update echoes the repos it was shown; unchanged inferred
 	// repos stay inferred instead of being registered.
 	p.ReposInferred = existing.ReposInferred && slices.Equal(p.Repos, existing.Repos)
@@ -377,25 +364,10 @@ func UpdateProject(name string, p Project) error {
 	return SaveProjects(upsertProject(ps, p))
 }
 
-// SetProjectHidden hides or shows the named project, returning the updated
-// record. Missing project → ErrProjectNotFound.
-func SetProjectHidden(name string, hidden bool) (Project, error) {
-	ps, err := LoadProjects(LoadProjectsOptions{IncludeHidden: true})
-	if err != nil {
-		return Project{}, err
-	}
-	p, ok := projectByName(ps, name)
-	if !ok {
-		return Project{}, fmt.Errorf("%w: %q was not found in %s", ErrProjectNotFound, name, projectsPath)
-	}
-	p.Hidden = hidden
-	return p, SaveProjects(upsertProject(ps, p))
-}
-
 // DeleteProject removes the named project, returning ErrProjectNotFound if it
 // does not exist.
 func DeleteProject(name string) error {
-	ps, err := LoadProjects(LoadProjectsOptions{IncludeHidden: true})
+	ps, err := LoadProjects()
 	if err != nil {
 		return err
 	}

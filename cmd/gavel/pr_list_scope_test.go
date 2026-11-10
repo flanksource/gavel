@@ -13,11 +13,13 @@ func TestScopePRSearch(t *testing.T) {
 	cases := map[string]struct {
 		startup github.PRSearchOptions
 		cfg     ui.SearchConfig
+		hidden  []string
 		want    github.PRSearchOptions
 	}{
 		"cleared repos return an org-wide serve to the whole org": {
 			startup: github.PRSearchOptions{All: true, Repos: startupRepos},
-			cfg:     ui.SearchConfig{IgnoredOrgs: []string{"noise"}},
+			cfg:     ui.SearchConfig{},
+			hidden:  []string{"noise"},
 			want:    github.PRSearchOptions{All: true, IgnoredOrgs: []string{"noise"}},
 		},
 		"selected repos replace the startup repos": {
@@ -32,7 +34,7 @@ func TestScopePRSearch(t *testing.T) {
 		},
 	}
 	for name, c := range cases {
-		if got := scopePRSearch(c.startup, c.cfg); !reflect.DeepEqual(got, c.want) {
+		if got := scopePRSearch(c.startup, c.cfg, c.hidden); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: scopePRSearch() = %+v, want %+v", name, got, c.want)
 		}
 	}

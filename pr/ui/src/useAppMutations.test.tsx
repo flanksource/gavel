@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { PropsWithChildren } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { todoQueryKeys } from './components/todos/todoQueries';
 import { queryKeys } from './query';
 import type { PRItem, SearchConfig, Snapshot } from './types';
 import { useAppMutations } from './useAppMutations';
@@ -125,9 +126,12 @@ describe('useAppMutations', () => {
     ]);
   });
 
-  it('posts the hidden flag to the narrow project endpoint and refreshes the project list and git summary', async () => {
-    const projectName = 'my project';
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ name: projectName, hidden: true }), {
+  it.each([
+    { hidden: true, method: 'POST' },
+    { hidden: false, method: 'DELETE' },
+  ])('sends the project dir to the hidden-projects filter ($method) and refreshes everything derived from it', async ({ hidden, method }) => {
+    const dir = '/work/my project';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ name: 'hidden-projects', kind: 'workspace', values: hidden ? [dir] : [] }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })));
@@ -135,14 +139,39 @@ describe('useAppMutations', () => {
     const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
     const { result } = renderHook(useAppMutations, { wrapper: wrapper(client) });
 
-    act(() => result.current.setProjectHidden({ name: projectName, hidden: true }));
+    act(() => result.current.setProjectHidden({ dir, hidden }));
 
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.projects(), exact: true }));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.projectGitSummary(), exact: true });
-    expect(fetch).toHaveBeenCalledWith('/api/projects/my%20project/hidden', {
+    expect(fetch).toHaveBeenCalledWith('/api/filters/hidden-projects/values', {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: dir }),
+    });
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
+      queryKeys.projects(),
+      queryKeys.projectGitSummary(),
+      queryKeys.filters(),
+      todoQueryKeys.workspaceList('hidden-projects'),
+      queryKeys.orgs(),
+    ]);
+  });
+
+  it('sends the org login to the hidden-github-orgs filter', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ name: 'hidden-github-orgs', kind: 'github-org', values: ['acme'] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const client = createClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
+    const { result } = renderHook(useAppMutations, { wrapper: wrapper(client) });
+
+    act(() => result.current.setOrgHidden({ login: 'acme', hidden: true }));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.orgs() }));
+    expect(fetch).toHaveBeenCalledWith('/api/filters/hidden-github-orgs/values', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hidden: true }),
+      body: JSON.stringify({ value: 'acme' }),
     });
   });
 
@@ -155,7 +184,7 @@ describe('useAppMutations', () => {
     const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
     const { result } = renderHook(useAppMutations, { wrapper: wrapper(client) });
 
-    act(() => result.current.setProjectHidden({ name: 'ghost', hidden: true }));
+    act(() => result.current.setProjectHidden({ dir: '/work/ghost', hidden: true }));
 
     await waitFor(() => expect(result.current.error).toBe('Update project visibility: project "ghost" not found'));
     expect(invalidate).not.toHaveBeenCalled();

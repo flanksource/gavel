@@ -56,15 +56,17 @@ const counts = {
   skipped: 0,
 };
 
+const LIST_URL = '/api/todos?exclude=hidden-projects';
+
 // The hook also loads the tag taxonomy (one cached request per workspace), so
-// these assertions scope themselves to the batch endpoint rather than counting
-// every fetch — the behaviour under test is the batch query, not the total.
+// these assertions scope themselves to the list endpoint rather than counting
+// every fetch — the behaviour under test is the list query, not the total.
 function isTagRequest(input: RequestInfo | URL): boolean {
   return String(input).startsWith('/api/todos/labels');
 }
 
-function batchCalls(mock: { mock: { calls: [RequestInfo | URL, RequestInit?][] } }) {
-  return mock.mock.calls.filter(([input]) => String(input) === '/api/todos/batch');
+function listCalls(mock: { mock: { calls: [RequestInfo | URL, RequestInit?][] } }) {
+  return mock.mock.calls.filter(([input]) => String(input) === LIST_URL);
 }
 
 function jsonResponse(body: unknown, ok = true, status = ok ? 200 : 500): Response {
@@ -110,7 +112,7 @@ describe('useWorkspaceTodos', () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/todos/item?')) return Promise.resolve(jsonResponse(detail));
-      if (url === '/api/todos/batch') return pendingList;
+      if (url === LIST_URL) return pendingList;
       throw new Error(`unexpected request: ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -132,7 +134,7 @@ describe('useWorkspaceTodos', () => {
     ]);
 
     const list: TodoListResponse = { dir: '/work/gavel', counts, items: [] };
-    await act(async () => resolveList(jsonResponse({ results: [list] })));
+    await act(async () => resolveList(jsonResponse(list)));
     await waitFor(() => expect(result.current.loadingList).toBe(false));
     unmount();
   });
@@ -152,8 +154,8 @@ describe('useWorkspaceTodos', () => {
     const historical = { ...base, lookupSessionId: sessionID };
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === '/api/todos/batch') {
-        return Promise.resolve(jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [base] }] }));
+      if (url === LIST_URL) {
+        return Promise.resolve(jsonResponse({ counts, items: [{ ...base, dir: '/work/gavel' }] }));
       }
       if (url === `/api/todos/item?ref=${todoID}`) return Promise.resolve(jsonResponse(base));
       if (url === `/api/todos/item?ref=${sessionID}`) return Promise.resolve(jsonResponse(historical));
@@ -186,7 +188,7 @@ describe('useWorkspaceTodos', () => {
       if (url.startsWith('/api/todos/item?')) {
         return Promise.resolve(jsonResponse({ error: message }, false, status));
       }
-      return Promise.resolve(jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [] }] }));
+      return Promise.resolve(jsonResponse({ counts, items: [] }));
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -204,8 +206,8 @@ describe('useWorkspaceTodos', () => {
     const detailSignals: AbortSignal[] = [];
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === '/api/todos/batch') {
-        return Promise.resolve(jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [] }] }));
+      if (url === LIST_URL) {
+        return Promise.resolve(jsonResponse({ counts, items: [] }));
       }
       if (url.startsWith('/api/todos/item?')) {
         detailSignals.push(init?.signal as AbortSignal);
@@ -253,94 +255,85 @@ describe('useWorkspaceTodos', () => {
   });
 
   it('keeps a database list failure visible while retaining an empty workspace group', async () => {
-    const workspaceError = { code: 'load_failed', message: 'database unavailable: connection refused' };
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
-      results: [{ dir: '/work/gavel', items: null, error: workspaceError }],
-    })));
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'database unavailable: connection refused' }, false)));
 
     const { result } = renderHook(() => useWorkspaceTodos(projects), { wrapper: queryTestWrapper() });
 
-    await waitFor(() => expect(result.current.error).toBe('database unavailable: connection refused'));
+    await waitFor(() => expect(result.current.error).toContain('database unavailable: connection refused'));
     expect(result.current.byDir['/work/gavel']?.items).toEqual([]);
-    expect(result.current.errorsByDir).toEqual({ '/work/gavel': workspaceError });
+    expect(result.current.listReady).toBe(false);
   });
 
-  it('loads the complete normalized workspace set with one ordered batch request', async () => {
+  it('loads every visible workspace with one GET and groups the flat list by item dir', async () => {
     const configuredProjects: Project[] = [
-      { name: 'second', dir: '/work/second/', repos: [] },
-      { name: 'first', dir: ' /work/first/./ ', repos: [] },
+      { name: 'second', dir: '/work/second', repos: [] },
+      { name: 'first', dir: '/work/first', repos: [] },
       { name: 'duplicate', dir: '/work/first', repos: [] },
+      { name: 'empty', dir: '/work/empty', repos: [] },
     ];
     const firstTodo: TodoItem = {
-      ref: 'first-1', id: 'first-1', cwd: '/work/first', title: 'First workspace todo',
+      ref: 'first-1', id: 'first-1', dir: '/work/first', title: 'First workspace todo',
       status: 'pending', priority: 'high',
     };
+    const secondTodo: TodoItem = {
+      ref: 'second-1', id: 'second-1', dir: '/work/second', title: 'Second workspace todo',
+      status: 'completed', priority: 'low',
+    };
+    const secondOpen: TodoItem = { ...secondTodo, ref: 'second-2', id: 'second-2', status: 'in_progress' };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       if (isTagRequest(input)) return jsonResponse({ definitions: [] });
-      if (String(input) !== '/api/todos/batch') throw new Error(`unexpected request: ${String(input)}`);
-      return jsonResponse({ results: [
-        { dir: '/work/first', counts: { ...counts, total: 1, open: 1, pending: 1 }, items: [firstTodo] },
-        { dir: '/work/second', counts, items: [] },
-      ] });
+      if (String(input) !== LIST_URL) throw new Error(`unexpected request: ${String(input)}`);
+      return jsonResponse({ counts: { ...counts, total: 3 }, items: [firstTodo, secondTodo, secondOpen] });
     });
     vi.stubGlobal('fetch', fetchMock);
 
     const { result } = renderHook(() => useWorkspaceTodos(configuredProjects), { wrapper: queryTestWrapper() });
 
-    await waitFor(() => expect(result.current.byDir['/work/first']?.items).toEqual([firstTodo]));
-    expect(result.current.workspaces.map(workspace => workspace.dir)).toEqual(['/work/second', '/work/first']);
-    expect(batchCalls(fetchMock)).toHaveLength(1);
-    const [, init] = batchCalls(fetchMock)[0];
-    expect(init).toMatchObject({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dirs: ['/work/first', '/work/second'] }),
+    await waitFor(() => expect(result.current.listReady).toBe(true));
+    expect(Object.fromEntries(Object.entries(result.current.byDir).map(([dir, list]) => [dir, list.items.map(item => item.ref)]))).toEqual({
+      '/work/first': ['first-1'],
+      '/work/second': ['second-1', 'second-2'],
+      '/work/empty': [],
     });
+    expect(result.current.byDir['/work/second']?.counts).toMatchObject({ total: 2, completed: 1, inProgress: 1, open: 1 });
+    expect(result.current.workspaces.map(workspace => workspace.dir)).toEqual(['/work/second', '/work/first', '/work/empty']);
+    expect(listCalls(fetchMock)).toHaveLength(1);
+    expect(listCalls(fetchMock)[0][1]).toEqual({ signal: expect.any(AbortSignal) });
   });
 
-  it('retains successful workspaces beside an explicit per-workspace failure', async () => {
-    const twoProjects: Project[] = [
-      projects[0],
-      { name: 'captain', dir: '/work/captain', repos: ['flanksource/captain'] },
-    ];
-    const successfulTodo: TodoItem = {
-      ref: 'todo-1', id: 'todo-1', cwd: '/work/gavel', title: 'Successful result',
-      status: 'pending', priority: 'medium',
-    };
-    const workspaceError = { code: 'load_failed', message: 'captain database unavailable' };
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ results: [
-      { dir: '/work/captain', items: null, error: workspaceError },
-      { dir: '/work/gavel', counts: { ...counts, total: 1, open: 1, pending: 1 }, items: [successfulTodo] },
-    ] })));
+  it('rejects a list whose items omit their workspace dir', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
+      isTagRequest(input)
+        ? jsonResponse({ definitions: [] })
+        : jsonResponse({ counts, items: [{ ref: 'orphan', title: 'No dir', status: 'pending', priority: 'low' }] })
+    )));
 
-    const { result } = renderHook(() => useWorkspaceTodos(twoProjects), { wrapper: queryTestWrapper() });
+    const { result } = renderHook(() => useWorkspaceTodos(projects), { wrapper: queryTestWrapper() });
 
-    await waitFor(() => expect(result.current.error).toBe(workspaceError.message));
-    expect(result.current.byDir['/work/gavel']?.items).toEqual([successfulTodo]);
-    expect(result.current.byDir['/work/captain']?.items).toEqual([]);
-    expect(result.current.errorsByDir['/work/captain']).toEqual(workspaceError);
+    await waitFor(() => expect(result.current.error).toContain('todo orphan omitted its workspace directory'));
+    expect(result.current.listReady).toBe(false);
   });
 
-  it('refetches the active normalized batch query on explicit refresh', async () => {
+  it('refetches the active list query on explicit refresh', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => (
       isTagRequest(input)
         ? jsonResponse({ definitions: [] })
-        : jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [] }] })
+        : jsonResponse({ counts, items: [] })
     ));
     vi.stubGlobal('fetch', fetchMock);
     const { result } = renderHook(() => useWorkspaceTodos(projects), { wrapper: queryTestWrapper() });
-    await waitFor(() => expect(batchCalls(fetchMock)).toHaveLength(1));
+    await waitFor(() => expect(listCalls(fetchMock)).toHaveLength(1));
 
     act(() => result.current.refresh());
 
-    await waitFor(() => expect(batchCalls(fetchMock)).toHaveLength(2));
-    expect(batchCalls(fetchMock).map(([input]) => String(input))).toEqual([
-      '/api/todos/batch',
-      '/api/todos/batch',
+    await waitFor(() => expect(listCalls(fetchMock)).toHaveLength(2));
+    expect(listCalls(fetchMock).map(([input]) => String(input))).toEqual([
+      LIST_URL,
+      LIST_URL,
     ]);
   });
 
-  it('aborts the batch request when its last observer unmounts', async () => {
+  it('aborts the list request when its last observer unmounts', async () => {
     let requestSignal: AbortSignal | undefined;
     vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       requestSignal = init?.signal as AbortSignal;
@@ -373,8 +366,8 @@ describe('useWorkspaceTodos', () => {
         detailRead++;
         return Promise.resolve(jsonResponse(body));
       }
-      if (url === '/api/todos/batch') {
-        return Promise.resolve(jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [] }] }));
+      if (url === LIST_URL) {
+        return Promise.resolve(jsonResponse({ counts, items: [] }));
       }
       throw new Error(`unexpected request: ${url}`);
     });
@@ -402,7 +395,7 @@ describe('useWorkspaceTodos', () => {
   // the navbar toggle and the body slots read one value, and written through to
   // storage so the choice survives a reload.
   it('defaults the layout to split and persists a change', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ results: [] })));
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ counts, items: [] })));
 
     const { result } = renderHook(() => useWorkspaceTodos([]), { wrapper: queryTestWrapper() });
     expect(result.current.layout).toBe('split');

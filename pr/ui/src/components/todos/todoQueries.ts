@@ -24,8 +24,13 @@ async function sessionRequest(url: string, signal: AbortSignal | undefined, cont
   }
 }
 
+// The named server-side filter that drops hidden workspaces from the flat list.
+export const HIDDEN_PROJECTS_FILTER = 'hidden-projects';
+
 export const todoQueryKeys = {
   list: (dir: string) => ['todos', 'list', { dir: queryDir(dir) }] as const,
+  // The flat, all-workspace list. Its scope is the exclude filter, not a dir.
+  workspaceList: (exclude: string) => ['todos', 'list', { exclude }] as const,
   item: (dir: string, ref: string) => ['todos', 'item', { dir: queryDir(dir), ref }] as const,
   globalItem: (ref: string) => ['todos', 'item', 'global', { ref }] as const,
   launch: (dir: string, ref: string) => ['todos', 'launch', { dir: queryDir(dir), ref }] as const,
@@ -65,6 +70,30 @@ export function todoListQueryOptions(dir: string) {
     ),
     staleTime: Infinity,
   });
+}
+
+// One DB-backed request for every visible workspace; each item carries the
+// `dir` of the workspace it belongs to.
+export function workspaceTodoListQueryOptions(exclude = HIDDEN_PROJECTS_FILTER) {
+  return queryOptions({
+    queryKey: todoQueryKeys.workspaceList(exclude),
+    queryFn: async ({ signal }) => {
+      const context = 'Failed to load todos';
+      const list = await fetchTodoJSON<TodoListResponse>(`/api/todos?exclude=${encodeURIComponent(exclude)}`, signal, context);
+      if (!list?.counts || !Array.isArray(list.items)) throw new Error(`${context}: response omitted counts or items`);
+      const missing = list.items.find(item => !item.dir?.trim());
+      if (missing) throw new Error(`${context}: todo ${missing.ref} omitted its workspace directory`);
+      return list;
+    },
+    staleTime: Infinity,
+  });
+}
+
+export function invalidateTodoLists(client: QueryClient, dir: string) {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: todoQueryKeys.list(dir), exact: true }),
+    client.invalidateQueries({ queryKey: todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER), exact: true }),
+  ]);
 }
 
 export function todoItemQueryOptions(
@@ -111,6 +140,13 @@ export function setTodoQueryData(client: QueryClient, dir: string, todo: TodoIte
   client.setQueryData<TodoListResponse>(todoQueryKeys.list(dir), current => {
     if (!current) return current;
     return { ...current, items: current.items.map(item => item.ref === todo.ref ? todo : item) };
+  });
+  client.setQueryData<TodoListResponse>(todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER), current => {
+    if (!current) return current;
+    return {
+      ...current,
+      items: current.items.map(item => item.ref === todo.ref && item.dir === dir.trim() ? { ...todo, dir: item.dir } : item),
+    };
   });
 }
 

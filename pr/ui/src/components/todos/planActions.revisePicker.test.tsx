@@ -1,6 +1,8 @@
 import React from 'react';
 import { fireEvent, render as rtlRender, renderHook, screen, waitFor, type RenderOptions } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('./useWorkspaceChanges', () => ({ useWorkspaceChanges: () => ({ ready: true, error: '' }) }));
 import type { TodoItem } from '../../types';
 import { PLAN_ACTIONS_CONTEXT as context } from './planActionsTestContext';
 import { TodoReviewBanner } from './planActions';

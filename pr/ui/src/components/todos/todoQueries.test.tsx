@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionStats } from '../../types';
 import { useSessionStats } from './TodoSessionTimer';
-import { sessionStatsQueryOptions, todoGlobalItemQueryOptions, todoItemQueryOptions, todoListQueryOptions, todoQueryKeys } from './todoQueries';
+import { sessionStatsQueryOptions, todoGlobalItemQueryOptions, todoItemQueryOptions, todoListQueryOptions, todoQueryKeys, workspaceTodoListQueryOptions } from './todoQueries';
 
 function stats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
@@ -78,6 +78,33 @@ describe('todo list query', () => {
 
     expect(result).toEqual(expected);
     expect(fetchMock).toHaveBeenCalledWith('/api/todos?dir=%2Frepo', { signal: expect.any(AbortSignal) });
+  });
+
+  it('loads the flat all-workspace list excluding hidden projects and keeps it apart from per-dir lists', async () => {
+    const expected = { counts: { total: 1 }, items: [{ ref: 'todo-1', dir: '/repo' }] };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(expected), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const options = workspaceTodoListQueryOptions('hidden-projects');
+    const result = await options.queryFn?.({ signal: new AbortController().signal } as never);
+
+    expect(result).toEqual(expected);
+    expect(fetchMock).toHaveBeenCalledWith('/api/todos?exclude=hidden-projects', { signal: expect.any(AbortSignal) });
+    expect(options.queryKey).toEqual(['todos', 'list', { exclude: 'hidden-projects' }]);
+    expect(options.queryKey).not.toEqual(todoQueryKeys.list('/repo'));
+  });
+
+  it('refuses a flat list item that does not say which workspace it belongs to', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ counts: { total: 1 }, items: [{ ref: 'todo-1' }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    await expect(workspaceTodoListQueryOptions('hidden-projects').queryFn?.({ signal: new AbortController().signal } as never))
+      .rejects.toThrow('todo todo-1 omitted its workspace directory');
   });
 });
 

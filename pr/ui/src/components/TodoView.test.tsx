@@ -100,7 +100,6 @@ function listProps(filters: TodoFilters): WorkspaceTodos {
     select: vi.fn(),
     loadingList: false,
     listReady: true,
-    errorsByDir: {},
     detail: null,
     error: '',
     selection: undefined as unknown as TodoSelection,

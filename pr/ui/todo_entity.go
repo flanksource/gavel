@@ -175,7 +175,7 @@ func todoEntityWorkspaces(ctx context.Context) ([]query.Workspace, error) {
 		}
 		return workspaces, nil
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := visibleProjects(ctx, nil)
 	if err != nil {
 		return nil, err
 	}

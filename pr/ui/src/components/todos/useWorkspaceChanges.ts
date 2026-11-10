@@ -7,6 +7,11 @@ interface Snapshot { epoch: string; catalog: number; workspaces: Record<string, 
 const snapshots = new WeakMap<object, Snapshot>();
 const pending = new WeakMap<object, Set<string>>();
 
+// The all-workspace list is keyed by its exclude filter, not by a workspace dir.
+function isWorkspaceListQuery(query: Query): boolean {
+  return query.queryKey[1] === 'list' && query.queryKey.some(part => !!part && typeof part === 'object' && 'exclude' in part);
+}
+
 function workspaceDir(query: Query): string {
   if (query.queryKey[1] === 'run-context') return String(query.queryKey[2] ?? '');
   const scope = query.queryKey.find(part => !!part && typeof part === 'object' && 'dir' in part);
@@ -47,14 +52,23 @@ export function useWorkspaceChanges(enabled: boolean) {
         if (next.error) { setError(next.error); return; }
         const previous = snapshots.get(client);
         const resync = !!previous && previous.epoch !== next.epoch;
+        // The flat list spans every workspace, so any workspace's revision, the
+        // workspace catalog, or a resync can change what it holds.
+        const anyWorkspaceChanged = !!previous && (resync || previous.catalog !== next.catalog
+          || [...new Set([...Object.keys(previous.workspaces), ...Object.keys(next.workspaces)])]
+            .some(dir => previous.workspaces[dir]?.revision !== next.workspaces[dir]?.revision));
         if (previous) for (const query of client.getQueryCache().getAll()) {
           if (query.queryKey[0] !== 'todos') continue;
+          if (isWorkspaceListQuery(query)) {
+            if (anyWorkspaceChanged) dirty.add(query.queryHash);
+            continue;
+          }
           const dir = workspaceDir(query);
           if (!dir) continue;
           const field = query.queryKey[1] === 'tags' ? 'labels' : query.queryKey[1] === 'run-context' ? 'config' : 'revision';
           if (resync || previous.workspaces[dir]?.[field] !== next.workspaces[dir]?.[field]) dirty.add(query.queryHash);
         }
-        if (previous && (resync || previous.catalog !== next.catalog || Object.keys(next.workspaces).some(dir => previous.workspaces[dir]?.revision !== next.workspaces[dir].revision))) {
+        if (anyWorkspaceChanged) {
           void client.invalidateQueries({ queryKey: ['projects'] });
         }
         snapshots.set(client, next);

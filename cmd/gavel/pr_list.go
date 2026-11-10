@@ -16,10 +16,12 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/service"
+	"github.com/flanksource/gavel/tenant"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/verify"
 	"github.com/timberio/go-datemath"
@@ -247,7 +249,11 @@ func runOrgBranchStatus(opts PRListOptions) (any, error) {
 	ghOpts := github.Options{}
 	org := opts.Org
 	if org == "" {
-		resolved, err := github.ResolveDefaultOrg(ghOpts, ui.LoadSettings().IgnoredOrgs)
+		hidden, err := localHiddenOrgs(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		resolved, err := github.ResolveDefaultOrg(ghOpts, hidden)
 		if err != nil {
 			return nil, fmt.Errorf("cannot determine org for --ci (use --org): %w", err)
 		}
@@ -290,18 +296,32 @@ func runRepoBranchStatus(opts PRListOptions, since time.Time) (any, error) {
 // The config's repos are the whole repo scope: the startup repo list only seeds
 // the config, so clearing the repos in the dashboard returns the search to the
 // startup mode (org-wide for `gavel serve`) instead of the startup repos.
-func scopePRSearch(so github.PRSearchOptions, cfg ui.SearchConfig) github.PRSearchOptions {
+func scopePRSearch(so github.PRSearchOptions, cfg ui.SearchConfig, hiddenOrgs []string) github.PRSearchOptions {
 	so.Repos = cfg.Repos
 	if len(cfg.Repos) > 0 {
 		so.All = false
 	}
 	// IgnoredOrgs lets ResolveDefaultOrg skip hidden orgs when --all is set
 	// without an explicit --org.
-	so.IgnoredOrgs = cfg.IgnoredOrgs
+	so.IgnoredOrgs = hiddenOrgs
 	if cfg.Org != "" {
 		so.Org = cfg.Org
 	}
 	return so
+}
+
+// localHiddenOrgs is the local org's hidden-github-orgs filter, the orgs the
+// dashboard's org chooser hides.
+func localHiddenOrgs(ctx context.Context) ([]string, error) {
+	store, err := localFilterStore(ctx, "hidden GitHub orgs")
+	if err != nil {
+		return nil, err
+	}
+	filter, err := store.Get(ctx, tenant.Local(), filters.HiddenGitHubOrgs)
+	if err != nil {
+		return nil, err
+	}
+	return filter.Values, nil
 }
 
 func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
@@ -337,6 +357,17 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	if err != nil {
 		return err
 	}
+	// The hidden projects and orgs an earlier gavel kept in its config files move
+	// into the filters table the migrations just created.
+	var filterStore *filters.Store
+	if runtime.DB != nil {
+		filterStore = filters.NewStore(runtime.DB)
+	}
+	if databaseMode == serveDatabaseWithMigrations && filterStore != nil {
+		if err := ui.ImportFileFilters(ctx, filterStore); err != nil {
+			return err
+		}
+	}
 	tracker, err := startGitTracker(ctx, runtime.DB)
 	if err != nil {
 		return err
@@ -347,17 +378,19 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		}
 	}
 	srv := ui.NewServer(serveContext(ctx, tracker), interval, ghOpts, ui.SearchConfig{
-		Repos:       searchOpts.Repos,
-		All:         searchOpts.All,
-		Org:         searchOpts.Org,
-		Project:     saved.Project,
-		IgnoredOrgs: saved.IgnoredOrgs,
+		Repos:   searchOpts.Repos,
+		All:     searchOpts.All,
+		Org:     searchOpts.Org,
+		Project: saved.Project,
 	})
 	blobs, err := verify.OpenGlobalStorage(ctx)
 	if err != nil {
 		return err
 	}
 	srv.SetBlobStore(blobs)
+	if filterStore != nil {
+		srv.SetFilterStore(filterStore)
+	}
 	srv.SetFixtureSchemaProvider(func() (any, error) {
 		return fixturesSchemaDocument()
 	})
@@ -405,7 +438,11 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 				so.Since = time.Now().Add(-closedPRLookback)
 			}
 		}
-		so = scopePRSearch(so, cfg)
+		hiddenOrgs, err := localHiddenOrgs(ctx)
+		if err != nil {
+			return github.PRSearchResults{}, nil, err
+		}
+		so = scopePRSearch(so, cfg, hiddenOrgs)
 		so.ShowAuthor = true
 		// Drop known bots at the source unless the user asked to see them via
 		// the @bots author chip. The bot set is learned from prior fetches, so

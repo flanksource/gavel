@@ -81,7 +81,7 @@ func (trs *TestRunSyncer) syncAll(ctx context.Context) {
 		return
 	}
 	changed := false
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := visibleProjects(ctx, nil)
 	if err != nil {
 		logger.Errorf("sync test runs: %v", err)
 		return

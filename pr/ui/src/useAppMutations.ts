@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { projectApiUrl } from './components/projectApiUrl';
+import { HIDDEN_GITHUB_ORGS_FILTER, type UserFilter } from './components/oneShotQueries';
+import { HIDDEN_PROJECTS_FILTER, todoQueryKeys } from './components/todos/todoQueries';
 import { mutationJSON, queryKeys } from './query';
 import type { PRItem, SearchConfig, Snapshot } from './types';
 import { prKey } from './utils';
@@ -14,7 +15,9 @@ export interface AppMutations {
   saveConfig: (config: SearchConfig) => void;
   setIncludeBots: (include: boolean) => void;
   setShowClosed: (show: boolean) => void;
-  setProjectHidden: (change: { name: string; hidden: boolean }) => void;
+  // dir is the project's workspace root: the value stored in the hidden-projects filter.
+  setProjectHidden: (change: { dir: string; hidden: boolean }) => void;
+  setOrgHidden: (change: { login: string; hidden: boolean }) => void;
 }
 
 export function useAppMutations(): AppMutations {
@@ -132,22 +135,35 @@ export function useAppMutations(): AppMutations {
     onSuccess: showClosed => setSnapshot(current => ({ ...current, showClosed })),
     onError: reportError,
   });
-  const projectHiddenMutation = useMutation({
-    mutationFn: ({ name, hidden }: { name: string; hidden: boolean }) => mutationJSON({
-      url: projectApiUrl({ projectName: name, resource: 'hidden' }),
-      method: 'POST',
-      body: { hidden },
-      context: 'Update project visibility',
-    }),
+  // Hiding is membership in a named server-side filter: hide adds the value,
+  // show removes it. Everything derived from a filter (the project list's
+  // `hidden` flag, the flat todos list, the org chooser) is refetched after.
+  const filterValueMutation = useMutation({
+    mutationFn: ({ filter, value, hidden, context }: { filter: string; value: string; hidden: boolean; context: string }) =>
+      mutationJSON<UserFilter>({
+        url: `/api/filters/${encodeURIComponent(filter)}/values`,
+        method: hidden ? 'POST' : 'DELETE',
+        body: { value },
+        context,
+      }),
     onMutate: clearError,
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.projects(), exact: true }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectGitSummary(), exact: true }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.filters() }),
+        queryClient.invalidateQueries({ queryKey: todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER), exact: true }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.orgs() }),
       ]);
     },
     onError: reportError,
   });
+  const setProjectHidden = useCallback(({ dir, hidden }: { dir: string; hidden: boolean }) => filterValueMutation.mutate({
+    filter: HIDDEN_PROJECTS_FILTER, value: dir, hidden, context: 'Update project visibility',
+  }), [filterValueMutation.mutate]);
+  const setOrgHidden = useCallback(({ login, hidden }: { login: string; hidden: boolean }) => filterValueMutation.mutate({
+    filter: HIDDEN_GITHUB_ORGS_FILTER, value: login, hidden, context: 'Update organization visibility',
+  }), [filterValueMutation.mutate]);
 
   return {
     error,
@@ -158,7 +174,8 @@ export function useAppMutations(): AppMutations {
     saveConfig: configMutation.mutate,
     setIncludeBots: botsMutation.mutate,
     setShowClosed: closedMutation.mutate,
-    setProjectHidden: projectHiddenMutation.mutate,
+    setProjectHidden,
+    setOrgHidden,
   };
 }
 

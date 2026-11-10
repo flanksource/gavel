@@ -75,3 +75,22 @@ it('refetches again when a change arrives during an in-flight read', async () =>
   await act(async () => { emit(3); await vi.advanceTimersByTimeAsync(1001); complete({}); await vi.advanceTimersByTimeAsync(1001); });
   expect(read).toHaveBeenCalledTimes(2);
 });
+
+it('marks the all-workspace list dirty when any workspace revision or the catalog changes', async () => {
+  vi.useFakeTimers();
+  const client = new QueryClient();
+  const list = vi.fn(async () => ({ counts: {}, items: [] }));
+  renderHook(() => {
+    useQuery({ queryKey: ['todos', 'list', { exclude: 'hidden-projects' }], queryFn: list, initialData: { counts: {}, items: [] }, staleTime: Infinity });
+    return useWorkspaceChanges(true);
+  }, { wrapper: queryTestWrapper(client) });
+  const emit = (workspaces: Record<string, { revision: number }>, catalog = 1) => streams.at(-1)!.dispatchEvent(new MessageEvent('message', {
+    data: JSON.stringify({ epoch: 'boot', catalog, workspaces }),
+  }));
+  await act(async () => { emit({ '/first': { revision: 1 }, '/second': { revision: 1 } }); await vi.advanceTimersByTimeAsync(30_000); });
+  expect(list).not.toHaveBeenCalled();
+  await act(async () => { emit({ '/first': { revision: 1 }, '/second': { revision: 2 } }); await vi.advanceTimersByTimeAsync(1001); });
+  expect(list).toHaveBeenCalledTimes(1);
+  await act(async () => { emit({ '/first': { revision: 1 }, '/second': { revision: 2 } }, 2); await vi.advanceTimersByTimeAsync(1001); });
+  expect(list).toHaveBeenCalledTimes(2);
+});

@@ -2,7 +2,7 @@ import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-q
 import type { TodoChildDisposition, TodoItem, TodoLandResponse, TodoListResponse, TodoRunLanding, TodoRunResponse } from '../../types';
 import { isProjectGitKey, queryKeys } from '../../query';
 import { todoQuery } from './format';
-import { setTodoQueryData, todoQueryKeys } from './todoQueries';
+import { HIDDEN_PROJECTS_FILTER, invalidateTodoLists, setTodoQueryData, todoQueryKeys } from './todoQueries';
 
 export interface TodoMutationBody {
   body: BodyInit;
@@ -65,7 +65,7 @@ export async function todoMutationResponseError(response: Response, context: str
 }
 
 export async function invalidateTodoCollections(client: QueryClient, dir: string) {
-  await client.invalidateQueries({ queryKey: todoQueryKeys.list(dir), exact: true });
+  await invalidateTodoLists(client, dir);
 }
 
 export async function setTodoCaches(client: QueryClient, dir: string, todo: TodoItem) {
@@ -102,12 +102,16 @@ export function optimisticallySetTodoCaches(client: QueryClient, dir: string, to
   const listKey = todoQueryKeys.list(dir);
   const previousItem = client.getQueryData<TodoItem>(itemKey);
   const previousList = client.getQueryData<TodoListResponse>(listKey);
+  const workspaceListKey = todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER);
+  const previousWorkspaceList = client.getQueryData<TodoListResponse>(workspaceListKey);
   setTodoQueryData(client, dir, todo);
   return () => {
     if (previousItem === undefined) client.removeQueries({ queryKey: itemKey, exact: true });
     else client.setQueryData(itemKey, previousItem);
     if (previousList === undefined) client.removeQueries({ queryKey: listKey, exact: true });
     else client.setQueryData(listKey, previousList);
+    if (previousWorkspaceList === undefined) client.removeQueries({ queryKey: workspaceListKey, exact: true });
+    else client.setQueryData(workspaceListKey, previousWorkspaceList);
   };
 }
 

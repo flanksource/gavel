@@ -146,7 +146,7 @@ func commentProject(ctx context.Context, scope string) (projectInfo, error) {
 		projects, err = s.projectList(ctx)
 	} else {
 		var local []Project
-		local, err = LoadProjects(LoadProjectsOptions{IncludeHidden: true})
+		local, err = LoadProjects()
 		for _, p := range local {
 			projects = append(projects, projectInfo{Name: p.Name, Dir: p.ResolvedDir(), Repos: p.Repos})
 		}

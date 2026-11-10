@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -115,12 +114,12 @@ func (s *Server) reloadWorkspaceData(ctx context.Context) error {
 			return err
 		}
 	} else {
-		rows, err := LoadProjects(LoadProjectsOptions{IncludeHidden: true})
+		rows, err := LoadProjects()
 		if err != nil {
 			return err
 		}
 		for _, p := range rows {
-			info, err := newProjectInfo(ctx, p, todoCountsResult{})
+			info, err := newProjectInfo(ctx, p, todoCountsResult{}, false)
 			if err != nil {
 				return err
 			}
@@ -150,7 +149,7 @@ func (s *Server) reloadWorkspaceData(ctx context.Context) error {
 			if !ok {
 				return fmt.Errorf("invalid hosted workspace %s", project.Dir)
 			}
-			options.RootPath = filepath.Join(s.workspaces.Sources.DataDir, "workspaces", s.orgID().String(), id.String())
+			options.RootPath = s.workspaces.rootPath(s.orgID(), id)
 		}
 		entry, exists := previous[project.Dir]
 		if exists && reflect.DeepEqual(entry.Options, options) && entry.Err == nil {

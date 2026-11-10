@@ -1,14 +1,60 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"github.com/flanksource/gavel/todos/labels"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 )
+
+type todoBatchRequest struct {
+	Dirs *[]string `json:"dirs"`
+}
+
+type todoBatchError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func todoBatchErrorFor(err error) *todoBatchError {
+	code := "load_failed"
+	switch {
+	case errors.Is(err, context.Canceled):
+		code = "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		code = "deadline_exceeded"
+	}
+	return &todoBatchError{Code: code, Message: err.Error()}
+}
+
+// validateTodoBatchDirs checks dirs are distinct, non-blank workspaces and, when paths is set,
+// normalized absolute paths. A hosted dashboard's workspaces are repo:<id> names, which each
+// workspace's load checks against the organization's repositories.
+func validateTodoBatchDirs(dirs []string, paths bool) error {
+	seen := make(map[string]int, len(dirs))
+	for i, dir := range dirs {
+		if dir == "" || strings.TrimSpace(dir) != dir {
+			return fmt.Errorf("dirs[%d] must be a non-blank normalized workspace path", i)
+		}
+		if paths && !filepath.IsAbs(dir) {
+			return fmt.Errorf("dirs[%d] must be absolute: %q", i, dir)
+		}
+		if paths && filepath.Clean(dir) != dir {
+			return fmt.Errorf("dirs[%d] must be normalized: %q", i, dir)
+		}
+		if first, ok := seen[dir]; ok {
+			return fmt.Errorf("dirs[%d] duplicates dirs[%d]: %q", i, first, dir)
+		}
+		seen[dir] = i
+	}
+	return nil
+}
 
 type todoLabelBatchResult struct {
 	Dir    string                  `json:"dir"`
@@ -49,7 +95,7 @@ func (s *Server) handleTodoLabelsBatch(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					break
 				}
-				options[i].RootPath = filepath.Join(s.workspaces.Sources.DataDir, "workspaces", s.orgID().String(), id.String())
+				options[i].RootPath = s.workspaces.rootPath(s.orgID(), id)
 			}
 			break
 		}
@@ -89,7 +135,7 @@ func (s *Server) labelProjects(r *http.Request) ([]projectInfo, error) {
 	if s.hosted {
 		return nil, errNoHostedWorkspaces
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{IncludeHidden: true})
+	projects, err := LoadProjects()
 	if err != nil {
 		return nil, err
 	}

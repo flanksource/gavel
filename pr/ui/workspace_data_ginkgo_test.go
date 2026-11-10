@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
@@ -23,7 +25,7 @@ import (
 )
 
 var _ = Describe("workspace startup and invalidation", func() {
-	It("bounds batch reads independently of workspace count without writes", func() {
+	It("bounds the flat todo list's reads independently of workspace count without writes", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		oldPath := projectsPath
@@ -42,6 +44,7 @@ var _ = Describe("workspace startup and invalidation", func() {
 		}
 		Expect(SaveProjects(projects)).To(Succeed())
 		server := &Server{}
+		server.SetFilterStore(filters.NewStore(opened.Gorm()))
 		Expect(server.StartWorkspaceData(ctx, opened.Gorm())).To(Succeed())
 		DeferCleanup(func() { cancel(); server.workspaceData.workers.Wait() })
 		previousProvider := openTodoProvider
@@ -78,12 +81,16 @@ var _ = Describe("workspace startup and invalidation", func() {
 		Expect(callbacks.Create().After("gorm:create").Register("test:workspace-reads", record)).To(Succeed())
 		Expect(callbacks.Update().After("gorm:update").Register("test:workspace-reads", record)).To(Succeed())
 		Expect(callbacks.Delete().After("gorm:delete").Register("test:workspace-reads", record)).To(Succeed())
-		results := server.loadTodoBatch(request, dirs)
-		Expect(results).To(HaveLen(len(dirs)))
-		for _, result := range results {
-			Expect(result.Error).To(BeNil())
-			Expect(result.Items).To(HaveLen(1))
+		listed := httptest.NewRecorder()
+		server.handleTodos(listed, httptest.NewRequest(http.MethodGet, "/api/todos?exclude="+filters.HiddenProjects, nil).WithContext(request))
+		Expect(listed.Code).To(Equal(http.StatusOK), listed.Body.String())
+		var list todoListResponse
+		Expect(json.Unmarshal(listed.Body.Bytes(), &list)).To(Succeed())
+		var listedDirs []string
+		for _, item := range list.Items {
+			listedDirs = append(listedDirs, item.Dir)
 		}
+		Expect(listedDirs).To(ConsistOf(dirs))
 		Expect(len(statements)).To(BeNumerically("<=", 8), "%v", statements)
 		for _, statement := range statements {
 			Expect(statement).To(MatchRegexp(`(?i)^\s*(SELECT|WITH)\b`))

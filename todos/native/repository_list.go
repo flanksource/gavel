@@ -156,6 +156,31 @@ func (r *Repository) ListWorkspaceIssues(ctx context.Context, workspaceIDs []uui
 	return issues, nil
 }
 
+// ListOrgWorkspaces returns the organization's workspaces whose primary path is
+// not one of excludeRootPaths, so a caller can list every workspace's issues with
+// ListWorkspaceIssues without naming them.
+func (r *Repository) ListOrgWorkspaces(ctx context.Context, excludeRootPaths []string) ([]Workspace, error) {
+	query := `SELECT ` + workspaceColumns + ` FROM ` + workspaceFrom + ` WHERE workspace.org_id = ?`
+	args := []any{r.org}
+	if len(excludeRootPaths) > 0 {
+		excluded := make([]string, 0, len(excludeRootPaths))
+		for _, path := range excludeRootPaths {
+			excluded = append(excluded, normalizeWorkspacePath(path))
+		}
+		query += ` AND COALESCE(primary_path.path, '') NOT IN ?`
+		args = append(args, excluded)
+	}
+	var records []workspaceRecord
+	if err := r.db.WithContext(ctx).Raw(query+` ORDER BY workspace.id`, args...).Scan(&records).Error; err != nil {
+		return nil, err
+	}
+	workspaces := make([]Workspace, 0, len(records))
+	for _, record := range records {
+		workspaces = append(workspaces, *record.workspace())
+	}
+	return workspaces, nil
+}
+
 // GetIssueByRef resolves exact workspace aliases before UUIDs so imported
 // UUID-shaped aliases remain authoritative. It then accepts native UUID and
 // unambiguous UUID/alias prefixes of at least MinShortReferenceLength.

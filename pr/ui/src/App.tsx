@@ -188,6 +188,7 @@ export function App() {
     setIncludeBots,
     setShowClosed,
     setProjectHidden,
+    setOrgHidden,
   } = useAppMutations();
   const { detail, loading: detailLoading, refresh: refreshDetail } = usePRDetailStream(selected);
   const rawPrs = snapshot.prs;
@@ -505,7 +506,13 @@ export function App() {
   }
 
   function hideProject(name: string, hidden: boolean) {
-    setProjectHidden({ name, hidden });
+    const project = allProjects.find(candidate => candidate.name === name);
+    if (!project) throw new Error(`Cannot change visibility of unknown project ${JSON.stringify(name)}`);
+    setProjectHidden({ dir: project.dir, hidden });
+  }
+
+  function hideOrg(login: string, hidden: boolean) {
+    setOrgHidden({ login, hidden });
   }
 
   function updateScopeConfig(partial: Partial<SearchConfig>) {
@@ -650,6 +657,7 @@ export function App() {
         projects={scopedProjects}
         availableProjects={allProjects}
         onSetProjectHidden={hideProject}
+        onSetOrgHidden={hideOrg}
         projectsLoaded={projectsLoaded}
         projectError={projectError}
         projectsByRepo={projectsByRepo}
@@ -702,7 +710,7 @@ export function App() {
       {hostControls && <TaskManagerButton basePath="/api/v1" />}
       {hostControls && <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />}
       {githubScopeVisible(authMode) && (
-        <OrgChooser config={{ ...config, project: scopeProject }} projects={allProjects} onChange={updateScopeConfig} onSetProjectHidden={hideProject} />
+        <OrgChooser config={{ ...config, project: scopeProject }} projects={allProjects} onChange={updateScopeConfig} onSetProjectHidden={hideProject} onSetOrgHidden={hideOrg} />
       )}
       <StatusIndicator
         onOpenChange={setStatusOpen}

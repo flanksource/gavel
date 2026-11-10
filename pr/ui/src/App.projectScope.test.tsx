@@ -52,6 +52,7 @@ vi.mock('./useAppMutations', () => ({
     setIncludeBots: vi.fn(),
     setShowClosed: vi.fn(),
     setProjectHidden: setProjectHiddenMock,
+    setOrgHidden: vi.fn(),
   }),
 }));
 
@@ -240,7 +241,7 @@ describe('hidden projects', () => {
     fireEvent.click(screen.getByRole('button', { name: /Manage hidden \(1\)/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Unhide archive project' }));
 
-    expect(setProjectHiddenMock).toHaveBeenCalledExactlyOnceWith({ name: 'archive', hidden: false });
+    expect(setProjectHiddenMock).toHaveBeenCalledExactlyOnceWith({ dir: '/work/archive', hidden: false });
   });
 
   it('falls back to all visible projects when the scoped project is hidden', () => {

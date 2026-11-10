@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/commons-db/dbtest"
 	gavelctx "github.com/flanksource/gavel/context"
+	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/git/gitstate"
 	"github.com/flanksource/gavel/internal/database"
 	. "github.com/onsi/ginkgo/v2"
@@ -42,7 +43,7 @@ func newTrackedGitServer() trackedGitServer {
 	DeferCleanup(cancel)
 	tracker := gitstate.NewTracker(gitstate.Options{Store: gitstate.NewStore(opened.Gorm()), Context: ctx})
 	return trackedGitServer{
-		server:  &Server{ctx: gavelctx.New(ctx, gavelctx.WithGitTracker(tracker))},
+		server:  &Server{ctx: gavelctx.New(ctx, gavelctx.WithGitTracker(tracker)), filters: filters.NewStore(opened.Gorm())},
 		tracker: tracker, db: opened.Gorm(), ctx: ctx,
 	}
 }

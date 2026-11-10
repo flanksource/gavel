@@ -25,6 +25,7 @@ var hostedPassThrough = []string{
 	"GET /api/events", "POST /api/events/{conn}/subs", "DELETE /api/events/{conn}/subs/{id}",
 	"/api/status", "GET /api/auth/config", "GET /api/me",
 	"GET /api/ssh-keys", "POST /api/ssh-keys", "DELETE /api/ssh-keys/{id}",
+	"GET /api/filters", "GET /api/filters/{name}", "POST /api/filters/{name}/values", "DELETE /api/filters/{name}/values",
 	"GET /api/sandbox-runs", "GET /api/sandbox-runs/{id}/log",
 
 	"/api/prs", "/api/prs/stream", "/api/prs/refresh", "/api/prs/bots", "/api/prs/closed",
@@ -38,7 +39,7 @@ var hostedPassThrough = []string{
 	// hosted_project_actions.go), before the host's projects are read.
 	"POST /api/projects/{name}/actions", "GET /api/projects/{name}/branches",
 
-	"GET /api/todos/changes", "GET /api/projects", "/api/todos", "POST /api/todos/batch", "POST /api/todos/labels/batch", "POST /api/todos/new", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
+	"GET /api/todos/changes", "GET /api/projects", "/api/todos", "POST /api/todos/labels/batch", "POST /api/todos/new", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
 	"/api/todos/pr-links", "POST /api/todos/criteria", "/api/todos/attachments", "GET /api/todos/attachments/{id}",
 	// Runs execute in sandbox jobs (see agent_runs.go).
 	"/api/todos/run", "POST /api/todos/plan/approve", "POST /api/todos/plan/revise", "POST /api/todos/plan/reject",

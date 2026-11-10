@@ -64,9 +64,6 @@ export interface SearchConfig {
   // Its repos constrain PRs while its directory constrains workspace-backed
   // surfaces such as Todos.
   project?: string;
-  // GitHub org logins the user has chosen to hide from the chooser and
-  // exclude from default-org resolution. Persists across daemon restarts.
-  ignoredOrgs?: string[];
 }
 
 // Project associates one or more repos with a local workspace directory where

@@ -5,15 +5,16 @@ import (
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 )
 
-func (s *Server) catalogProjectCounts(ctx context.Context) ([]projectInfo, error) {
+func (s *Server) catalogProjectCounts(ctx context.Context, hidden workspaceSet) ([]projectInfo, error) {
 	projects, err := s.catalogProjects()
 	if err != nil {
 		return nil, err
 	}
 	providers := make([]*todoruntime.Provider, 0, len(projects))
 	byDir := map[string]*todoruntime.Provider{}
-	for _, project := range projects {
-		if project.Hidden || project.Error != "" {
+	for i, project := range projects {
+		projects[i].Hidden = hidden.has(project.Dir)
+		if projects[i].Hidden || project.Error != "" {
 			continue
 		}
 		provider, err := s.workspaceReadProvider(ctx, project.Dir)

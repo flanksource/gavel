@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery, useQueries, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
-import type { Project, TodoCounts, TodoDensity, TodoGroupBy, TodoItem, TodoLayout, TodoListResponse, TodoStatus } from '../../types';
-import { addCounts, emptyCounts } from './format';
-import { readWorkspaceBatch } from './workspaceBatch';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { Project, TodoDensity, TodoGroupBy, TodoItem, TodoLayout, TodoListResponse, TodoStatus } from '../../types';
+import { addCounts, countsFromItems, emptyCounts } from './format';
 import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { loadDensity, saveDensity } from './todoDensity';
 import { loadGroupBy, saveGroupBy } from './todoGroup';
@@ -11,87 +10,18 @@ import { loadTodoFilters, saveTodoFilters, toggleStatusFilter, type TodoFilters 
 import type { TodoSort } from './todoSort';
 import { loadTodoSort, saveTodoSort } from './todoSort';
 import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRange';
-import { setTodoQueryData, todoGlobalItemQueryOptions, todoItemQueryOptions, todoQueryKeys } from './todoQueries';
+import {
+  HIDDEN_PROJECTS_FILTER, setTodoQueryData, todoGlobalItemQueryOptions, todoItemQueryOptions, todoQueryKeys,
+  workspaceTodoListQueryOptions,
+} from './todoQueries';
 import { useTodoSelection, type SelectedTodo } from './todoSelection';
 import { useTodoTagIndexes } from './tagQueries';
 import type { TodoDetailView } from '../../routes';
 
 export type { SelectedTodo };
 
-export interface WorkspaceTodoError {
-  code: string;
-  message: string;
-}
-
-interface WorkspaceTodoBatchResult {
-  dir: string;
-  counts?: TodoCounts;
-  items: TodoItem[] | null;
-  error?: WorkspaceTodoError;
-}
-
-interface WorkspaceTodoBatchResponse {
-  results: WorkspaceTodoBatchResult[];
-}
-
-interface WorkspaceTodoBatchState {
-  byDir: Record<string, TodoListResponse>;
-  errorsByDir: Record<string, WorkspaceTodoError>;
-  error: string;
-}
-
-// The shared "no workspace failed" value. Frozen so a caller cannot turn the
-// shared instance into a per-render surprise by writing into it.
-const noErrors: Record<string, WorkspaceTodoError> = Object.freeze({});
-
-function normalizeWorkspaceDir(dir: string): string {
-  const trimmed = dir.trim();
-  if (!trimmed) return '';
-  const parts: string[] = [];
-  for (const part of trimmed.split('/')) {
-    if (!part || part === '.') continue;
-    if (part === '..') parts.pop();
-    else parts.push(part);
-  }
-  return `${trimmed.startsWith('/') ? '/' : ''}${parts.join('/')}` || (trimmed.startsWith('/') ? '/' : '.');
-}
-
-function workspaceTodoBatchState(dirs: string[], payload: WorkspaceTodoBatchResponse): WorkspaceTodoBatchState {
-  if (!Array.isArray(payload.results) || payload.results.length !== dirs.length) {
-    throw new Error(`Todo batch response returned ${payload.results?.length ?? 'no'} results for ${dirs.length} workspaces`);
-  }
-  const byDir: Record<string, TodoListResponse> = {};
-  const errorsByDir: Record<string, WorkspaceTodoError> = {};
-  for (let index = 0; index < dirs.length; index++) {
-    const dir = dirs[index];
-    const result = payload.results[index];
-    if (result?.dir !== dir) {
-      throw new Error(`Todo batch result ${index} returned workspace ${JSON.stringify(result?.dir)} instead of ${JSON.stringify(dir)}`);
-    }
-    if (result.error) {
-      if (!result.error.code?.trim() || !result.error.message?.trim()) {
-        throw new Error(`Todo batch result for ${dir} returned an invalid error`);
-      }
-      errorsByDir[dir] = result.error;
-      byDir[dir] = { dir, counts: emptyCounts, items: [] };
-      continue;
-    }
-    if (!result.counts || !Array.isArray(result.items)) {
-      throw new Error(`Todo batch result for ${dir} omitted counts or items`);
-    }
-    byDir[dir] = { dir, counts: result.counts, items: result.items };
-  }
-  return {
-    byDir,
-    errorsByDir,
-    error: [...new Set(Object.values(errorsByDir).map(result => result.message))].join('; '),
-  };
-}
-
-
-
-// useWorkspaceTodos drives the shared todos data layer: it lists every
-// configured workspace's todos in one batch, loads the selected todo's detail,
+// useWorkspaceTodos drives the shared todos data layer: it lists every visible
+// workspace's todos with one GET /api/todos?exclude=hidden-projects, loads the selected todo's detail,
 // aggregates counts, and exposes the create/update/delete callbacks. Both the
 // dashboard TodoView and the compact MenubarTodos render off this one hook so
 // they hit the same /api/todos endpoints and stay in sync.
@@ -118,16 +48,15 @@ export function useWorkspaceTodos(
   projects: Project[],
   { selectedId = '', onNavigate, view, onViewChange, enabled = true }: WorkspaceTodosOptions = {},
 ) {
-  // Normalize and de-duplicate configured directories before they reach the
-  // strict batch API. Rendering retains projects.json order while the query key
-  // and request body use a stable set order.
+  // De-duplicate configured directories. Rendering retains projects.json order;
+  // the visible-workspace set itself is decided server-side by the
+  // hidden-projects filter.
   const workspaces = useMemo(() => {
     const seen = new Set<string>();
-    return projects.flatMap(project => {
-      const dir = normalizeWorkspaceDir(project.dir);
-      if (!dir || seen.has(dir)) return [];
-      seen.add(dir);
-      return [{ ...project, dir }];
+    return projects.filter(project => {
+      if (!project.dir || seen.has(project.dir)) return false;
+      seen.add(project.dir);
+      return true;
     });
   }, [projects]);
   const workspaceDirsKey = JSON.stringify(workspaces.map(workspace => workspace.dir).sort());
@@ -138,34 +67,21 @@ export function useWorkspaceTodos(
   const queryClient = useQueryClient();
   const changes = useWorkspaceChanges(enabled);
   const tagsByDir = useTodoTagIndexes(workspaceDirs, enabled && changes.ready);
-  const combine = useCallback((results: UseQueryResult<TodoListResponse, Error>[]) => {
-    const state = workspaceTodoBatchState(workspaceDirs, { results: results.map((query, index) => ({
-      dir: workspaceDirs[index], counts: query.data?.counts ?? emptyCounts, items: query.data?.items ?? [],
-      ...(query.error ? { error: { code: 'load_failed', message: query.error.message } } : {}),
-    })) });
-    for (let index = 0; index < results.length; index++) {
-      if (results[index].data) state.byDir[workspaceDirs[index]] = results[index].data!;
-    }
-    return { data: results.some(query => query.isFetched) ? state : undefined, isFetching: results.some(query => query.isFetching) };
-  }, [workspaceDirs]);
-  const listQuery = useQueries({ queries: workspaceDirs.map(dir => ({
-    queryKey: todoQueryKeys.list(dir),
-    queryFn: ({ signal }: { signal: AbortSignal }) => readWorkspaceBatch(queryClient, dir, signal),
-    enabled: enabled && changes.ready,
-    staleTime: Infinity,
-  })), combine });
-  const emptyByDir = useMemo(
-    () => Object.fromEntries(workspaceDirs.map(dir => [dir, { dir, counts: emptyCounts, items: [] }])),
-    [workspaceDirs],
-  );
-  const byDir = listQuery.data?.byDir ?? emptyByDir;
-  // noErrors is a module constant, not a fresh `{}`: this value is a prop on the
-  // list, and a new empty object each render would re-render the whole tree for
-  // the common case of no errors at all.
-  const errorsByDir = listQuery.data?.errorsByDir ?? noErrors;
-  const error = changes.error || listQuery.data?.error || '';
+  const listQuery = useQuery({ ...workspaceTodoListQueryOptions(HIDDEN_PROJECTS_FILTER), enabled: enabled && changes.ready });
+  // Group the flat list by workspace. Every configured workspace keeps an entry
+  // (empty when it has no todos) so the grouped rendering and the aggregate do
+  // not depend on which workspaces happen to hold items.
+  const byDir = useMemo(() => {
+    const items = listQuery.data?.items ?? [];
+    const grouped: Record<string, TodoItem[]> = Object.fromEntries(workspaceDirs.map(dir => [dir, []]));
+    for (const item of items) (grouped[item.dir!] ??= []).push(item);
+    return Object.fromEntries(Object.entries(grouped).map(([dir, list]): [string, TodoListResponse] => (
+      [dir, { dir, counts: list.length ? countsFromItems(list) : emptyCounts, items: list }]
+    )));
+  }, [listQuery.data, workspaceDirs]);
+  const error = changes.error || listQuery.error?.message || '';
   const loadingList = listQuery.isFetching;
-  // False until the first batch has landed: `byDir` is then a placeholder of
+  // False until the first list has landed: `byDir` is then a placeholder of
   // empty lists, which must not be read as workspaces that hold no todos.
   const listReady = listQuery.data !== undefined;
   const [selected, setSelected] = useState<SelectedTodo | null>(null);
@@ -273,7 +189,7 @@ export function useWorkspaceTodos(
     ? globalDetailQuery.isFetching
     : !!selected && selectedDetailQuery.isFetching && !selectedDetailQuery.data;
 
-  // Resolve a deep link independently of the batch. The global query accepts a
+  // Resolve a deep link independently of the list. The global query accepts a
   // canonical ID, short ID, session ID, or imported alias; seed its canonical
   // workspace query so adopting the selection does not issue a duplicate read.
   useEffect(() => {
@@ -303,8 +219,8 @@ export function useWorkspaceTodos(
   );
 
   const refresh = useCallback(() => {
-    for (const dir of workspaceDirs) void queryClient.invalidateQueries({ queryKey: todoQueryKeys.list(dir), exact: true });
-  }, [workspaceDirs, queryClient]);
+    void queryClient.invalidateQueries({ queryKey: todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER), exact: true });
+  }, [queryClient]);
 
   const created = useCallback((dir: string, todo: TodoItem) => {
     setShowCreate(false);
@@ -337,7 +253,6 @@ export function useWorkspaceTodos(
   return useMemo(() => ({
     workspaces,
     byDir,
-    errorsByDir,
     loadingList,
     listReady,
     error,
@@ -373,7 +288,7 @@ export function useWorkspaceTodos(
     detailView,
     setDetailView,
   }), [
-    workspaces, byDir, errorsByDir, loadingList, listReady, error, detailError, aggregate,
+    workspaces, byDir, loadingList, listReady, error, detailError, aggregate,
     selected, setSelection, select, detail, loadingDetail, refresh, showCreate,
     created, updateItem, deleted, transferred, filters, setFilters, toggleStatus,
     density, setDensity, groupBy, setGroupBy, layout, setLayout, sortBy, setSortBy,
