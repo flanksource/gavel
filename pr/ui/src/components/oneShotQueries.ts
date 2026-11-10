@@ -68,7 +68,7 @@ export interface MeOrg {
 }
 
 export interface MeResponse {
-  user: { id: string; name: string; email: string; githubLogin: string } | null;
+  user: { id: string; name: string; email: string; githubLogin: string; platformAdmin?: boolean } | null;
   org: MeOrg;
   orgs: MeOrg[];
 }

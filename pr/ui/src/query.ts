@@ -5,6 +5,7 @@ export const queryKeys = {
   sandboxRuns: () => ['sandbox-runs'] as const,
   sandboxRunLog: (id: string) => ['sandbox-runs', id, 'log'] as const,
   githubInstallations: () => ['github', 'installations'] as const,
+  platform: (source: string, days?: number) => ['platform', source, { days }] as const,
   prSnapshot: () => ['prs', 'snapshot'] as const,
   prDetail: (repo: string, number: number) => ['prs', repo, number, 'detail'] as const,
   linkedPR: (url: string) => ['prs', 'linked', url] as const,

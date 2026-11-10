@@ -162,6 +162,15 @@ describe('sandbox run routes', () => {
   });
 });
 
+describe('platform dashboard route', () => {
+  it('round-trips the platform tab', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/platform') as unknown as Location);
+
+    expect(parsed).toEqual({ ...emptyRouteState(), tab: 'platform' });
+    expect(buildRoute(parsed)).toBe('/platform');
+  });
+});
+
 describe('todo detail view routes', () => {
   const parse = (url: string) => parseRoute(new URL(`http://localhost:9092${url}`) as unknown as Location);
 

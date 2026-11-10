@@ -20,10 +20,13 @@ import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
 import { HostedProjectPane, HostedProjectsSidebar } from './components/HostedProjectsView';
 import { ProcessManager } from './components/ProcessManager';
 import { RunsView } from './components/RunsView';
+import { PlatformView } from './components/platform/PlatformView';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
 import { currentAuthMode } from './query';
+import { meQuery } from './components/oneShotQueries';
+import { useQuery } from '@tanstack/react-query';
 import { ReactGrabHelp } from './components/ReactGrabHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
@@ -47,7 +50,7 @@ import { useAppQueries } from './useAppQueries';
 import { useAppMutations } from './useAppMutations';
 import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiCheck, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiPlay, UiRobotAi, UiTerminal } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiCheck, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiOrganization, UiPlay, UiRobotAi, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
 import { MenubarView } from './components/mobile/MenubarView';
 import { ProcessesPage } from './components/ProcessesPage';
@@ -824,6 +827,8 @@ export function App() {
           </div>
         ) : activeTab === 'runs' ? (
           <RunsView selectedId={selectedPath} onSelect={navigateRun} />
+        ) : activeTab === 'platform' ? (
+          <PlatformView />
         ) : activeTab === 'prompts' ? (
           <PromptsView
             projects={scopedProjects}
@@ -871,8 +876,10 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
     { id: 'tasks', label: 'Tasks', icon: UiListChecks },
     { id: 'prompts', label: 'Prompts', icon: UiRobotAi },
     { id: 'activity', label: 'Activity', icon: UiActivity },
+    { id: 'platform', label: 'Platform', icon: UiOrganization },
   ];
-  const shown = new Set(visibleTabs(currentAuthMode(), allTabs.map(t => t.id)));
+  const me = useQuery(meQuery());
+  const shown = new Set(visibleTabs(currentAuthMode(), allTabs.map(t => t.id), me.data?.user?.platformAdmin));
   const tabs = allTabs.filter(t => shown.has(t.id));
   return (
     <div className="flex gap-1 border-b border-transparent">
