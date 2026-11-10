@@ -80,4 +80,9 @@ func TestMeForAnOrgMember(t *testing.T) {
 	current := map[string]any{"id": org.String(), "slug": "other", "name": "Other", "role": "org:admin"}
 	assert.Equal(t, current, body["org"])
 	assert.Equal(t, []any{current}, body["orgs"])
+
+	req = httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req = req.WithContext(tenant.WithScope(req.Context(), tenant.Scope{OrgID: org, UserID: &user.ID, Role: "org:admin", PlatformAdmin: true}))
+	body = getJSON(t, srv.handleMe, req)
+	assert.Equal(t, true, body["user"].(map[string]any)["platformAdmin"], "the SPA shows the platform tab to platform admins")
 }
