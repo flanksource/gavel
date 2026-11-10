@@ -11,6 +11,8 @@ import (
 
 	"github.com/flanksource/gavel/api"
 	"github.com/flanksource/gavel/api/clerktest"
+	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/github/githubtest"
 	"github.com/flanksource/gavel/platform"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
@@ -123,4 +125,62 @@ func TestPlatformSandboxRuns(t *testing.T) {
 	var failure map[string]string
 	assert.Equal(t, http.StatusBadRequest, platformGet(t, base+"/api/platform/sandbox-runs?days=0", &failure))
 	assert.Contains(t, failure["error"], "days must be a whole number from 1 to 60")
+}
+
+func TestPlatformGitHub(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	gh := githubtest.New(t)
+	acme := github.InstallationAccount{Login: "acme", Type: "Organization"}
+	gh.Install(7, acme, github.InstallationRepo{ID: 1, FullName: "acme/api"})
+	gh.Install(8, github.InstallationAccount{Login: "solo", Type: "User"})
+	gh.Install(9, github.InstallationAccount{Login: "flaky", Type: "Organization"})
+	suspended := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	gh.Suspend(8, suspended)
+	gh.FailRateLimit(9)
+	require.NoError(t, db.Exec(`INSERT INTO github_installations (id, org_id, account_login, account_type) VALUES (7, ?, 'acme', 'Organization'), (11, ?, 'gone', 'Organization')`, org, org).Error)
+	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, github_repo_id, installation_id) VALUES (?, 'acme/api', 'github', 1, 7)`, org).Error)
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}, App: gh.App(t)}
+	base := servePlatform(t, p, org, true)
+
+	var got PlatformGitHub
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/github", &got))
+	assert.Equal(t, PlatformGitHubApp{ID: githubtest.AppID, Slug: "gavel-test"}, got.App)
+	assert.Empty(t, got.GitHubError)
+	require.Len(t, got.Installations, 4, "%+v", got.Installations)
+	linked, solo, flaky, gone := got.Installations[0], got.Installations[1], got.Installations[2], got.Installations[3]
+
+	assert.Equal(t, "acme", linked.Account)
+	require.NotNil(t, linked.Org)
+	assert.Equal(t, org, linked.Org.ID)
+	assert.Equal(t, 1, linked.Repos)
+	require.NotNil(t, linked.RateLimit)
+	assert.Equal(t, 5000, linked.RateLimit.Limit)
+
+	assert.Nil(t, solo.Org, "installed on GitHub but linked to no organization")
+	require.NotNil(t, solo.SuspendedAt)
+	assert.Equal(t, suspended, *solo.SuspendedAt)
+	assert.Nil(t, solo.RateLimit, "a suspended installation gets no token")
+	assert.Empty(t, solo.RateLimitError)
+
+	assert.Nil(t, flaky.RateLimit)
+	assert.Contains(t, flaky.RateLimitError, "installation 9", "one installation's failure leaves the rest")
+
+	assert.Equal(t, int64(11), gone.ID)
+	assert.True(t, gone.Uninstalled, "linked in gavel, but GitHub no longer lists it")
+	require.NotNil(t, gone.Org)
+
+	t.Setenv("GITHUB_API_URL", "http://127.0.0.1:1")
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/github", &got))
+	assert.Contains(t, got.GitHubError, "cannot reach GitHub")
+	require.Len(t, got.Installations, 2, "gavel's linked installations, without GitHub's")
+	assert.Equal(t, int64(7), got.Installations[0].ID)
+}
+
+func TestPlatformGitHubWithoutTheApp(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}}
+
+	var failure map[string]string
+	assert.Equal(t, http.StatusNotFound, platformGet(t, servePlatform(t, p, org, true)+"/api/platform/github", &failure))
+	assert.Contains(t, failure["error"], "--github-app-id")
 }

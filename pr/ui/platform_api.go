@@ -4,6 +4,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -12,8 +13,10 @@ import (
 	"time"
 
 	"github.com/flanksource/gavel/api"
+	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/platform"
 	"github.com/flanksource/gavel/tenant"
+	"github.com/google/uuid"
 )
 
 // PlatformAPI serves /api/platform/ to platform admins.
@@ -21,6 +24,8 @@ type PlatformAPI struct {
 	Store platform.Store
 	// Clerk lists the instance's organizations, including those that never used gavel.
 	Clerk api.ClerkOrganizations
+	// App lists the GitHub App's installations; nil when serve runs without one.
+	App *github.App
 }
 
 // platformSourceTimeout bounds how long one route waits for its source.
@@ -34,6 +39,7 @@ func (p *PlatformAPI) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/platform/tenants", p.tenants)
 	mux.HandleFunc("GET /api/platform/sandbox-runs", p.sandboxRuns)
+	mux.HandleFunc("GET /api/platform/github", p.gitHubApp)
 	return platformAdminsOnly(mux)
 }
 
@@ -131,4 +137,101 @@ func (p *PlatformAPI) sandboxRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, usage)
+}
+
+// PlatformGitHub is the GitHub App's installations, from GitHub and from gavel. GitHubError
+// says why GitHub's list is missing, when it is.
+type PlatformGitHub struct {
+	App           PlatformGitHubApp      `json:"app"`
+	Installations []PlatformInstallation `json:"installations"`
+	GitHubError   string                 `json:"githubError,omitempty"`
+}
+
+// PlatformGitHubApp names the GitHub App serve runs as.
+type PlatformGitHubApp struct {
+	ID   int64  `json:"id"`
+	Slug string `json:"slug"`
+}
+
+// PlatformInstallation is one installation. Org is nil for one no organization linked;
+// Uninstalled marks one gavel has linked that GitHub no longer lists.
+type PlatformInstallation struct {
+	ID             int64                    `json:"id"`
+	Account        string                   `json:"account"`
+	AccountType    string                   `json:"accountType,omitempty"`
+	CreatedAt      *time.Time               `json:"createdAt,omitempty"`
+	SuspendedAt    *time.Time               `json:"suspendedAt,omitempty"`
+	Org            *PlatformInstallationOrg `json:"org,omitempty"`
+	Repos          int                      `json:"repos"`
+	Uninstalled    bool                     `json:"uninstalled,omitempty"`
+	RateLimit      *github.RateLimit        `json:"rateLimit,omitempty"`
+	RateLimitError string                   `json:"rateLimitError,omitempty"`
+}
+
+// PlatformInstallationOrg is the organization an installation is linked to.
+type PlatformInstallationOrg struct {
+	ID   uuid.UUID `json:"id"`
+	Slug string    `json:"slug"`
+	Name string    `json:"name"`
+}
+
+// linkedRow is a linked installation as gavel knows it, without GitHub's details.
+func linkedRow(linked platform.LinkedInstallation) PlatformInstallation {
+	return PlatformInstallation{
+		ID: linked.ID, Account: linked.AccountLogin, Repos: linked.Repos,
+		Org: &PlatformInstallationOrg{ID: linked.OrgID, Slug: linked.OrgSlug, Name: linked.OrgName},
+	}
+}
+
+// gitHubApp answers GitHub's installations of the App merged with those gavel's
+// organizations linked, with each active installation's rate limit.
+func (p *PlatformAPI) gitHubApp(w http.ResponseWriter, r *http.Request) {
+	if p.App == nil {
+		writeJSONError(w, http.StatusNotFound, errors.New("the GitHub App isn't configured: start gavel serve with --github-app-id, --github-app-slug and --github-app-private-key"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
+	defer cancel()
+	linked, err := p.Store.LinkedInstallations(ctx)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	result := PlatformGitHub{App: PlatformGitHubApp{ID: p.App.ID, Slug: p.App.Slug}, Installations: []PlatformInstallation{}}
+	installs, err := p.App.Installations(ctx)
+	if err != nil {
+		result.GitHubError = err.Error()
+		for _, l := range linked {
+			result.Installations = append(result.Installations, linkedRow(l))
+		}
+		writeJSON(w, result)
+		return
+	}
+	unlisted := map[int64]platform.LinkedInstallation{}
+	for _, l := range linked {
+		unlisted[l.ID] = l
+	}
+	for _, install := range installs {
+		row := PlatformInstallation{ID: install.ID, Account: install.Account.Login, AccountType: install.Account.Type, CreatedAt: &install.CreatedAt, SuspendedAt: install.SuspendedAt}
+		if l, ok := unlisted[install.ID]; ok {
+			row.Org, row.Repos = linkedRow(l).Org, l.Repos
+			delete(unlisted, install.ID)
+		}
+		if install.SuspendedAt == nil {
+			if limit, err := p.App.InstallationRateLimit(ctx, install.ID); err != nil {
+				row.RateLimitError = err.Error()
+			} else {
+				row.RateLimit = &limit
+			}
+		}
+		result.Installations = append(result.Installations, row)
+	}
+	for _, l := range linked {
+		if _, ok := unlisted[l.ID]; ok {
+			row := linkedRow(l)
+			row.Uninstalled = true
+			result.Installations = append(result.Installations, row)
+		}
+	}
+	writeJSON(w, result)
 }
