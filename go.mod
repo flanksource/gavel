@@ -8,6 +8,7 @@ require (
 	github.com/flanksource/commons v1.63.0
 	github.com/flanksource/commons-db v0.1.67
 	github.com/flanksource/gomplate/v3 v3.24.90
+	github.com/flanksource/incident-commander v0.0.2051
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/repomap v0.4.1
