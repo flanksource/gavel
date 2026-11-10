@@ -28,6 +28,7 @@ import (
 	"github.com/flanksource/gavel/github/installations"
 	shared "github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/modelkeys"
+	"github.com/flanksource/gavel/platform"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sandbox"
@@ -211,14 +212,16 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 		return srv, nil
 	}, orgIdleTTL)
-	next := orgs.Handler()
+	// The platform dashboard reads across organizations, so it is served beside the
+	// per-org servers, not by them.
+	platformAPI := &ui.PlatformAPI{Store: platform.Store{DB: db, Issuer: issuer}, Clerk: backend}
+	mux := http.NewServeMux()
+	mux.Handle("/api/platform/", platformAPI.Handler())
 	if app != nil {
 		link := &ui.GitHubLink{App: app, Store: store, Clerk: backend, SecretKey: secret}
-		mux := http.NewServeMux()
 		mux.Handle("/api/github/", link.Handler())
-		mux.Handle("/", next)
-		next = mux
 	}
+	mux.Handle("/", orgs.Handler())
 
 	shellCtx, stopShell := context.WithCancel(ctx)
 	shell := ui.NewServer(gavelctx.New(shellCtx), interval, github.Options{TokenSource: githubNotConnected}, ui.SearchConfig{})
@@ -246,7 +249,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 		root.Handle("/api/credentials/", credentials.Handler())
 	}
-	root.Handle("/", auth.Middleware(next, shell.Handler()))
+	root.Handle("/", auth.Middleware(mux, shell.Handler()))
 	return hostedStack{handler: root, members: auth.Members, stop: stop, dispatcher: dispatcher}, nil
 }
 

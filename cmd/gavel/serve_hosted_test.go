@@ -159,6 +159,45 @@ func TestHostedDashboard(t *testing.T) {
 	assert.Equal(t, []string{"acme/app"}, saved.Repos)
 }
 
+// The platform dashboard is served behind the Clerk middleware, across organizations,
+// to a user whose Clerk public metadata marks them a platform admin.
+func TestHostedPlatformAPI(t *testing.T) {
+	f := newHostedFixture(t)
+	f.clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+	f.clerk.Organizations = []clerktest.Organization{
+		{ID: "org_a", Slug: "alpha", Name: "Alpha", Members: 2},
+		{ID: "org_c", Slug: "gamma", Name: "Gamma", Members: 1},
+	}
+	get := func(header http.Header) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, f.server.URL+"/api/platform/tenants", nil)
+		require.NoError(t, err)
+		req.Header = header
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return resp.StatusCode, string(data)
+	}
+
+	status, _ := get(http.Header{})
+	assert.Equal(t, http.StatusUnauthorized, status, "the platform API needs a signed-in user")
+
+	session := f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour))
+	status, body := get(http.Header{"Cookie": {"__session=" + session}})
+	require.Equal(t, http.StatusOK, status, body)
+	var tenants ui.PlatformTenants
+	require.NoError(t, json.Unmarshal([]byte(body), &tenants))
+	assert.Empty(t, tenants.ClerkError)
+	var names []string
+	for _, row := range tenants.Tenants {
+		names = append(names, fmt.Sprintf("%s inGavel=%t", row.Name, row.InGavel))
+	}
+	assert.Equal(t, []string{"Alpha inGavel=true", "Beta inGavel=true", "Gamma inGavel=false"}, names,
+		"the user's organizations, synced on sign-in, and one only Clerk has")
+}
+
 func TestHostedPush(t *testing.T) {
 	f := newHostedFixture(t)
 	ctx := t.Context()
