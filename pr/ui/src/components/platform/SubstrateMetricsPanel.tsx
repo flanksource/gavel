@@ -153,7 +153,7 @@ export function SubstrateMetricsPanel() {
         )}
       </h2>
       {metrics.error && <p role="alert" className="text-red-600">{metrics.error.message}</p>}
-      {view?.refreshError && <p role="status" className="text-amber-600">Mission Control couldn't refresh the view, so it may be stale: {view.refreshError}</p>}
+      {view?.refreshError && <p role="status" className="text-amber-600">Mission Control couldn't refresh the view, so what it shows may be old or missing: {view.refreshError}</p>}
       {values.length > 0 && (
         <StatStrip items={values.map(panel => ({
           label: panel.name,
