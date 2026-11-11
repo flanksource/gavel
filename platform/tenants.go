@@ -12,15 +12,15 @@ import (
 
 // Tenant is one organization and how much of gavel it uses.
 type Tenant struct {
-	ID                  uuid.UUID  `json:"id"`
-	ClerkOrgID          string     `json:"clerkOrgId"`
-	Slug                string     `json:"slug"`
-	Name                string     `json:"name"`
-	CreatedAt           time.Time  `json:"createdAt"`
-	Members             int        `json:"members"`
-	Repos               int        `json:"repos"`
-	PushedRepos         int        `json:"pushedRepos"`
-	GitHubInstallations int        `json:"githubInstallations" gorm:"column:github_installations"`
+	ID                  uuid.UUID `json:"id"`
+	ClerkOrgID          string    `json:"clerkOrgId"`
+	Slug                string    `json:"slug"`
+	Name                string    `json:"name"`
+	CreatedAt           time.Time `json:"createdAt"`
+	Members             int       `json:"members"`
+	Repos               int       `json:"repos"`
+	PushedRepos         int       `json:"pushedRepos"`
+	GitHubInstallations int       `json:"githubInstallations" gorm:"column:github_installations"`
 	// SandboxRuns counts the runs created since the window Tenants was asked for.
 	SandboxRuns int        `json:"sandboxRuns"`
 	LastRunAt   *time.Time `json:"lastRunAt,omitempty"`
