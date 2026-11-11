@@ -13,6 +13,7 @@ the panel says why and the other panels still load.
 | Substrate metrics | The panels of a Mission Control View graphing substrate's Prometheus metrics: timeseries as line charts, each with its numbers as a table, and number and gauge panels as figures |
 | Model usage | Captain's model-call ledger: spend per day, calls and tokens, and each organization's and model's share |
 | Budgets | Captain's budget rules, each group's completed spend in the rule's current window against its amount |
+| Captain history | Captain's prompt runs per day by outcome, each organization's runs, failures, run time and live sessions (with how many are stalled or zombie), and the latest failures with their errors |
 | Infrastructure | The config items, health checks and config changes Mission Control has for gavel's infrastructure |
 
 Windows are limited to 60 days, because sandbox runs are kept for 60 days by default.

@@ -1,6 +1,7 @@
 // The platform dashboard: how every organization uses hosted gavel, for platform admins.
 // Each panel loads its own source, so one source's outage leaves the others readable.
 import { BudgetsPanel } from './BudgetsPanel';
+import { CaptainHistoryPanel } from './CaptainHistoryPanel';
 import { GitHubPanel } from './GitHubPanel';
 import { InfrastructurePanel } from './InfrastructurePanel';
 import { ModelUsagePanel } from './ModelUsagePanel';
@@ -18,6 +19,7 @@ export function PlatformView() {
       <SubstrateMetricsPanel />
       <ModelUsagePanel />
       <BudgetsPanel />
+      <CaptainHistoryPanel />
       <GitHubPanel />
       <InfrastructurePanel />
     </div>
