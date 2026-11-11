@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"slices"
 	"strings"
 	"time"
 
@@ -135,22 +136,25 @@ func (s *Service) Upload(ctx context.Context, req Upload) (Comment, error) {
 	if err = s.blobs.Put(ctx, p.TenantID, a.ID, data); err != nil {
 		return Comment{}, err
 	}
-	out, err := s.store.Mutate(ctx, p.TenantID, c.ID, req.ExpectedVersion, func(current Comment) (Change, error) {
-		if current.Phase == Final {
-			return Change{}, ErrConflict
+	// An attachment only appends, and its preconditions are checked against the
+	// latest thread, so changes made since the uploader's version (an agent
+	// delivery claiming the new thread) do not conflict; a version the thread
+	// has not reached does.
+	out, err := s.WithLatest(ctx, c.ID, func(latest Comment) (Comment, error) {
+		if req.ExpectedVersion > latest.Version {
+			return Comment{}, fmt.Errorf("%w: expectedVersion %d is newer than the thread's %d", ErrConflict, req.ExpectedVersion, latest.Version)
 		}
-		if a.MessageID != "" {
-			found := false
-			for _, m := range current.Messages {
-				found = found || m.ID == a.MessageID
+		return s.store.Mutate(ctx, p.TenantID, c.ID, latest.Version, func(current Comment) (Change, error) {
+			if current.Phase == Final {
+				return Change{}, ErrConflict
 			}
-			if !found {
+			if a.MessageID != "" && !slices.ContainsFunc(current.Messages, func(m Message) bool { return m.ID == a.MessageID }) {
 				return Change{}, ErrInvalid
 			}
-		}
-		current.Version++
-		current.UpdatedAt = a.CreatedAt
-		return Change{Comment: current, Attachment: &a, Event: Event{CommentID: c.ID, Kind: "attachment", Actor: p.Actor, At: a.CreatedAt}}, nil
+			current.Version++
+			current.UpdatedAt = a.CreatedAt
+			return Change{Comment: current, Attachment: &a, Event: Event{CommentID: c.ID, Kind: "attachment", Actor: p.Actor, At: a.CreatedAt}}, nil
+		})
 	})
 	if err != nil {
 		if cleanup := s.blobs.Delete(context.WithoutCancel(ctx), p.TenantID, a.ID); cleanup != nil {

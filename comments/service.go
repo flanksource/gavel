@@ -22,6 +22,8 @@ type Service struct {
 	providers       map[string]Provider
 	blobs           Blobs
 	attachmentLimit int64
+	routes          RouteStore
+	delivery        Delivery
 }
 
 func New(options Options) (*Service, error) {
@@ -33,6 +35,15 @@ func New(options Options) (*Service, error) {
 		return nil, fmt.Errorf("%w: explicit positive attachment limit is required", ErrInvalid)
 	}
 	s.blobs, s.attachmentLimit = options.Blobs, options.AttachmentLimit
+	if options.Routes != nil && options.Delivery == nil {
+		return nil, fmt.Errorf("%w: comment routes require agent delivery", ErrInvalid)
+	}
+	s.routes = options.Routes
+	if options.Delivery != nil {
+		if s.delivery = options.Delivery(s); s.delivery == nil {
+			return nil, fmt.Errorf("%w: delivery constructor returned nil", ErrInvalid)
+		}
+	}
 	for _, p := range options.Providers {
 		if p == nil || p.Name() == "" {
 			return nil, ErrInvalid
@@ -140,10 +151,14 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Comment, error
 	now := time.Now().UTC()
 	c := Comment{ID: uuid.NewString(), TenantID: p.TenantID, Target: target, Body: req.Body, Author: p.Actor, WorkflowID: w.ID, Status: w.Initial, Phase: Active, Content: req.Content, Links: req.Links, Version: 1, CreatedAt: now, UpdatedAt: now}
 	created, err := s.store.Create(ctx, c, req.RequestID, hex.EncodeToString(hash[:]), Event{CommentID: c.ID, Kind: "created", Actor: p.Actor, At: now})
-	if err == nil && created.DeletedAt != nil {
+	if err != nil {
+		return Comment{}, err
+	}
+	if created.DeletedAt != nil {
 		return Comment{}, ErrConflict
 	}
-	return created, err
+	s.routeCreated(ctx, created)
+	return created, nil
 }
 func (s *Service) Get(ctx context.Context, id string) (Comment, error) {
 	p, err := s.principal(ctx)

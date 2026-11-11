@@ -209,7 +209,7 @@ func validateRemote(provider string, r RemoteComment) error {
 type providerExecutor struct{ service *Service }
 
 func (s *Service) ProcessProvider(ctx context.Context, lease time.Duration) (Operation, error) {
-	return s.Process(ctx, providerExecutor{service: s}, lease)
+	return s.Process(ctx, ProcessRequest{Executor: providerExecutor{service: s}, Lease: lease, Kinds: []string{"publish", "publish-reply", "resolve-native", "reopen-native"}})
 }
 func (e providerExecutor) Execute(ctx context.Context, op Operation) (json.RawMessage, error) {
 	var publication Publication

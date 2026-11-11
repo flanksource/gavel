@@ -148,7 +148,9 @@ func (s *Store) Mutate(ctx context.Context, tenant, id string, expected int64, f
 			return comments.ErrConflict
 		}
 		var pending int64
-		if err = tx.Table("comment_operations").Where("tenant_id = ? AND comment_id = ? AND state IN ('pending','inflight')", tenant, id).Count(&pending).Error; err != nil {
+		// A publication freezes its root until it finishes; an agent delivery
+		// does not, because its executor assigns the thread and records its run.
+		if err = tx.Table("comment_operations").Where("tenant_id = ? AND comment_id = ? AND state IN ('pending','inflight') AND payload->>'kind' <> ?", tenant, id, comments.DeliverAgent).Count(&pending).Error; err != nil {
 			return err
 		}
 		if pending > 0 {

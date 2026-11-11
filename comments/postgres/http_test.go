@@ -63,6 +63,8 @@ var _ = Describe("generated HTTP comments", func() {
 		}
 		Expect(json.Unmarshal(doc.Body.Bytes(), &document)).To(Succeed())
 		Expect(document.Paths).To(HaveKey("/api/v1/comments/{id}/attachments"))
+		Expect(document.Paths).To(HaveKey("/api/v1/comments/{id}/deliver"))
+		Expect(document.Paths).To(HaveKey("/api/v1/comments/routes"))
 		Expect(string(document.Paths["/api/v1/comments"])).To(ContainSubstring(`"type":"object"`))
 		w = request(http.MethodGet, "/api/v1/comments?scope="+url.QueryEscape("git://repo")+"&limit=20&unread=true", nil)
 		Expect(w.Code).To(Equal(200), w.Body.String())

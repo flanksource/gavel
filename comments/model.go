@@ -119,4 +119,8 @@ type Options struct {
 	Providers       []Provider
 	Blobs           Blobs
 	AttachmentLimit int64
+	// Routes deliver new human-authored roots automatically; they need Delivery.
+	Routes RouteStore
+	// Delivery builds the host's agent delivery for the constructed service.
+	Delivery func(*Service) Delivery
 }

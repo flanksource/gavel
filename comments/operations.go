@@ -24,9 +24,18 @@ type Operation struct {
 	Error      string          `json:"error,omitempty"`
 	CreatedAt  time.Time       `json:"createdAt"`
 }
+
+// ClaimRequest leases one pending operation of a tenant, narrowed to one
+// operation or to operation kinds when set.
+type ClaimRequest struct {
+	TenantID    string
+	OperationID string
+	Kinds       []string
+	Lease       time.Duration
+}
 type OperationStore interface {
 	Queue(context.Context, Operation, int64) (Operation, error)
-	Claim(context.Context, string, time.Duration) (Operation, error)
+	Claim(context.Context, ClaimRequest) (Operation, error)
 	Finish(context.Context, Operation) (Operation, error)
 	Operation(context.Context, string, string) (Operation, error)
 	OperationByRequest(context.Context, string, string) (Operation, error)
@@ -51,7 +60,7 @@ func (s *Service) Queue(ctx context.Context, req QueueRequest) (Operation, error
 		return Operation{}, ErrInvalid
 	}
 	switch req.Kind {
-	case "publish", "publish-reply", "resolve-native", "reopen-native", "deliver-agent":
+	case "publish", "publish-reply", "resolve-native", "reopen-native", DeliverAgent:
 	default:
 		return Operation{}, fmt.Errorf("%w: unknown operation %s", ErrInvalid, req.Kind)
 	}
@@ -70,17 +79,27 @@ func (s *Service) Queue(ctx context.Context, req QueueRequest) (Operation, error
 	return store.Queue(ctx, op, req.ExpectedVersion)
 }
 
+// ProcessRequest is one claim: any pending operation of the caller's tenant,
+// or only OperationID, or only Kinds, handled by Executor under Lease.
+type ProcessRequest struct {
+	Executor    Executor
+	Lease       time.Duration
+	OperationID string
+	Kinds       []string
+}
+
 // Process claims one request. Any unconfirmed delivery is retained as unknown and never automatically retried.
-func (s *Service) Process(ctx context.Context, executor Executor, lease time.Duration) (Operation, error) {
+func (s *Service) Process(ctx context.Context, req ProcessRequest) (Operation, error) {
 	store, ok := s.store.(OperationStore)
-	if !ok || executor == nil || lease <= 0 {
+	if !ok || req.Executor == nil || req.Lease <= 0 {
 		return Operation{}, ErrInvalid
 	}
+	executor := req.Executor
 	p, err := s.principal(ctx)
 	if err != nil {
 		return Operation{}, err
 	}
-	op, err := store.Claim(ctx, p.TenantID, lease)
+	op, err := store.Claim(ctx, ClaimRequest{TenantID: p.TenantID, OperationID: req.OperationID, Kinds: req.Kinds, Lease: req.Lease})
 	if err != nil {
 		return op, err
 	}

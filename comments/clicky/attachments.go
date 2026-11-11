@@ -60,6 +60,10 @@ func Attachments(resolve Resolver) http.Handler {
 func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
+	case errors.Is(err, comments.ErrDelivery):
+		status = http.StatusBadGateway
+	case errors.Is(err, comments.ErrUnsupported):
+		status = http.StatusNotImplemented
 	case errors.Is(err, comments.ErrInvalid):
 		status = 400
 	case errors.Is(err, comments.ErrForbidden):

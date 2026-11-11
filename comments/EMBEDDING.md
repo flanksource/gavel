@@ -12,6 +12,8 @@ Import `github.com/flanksource/gavel/comments` for the core, `comments/postgres`
 - `Workflows` declares status phases/transitions. `HumanReview()` keeps proposed resolution separate from human closure; `NativePR()` has final native resolution.
 - `Blobs` and `AttachmentLimit` optionally configure attachments with an explicit positive byte limit. The Postgres store implements `Blobs`. `comments/blob.Store` adapts Gavel's configured filesystem/object store.
 - `Providers` optionally supplies GitHub/Azure adapters with per-principal credential resolvers. Bind credentials to the request's tenant and repository.
+- `Delivery` optionally opts the host into agent delivery. Build it with `comments/agents.Delivery(agents.Options{Bridge, Groups, Workdir})`: `Bridge` reaches Captain (`agents.Captain{}` in-process, or a fake such as `agents/agentstest.Bridge` in tests), `Groups` is the Postgres store (it records the session each delivery group reuses), and `Workdir` resolves the directory a target's managed sessions run in and that a scope's session listing is narrowed to. Optional `BaseURL` (an absolute origin such as `http://127.0.0.1:8080`) makes the attachment links in a delivered thread absolute; without it they are `/api/v1/comments/{id}/attachments/{attachment}` paths.
+- `Routes` optionally stores comment routes (the Postgres store implements it). Routes require `Delivery`.
 
 `CodeSelector` validates version 1, relative paths, inclusive line ranges, code revisions, and both diff commits plus the selected side. Other selector kinds are host-defined JSON. Structured root/reply content and capture metadata round-trip without a Gavel-specific presentation schema.
 
@@ -39,7 +41,34 @@ Mutations require `expectedVersion`; stale writes return 409. `reply` accepts an
 
 Listing accepts `scope`, optional `target`, `phase`, `unread`, `limit` and `offset`. The API reports pagination totals and row-level `readVersion`/`unread`. `read` monotonically advances the current actor's observed version and rejects future versions. `capabilities` reports workflow/actions, providers/bindings and attachment limits.
 
-Mount `Stream(resolve)` at `GET <prefix>/comments/events?scope=...`; use `after` or `Last-Event-ID` to resume commit-ordered events. Mount attachment handlers at `POST <prefix>/comments/{id}/attachments` and `GET <prefix>/comments/{id}/attachments/{attachment}`. Upload raw bytes with `name`, `expectedVersion` and optional `messageId` query parameters plus `Content-Type`. Downloads authorize the root and use attachment disposition. Failed aggregate admission removes the unlinked blob. Use `OpenAPI(handler, prefix)` around the generated document to include these routes.
+Mount `Stream(resolve)` at `GET <prefix>/comments/events?scope=...`; use `after` or `Last-Event-ID` to resume commit-ordered events. Mount attachment handlers at `POST <prefix>/comments/{id}/attachments` and `GET <prefix>/comments/{id}/attachments/{attachment}`. Upload raw bytes with `name`, `expectedVersion` and optional `messageId` query parameters plus `Content-Type`. An attachment only appends and is checked against the latest thread, so `expectedVersion` is the version the uploader last saw: changes made since (such as an automatic agent delivery assigning the new thread) do not conflict, while a final thread or a version the thread has not reached answers 409. A client can attach to a comment it just created with the create's version. Downloads authorize the root and use attachment disposition. Failed aggregate admission removes the unlinked blob. Use `OpenAPI(handler, prefix)` around the generated document to include these routes.
+
+## Agent delivery and routes
+
+`Handler(resolve)` mounts these routes; a host mounting the generated routes itself calls `RegisterDeliveryRoutes(router, resolve)`. A host without `Delivery` answers them 501.
+
+- `GET <prefix>/comments/agent-sessions[?scope=<scopeUri>][&all=1]` lists live sessions as `[{id, source, title, model, cwd, status, inCmux}]`. With `scope` and without `all=1`, only sessions whose cwd holds, or is inside, the scope's workdir are listed.
+- `POST <prefix>/comments/{id}/deliver` with `{expectedVersion, requestId, target}` delivers the thread and returns the updated comment, whose `content.agentRun` records the hand-off. A stale version answers 409; a delivery that ran and failed answers 502 with the error, which is also recorded as `agentRun.state:"error"`. Malformed `runOptions`, and `fresh` on a session target, answer 400 before anything is queued. To retry a hand-off that errored (or start over after one that went through), POST again with the thread's latest version and a new `requestId`: the earlier operation is finished, so nothing blocks the new one, and its `agentRun` replaces the previous one.
+- A run target with `fresh:true` always launches a new managed session, never reusing its `groupKey`'s; the new session is recorded as the group's, so the group's later non-fresh deliveries go to it. On a stored route target, `fresh` starts a new session for every routed comment.
+- `POST <prefix>/comments/{id}/deliver/preview` with `{target}` (a run target) renders the run without claiming the thread or launching: `{model, mode, resolution, validationError?, warnings?, tools:[{name, description, source}]}`.
+- `GET <prefix>/comments/routes?scope=<scopeUri>` lists routes, `PUT <prefix>/comments/routes` saves one (no `id` creates it), and `DELETE <prefix>/comments/routes/{routeId}` deletes one (204). A route is `{id, scopeUri, targetPrefix, workflowId, target, enabled}`; its `targetPrefix` must lie within its `scopeUri`.
+
+A new human-authored root is delivered through the route with the longest `targetPrefix` covering its target URI: the URI equals the prefix, or continues it after a `/` (a prefix ending in `/` covers everything beneath it). `.../pages/team` covers `.../pages/team/members` but not `.../pages/team-x`. A disabled best match opts its subtree out. Routed delivery runs in the background after the create responds and works on the thread's latest version: it queues against it, and each of its own changes (assign, acknowledge, `agentRun`) re-reads the thread and retries when a concurrent write, such as the creator's screenshot upload, moved it. A delivery that cannot be queued after bounded retries is recorded as `agentRun.state:"error"`.
+
+A delivered thread (the live-session message, and the managed session's `message` variable) carries where it is (`content.page.url`, else `content.playground.element.pageUrl`, else the file or target), its anchor, and, when present, `content.page.title`, the element's component and source (`content.playground.element`), its locators and HTML (the selector's `locators`/`html`, else the element's; HTML trimmed to 4 KB), links to the thread's attachments, then the root and each reply. Every field is optional; a known field of the wrong JSON shape fails the delivery.
+
+`runOptions` is `{presets?, spec?, variables?, instructions?}`. A run's host variables (`dir`, `scope`, `target`, `actor`, `gavelExecutable`, `message`) override its own, and every managed session gets the `list_threads`, `reply_to_thread` and `resolve_thread` tools for threads on its target.
+
+```sh
+gavel comments deliver <id> --session <session-id>
+gavel comments deliver <id> --prompt editor-comments --group page:home --run-options '{"instructions":"Keep it short"}'
+gavel comments deliver <id> --prompt editor-comments --group page:home --fresh
+gavel comments routes set --scope 'gavel://project/demo' --prefix 'gavel://project/demo/pages/' --session <session-id>
+gavel comments routes list --scope 'gavel://project/demo'
+gavel comments routes delete <route-id>
+```
+
+The dashboard (`gavel serve`), `gavel launch serve` and `gavel edit` all opt in with the in-process Captain bridge. `comments/testhost` serves the API with a fake bridge whose one live session is `fake-session`.
 
 ## Native publication
 

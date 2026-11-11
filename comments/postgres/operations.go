@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var _ comments.OperationStore = (*Store)(nil)
@@ -119,17 +120,25 @@ func (s *Store) Operation(ctx context.Context, tenant, id string) (comments.Oper
 	}
 	return op, nil
 }
-func (s *Store) Claim(ctx context.Context, tenant string, lease time.Duration) (comments.Operation, error) {
+func (s *Store) Claim(ctx context.Context, req comments.ClaimRequest) (comments.Operation, error) {
 	var op comments.Operation
+	lease := req.Lease
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("UPDATE comment_operations SET state = 'unknown' WHERE tenant_id = ? AND state = 'inflight' AND lease_until < now()", tenant).Error; err != nil {
+		if err := tx.Exec("UPDATE comment_operations SET state = 'unknown' WHERE tenant_id = ? AND state = 'inflight' AND lease_until < now()", req.TenantID).Error; err != nil {
 			return err
 		}
 		var row struct {
 			ID       string
 			TenantID string
 		}
-		q := tx.Raw("SELECT id, tenant_id FROM comment_operations WHERE tenant_id = ? AND state = 'pending' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1", tenant).Scan(&row)
+		pending := tx.Table("comment_operations").Select("id, tenant_id").Where("tenant_id = ? AND state = 'pending'", req.TenantID)
+		if req.OperationID != "" {
+			pending = pending.Where("id = ?", req.OperationID)
+		}
+		if len(req.Kinds) > 0 {
+			pending = pending.Where("payload->>'kind' IN ?", req.Kinds)
+		}
+		q := pending.Order("id").Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).Limit(1).Scan(&row)
 		if q.Error != nil {
 			return q.Error
 		}
