@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
-	"html/template"
 	"io/fs"
 	"maps"
 	"net/http"
@@ -663,8 +661,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sandbox-runs", s.handleSandboxRuns)
 	mux.HandleFunc("GET /api/sandbox-runs/{id}/log", s.handleSandboxRunLog)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
-	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
-	mux.HandleFunc("/react-grab", handleReactGrabInstall)
 	mux.HandleFunc("/brand/gavel-logo.svg", handleLogo)
 	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
 	mux.HandleFunc("/brand/menubar-unread.png", handleMenubarUnreadIcon)
@@ -722,9 +718,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/proc/stop", s.handleProcControl)
 	mux.HandleFunc("/api/proc/restart", s.handleProcControl)
 	mux.HandleFunc("/api/proc/logs", s.handleProcLogs)
-	// Serves GET /api/proc/metrics/{id}?since= as a timeseries the process
-	// dashboard gauges poll; {id} is one URL-encoded segment (see procRunKey).
+	// Serves GET /api/proc/metrics/{id}?since= as a timeseries for the process
+	// dashboard gauges; {id} is one URL-encoded segment (see procRunKey). The
+	// page's TimeseriesStreamProvider reads them in one batch from
+	// /api/proc/metrics/stream over the events hub.
 	metrics.RegisterRoutes(router, s.procMetrics, "/api/proc")
+	metrics.RegisterStreamRoutes(router, metrics.StoreSource(s.procMetrics), "/api/proc")
 	taskSource := s.taskSource
 	if taskSource == nil {
 		taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
@@ -787,9 +786,8 @@ func assetsHandler() http.Handler {
 	}))
 }
 
-// requestOrigin reconstructs the scheme+host this request was served from so an
-// asset can target gavel itself even when injected into a different app's page
-// (e.g. via the React Grab bookmarklet, where window.location is the host app).
+// requestOrigin reconstructs the scheme+host this request was served from, so
+// server-built links (attachment URLs, push base URLs) target gavel itself.
 func requestOrigin(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil {
@@ -799,37 +797,6 @@ func requestOrigin(r *http.Request) string {
 		scheme = proto
 	}
 	return scheme + "://" + r.Host
-}
-
-// handleReactGrabPlugin serves the React Grab plugin script with __GAVEL_ORIGIN__
-// substituted for this server's origin. It is intentionally uncached so the
-// origin always matches the host that served it.
-//
-// The origin is reconstructed from the client-controlled Host / X-Forwarded-Proto
-// headers and lands inside a JS string literal, so it is escaped for that context
-// and can never terminate the literal.
-func handleReactGrabPlugin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	origin := template.JSEscapeString(requestOrigin(r))
-	fmt.Fprint(w, strings.ReplaceAll(reactGrabPluginJS, "__GAVEL_ORIGIN__", origin))
-}
-
-// handleReactGrabInstall serves the install page (bookmarklet + console snippet)
-// for loading the React Grab plugin into any running dev app.
-//
-// The origin comes from the client-controlled Host / X-Forwarded-Proto headers
-// and is reflected into HTML, once inside a `javascript:` href. A browser HTML-
-// decodes that attribute before evaluating it as JS, so the value is escaped in
-// that order too: JS first, then HTML. Escaping only the HTML layer would let
-// `&#39;` decode back into a quote that breaks out of the bookmarklet's string.
-func handleReactGrabInstall(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	origin := html.EscapeString(template.JSEscapeString(requestOrigin(r)))
-	fmt.Fprint(w, strings.ReplaceAll(reactGrabInstallHTML, "__GAVEL_ORIGIN__", origin))
 }
 
 func handleLogo(w http.ResponseWriter, r *http.Request) {

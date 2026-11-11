@@ -63,6 +63,7 @@ func (s *Server) registerEntityRoutes(router *route.Router) {
 	resolve := func(ctx context.Context) (*comments.Service, error) { return OpenComments(withEntityServer(ctx, s)) }
 	router.Raw("GET /api/v1/comments/events", commentapi.Stream(resolve), route.Meta{Entity: "comments", Verb: "events", ReadOnly: true})
 	router.Raw("POST /api/v1/comments/batch", commentapi.Batch(resolve), route.Meta{Entity: "comments", Verb: "batch"})
+	commentapi.RegisterDeliveryRoutes(router, resolve)
 	router.Raw("POST /api/v1/comments/{id}/attachments", commentapi.Attachments(resolve), route.Meta{Entity: "comments", Verb: "attach", IDParam: "id"})
 	router.Raw("GET /api/v1/comments/{id}/attachments/{attachment}", commentapi.Attachments(resolve), route.Meta{Entity: "comments", Verb: "download", IDParam: "id", ReadOnly: true})
 	router.MountGenerated("GET /api/entities", http.HandlerFunc(server.HandleEntities))

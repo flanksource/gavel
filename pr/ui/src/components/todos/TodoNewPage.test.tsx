@@ -15,11 +15,13 @@ const mocks = vi.hoisted(() => ({
   items: [] as unknown[],
   create: vi.fn(),
   update: vi.fn(),
+  add: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-query', async importOriginal => ({
   ...await importOriginal<typeof import('@tanstack/react-query')>(),
   useQuery: () => ({ data: { items: mocks.items }, error: null, isFetching: false, isPending: false }),
+  useQueryClient: () => ({}),
 }));
 
 vi.mock('../../procStatusQuery', () => ({ useProcStatus: () => ({}) }));
@@ -40,7 +42,7 @@ vi.mock('./attachments', () => ({
   useAttachments: () => ({
     attachments: [],
     previews: [],
-    add: vi.fn(),
+    add: mocks.add,
     remove: vi.fn(),
   }),
 }));
@@ -53,6 +55,14 @@ vi.mock('./todoMutations', () => ({
 const workspace = { name: 'acme', dir: '/work/acme', repos: [] };
 const sourceHost = 'localhost:5173';
 const sourceUrl = `http://${sourceHost}/checkout`;
+// jsdom has no location.ancestorOrigins, so the framing page's origin comes
+// from the referrer, as it does in browsers without ancestorOrigins.
+const parentOrigin = 'http://relay.example:7000';
+let parent: { postMessage: ReturnType<typeof vi.fn> };
+
+function embedMessages() {
+  return parent.postMessage.mock.calls;
+}
 
 function chooseWorkspace() {
   fireEvent.change(screen.getByLabelText('Workspace'), { target: { value: workspace.dir } });
@@ -68,6 +78,10 @@ beforeEach(() => {
   mocks.items = [];
   mocks.create.mockReset();
   mocks.update.mockReset();
+  mocks.add.mockReset();
+  parent = { postMessage: vi.fn() };
+  vi.spyOn(window, 'parent', 'get').mockReturnValue(parent as unknown as Window);
+  vi.spyOn(document, 'referrer', 'get').mockReturnValue(`${parentOrigin}/relay.html`);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -221,6 +235,48 @@ describe('TodoNewPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add comment' }));
 
     await waitFor(() => expect(loadRecentTodos(sourceHost).map(e => e.ref)).toEqual(['t-open']));
+  });
+
+  it('announces readiness and reports the created todo only to the parent origin', async () => {
+    mocks.create.mockResolvedValue({ todo: todo('t-new', 'Fix checkout') });
+    render(<TodoNewPage projects={[workspace]} />);
+    chooseWorkspace();
+    fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Fix checkout' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+
+    await waitFor(() => expect(embedMessages()).toHaveLength(2));
+    expect(embedMessages()).toEqual([
+      [{ source: 'gavel-react-grab', type: 'embed-ready' }, parentOrigin],
+      [{ source: 'gavel-react-grab', type: 'todo-created', ref: 't-new' }, parentOrigin],
+    ]);
+  });
+
+  it('attaches a screenshot posted by the parent and ignores the same message from any other window', () => {
+    render(<TodoNewPage projects={[workspace]} />);
+    const blob = new Blob(['png'], { type: 'image/png' });
+    const post = (source: unknown, origin: string) => {
+      const event = new MessageEvent('message', { data: { source: 'gavel-react-grab', type: 'attachment', blob, name: 'shot.png' }, origin });
+      Object.defineProperty(event, 'source', { value: source });
+      window.dispatchEvent(event);
+    };
+
+    post({}, parentOrigin);
+    post(parent, 'http://evil.example');
+    expect(mocks.add).not.toHaveBeenCalled();
+
+    post(parent, parentOrigin);
+    expect(mocks.add).toHaveBeenCalledWith([{ blob, name: 'shot.png' }]);
+  });
+
+  it('refuses to submit when the embedding parent origin cannot be resolved', () => {
+    vi.spyOn(document, 'referrer', 'get').mockReturnValue('');
+    render(<TodoNewPage projects={[workspace]} />);
+    chooseWorkspace();
+    fireEvent.change(screen.getByPlaceholderText('What needs doing?'), { target: { value: 'Fix checkout' } });
+
+    expect(screen.getByText(/Cannot determine the embedding parent origin/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Add todo' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(embedMessages()).toEqual([]);
   });
 
   it('offers the default workspace when no projects are configured', () => {

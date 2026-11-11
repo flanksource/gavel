@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/flanksource/gavel/comments"
+	"github.com/flanksource/gavel/comments/agents"
 	commentblob "github.com/flanksource/gavel/comments/blob"
 	commentapi "github.com/flanksource/gavel/comments/clicky"
 	commentlint "github.com/flanksource/gavel/comments/lint"
@@ -51,7 +52,27 @@ func OpenComments(ctx context.Context) (*comments.Service, error) {
 		blobs = commentblob.Store{Store: s.blobs}
 	}
 	access := CommentAccess{}
-	return comments.New(comments.Options{Store: store, Access: access, Targets: access, Workflows: []comments.Workflow{comments.HumanReview(), comments.NativePR()}, Blobs: blobs, AttachmentLimit: 10 << 20, Providers: []comments.Provider{providers.GitHub{Resolve: commentGitHub}, providers.Azure{Resolve: commentAzure}}})
+	options := comments.Options{Store: store, Access: access, Targets: access, Workflows: []comments.Workflow{comments.HumanReview(), comments.NativePR()}, Blobs: blobs, AttachmentLimit: 10 << 20, Providers: []comments.Provider{providers.GitHub{Resolve: commentGitHub}, providers.Azure{Resolve: commentAzure}}}
+	// Agent delivery reaches this machine's Captain sessions, so only the local tenant gets it.
+	if tenant.FromContext(ctx).IsLocal() {
+		if options.Delivery, err = agents.Delivery(agents.Options{Bridge: agents.Captain{}, Groups: store, Workdir: CommentWorkdir}); err != nil {
+			return nil, err
+		}
+		options.Routes = store
+	}
+	return comments.New(options)
+}
+
+// CommentWorkdir is the directory of the project a gavel://project/<name> target belongs to.
+func CommentWorkdir(ctx context.Context, t comments.Target) (string, error) {
+	project, err := commentProject(ctx, t.ScopeURI)
+	if err != nil {
+		return "", err
+	}
+	if project.Dir == "" {
+		return "", fmt.Errorf("project %q has no local directory for an agent session to run in", project.Name)
+	}
+	return CanonicalPath(project.Dir)
 }
 
 // CommentAccess is the comment host for gavel://project/<name> scopes: the

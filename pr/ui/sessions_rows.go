@@ -17,7 +17,10 @@ import (
 // state joined with where its work sits — the worktree it ran in, that
 // worktree's uncommitted and unmerged changes, and the branch's PR.
 type sessionRow struct {
-	ID                string           `json:"id"`
+	ID string `json:"id"`
+	// ParentID is the listed session that delegated this one (a subagent);
+	// empty for top-level sessions.
+	ParentID          string           `json:"parentId,omitempty"`
 	ProviderSessionID string           `json:"providerSessionId,omitempty"`
 	Title             string           `json:"title"`
 	Project           string           `json:"project,omitempty"`
@@ -147,6 +150,33 @@ func buildSessionRows(
 	sort.SliceStable(rows, func(i, j int) bool { return sessionRowBefore(rows[i], rows[j]) })
 	if limit > 0 && len(rows) > limit {
 		rows = rows[:limit]
+	}
+	return rows
+}
+
+// attachSubagentRows appends, after the listed rows, the Claude/Codex
+// subagents whose parent is listed — and the subagents those delegated in
+// turn — each carrying its parent's id so the Sessions tab nests it.
+func attachSubagentRows(rows []sessionRow, candidates []captaindb.SessionListSummary, projects []sessionProject) []sessionRow {
+	listed := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		listed[row.ID] = true
+	}
+	for added := true; added; {
+		added = false
+		for _, candidate := range candidates {
+			id := candidate.ID.String()
+			if listed[id] || candidate.ParentRelation != captaindb.SessionParentRelationAgent ||
+				candidate.ParentSessionID == nil || !listed[candidate.ParentSessionID.String()] ||
+				(candidate.Source != "claude" && candidate.Source != "codex") {
+				continue
+			}
+			row := sessionRowFromOverview(candidate)
+			row.ParentID = candidate.ParentSessionID.String()
+			attachSessionWork(&row, candidate, projects, nil)
+			rows = append(rows, row)
+			listed[id], added = true, true
+		}
 	}
 	return rows
 }

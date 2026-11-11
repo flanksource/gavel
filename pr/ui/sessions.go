@@ -98,8 +98,46 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			response.Errors = append(response.Errors, sessionProjectError{Project: source.project.Project.Name, Error: source.err.Error()})
 		}
 	}
-	response.Sessions = buildSessionRows(overviews, sessionProjects, runs, prs, strings.TrimSpace(r.URL.Query().Get("project")), limit)
+	rows := buildSessionRows(overviews, sessionProjects, runs, prs, strings.TrimSpace(r.URL.Query().Get("project")), limit)
+	subagents, err := sessionSubagentCandidates(r.Context(), captain, rows)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.Sessions = attachSubagentRows(rows, subagents, sessionProjects)
 	respondJSON(w, http.StatusOK, response)
+}
+
+// sessionSubagentCandidates reads every session active since the earliest
+// listed session started: a subagent runs inside its parent's lifetime, so
+// this window holds every subagent of a listed session.
+func sessionSubagentCandidates(ctx context.Context, captain *captaindb.DB, rows []sessionRow) ([]captaindb.SessionListSummary, error) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	from := rows[0].LastActivityAt
+	for _, row := range rows {
+		start := row.LastActivityAt
+		if row.StartedAt != nil {
+			start = *row.StartedAt
+		}
+		if start.Before(from) {
+			from = start
+		}
+	}
+	var candidates []captaindb.SessionListSummary
+	filter := captaindb.SessionListFilter{ExcludeInactiveEmpty: true, ActivityFrom: &from, Limit: sessionSummaryScan}
+	for {
+		page, err := captain.ListSessionSummaries(ctx, filter)
+		if err != nil {
+			return nil, fmt.Errorf("subagents of listed sessions: %w", err)
+		}
+		candidates = append(candidates, page.Rows...)
+		if page.NextCursor == "" {
+			return candidates, nil
+		}
+		filter.Cursor = page.NextCursor
+	}
 }
 
 func sessionLimit(raw string) (int, error) {

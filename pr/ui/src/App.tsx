@@ -24,7 +24,7 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
 import { currentAuthMode } from './query';
-import { ReactGrabHelp } from './components/ReactGrabHelp';
+import { GrabberExtensionHelp } from './components/GrabberExtensionHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
 import { aggregateGavelShards, computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
@@ -711,7 +711,7 @@ export function App() {
       {activeTab === 'todos' && <TodoReviewButton review={review} />}
       {activeTab === 'todos' && <TodoNavbarLayoutPicker todos={todos} />}
       {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
-      {activeTab === 'todos' && <ReactGrabHelp />}
+      {activeTab === 'todos' && <GrabberExtensionHelp />}
       {activeTab === 'todos' && <TodoNewButton todos={todos} />}
       {!overflow && chatButton}
       {hostControls && <TaskManagerButton basePath="/api/v1" />}

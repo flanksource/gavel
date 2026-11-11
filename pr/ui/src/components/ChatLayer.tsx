@@ -2,7 +2,7 @@ import { ChatWindowLayer } from '@flanksource/clicky-ui/ai';
 import { chatContextTypeConfig, GavelContextPicker } from './chatContext';
 
 // Pages that never get the assistant FAB: the native menubar webview and the
-// focused new-todo window (standalone, or embedded in the React Grab dialog).
+// focused new-todo window (standalone, or framed by the Playground grabber extension).
 const chatlessPaths = new Set(['/menubar', '/todos/new']);
 
 export function chatLayerEnabled(pathname: string): boolean {

@@ -19,10 +19,11 @@ import {
   oneOf, parseBool, returnTarget, todoMatchesSearch, type TodoNewMode,
 } from './todoNewParams';
 import { todoListQueryOptions } from './todoQueries';
+import { embedAttachment, embedParentOrigin, postToEmbedParent } from './embedParent';
 
 // TodoNewPage is the focused, full-page todo form served at /todos/new. Unlike
 // the in-dashboard CreateTodoDialog modal it is meant to be linked to (from the
-// menubar, a bookmarklet, or another app): every field can be pre-filled from
+// menubar, the Playground grabber extension, or another app): every field can be pre-filled from
 // query params and, on submit or cancel, it navigates back to the referer (or an
 // explicit ?return= path), falling back to the newly-created todo otherwise.
 export function TodoNewPage({ projects, projectError = '' }: { projects: Project[]; projectError?: string }) {
@@ -31,6 +32,14 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const back = useMemo(() => returnTarget(params), [params]);
   const embed = useMemo(() => parseBool(firstParam(params, 'embed')), [params]);
+  const embedParent = useMemo((): { origin: string; error: string } => {
+    if (!embed) return { origin: '', error: '' };
+    try {
+      return { origin: embedParentOrigin(window), error: '' };
+    } catch (err) {
+      return { origin: '', error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [embed]);
 
   const queryDir = useMemo(() => firstParam(params, 'dir', 'workspace'), [params]);
   const queryProject = useMemo(() => firstParam(params, 'project'), [params]);
@@ -101,7 +110,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
   const existingTodos = useMemo(() => existingTodosQuery.data?.items ?? [], [existingTodosQuery.data]);
   const loadingTodos = existingTodosQuery.isFetching;
   const busy = createTodo.isPending || commentTodo.isPending;
-  const visibleError = error || projectError || (existingTodosQuery.error instanceof Error ? existingTodosQuery.error.message : '');
+  const visibleError = error || embedParent.error || projectError ||(existingTodosQuery.error instanceof Error ? existingTodosQuery.error.message : '');
   const showModeSwitch = embed || initialMode === 'existing';
 
   const setDir = useCallback((next: string) => {
@@ -115,20 +124,20 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
     }
   }, [dir, dirTouched, preferredDir]);
 
-  // In embed mode the React Grab plugin hands us a captured screenshot: we tell
-  // the parent we're ready, then receive the image Blob over postMessage (a Blob
+  // In embed mode the framing page hands us a captured screenshot: we tell the
+  // parent we're ready, then receive the image Blob over postMessage (a Blob
   // survives the structured clone even cross-origin) and attach it to the create.
   useEffect(() => {
-    if (!embed) return;
+    if (!embedParent.origin) return;
+    const origin = embedParent.origin;
     function onMessage(e: MessageEvent) {
-      const d = e.data;
-      if (!d || d.source !== 'gavel-react-grab' || d.type !== 'attachment' || !d.blob) return;
-      add([{ blob: d.blob as Blob, name: (d.name as string) || 'attachment' }]);
+      const attachment = embedAttachment(e, window, origin);
+      if (attachment) add([attachment]);
     }
     window.addEventListener('message', onMessage);
-    window.parent.postMessage({ source: 'gavel-react-grab', type: 'embed-ready' }, '*');
+    postToEmbedParent(window, origin, { type: 'embed-ready' });
     return () => window.removeEventListener('message', onMessage);
-  }, [embed, add]);
+  }, [embedParent.origin, add]);
 
   const selectableTodos = useMemo(
     () => existingTodos
@@ -169,11 +178,12 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
     window.location.href = to;
   }
 
-  // In embed mode (rendered inside the React Grab dialog iframe) the form reports
-  // its outcome to the parent window — which closes the dialog — instead of
-  // navigating this iframe.
+  // In embed mode (framed by the grabber's dialog) the form reports its outcome
+  // to the parent window — which closes the dialog — instead of navigating this
+  // iframe.
   function finish(type: 'todo-created' | 'todo-commented' | 'cancel', ref?: string) {
-    window.parent.postMessage({ source: 'gavel-react-grab', type, ref }, '*');
+    if (!embedParent.origin) throw new Error(embedParent.error);
+    postToEmbedParent(window, embedParent.origin, { type, ref });
   }
 
   function cancel() {
@@ -182,7 +192,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
   }
 
   async function submit() {
-    if (workspaceMissing) return;
+    if (workspaceMissing || embedParent.error) return;
     if (mode === 'existing') {
       await submitExisting();
       return;
@@ -246,7 +256,7 @@ export function TodoNewPage({ projects, projectError = '' }: { projects: Project
     }
   }
 
-  const submitDisabled = workspaceMissing || (mode === 'existing'
+  const submitDisabled = workspaceMissing || !!embedParent.error || (mode === 'existing'
     ? !selectedRef || busy || (!body.trim() && attachments.length === 0)
     : !title.trim() || busy || runAfter.blocked);
 

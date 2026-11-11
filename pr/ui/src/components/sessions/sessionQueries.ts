@@ -44,5 +44,11 @@ export function parseAgentSessions(payload: unknown): AgentSessionsResponse {
       throw new Error(`Load agent sessions: invalid session ${JSON.stringify(session)}`);
     }
   }
+  const ids = new Set(payload.sessions.map(session => (session as { id: string }).id));
+  for (const session of payload.sessions as Record<string, unknown>[]) {
+    if (session.parentId !== undefined && (typeof session.parentId !== 'string' || !ids.has(session.parentId))) {
+      throw new Error(`Load agent sessions: session ${session.id} names parent ${JSON.stringify(session.parentId)}, which is not listed`);
+    }
+  }
   return payload as unknown as AgentSessionsResponse;
 }
