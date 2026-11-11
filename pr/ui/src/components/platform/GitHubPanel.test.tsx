@@ -55,3 +55,20 @@ it('says how to configure the App when serve runs without one', async () => {
 
   expect((await screen.findByRole('alert')).textContent).toContain('--github-app-id');
 });
+
+it('shows only one organization\'s installations when given one', async () => {
+  response = {
+    status: 200,
+    body: {
+      app: { id: 123, slug: 'gavel-dev' },
+      installations: [
+        { id: 7, account: 'acme', org: { id: 'o-alpha', slug: 'alpha', name: 'Alpha' }, repos: 3 },
+        { id: 8, account: 'solo', repos: 0 },
+      ],
+    },
+  };
+  render(<GitHubPanel org="o-alpha" />, { wrapper: queryTestWrapper() });
+
+  expect(await screen.findByRole('heading', { name: 'GitHub App gavel-dev · 1 installations, 1 linked, 0 suspended' })).toBeTruthy();
+  expect(screen.queryByRole('row', { name: /solo/ })).toBeNull();
+});

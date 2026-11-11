@@ -92,12 +92,14 @@ function Table({ title, headings, rows }: { title: string; headings: string[]; r
   );
 }
 
-export function SubstrateInventoryPanel() {
+// SubstrateInventoryPanel shows substrate's workers and every actor, or only the actors of org's
+// runs when given one: workers belong to no one organization.
+export function SubstrateInventoryPanel({ org }: { org?: string } = {}) {
   const inventory = useQuery({
     queryKey: queryKeys.platform('substrate-inventory'),
     queryFn: ({ signal }) => fetchJSON<SubstrateInventory>({ url: '/api/platform/substrate/inventory', signal, context: 'load substrate\'s inventory' }),
   });
-  const data = inventory.data;
+  const data = inventory.data && (org ? { ...inventory.data, actors: inventory.data.actors.filter(actor => actor.org?.org === org) } : inventory.data);
   const workers = data?.workers ?? [];
   const sum = (pick: (w: SubstrateWorker) => number) => workers.reduce((total, worker) => total + pick(worker), 0);
 
@@ -107,7 +109,7 @@ export function SubstrateInventoryPanel() {
       {inventory.error && <p role="alert" className="text-red-600">{inventory.error.message}</p>}
       {data?.workersError && <p role="alert" className="text-red-600">{data.workersError}</p>}
       {data?.actorsError && <p role="alert" className="text-red-600">{data.actorsError}</p>}
-      {data && !data.workersError && (
+      {data && !org && !data.workersError && (
         <>
           <StatStrip
             items={[

@@ -42,12 +42,13 @@ function state(install: PlatformInstallation): string {
   return '';
 }
 
-export function GitHubPanel() {
+// GitHubPanel shows every installation of the App, or only those linked to org when given one.
+export function GitHubPanel({ org }: { org?: string } = {}) {
   const github = useQuery({
     queryKey: queryKeys.platform('github'),
     queryFn: ({ signal }) => fetchJSON<PlatformGitHub>({ url: '/api/platform/github', signal, context: 'load the GitHub App' }),
   });
-  const data = github.data;
+  const data = github.data && (org ? { ...github.data, installations: github.data.installations.filter(install => install.org?.id === org) } : github.data);
   const linked = data?.installations.filter(install => install.org).length ?? 0;
   const suspended = data?.installations.filter(install => install.suspendedAt).length ?? 0;
 

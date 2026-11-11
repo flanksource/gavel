@@ -77,3 +77,19 @@ it('says why Captain\'s history didn\'t load', async () => {
 
   expect((await screen.findByRole('alert')).textContent).toContain('connection refused');
 });
+
+it('shows only one organization\'s runs, failures and sessions when given one', async () => {
+  response = {
+    status: 200,
+    body: {
+      days: [day({ org: 'a', orgName: 'Alpha', runs: 2 }), day({ runs: 5 })],
+      failures: [{ id: 'r1', origin: 'cli', error: 'no model key', createdAt: '2026-11-10T09:00:00Z' }],
+      live: [{ org: 'a', orgName: 'Alpha', health: 'healthy', sessions: 1 }, { health: 'healthy', sessions: 4 }],
+    },
+  };
+  render(<CaptainHistoryPanel org="a" />, { wrapper: queryTestWrapper() });
+
+  expect(await screen.findByText('2 prompt runs')).toBeTruthy();
+  expect(screen.getByText('1 sessions live')).toBeTruthy();
+  expect(screen.queryByRole('table', { name: 'Latest failed prompt runs' })).toBeNull();
+});

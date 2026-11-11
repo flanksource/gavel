@@ -68,3 +68,11 @@ it('says why model usage didn\'t load', async () => {
 
   expect((await screen.findByRole('alert')).textContent).toContain('connection refused');
 });
+
+it('shows only one organization\'s calls when given one', async () => {
+  response = { status: 200, body: { days: [call({ org: 'a', orgName: 'Alpha', costUSD: 1.25 }), call({ costUSD: 0.5 })] } };
+  render(<ModelUsagePanel org="a" />, { wrapper: queryTestWrapper() });
+
+  expect(await screen.findByText('$1.25 spent')).toBeTruthy();
+  expect(screen.queryByText('Unattributed')).toBeNull();
+});

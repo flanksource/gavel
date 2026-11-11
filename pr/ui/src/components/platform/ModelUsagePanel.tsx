@@ -143,12 +143,13 @@ function CostBars({ data }: { data: DayCost[] }) {
   );
 }
 
-export function ModelUsagePanel() {
+// ModelUsagePanel shows every organization's model calls, or only org's when given one.
+export function ModelUsagePanel({ org }: { org?: string } = {}) {
   const usage = useQuery({
     queryKey: queryKeys.platform('model-usage', usageWindowDays),
     queryFn: ({ signal }) => fetchJSON<ModelUsage>({ url: `/api/platform/model-usage?days=${usageWindowDays}`, signal, context: 'load model usage' }),
   });
-  const rows = usage.data?.days ?? [];
+  const rows = (usage.data?.days ?? []).filter(row => !org || row.org === org);
   const spent = rows.reduce((sum, row) => sum + row.costUSD, 0);
   const calls = rows.reduce((sum, row) => sum + row.calls, 0);
   const allTokens = rows.reduce((sum, row) => sum + tokens(row), 0);
