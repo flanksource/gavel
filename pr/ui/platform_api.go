@@ -45,6 +45,8 @@ func (p *PlatformAPI) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/platform/tenants", p.tenants)
 	mux.HandleFunc("GET /api/platform/sandbox-runs", p.sandboxRuns)
+	mux.HandleFunc("GET /api/platform/model-usage", p.modelUsage)
+	mux.HandleFunc("GET /api/platform/budgets", p.budgets)
 	mux.HandleFunc("GET /api/platform/github", p.gitHubApp)
 	mux.HandleFunc("GET /api/platform/infrastructure", p.infrastructure)
 	mux.HandleFunc("GET /api/platform/substrate/metrics", p.substrateMetrics)
@@ -145,6 +147,43 @@ func (p *PlatformAPI) sandboxRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, usage)
+}
+
+// PlatformModelUsage is the platform's model calls per day, organization, model and provider.
+type PlatformModelUsage struct {
+	Days []platform.ModelUsageDay `json:"days"`
+}
+
+func (p *PlatformAPI) modelUsage(w http.ResponseWriter, r *http.Request) {
+	since, err := windowStart(r, 30)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
+	defer cancel()
+	days, err := p.Store.ModelUsage(ctx, since)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, PlatformModelUsage{Days: days})
+}
+
+// PlatformBudgets is every live budget rule with its groups' spend in the current window.
+type PlatformBudgets struct {
+	Budgets []platform.Budget `json:"budgets"`
+}
+
+func (p *PlatformAPI) budgets(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
+	defer cancel()
+	budgets, err := p.Store.Budgets(ctx, time.Now())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, PlatformBudgets{Budgets: budgets})
 }
 
 // PlatformGitHub is the GitHub App's installations, from GitHub and from gavel. GitHubError

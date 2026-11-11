@@ -130,6 +130,43 @@ func TestPlatformSandboxRuns(t *testing.T) {
 	assert.Contains(t, failure["error"], "days must be a whole number from 1 to 60")
 }
 
+func TestPlatformModelUsage(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	session, turn := uuid.New(), uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO captain_sessions (id, source) VALUES (?, 'test')`, session).Error)
+	require.NoError(t, db.Exec(`INSERT INTO captain_turns (id, session_id, turn_index, status) VALUES (?, ?, 0, 'ended')`, turn, session).Error)
+	for i, age := range []string{"2 days", "20 days"} {
+		require.NoError(t, db.Exec(`INSERT INTO captain_model_calls (id, turn_id, call_index, model, currency, input_tokens, input_cost, created_at)
+			VALUES (?, ?, ?, 'claude-sonnet', 'USD', 10, 0.5, now() - ?::interval)`, uuid.New(), turn, i, age).Error)
+	}
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}}
+	base := servePlatform(t, p, org, true)
+
+	var usage PlatformModelUsage
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/model-usage?days=7", &usage))
+	require.Len(t, usage.Days, 1, "only the calls in the window: %+v", usage.Days)
+	assert.Equal(t, 0.5, usage.Days[0].CostUSD)
+
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/model-usage", &usage))
+	assert.Len(t, usage.Days, 2, "the default window is 30 days")
+
+	var failure map[string]string
+	assert.Equal(t, http.StatusBadRequest, platformGet(t, base+"/api/platform/model-usage?days=61", &failure))
+	assert.Contains(t, failure["error"], "days must be a whole number from 1 to 60")
+}
+
+func TestPlatformBudgets(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	require.NoError(t, db.Exec(`INSERT INTO captain_budget_rules (id, name, amount, "window") VALUES (?, 'Monthly', 100, 'now/M')`, uuid.New()).Error)
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}}
+
+	var got PlatformBudgets
+	require.Equal(t, http.StatusOK, platformGet(t, servePlatform(t, p, org, true)+"/api/platform/budgets", &got))
+	require.Len(t, got.Budgets, 1)
+	assert.Equal(t, "Monthly", got.Budgets[0].Name)
+	assert.NotNil(t, got.Budgets[0].WindowStart)
+}
+
 func TestPlatformGitHub(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	gh := githubtest.New(t)
