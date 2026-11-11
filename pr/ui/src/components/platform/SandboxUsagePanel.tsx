@@ -2,10 +2,10 @@
 // time per day by kind, the headline figures, and each organization's share.
 import { useQuery } from '@tanstack/react-query';
 import { StatStrip } from '@flanksource/clicky-ui/data';
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { fetchJSON, queryKeys } from '../../query';
 import { kindLabels } from '../RunsView';
 import { formatSeconds } from './formatSeconds';
+import { StackedDayBars, type DaySeries } from './StackedDayBars';
 import { windowDays } from './windowDays';
 
 export interface SandboxDay {
@@ -82,51 +82,8 @@ function orgShares(usage: SandboxUsage): OrgShare[] {
   return [...shares.values()].sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name));
 }
 
-// KindBars stacks a day's totals by kind, each kind in its --kind-* color from index.css,
-// with the same numbers as a table: two of the colors are faint on the light surface.
-function KindBars({ title, data, unit }: { title: string; data: KindTotals[]; unit: string }) {
-  return (
-    <figure className="flex flex-col gap-1">
-      <figcaption className="text-xs text-muted-foreground">{title}</figcaption>
-      <div className="h-48 text-muted-foreground">
-        {/* initialDimension sizes the first render, before the container is measured. */}
-        <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 480, height: 192 }}>
-          <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.15} />
-            <XAxis dataKey="day" tickFormatter={(day: string) => day.slice(5)} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
-            <YAxis allowDecimals={false} width={36} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
-            <Tooltip formatter={(value, kind) => [`${Math.round(Number(value))} ${unit}`, kindLabels[String(kind)] ?? String(kind)]} cursor={{ fillOpacity: 0.08 }} />
-            <Legend formatter={(kind: string) => <span className="text-xs text-foreground">{kindLabels[kind] ?? kind}</span>} iconSize={8} />
-            {runKinds.map(kind => (
-              <Bar key={kind} dataKey={kind} stackId="kinds" fill={`var(--kind-${kind})`} stroke="var(--background)" strokeWidth={1} maxBarSize={24} />
-            ))}
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <details className="text-xs">
-        <summary className="cursor-pointer text-muted-foreground">Show as a table</summary>
-        <table aria-label={title} className="mt-1 w-full border-collapse text-left">
-          <thead className="text-muted-foreground">
-            <tr>
-              {['Day', ...runKinds.map(kind => kindLabels[kind] ?? kind), 'Total'].map(heading => (
-                <th key={heading} className="border-b border-border px-2 py-1 font-medium">{heading}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.map(row => (
-              <tr key={row.day} className="border-b border-border">
-                <td className="px-2 py-1 font-mono">{row.day}</td>
-                {runKinds.map(kind => <td key={kind} className="px-2 py-1">{Math.round(row[kind])}</td>)}
-                <td className="px-2 py-1">{Math.round(runKinds.reduce((sum, kind) => sum + row[kind], 0))}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </details>
-    </figure>
-  );
-}
+// kindSeries are the run kinds as stacked segments, each in its --kind-* color from index.css.
+const kindSeries: DaySeries[] = runKinds.map(kind => ({ key: kind, label: kindLabels[kind] ?? kind, color: `var(--kind-${kind})` }));
 
 export function SandboxUsagePanel() {
   const usage = useQuery({
@@ -155,8 +112,8 @@ export function SandboxUsagePanel() {
             ]}
           />
           <div className="grid gap-4 lg:grid-cols-2">
-            <KindBars title="Runs per day" data={perDay(data.days, usageWindowDays, now, row => row.runs)} unit="runs" />
-            <KindBars title="Sandbox minutes per day" data={perDay(data.days, usageWindowDays, now, row => row.runSeconds / 60)} unit="min" />
+            <StackedDayBars title="Runs per day" data={perDay(data.days, usageWindowDays, now, row => row.runs)} series={kindSeries} unit="runs" />
+            <StackedDayBars title="Sandbox minutes per day" data={perDay(data.days, usageWindowDays, now, row => row.runSeconds / 60)} series={kindSeries} unit="min" />
           </div>
           <table className="w-full border-collapse text-left text-xs">
             <thead className="text-muted-foreground">
