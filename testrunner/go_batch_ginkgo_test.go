@@ -58,6 +58,41 @@ var _ = Describe("unified Go runner", func() {
 		}))
 	})
 
+	It("does not map a nested package to a selected package that only shares its suffix", func() {
+		workDir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/service\n\ngo 1.26.1\n"), 0o600)).To(Succeed())
+		paths, err := resolveGoBatchPaths(workDir, []string{"./har"}, []string{"example.com/service/examples/har", "example.com/service/har"}, true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(Equal(map[string]string{
+			"example.com/service/har":          "./har",
+			"example.com/service/examples/har": "./examples/har",
+		}))
+	})
+
+	It("maps packages exactly when the workdir is a subdirectory of a module", func() {
+		module := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(module, "go.mod"), []byte("module example.com/service\n\ngo 1.26.1\n"), 0o600)).To(Succeed())
+		workDir := filepath.Join(module, "sub")
+		Expect(os.MkdirAll(workDir, 0o755)).To(Succeed())
+		paths, err := resolveGoBatchPaths(workDir, []string{"./har"}, []string{"example.com/service/sub/examples/har", "example.com/service/sub/har"}, true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(Equal(map[string]string{
+			"example.com/service/sub/har":          "./har",
+			"example.com/service/sub/examples/har": "./examples/har",
+		}))
+	})
+
+	It("limits a Ginkgo-only run of a mixed package to its RunSpecs bootstrap", func() {
+		workDir, err := filepath.Abs("..")
+		Expect(err).NotTo(HaveOccurred())
+		pkg := "./testrunner/runners/testdata/overlayfixture"
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir}}
+		plans, err := o.planGoBatches(map[Framework][]string{parsers.Ginkgo: {pkg}}, map[Framework][]string{parsers.Ginkgo: {"--focus=reports metadata"}}, false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plans).To(HaveLen(1))
+		Expect(plans[0].args).To(Equal([]string{"-ginkgo.focus=reports metadata", "-run=^(?:TestSuite)$"}))
+	})
+
 	It("runs a mixed Go and Ginkgo package once and replays both results from cache", func() {
 		workDir, err := filepath.Abs("..")
 		Expect(err).NotTo(HaveOccurred())
