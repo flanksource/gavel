@@ -5,7 +5,7 @@ parent: todo-engine
 order: 20
 ---
 
-The New Todo dialog, React Grab form and Create from PR dialog have a **Run after creation** selector listing the lifecycle steps that apply to the new TODO (`GET /api/todos/new/steps`). Choose `Triage new` to triage the TODO once it is saved, or `None` to start nothing.
+The New Todo dialog, the `/todos/new` form (also framed by the Playground grabber extension) and Create from PR dialog have a **Run after creation** selector listing the lifecycle steps that apply to the new TODO (`GET /api/todos/new/steps`). Choose `Triage new` to triage the TODO once it is saved, or `None` to start nothing.
 
 The TODO, attachments and PR verification are saved before the step starts. Closing the creation window does not cancel an admitted run. If the step cannot start, the window links to the saved TODO and offers **Retry**; retrying starts a run on that TODO instead of creating another one.
 

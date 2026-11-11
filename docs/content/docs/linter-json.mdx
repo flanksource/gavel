@@ -1,11 +1,11 @@
 ---
-title: JSON, YAML and NDJSON
-description: Validate data syntax and JSON Schemas using explicit paths or document declarations.
+title: JSON, YAML, NDJSON and frontmatter
+description: Validate data and Markdown frontmatter syntax and JSON Schemas using explicit paths, document declarations, configured globs or gavel's own file kinds.
 parent: lint-execution
 order: 12
 ---
 
-`gavel lint json` checks `.json`, `.yaml`, `.yml`, and `.ndjson` files. It is built into Gavel and runs automatically during `gavel lint` when matching files are found. Files without a schema receive syntax checks.
+`gavel lint json` checks `.json`, `.yaml`, `.yml`, and `.ndjson` files, and the YAML frontmatter of `.md` and `.mdx` files. It is built into Gavel and runs automatically during `gavel lint` when matching files are found. Files without a schema receive syntax checks; Markdown without frontmatter is skipped.
 
 ```sh
 gavel lint json '*.yaml' '*.json' '*.ndjson'
@@ -33,7 +33,24 @@ JSON objects can declare a schema through their top-level `$schema` property:
 {"$schema":"./schema.json","name":"example"}
 ```
 
+Markdown frontmatter declares its schema the same way, with a `$schema` key or a `yaml-language-server` comment inside the `---` block. Findings report their line in the Markdown file.
+
+```markdown
+---
+$schema: ../schemas/page.json
+title: Getting started
+---
+```
+
 Gavel leaves `$schema` in the document during validation. The schema must allow that property if it forbids additional properties. Each NDJSON record can declare its own schema; an explicit `--schema` applies to every record.
+
+A file that declares no schema takes the schema its `.gavel.yaml` layers map its path to under [`lint.schemas`](/docs/configuration-reference#lint), so docs sites can type their frontmatter without a `$schema` key on every page. Otherwise gavel's own file kinds get a built-in schema: fixture Markdown frontmatter (`fixtures.files`, by default `**/*.fixture.md`) and YAML/JSON fixture documents.
+
+```yaml
+lint:
+  schemas:
+    "docs/**/*.mdx": schemas/page.json
+```
 
 Schema references resolve relative to the containing schema file or URL. Schemas are loaded and compiled once per run. Draft-07 and draft 2020-12 declarations are supported. Invalid schemas, missing files, and HTTP failures stop validation with an execution error.
 

@@ -81,9 +81,28 @@ Server messages — `PRINT`, `RAISERROR` — are the step's output: each streams
 RAISERROR('purge: listing the looping groups', 0, 1) WITH NOWAIT
 ```
 
+### Progress from stored routines
+
+The repository's [database progress examples](https://github.com/flanksource/gavel/blob/main/examples/sql-progress.md) include YAML fixtures and adjacent SQL scripts for a PostgreSQL function and a SQL Server stored procedure. Each processes five one-second batches, streams `::progress::0/5` through `5/5`, updates `::description` and `::status`, and returns a count checked with CEL.
+
+```bash
+./.bin/gavel fixtures examples/postgres-progress.fixture.yaml --ui
+./.bin/gavel fixtures examples/sqlserver-progress.fixture.yaml --ui
+```
+
+Each fixture opens the existing connection picker, filtered to its database engine. Select a saved connection, or supply `--param connection=<name>` to use it without prompting. Both routines are session-local and disappear when the query connection closes. PostgreSQL forwards raw `RAISE NOTICE` messages; SQL Server flushes severity-zero `RAISERROR` messages with `WITH NOWAIT`. Neither fixture provisions a database or requires a database CLI. Keep each fixture next to its SQL script when copying it.
+
+Workflow commands update the running step and are removed from its stdout; ordinary batch-completion messages remain in the output. SQL Server uses a procedure because its functions cannot emit `RAISERROR` messages.
+
 ## Results and findings
 
-Outputs are `rows`, `row` (the first row), `rowCount`, `columns`, `connection` (its `name` and `type` and, for a SQL connection, the `host`, `port`, `user` and `database` the driver opens — `database:` when the step switches database, the file path for sqlite — never the password) and `findings`, plus `session` on a SQL server connection — `engine`, `sessionId` (0 for ClickHouse), `queryId`, `server`, `database`, `user` — so a `cel:` can read `session.sessionId`. The same `connection` map is recorded in the step's query details beside the template, issued SQL and params.
+Outputs are `rows`, `row` (the first row), `rowCount`, `columns`, `resultSets`, `connection` (its `name` and `type` and, for a SQL connection, the `host`, `port`, `user` and `database` the driver opens — `database:` when the step switches database, the file path for sqlite — never the password) and `findings`, plus `session` on a SQL server connection — `engine`, `sessionId` (0 for ClickHouse), `queryId`, `server`, `database`, `user` — so a `cel:` can read `session.sessionId`. The same `connection` map is recorded in the step's query details beside the template, issued SQL and params.
+
+`resultSets` is every result set the query returned, in the order the server sent them across batches: a list of row lists. A plain SELECT has one, equal to `rows`. A SQL program (an `EXEC`, several statements or GO-separated batches) can return several, each its own shape, and its `rows`, `row`, `rowCount` and `columns` describe the last one. A procedure that reports one result set per check is read whole through `resultSets`:
+
+```yaml
+cel: size(resultSets) == 2 && resultSets[0].all(r, r.detector == 'large')
+```
 
 `findings:` takes one of two forms. Both produce gavel lint violations (`models.Violation`).
 
@@ -96,7 +115,7 @@ Outputs are `rows`, `row` (the first row), `rowCount`, `columns`, `connection` (
       "locations": ["queries/q.sql:" + string(r.size), {"entity": {"kind": "Policy", "id": r.policy}}]})
   ```
 
-- **A per-row mapper** with `when` (CEL over `row`; rows where it is false yield nothing), `severity` (`error`, `warning`, `info`, or a CEL expression returning one), `rule` (defaults to the step id), `message`, `code` and `locations`. Its strings are Go templates over `.row`.
+- **A per-row mapper** with `when` (CEL over `row`; rows where it is false yield nothing), `severity` (`error`, `warning`, `info`, or a CEL expression returning one), `rule` (defaults to the step id), `message`, `code` and `locations`. Its strings are Go templates over `.row`. It maps the rows of every result set in order, and `resultSet` (`.resultSet` in templates) is the 0-based index of the row's set, so one mapper can tell differently shaped sets apart. An error names both, as `findings result set 1 row 3`.
 
 Each location is a `models.ViolationLocation` object (`file`, `line`, `column`, `ref`, `entity: {kind, id, name}`, `url: {url, css | xpath | testId | role+name | text}`, `image: {src, x, y, width, height}`) or one of these shortcuts:
 

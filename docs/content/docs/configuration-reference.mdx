@@ -226,6 +226,7 @@ Settings for `gavel lint`.
 | `lint.ignore[].file` | string | — | — | Match the violation's file path using doublestar globs (`"pkg/**/*.go"`). |
 | `lint.ignore[].line` | int | — | — | Match only the violation on this 1-based line, ignoring one occurrence. Requires `file`; the rule stops matching once the code moves. |
 | `lint.ignore[].fingerprint` | string | — | — | Match one occurrence by the `fingerprint` gavel reports for it (linter, rule, anchor and message, without the line), so the rule survives code shifting; `line` is then only a hint. |
+| `lint.schemas` | map[glob]string | `{}` | later layer wins per glob | JSON Schemas for files and Markdown frontmatter that declare none (see below). |
 | `lint.linters.<name>.enabled` | bool | linter default | later layer wins per linter | Force a linter on/off. Omit to use the linter's built-in default. |
 | `lint.linters.uir.config` | object | — | standard config layering | Complete native UIR document, written to a temporary project `.uir.d/` fragment; [UIR integration](/docs/linter-uir). |
 | `lint.linters.<name>.command` | string[] | — | standard config layering | Declares an external linter named `<name>` (not a built-in's name): the argv of a command that prints one gavel `LinterResult` report; [command linters](/docs/linter-command). |
@@ -233,6 +234,17 @@ Settings for `gavel lint`.
 
 An ignore rule matches only when **every** populated field matches; an empty
 rule (no `rule`/`source`/`file`/`fingerprint`) never matches.
+
+`lint.schemas` maps doublestar file globs to the JSON Schema (path or HTTP(S) URL) of JSON/YAML files, and of Markdown frontmatter, that declare no `$schema`. Globs and relative schema paths resolve against the directory of the `.gavel.yaml` that declares them, and entries merge across layers by glob, so a subdirectory's `.gavel.yaml` can map its own pages. A file matching more than one glob is an error. The `json` linter validates against the mapped schema and `gavel edit` builds its forms from it.
+
+```yaml
+lint:
+  schemas:
+    "docs/**/*.mdx": schemas/doc-frontmatter.schema.json
+    "deploy/*.yaml": https://example.com/deploy.schema.json
+```
+
+A file's schema is, in order: the `--schema` / `lint.options.schema` override, its own declaration (`$schema` or a `yaml-language-server` header, inside the frontmatter for Markdown), the `lint.schemas` glob, then gavel's built-in schema for its own file kinds: fixture Markdown (`fixtures.files`, by default `**/*.fixture.md`) gets the fixture frontmatter schema, and YAML/JSON fixture documents the fixture document schema.
 
 ## `commit`
 
