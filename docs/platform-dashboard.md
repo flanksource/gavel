@@ -9,7 +9,10 @@ the panel says why and the other panels still load.
 | Tenants | gavel's organizations, with their members, repositories, GitHub installs and recent runs, merged with Clerk's organization list |
 | Sandbox usage | gavel's sandbox runs: runs and sandbox minutes per day by kind, failures, active runs, and each organization's share. Each chart can be shown as a table |
 | GitHub App | The App's installations on GitHub, the organization each is linked to, its repositories, core rate limit, and whether it is suspended or was uninstalled from GitHub |
+| Substrate inventory | Substrate's workers with their capacity against what their actors are allocated, and every atespace's actors by the organization whose run each is |
 | Substrate metrics | The panels of a Mission Control View graphing substrate's Prometheus metrics: timeseries as line charts, each with its numbers as a table, and number and gauge panels as figures |
+| Model usage | Captain's model-call ledger: spend per day, calls and tokens, and each organization's and model's share |
+| Budgets | Captain's budget rules, each group's completed spend in the rule's current window against its amount |
 | Infrastructure | The config items, health checks and config changes Mission Control has for gavel's infrastructure |
 
 Windows are limited to 60 days, because sandbox runs are kept for 60 days by default.
@@ -27,6 +30,40 @@ gavel reads it with the rest of the user's Clerk profile. It applies within 5 mi
 both browser sessions and CLI tokens. Other users don't see the tab. If they open `/platform`
 directly, the page says how to become a platform admin. The API (`/api/platform/…`) answers them
 with `403 not_platform_admin`.
+
+## Model usage and budgets
+
+Both panels read Captain's tables in gavel's database, so they need no configuration.
+
+- **Owner:** a model call belongs to the organization that owns its session, or its root session
+  when the session has no owner. Calls of sessions without an owner, or owned by the local
+  organization or another Clerk instance's, are counted as **Unattributed**.
+- **Cost:** a call costs what its provider reported, else its list price (the same rule Captain's
+  own totals use). A call priced in another currency adds its tokens but not its cost, since
+  there's no rate to convert it, and the panel says how many calls that left out.
+- **Budget spend:** only completed calls count, from where the rule's window starts until now.
+  The window is the rule's datemath (`now/M`, `now-30d`), evaluated as Captain evaluates it. A
+  group holding a call in another currency shows why it has no total, as Captain refuses to add
+  it up too. Rules are created with `captain budget-rule create` or on `captain serve`'s Budgets
+  page.
+
+## Substrate inventory
+
+With `--sandbox substrate`, the panel lists substrate's workers and the actors of every atespace
+through ate-api-server, with serve's `--substrate-*` credentials. Listing either needs
+substrate's global `viewer` role, so grant it to gavel's identity in substrate's global access
+policy:
+
+```yaml
+bindings:
+- role: viewer
+  members:
+  - user:system:serviceaccount:gavel:gavel-beta
+```
+
+Without it, the panel shows substrate's `PermissionDenied` for the list it couldn't read. An actor
+named `gavel-run-<run ID>` is that sandbox run's environment, listed under the run's organization;
+other actors are listed by atespace.
 
 ## Mission Control
 
