@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -423,7 +424,7 @@ func (p *PlatformAPI) substrateInventory(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	slices.SortStableFunc(result.Actors, func(a, b PlatformActor) int {
-		return strings.Compare(a.Atespace+"/"+a.Name, b.Atespace+"/"+b.Name)
+		return cmp.Or(strings.Compare(a.Atespace, b.Atespace), strings.Compare(a.Name, b.Name))
 	})
 	writeJSON(w, result)
 }
