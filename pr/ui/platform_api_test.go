@@ -158,6 +158,31 @@ func TestPlatformModelUsage(t *testing.T) {
 	assert.Contains(t, failure["error"], "days must be a whole number from 1 to 60")
 }
 
+func TestPlatformCaptainHistory(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	session := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO captain_sessions (id, source) VALUES (?, 'test')`, session).Error)
+	for _, age := range []string{"2 days", "20 days"} {
+		require.NoError(t, db.Exec(`INSERT INTO captain_prompt_runs (id, session_id, root_session_id, state, error, queued_at, created_at)
+			VALUES (?, ?, ?, 'failed', 'boom', now() - ?::interval, now() - ?::interval)`, uuid.New(), session, session, age, age).Error)
+	}
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}}
+	base := servePlatform(t, p, org, true)
+
+	var history platform.CaptainHistory
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/captain-history?days=7", &history))
+	require.Len(t, history.Days, 1, "only the runs in the window: %+v", history.Days)
+	require.Len(t, history.Failures, 1)
+	assert.Equal(t, "boom", history.Failures[0].Error)
+
+	require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/captain-history", &history))
+	assert.Len(t, history.Failures, 2, "the default window is 30 days")
+
+	var failure map[string]string
+	assert.Equal(t, http.StatusBadRequest, platformGet(t, base+"/api/platform/captain-history?days=x", &failure))
+	assert.Contains(t, failure["error"], "days must be a whole number from 1 to 60")
+}
+
 func TestPlatformBudgets(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	require.NoError(t, db.Exec(`INSERT INTO captain_budget_rules (id, name, amount, "window") VALUES (?, 'Monthly', 100, 'now/M')`, uuid.New()).Error)

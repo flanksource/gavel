@@ -57,6 +57,7 @@ func (p *PlatformAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/platform/sandbox-runs", p.sandboxRuns)
 	mux.HandleFunc("GET /api/platform/model-usage", p.modelUsage)
 	mux.HandleFunc("GET /api/platform/budgets", p.budgets)
+	mux.HandleFunc("GET /api/platform/captain-history", p.captainHistory)
 	mux.HandleFunc("GET /api/platform/github", p.gitHubApp)
 	mux.HandleFunc("GET /api/platform/infrastructure", p.infrastructure)
 	mux.HandleFunc("GET /api/platform/substrate/metrics", p.substrateMetrics)
@@ -195,6 +196,22 @@ func (p *PlatformAPI) budgets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, PlatformBudgets{Budgets: budgets})
+}
+
+func (p *PlatformAPI) captainHistory(w http.ResponseWriter, r *http.Request) {
+	since, err := windowStart(r, 30)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
+	defer cancel()
+	history, err := p.Store.CaptainHistory(ctx, since)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, history)
 }
 
 // PlatformGitHub is the GitHub App's installations, from GitHub and from gavel. GitHubError
