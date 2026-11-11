@@ -18,7 +18,7 @@ const IndexName = "runs-index.json"
 
 // indexVersion is bumped whenever runInfo derives a RunInfo differently, so
 // summaries cached by an older gavel are recomputed rather than served.
-const indexVersion = 2
+const indexVersion = 3
 
 type indexFile struct {
 	Version int                   `json:"version"`

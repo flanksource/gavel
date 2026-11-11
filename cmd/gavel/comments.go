@@ -49,6 +49,7 @@ func init() {
 	}
 	generated.RemoveCommand(lintCommand)
 	rootCmd.AddCommand(lintCommand)
+	command.AddCommand(commentsDeliverCommand(), commentsRoutesCommand())
 	command.AddCommand(&cobra.Command{Use: "dispatch", Short: "Process one explicitly admitted native publication for the local tenant", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		service, err := ui.OpenComments(cmd.Context())
 		if err != nil {

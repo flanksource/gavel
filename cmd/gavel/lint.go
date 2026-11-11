@@ -196,8 +196,9 @@ func runLint(ctx context.Context, opts LintOptions) (value any, runErr error) {
 		allResults = fixed.FinalResults
 	}
 
+	finished := lintResultOptions{Server: uiServer, Options: opts, Files: lintScope(groups), Results: allResults, Started: runStarted}
 	if uiServer != nil {
-		return serveLintResults(lintUIResultOptions{Server: uiServer, Options: opts, Results: allResults, Started: runStarted})
+		return serveLintResults(finished)
 	}
 
 	if opts.Triage {
@@ -223,7 +224,22 @@ func runLint(ctx context.Context, opts LintOptions) (value any, runErr error) {
 		}
 	}
 
-	return finishLint(opts, allResults, runStarted)
+	return finishLint(finished)
+}
+
+// lintScope is the absolute files and folders a run was limited to, or nil
+// for a run over the whole tree.
+func lintScope(groups []lint.Group) []string {
+	var files []string
+	for _, group := range groups {
+		for _, file := range group.Files {
+			if !filepath.IsAbs(file) {
+				file = filepath.Join(group.GitRoot, file)
+			}
+			files = append(files, file)
+		}
+	}
+	return files
 }
 
 type lintUIOptions struct {
@@ -305,17 +321,20 @@ func finishLintUIRun(srv *testui.Server, persist func(*testui.Snapshot) error, r
 	return nil
 }
 
-type lintUIResultOptions struct {
+// lintResultOptions is a finished `gavel lint` run: Files are the absolute
+// files and folders it was limited to (nil for the whole tree).
+type lintResultOptions struct {
 	Server  *testui.Server
 	Options LintOptions
+	Files   []string
 	Results []*linters.LinterResult
 	Started time.Time
 }
 
 // serveLintResults saves the completed run before waiting for shutdown, then
 // returns the latest UI results for terminal rendering.
-func serveLintResults(opts lintUIResultOptions) (any, error) {
-	if _, err := finishLint(opts.Options, opts.Results, opts.Started); err != nil {
+func serveLintResults(opts lintResultOptions) (any, error) {
+	if _, err := finishLint(opts); err != nil {
 		return nil, err
 	}
 	// The run's context ends on the UI's Stop button; only a signal ends the UI.
@@ -330,15 +349,16 @@ func serveLintResults(opts lintUIResultOptions) (any, error) {
 	return lintRunReturnValue(&snapshot, opts.Options), nil
 }
 
-func finishLint(opts LintOptions, allResults []*linters.LinterResult, runStarted time.Time) (any, error) {
+func finishLint(run lintResultOptions) (any, error) {
+	opts := run.Options
 	snap := lint.Snapshot(lint.SnapshotOptions{
-		WorkDir: opts.WorkDir, Version: version, Started: runStarted,
-		Changes: opts.Selection.Snapshot(), Results: allResults,
+		WorkDir: opts.WorkDir, Version: version, Started: run.Started, Files: run.Files,
+		Changes: opts.Selection.Snapshot(), Results: run.Results,
 	})
 	if _, err := lint.SaveSnapshot(opts.Dirs.StateRoot, snap); err != nil {
 		return nil, err
 	}
-	if linters.HasFailures(allResults) {
+	if linters.HasFailures(run.Results) {
 		exitCode = 1
 	}
 	return lintRunReturnValue(snap, opts), nil

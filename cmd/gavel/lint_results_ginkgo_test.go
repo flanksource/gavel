@@ -19,7 +19,7 @@ var _ = Describe("Standalone lint output", func() {
 	It("returns a persistence error when the history directory cannot be created", func() {
 		dir := GinkgoT().TempDir()
 		Expect(os.WriteFile(filepath.Join(dir, ".gavel"), []byte("blocked"), 0o600)).To(Succeed())
-		_, err := finishLint(LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, nil, time.Now())
+		_, err := finishLint(lintResultOptions{Options: LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, Started: time.Now()})
 		Expect(err).To(MatchError(ContainSubstring("persist per-run lint snapshot")))
 	})
 
@@ -29,7 +29,7 @@ var _ = Describe("Standalone lint output", func() {
 		exitCode = 0
 		withFormat("json", func() {
 			dir := GinkgoT().TempDir()
-			value, err := finishLint(LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, []*linters.LinterResult{result}, time.Now())
+			value, err := finishLint(lintResultOptions{Options: LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, Results: []*linters.LinterResult{result}, Started: time.Now()})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(value).To(BeAssignableToTypeOf(&testui.Snapshot{}))
 			Expect(exitCode).To(Equal(wantExit))

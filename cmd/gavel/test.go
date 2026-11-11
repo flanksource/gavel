@@ -252,6 +252,11 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		}
 		opts.Updates = attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Stream: stream, Options: opts, Started: runStarted, Downstream: attachUIUpdates()})
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
+			// Refused before anything runs, so the last run stays on screen.
+			fixture, err := resumeFixtureRerun(uiServer.Snapshot().Tests, req)
+			if err != nil {
+				return err
+			}
 			clicky.ClearGlobalTasks()
 			rerunCtx, cancelRerun := newStopContext(opts.Context, opts.Timeout)
 			defer cancelRerun()
@@ -275,11 +280,11 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 				uiServer.MarkDone()
 				return nil
 			}
-			rerunOpts := prepareRerunOptions(opts, req, attachUIRerunUpdates())
+			rerunOpts := prepareRerunOptions(opts, req, fixture, attachUIRerunUpdates())
 			rerunOpts.FixtureRunID = uiServer.PromptOwner()
 			rerunOpts.Context = rerunCtx
 			rerunOpts.OutputTee = output.StdoutWriter()
-			_, err := testrunner.Run(rerunOpts)
+			_, err = testrunner.Run(rerunOpts)
 			return err
 		})
 	}
@@ -554,19 +559,15 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		failedSnapshot := saveFailedRun(failedRun{
 			Opts: opts, Tests: tests, Lint: lintResults, Started: runStarted, Trace: trace, Performance: fixturePerformance, Err: err,
 		})
-		if uiServer != nil && fixtureBenchmarkMode(opts) != "" {
-			uiServer.SetRunError(err)
-			uiServer.MarkDone()
+		holdFailedRunUI(uiServer, err, func() {
 			if detach {
 				if handoffErr := handoffDetachedUI(uiListener, failedSnapshot, detachedUIOptions{AutoStop: opts.AutoStop, IdleTimeout: opts.IdleTimeout, Dev: opts.Dev}); handoffErr != nil {
 					logger.Warnf("Detached UI handoff failed: %v", handoffErr)
 				}
-			} else {
-				sig := make(chan os.Signal, 1)
-				signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-				<-sig
+				return
 			}
-		}
+			waitForStopSignal()
+		})
 		failure := testRunFailureValue(opts, tests, lintResults, runStarted, err)
 		if envelope, ok := failure.(testRunFailure); ok {
 			envelope.Performance = fixturePerformance
@@ -620,9 +621,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			snapshot.Performance = fixturePerformance
 			persistRunSnapshot(opts.Dirs.StateRoot, &snapshot, runStarted)
 			runSucceeded = true
-			sig := make(chan os.Signal, 1)
-			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-			<-sig
+			waitForStopSignal()
 			return nil, nil
 		}
 		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
@@ -648,6 +647,26 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		return testRunReturnValue(snapshot), nil
 	}
 	return result, nil
+}
+
+// holdFailedRunUI keeps a failed run's --ui dashboard up, like a passing
+// run's: it publishes the run error, marks the run done and holds (serves
+// until stopped, or detaches) so the run can be inspected and rerun. Without
+// a UI it returns at once; the run's non-zero exit is the caller's.
+func holdFailedRunUI(server *testui.Server, runErr error, hold func()) {
+	if server == nil {
+		return
+	}
+	server.SetRunError(runErr)
+	server.MarkDone()
+	hold()
+}
+
+// waitForStopSignal blocks until SIGINT or SIGTERM.
+func waitForStopSignal() {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
 }
 
 // writeUIRExport writes the run's flat results, with the coverage its go test batches profiled into
@@ -1150,7 +1169,7 @@ func buildRerunArgs(req testui.RerunRequest) []string {
 	return nil
 }
 
-func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, updates chan []parsers.Test) testrunner.RunOptions {
+func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, fixture fixtureRerun, updates chan []parsers.Test) testrunner.RunOptions {
 	rerunOpts := base
 	rerunOpts.Selection = base.Selection.Fresh()
 	rerunOpts.Lint = false
@@ -1162,6 +1181,9 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 	}
 	rerunOpts.StartingPaths = req.PackagePaths
 	rerunOpts.ExtraArgs = buildRerunArgs(req)
+	if fixture.Resume != nil {
+		rerunOpts = fixture.scope(rerunOpts, req.Fixture)
+	}
 	if req.Params != nil {
 		rerunOpts.FixtureParams = req.Params
 	}

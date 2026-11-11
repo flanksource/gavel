@@ -506,7 +506,6 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
 		logger.Infof("%s", testui.Banner("PR Dashboard", dashboardURL, networkURL))
-		logger.Infof("React Grab → todo: install the bookmarklet at %s/react-grab", dashboardURL)
 	}
 
 	return runDashboardFrontend(ctx, srv, dashboardURL, opts)

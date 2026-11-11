@@ -21,20 +21,22 @@ const (
 	RunKindTest     = "test"
 	RunKindLint     = "lint"
 	RunKindTestLint = "test+lint"
+	RunKindFixture  = "fixture"
 )
 
 // RunInfo is the per-run summary ListRuns derives from a single
 // run-<timestamp>.json snapshot. It carries enough to render a run list row;
 // ReadRun(workDir, RunID) reads the snapshot itself.
 type RunInfo struct {
-	RunID      string    `json:"runId"`             // file stem, e.g. run-2026-06-28T10-43-42Z
-	Path       string    `json:"path"`              // where the snapshot is stored (see Location)
-	Started    time.Time `json:"started,omitempty"` // run start (UTC)
-	Ended      time.Time `json:"ended,omitempty"`   // run end (UTC)
-	Kind       string    `json:"kind"`              // test | lint | test+lint
-	Repo       string    `json:"repo,omitempty"`    // git repo name (Git.Repo)
-	SHA        string    `json:"sha,omitempty"`     // git HEAD sha at run time
-	Frameworks []string  `json:"frameworks,omitempty"`
+	RunID        string    `json:"runId"`             // file stem, e.g. run-2026-06-28T10-43-42Z
+	Path         string    `json:"path"`              // where the snapshot is stored (see Location)
+	Started      time.Time `json:"started,omitempty"` // run start (UTC)
+	Ended        time.Time `json:"ended,omitempty"`   // run end (UTC)
+	Kind         string    `json:"kind"`              // test | lint | test+lint | fixture
+	Repo         string    `json:"repo,omitempty"`    // git repo name (Git.Repo)
+	SHA          string    `json:"sha,omitempty"`     // git HEAD sha at run time
+	Frameworks   []string  `json:"frameworks,omitempty"`
+	FixtureFiles []string  `json:"fixtureFiles,omitempty"`
 
 	Passed  int `json:"passed"`
 	Failed  int `json:"failed"`
@@ -378,13 +380,16 @@ func runInfo(snap testui.Snapshot, name, path string, started time.Time) RunInfo
 	}
 	if snap.Metadata != nil {
 		info.Ended = snap.Metadata.Ended.UTC()
-		info.Frameworks = snap.Metadata.Frameworks
 	}
 	if snap.Git != nil {
 		info.Repo = snap.Git.Repo
 		info.SHA = snap.Git.SHA
 	}
 	info.Kind = runKind(sum.Total, info.LintLinters, snap.Status.LintRun)
+	info.Frameworks, info.FixtureFiles = historyIdentity(snap)
+	if info.Kind == RunKindTest && len(info.Frameworks) == 1 && info.Frameworks[0] == "fixture" {
+		info.Kind = RunKindFixture
+	}
 	return info
 }
 

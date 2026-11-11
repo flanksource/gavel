@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/prompt"
+	"github.com/flanksource/clicky/task"
+	commonscontext "github.com/flanksource/commons/context"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -36,9 +38,12 @@ var _ = Describe("dashboard commit command", func() {
 		DeferCleanup(cancel)
 		before := exitCode
 		finished := make(chan error, 1)
-		go func() {
-			finished <- runDashboardCommit(ctx, []string{"commit", "--work-dir", repo, "--message=fix: example", "--dry-run", "--tidy=false", "--lint=false", "--lint-secrets=false", "change.txt"}, io.Discard)
-		}()
+		run := task.StartTask("dashboard commit", func(ctx commonscontext.Context, _ *task.Task) (int, error) {
+			err := runDashboardCommit(ctx, []string{"commit", "--work-dir", repo, "--message=fix: example", "--dry-run", "--tidy=false", "--lint=false", "--lint-secrets=false", "change.txt"}, io.Discard)
+			finished <- err
+			return 0, err
+		}, task.WithContext(ctx))
+		DeferCleanup(run.Cancel)
 		var pending prompt.PromptSnapshot
 		Eventually(func(g Gomega) {
 			questions := manager.List(prompt.Filter{Owner: "dashboard-commit-test", State: "pending"})
@@ -49,6 +54,7 @@ var _ = Describe("dashboard commit command", func() {
 		var err error
 		Eventually(finished, 5*time.Second).Should(Receive(&err))
 		Expect(err).NotTo(HaveOccurred())
+		Eventually(run.Status).Should(Equal(task.StatusSuccess))
 		Expect(lock).NotTo(BeAnExistingFile())
 		Expect(exitCode).To(Equal(before))
 	})

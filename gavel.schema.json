@@ -2028,6 +2028,340 @@
       },
       "type": "object"
     },
+    "comments": {
+      "additionalProperties": false,
+      "description": "Comment thread settings for the files beneath this .gavel.yaml's directory.",
+      "properties": {
+        "agents": {
+          "additionalProperties": false,
+          "description": "Which agent works new comment threads. The nearest .gavel.yaml wins, and a page entry wins over its directory's default.",
+          "properties": {
+            "default": {
+              "additionalProperties": false,
+              "description": "A captain run that new human comment threads are handed to.",
+              "properties": {
+                "assign": {
+                  "description": "Make the agent the thread's assignee as soon as the thread is created.",
+                  "type": "boolean"
+                },
+                "enabled": {
+                  "description": "Hand new human threads on these pages to the agent. false opts the pages out of an agent inherited from a .gavel.yaml further up.",
+                  "type": "boolean"
+                },
+                "instructions": {
+                  "description": "Instructions appended to the thread the session is given.",
+                  "type": "string"
+                },
+                "presets": {
+                  "description": "Runtime presets replacing the prompt frontmatter's presets.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "prompt": {
+                  "default": "editor-comments",
+                  "description": "Captain prompt the run starts.",
+                  "type": "string"
+                },
+                "spec": {
+                  "additionalProperties": false,
+                  "description": "Runtime spec layered over the prompt frontmatter's.",
+                  "properties": {
+                    "batch": {
+                      "$ref": "#/$defs/Batch"
+                    },
+                    "budget": {
+                      "$ref": "#/$defs/Budget"
+                    },
+                    "callerTools": {
+                      "type": "boolean"
+                    },
+                    "cliArgs": {
+                      "type": "object"
+                    },
+                    "effort": {
+                      "enum": [
+                        "",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max",
+                        "ultra"
+                      ],
+                      "type": "string"
+                    },
+                    "fallbacks": {
+                      "$ref": "#/$defs/ModelList"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "interrupt": {
+                      "type": "boolean"
+                    },
+                    "labels": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "mediaTypes": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "memory": {
+                      "$ref": "#/$defs/Memory"
+                    },
+                    "messages": {
+                      "items": {
+                        "$ref": "#/$defs/Message"
+                      },
+                      "type": "array"
+                    },
+                    "mode": {
+                      "enum": [
+                        "api",
+                        "agent",
+                        "cli",
+                        "cmux"
+                      ],
+                      "type": "string"
+                    },
+                    "model": {
+                      "description": "Model the run uses; the prompt's when unset.",
+                      "type": "string"
+                    },
+                    "noCache": {
+                      "type": "boolean"
+                    },
+                    "permissions": {
+                      "$ref": "#/$defs/Permissions"
+                    },
+                    "prompt": {
+                      "$ref": "#/$defs/Prompt"
+                    },
+                    "resume": {
+                      "type": "boolean"
+                    },
+                    "sandbox": {
+                      "$ref": "#/$defs/SandboxRef"
+                    },
+                    "sessionId": {
+                      "type": "string"
+                    },
+                    "setup": {
+                      "$ref": "#/$defs/Setup"
+                    },
+                    "steer": {
+                      "type": "boolean"
+                    },
+                    "streaming": {
+                      "type": "boolean"
+                    },
+                    "temperature": {
+                      "type": "number"
+                    },
+                    "toolApproval": {
+                      "$ref": "#/$defs/ToolApprovalResume"
+                    },
+                    "toolPolicy": {
+                      "$ref": "#/$defs/PermissionPolicy"
+                    },
+                    "toolPreferences": {
+                      "$ref": "#/$defs/ToolPreferences"
+                    },
+                    "tools": {
+                      "$ref": "#/$defs/InlineTools"
+                    },
+                    "workflow": {
+                      "$ref": "#/$defs/Workflow"
+                    }
+                  },
+                  "required": [
+                    "model"
+                  ],
+                  "type": "object"
+                },
+                "variables": {
+                  "additionalProperties": {},
+                  "description": "Prompt template variables, below the ones the host sets.",
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            "pages": {
+              "additionalProperties": {
+                "additionalProperties": false,
+                "description": "A captain run that new human comment threads are handed to.",
+                "properties": {
+                  "assign": {
+                    "description": "Make the agent the thread's assignee as soon as the thread is created.",
+                    "type": "boolean"
+                  },
+                  "enabled": {
+                    "description": "Hand new human threads on these pages to the agent. false opts the pages out of an agent inherited from a .gavel.yaml further up.",
+                    "type": "boolean"
+                  },
+                  "instructions": {
+                    "description": "Instructions appended to the thread the session is given.",
+                    "type": "string"
+                  },
+                  "presets": {
+                    "description": "Runtime presets replacing the prompt frontmatter's presets.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "prompt": {
+                    "default": "editor-comments",
+                    "description": "Captain prompt the run starts.",
+                    "type": "string"
+                  },
+                  "spec": {
+                    "additionalProperties": false,
+                    "description": "Runtime spec layered over the prompt frontmatter's.",
+                    "properties": {
+                      "batch": {
+                        "$ref": "#/$defs/Batch"
+                      },
+                      "budget": {
+                        "$ref": "#/$defs/Budget"
+                      },
+                      "callerTools": {
+                        "type": "boolean"
+                      },
+                      "cliArgs": {
+                        "type": "object"
+                      },
+                      "effort": {
+                        "enum": [
+                          "",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max",
+                          "ultra"
+                        ],
+                        "type": "string"
+                      },
+                      "fallbacks": {
+                        "$ref": "#/$defs/ModelList"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "interrupt": {
+                        "type": "boolean"
+                      },
+                      "labels": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "mediaTypes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "memory": {
+                        "$ref": "#/$defs/Memory"
+                      },
+                      "messages": {
+                        "items": {
+                          "$ref": "#/$defs/Message"
+                        },
+                        "type": "array"
+                      },
+                      "mode": {
+                        "enum": [
+                          "api",
+                          "agent",
+                          "cli",
+                          "cmux"
+                        ],
+                        "type": "string"
+                      },
+                      "model": {
+                        "description": "Model the run uses; the prompt's when unset.",
+                        "type": "string"
+                      },
+                      "noCache": {
+                        "type": "boolean"
+                      },
+                      "permissions": {
+                        "$ref": "#/$defs/Permissions"
+                      },
+                      "prompt": {
+                        "$ref": "#/$defs/Prompt"
+                      },
+                      "resume": {
+                        "type": "boolean"
+                      },
+                      "sandbox": {
+                        "$ref": "#/$defs/SandboxRef"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "setup": {
+                        "$ref": "#/$defs/Setup"
+                      },
+                      "steer": {
+                        "type": "boolean"
+                      },
+                      "streaming": {
+                        "type": "boolean"
+                      },
+                      "temperature": {
+                        "type": "number"
+                      },
+                      "toolApproval": {
+                        "$ref": "#/$defs/ToolApprovalResume"
+                      },
+                      "toolPolicy": {
+                        "$ref": "#/$defs/PermissionPolicy"
+                      },
+                      "toolPreferences": {
+                        "$ref": "#/$defs/ToolPreferences"
+                      },
+                      "tools": {
+                        "$ref": "#/$defs/InlineTools"
+                      },
+                      "workflow": {
+                        "$ref": "#/$defs/Workflow"
+                      }
+                    },
+                    "required": [
+                      "model"
+                    ],
+                    "type": "object"
+                  },
+                  "variables": {
+                    "additionalProperties": {},
+                    "description": "Prompt template variables, below the ones the host sets.",
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              },
+              "description": "Per-file agents, keyed by the file's path relative to this .gavel.yaml's directory.",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "commit": {
       "additionalProperties": false,
       "description": "Settings for `gavel commit`.",
@@ -3175,6 +3509,14 @@
               "type": "string"
             }
           },
+          "type": "object"
+        },
+        "schemas": {
+          "additionalProperties": {
+            "description": "JSON Schema path, or an HTTP(S) URL.",
+            "type": "string"
+          },
+          "description": "JSON Schemas keyed by doublestar file glob, for JSON/YAML files and Markdown frontmatter that declare no `$schema`. Globs and relative schema paths resolve against this .gavel.yaml's directory; entries merge across layers. A file matching several globs is an error.",
           "type": "object"
         }
       },

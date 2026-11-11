@@ -100,13 +100,11 @@ func ResolvePaths(options any, base string) {
 			continue
 		}
 		resolve := func(path string) string {
+			if value.Type().Field(i).Tag.Get("path") == "uri" {
+				return ResolveURI(path, base)
+			}
 			if path == "" || filepath.IsAbs(path) {
 				return path
-			}
-			if value.Type().Field(i).Tag.Get("path") == "uri" {
-				if parsed, err := url.Parse(path); err == nil && parsed.IsAbs() {
-					return path
-				}
 			}
 			return filepath.Join(base, path)
 		}
@@ -118,6 +116,18 @@ func ResolvePaths(options any, base string) {
 			}
 		}
 	}
+}
+
+// ResolveURI anchors a relative file path to base, leaving absolute paths and
+// absolute URLs (https://…, gavel:…) as written.
+func ResolveURI(path, base string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	if parsed, err := url.Parse(path); err == nil && parsed.IsAbs() {
+		return path
+	}
+	return filepath.Join(base, path)
 }
 
 func Present(options any) map[string]bool {

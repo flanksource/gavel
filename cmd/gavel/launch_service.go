@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/gavel/comments/agents"
 	"github.com/flanksource/gavel/internal/database"
 	"path/filepath"
 	"reflect"
@@ -61,7 +62,7 @@ func newLaunchService(ctx context.Context, root, backend string, localRoots []st
 	if err != nil {
 		return nil, errors.Join(err, workspaces.Close())
 	}
-	comments, err := launch.CommentsHandler(db.Gorm(), root)
+	comments, err := launch.CommentsHandler(db.Gorm(), root, agents.Captain{})
 	if err != nil {
 		return nil, errors.Join(err, store.Close(), workspaces.Close())
 	}

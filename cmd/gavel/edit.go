@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/gavel/comments/agents"
 	commentapi "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/editor"
 	editorui "github.com/flanksource/gavel/editor/ui"
 	jsonlint "github.com/flanksource/gavel/linters/json"
+	"github.com/flanksource/gavel/sdk/status"
 )
 
 type EditOptions struct {
@@ -64,7 +66,20 @@ func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 	}
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	editorServer := &editor.Server{Store: store, Schema: opts.Schema, Assets: editorui.Assets(), Context: ctx}
+	editorServer := &editor.Server{Store: store, Schema: opts.Schema, Assets: editorui.Assets(), Context: ctx, Agents: agents.Captain{}, Version: version}
+	if err := editorServer.Reload(); err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+	cache, err := status.CacheDir()
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+	if err := editorServer.WatchRuns(cache); err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
 	if opts.Dev {
 		if editorServer.DevProxy, err = devProxy(editorDev, ""); err != nil {
 			_ = listener.Close()

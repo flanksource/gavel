@@ -1,14 +1,46 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 
+	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/fixtures"
+	jsonlint "github.com/flanksource/gavel/linters/json"
 
 	g "github.com/onsi/ginkgo/v2"
 	o "github.com/onsi/gomega"
 	"github.com/spf13/pflag"
 )
+
+var _ = g.Describe("builtin fixture schemas", func() {
+	g.It("validate fixture frontmatter and documents that declare no schema, and reach the editor", func() {
+		root := g.GinkgoT().TempDir()
+		o.Expect(os.Mkdir(filepath.Join(root, ".git"), 0o700)).To(o.Succeed())
+		markdown := filepath.Join(root, "checks.fixture.md")
+		o.Expect(os.WriteFile(markdown, []byte("---\ntimeout: 30s\nenv: [not, a, map]\n---\n# Checks\n"), 0o600)).To(o.Succeed())
+		document := filepath.Join(root, "plain.md")
+		o.Expect(os.WriteFile(document, []byte("---\nenv: [fine]\n---\n"), 0o600)).To(o.Succeed())
+
+		frontmatter, err := jsonlint.PathSchema(markdown)
+		o.Expect(err).NotTo(o.HaveOccurred())
+		plain, err := jsonlint.PathSchema(document)
+		o.Expect(err).NotTo(o.HaveOccurred())
+		adapter := jsonlint.New(root)
+		adapter.Files = []string{markdown, document}
+		violations, err := adapter.Run(commonsContext.NewContext(context.Background()), nil)
+		o.Expect(err).NotTo(o.HaveOccurred())
+		editor, err := jsonlint.EditorSchema(context.Background(), []byte("timeout: 30s\n"), markdown, "")
+		o.Expect(err).NotTo(o.HaveOccurred())
+
+		o.Expect(frontmatter).To(o.Equal("gavel:fixture-frontmatter"))
+		o.Expect(plain).To(o.BeEmpty())
+		o.Expect(violations).To(o.ConsistOf(o.SatisfyAll(o.HaveField("File", markdown), o.HaveField("Line", 3))))
+		o.Expect(editor).To(o.HaveKey("$defs"))
+	})
+})
 
 var _ = g.Describe("fixture document schema", func() {
 	g.It("retains native CLI flag groups for global reference fields", func() {
