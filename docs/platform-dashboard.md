@@ -16,7 +16,14 @@ the panel says why and the other panels still load.
 | Captain history | Captain's prompt runs per day by outcome, each organization's runs, failures, run time and live sessions (with how many are stalled or zombie), and the latest failures with their errors |
 | Infrastructure | The config items, health checks and config changes Mission Control has for gavel's infrastructure |
 
-Windows are limited to 60 days, because sandbox runs are kept for 60 days by default.
+Windows are limited to 60 days, because sandbox runs are kept for 60 days by default. Each window
+starts at UTC midnight, so every day on a chart is a whole day.
+
+Click an organization on the Tenants panel to open its own view at `/platform/<organization ID>`:
+its members, repositories, GitHub installations and last run, then the sandbox usage, model usage,
+Captain history, substrate actors and GitHub installations panels with only its rows. Budgets,
+substrate's workers, its metrics and gavel's infrastructure belong to no one organization, so they
+show only on the dashboard of every organization.
 
 ## Platform admins
 

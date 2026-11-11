@@ -290,6 +290,10 @@ export function App() {
     commitRoute({ tab: 'tasks', selectedPath: id ?? '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
   }, [commitRoute, filters, scopeProject]);
 
+  const navigatePlatformOrg = useCallback((org: string) => {
+    commitRoute({ tab: 'platform', selectedPath: org, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
+  }, [commitRoute, filters, scopeProject]);
+
   const navigateRun = useCallback((id: string) => {
     commitRoute({ tab: 'runs', selectedPath: id, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
   }, [commitRoute, filters, scopeProject]);
@@ -828,7 +832,7 @@ export function App() {
         ) : activeTab === 'runs' ? (
           <RunsView selectedId={selectedPath} onSelect={navigateRun} />
         ) : activeTab === 'platform' ? (
-          <PlatformView />
+          <PlatformView selectedOrg={selectedPath} onSelectOrg={navigatePlatformOrg} />
         ) : activeTab === 'prompts' ? (
           <PromptsView
             projects={scopedProjects}
