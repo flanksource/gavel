@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
+	"github.com/flanksource/captain/pkg/substrate/substratetest"
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/api/clerktest"
@@ -227,6 +229,28 @@ func TestHostedPlatformReadsMissionControl(t *testing.T) {
 	require.Len(t, mc.Searches(), 1)
 	assert.Equal(t, "namespace=gavel", mc.Searches()[0].Configs[0].Search)
 	assert.Contains(t, get("/api/platform/substrate/metrics"), `"name":"Crashes","type":"number","value":3`)
+}
+
+func TestHostedPlatformListsSubstratesInventory(t *testing.T) {
+	server := substratetest.Start(t)
+	server.AddWorker(substrate.Worker{Name: "pool-a-0", Pool: "pool-a", State: "active"})
+	options := server.Options()
+	f := newHostedFixture(t, func(o *DashboardOptions) {
+		o.Sandbox, o.SubstrateTemplate = "substrate", "gavel-runner"
+		o.SubstrateEnvAPI, o.SubstrateControl = options.EnvAPI, options.Control
+		o.SubstrateGavelName, o.credentialProviderToken = "beta", "provider-token"
+	})
+	f.clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+	req, err := http.NewRequest(http.MethodGet, f.server.URL+"/api/platform/substrate/inventory", nil)
+	require.NoError(t, err)
+	req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	assert.Contains(t, string(body), `"name":"pool-a-0"`)
 }
 
 func TestHostedPush(t *testing.T) {
