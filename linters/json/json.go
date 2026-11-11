@@ -29,7 +29,7 @@ func (j *JSON) HasDefaultActivation(workDir string) bool {
 }
 func (j *JSON) SetOptions(options linters.RunOptions) { j.RunOptions = options }
 func (j *JSON) DefaultIncludes() []string {
-	return []string{"**/*.json", "**/*.yaml", "**/*.yml", "**/*.ndjson"}
+	return []string{"**/*.json", "**/*.yaml", "**/*.yml", "**/*.ndjson", "**/*.md", "**/*.mdx"}
 }
 func (j *JSON) DefaultExcludes() []string {
 	return []string{"node_modules/**", "vendor/**", ".gavel/**"}
@@ -158,7 +158,7 @@ func (j *JSON) files(ctx context.Context) ([]string, error) {
 
 func supported(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".json", ".yaml", ".yml", ".ndjson":
+	case ".json", ".yaml", ".yml", ".ndjson", ".md", ".mdx":
 		return true
 	default:
 		return false

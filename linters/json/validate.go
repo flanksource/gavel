@@ -19,6 +19,9 @@ func (v *validator) validate(input fileInput, doc document) ([]models.Violation,
 		}
 	}
 	if reference == "" {
+		reference = input.fallback
+	}
+	if reference == "" {
 		return nil, nil
 	}
 	schema, err := v.compile(reference, filepath.Dir(input.path))

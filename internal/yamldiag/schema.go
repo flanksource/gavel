@@ -44,7 +44,10 @@ func Violations(path string, data []byte, node *yaml.Node, offset int, invalid *
 		}
 		v := models.NewViolationBuilder().WithFile(path).WithLocation(line, column).WithSource("json").WithRuleFromLinter("json", "schema").WithMessage(text).Build()
 		v.Severity = models.SeverityError
-		v.Excerpt = models.NewSourceExcerpt(data, line, column)
+		// data is the fragment the node was parsed from; offset places it in the file.
+		v.Excerpt = models.NewSourceExcerpt(data, line-offset, column)
+		v.Excerpt.StartLine += offset
+		v.Excerpt.Line += offset
 		out = append(out, v)
 	}
 	return out

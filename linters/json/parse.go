@@ -22,6 +22,8 @@ type fileInput struct {
 	data    []byte
 	schema  string
 	workDir string
+	// fallback is the resolved PathSchema of a file declaring no schema.
+	fallback string
 }
 
 type document struct {
@@ -40,12 +42,24 @@ func (v *validator) lintFile(input fileInput) ([]models.Violation, error) {
 			return nil, err
 		}
 		input.schema = location
+	} else {
+		fallback, err := PathSchema(input.path)
+		if err != nil {
+			return nil, err
+		}
+		if fallback != "" {
+			if input.fallback, err = ResolveSchema(fallback, filepath.Dir(input.path)); err != nil {
+				return nil, err
+			}
+		}
 	}
 	switch strings.ToLower(filepath.Ext(input.path)) {
 	case ".ndjson":
 		return v.lintRecords(input)
 	case ".yaml", ".yml":
 		return v.lintYAML(input)
+	case ".md", ".mdx":
+		return v.lintMarkdown(input)
 	default:
 		doc, err := parseJSON(input.data, 0)
 		if err != nil {
@@ -132,14 +146,17 @@ func (v *validator) validateYAML(input fileInput, doc document) ([]models.Violat
 		}
 	}
 	if input.schema == "" {
+		input.schema = input.fallback
+	}
+	if input.schema == "" {
 		if err := doc.node.Decode(&doc.value); err != nil {
-			return []models.Violation{syntaxViolation(input.path, input.data, err, 0)}, nil
+			return []models.Violation{syntaxViolation(input.path, input.data, err, doc.offset)}, nil
 		}
 		return nil, nil
 	}
 	doc.value, err = yamlValue(&doc.node, map[*yaml.Node]bool{})
 	if err != nil {
-		return []models.Violation{syntaxViolation(input.path, input.data, err, 0)}, nil
+		return []models.Violation{syntaxViolation(input.path, input.data, err, doc.offset)}, nil
 	}
 	return v.validate(input, doc)
 }

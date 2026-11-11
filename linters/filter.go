@@ -111,7 +111,7 @@ func violationMatchesAnyScope(file, resultWorkDir, callerWorkDir string, scopes 
 		return true
 	}
 	if filepath.IsAbs(file) {
-		return pathMatchesAnyScope(filepath.Clean(file), scopes)
+		return PathMatchesAnyScope(filepath.Clean(file), scopes)
 	}
 	bases := make([]string, 0, 2)
 	if resultWorkDir != "" {
@@ -126,20 +126,20 @@ func violationMatchesAnyScope(file, resultWorkDir, callerWorkDir string, scopes 
 	}
 	for _, base := range bases {
 		candidate := filepath.Clean(filepath.Join(base, file))
-		if pathMatchesAnyScope(candidate, scopes) {
+		if PathMatchesAnyScope(candidate, scopes) {
 			return true
 		}
 	}
 	return false
 }
 
-// pathMatchesAnyScope reports whether absPath equals or is a descendant of
+// PathMatchesAnyScope reports whether absPath equals or is a descendant of
 // any scope path. Scope entries naming a file match only that exact file;
 // entries naming a directory match the directory itself and everything under
 // it. Non-existent scope entries are treated as directories (a typo-tolerant
 // prefix match) so the filter is useful even when the user typed a path that
 // does not yet exist on disk.
-func pathMatchesAnyScope(absPath string, scopes []string) bool {
+func PathMatchesAnyScope(absPath string, scopes []string) bool {
 	for _, scope := range scopes {
 		if absPath == scope {
 			return true

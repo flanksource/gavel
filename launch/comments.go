@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/comments"
+	"github.com/flanksource/gavel/comments/agents"
 	api "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/comments/postgres"
 	"gorm.io/gorm"
@@ -38,9 +39,10 @@ func (h localCommentHost) Resolve(ctx context.Context, p comments.Principal, t c
 	return t, h.Authorize(ctx, p, "target", t)
 }
 
-// CommentsHandler embeds comments for a local workspace. It never provisions storage.
+// CommentsHandler embeds comments for a local workspace, delivering threads to
+// agents through bridge. It never provisions storage.
 // Actor assertions are accepted only from loopback callers such as a local UI host.
-func CommentsHandler(db *gorm.DB, root string) (http.Handler, error) {
+func CommentsHandler(db *gorm.DB, root string, bridge agents.Bridge) (http.Handler, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -51,7 +53,11 @@ func CommentsHandler(db *gorm.DB, root string) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	service, err := comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 32 << 20})
+	delivery, err := agents.Delivery(agents.Options{Bridge: bridge, Groups: store, Workdir: func(context.Context, comments.Target) (string, error) { return root, nil }})
+	if err != nil {
+		return nil, err
+	}
+	service, err := comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 32 << 20, Routes: store, Delivery: delivery})
 	if err != nil {
 		return nil, err
 	}

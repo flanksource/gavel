@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -34,12 +35,15 @@ func ReportView(results []*linters.LinterResult, opts ReportOptions) any {
 }
 
 // SnapshotOptions is one finished lint run: the directory it linted, the
-// version of the tool that ran it, when it started, the change selection it
-// was narrowed to and its results.
+// version of the tool that ran it, when it started, the files and change
+// selection it was narrowed to and its results.
 type SnapshotOptions struct {
 	WorkDir string
 	Version string
 	Started time.Time
+	// Files are the files or folders the run was limited to, relative to
+	// WorkDir unless absolute; empty for a run over the whole tree.
+	Files   []string
 	Changes []*changeset.ChangeSet
 	Results []*linters.LinterResult
 }
@@ -48,16 +52,31 @@ type SnapshotOptions struct {
 func Snapshot(opts SnapshotOptions) *testui.Snapshot {
 	return &testui.Snapshot{
 		Metadata: &testui.SnapshotMetadata{
-			Version: opts.Version,
-			Started: opts.Started,
-			Ended:   time.Now().UTC(),
-			Kind:    "lint",
-			Changes: opts.Changes,
+			Version:   opts.Version,
+			Started:   opts.Started,
+			Ended:     time.Now().UTC(),
+			Kind:      "lint",
+			LintFiles: absoluteFiles(opts.WorkDir, opts.Files),
+			Changes:   opts.Changes,
 		},
 		Git:    snapshots.GitInfo(opts.WorkDir),
 		Status: testui.SnapshotStatus{LintRun: true},
 		Lint:   opts.Results,
 	}
+}
+
+func absoluteFiles(workDir string, files []string) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	abs := make([]string, len(files))
+	for i, file := range files {
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(workDir, file)
+		}
+		abs[i] = filepath.Clean(file)
+	}
+	return abs
 }
 
 // SaveSnapshot persists a lint snapshot under stateRoot's .gavel: keyed by

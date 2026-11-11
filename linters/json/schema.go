@@ -34,7 +34,7 @@ func ResolveSchema(reference, directory string) (string, error) {
 		return "", fmt.Errorf("schema %q: %w", reference, err)
 	}
 	if parsed.IsAbs() {
-		if parsed.Scheme != "file" && parsed.Scheme != "http" && parsed.Scheme != "https" {
+		if parsed.Scheme != "file" && parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != BuiltinScheme {
 			return "", fmt.Errorf("unsupported schema URL scheme %q", parsed.Scheme)
 		}
 		return parsed.String(), nil
@@ -87,6 +87,9 @@ func (l schemaLoader) Load(location string) (any, error) {
 		}
 		defer file.Close()
 		return decodeSchema(file, path, "")
+	}
+	if parsed.Scheme == BuiltinScheme {
+		return loadBuiltin(location)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported schema URL scheme %q", parsed.Scheme)

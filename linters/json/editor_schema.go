@@ -29,6 +29,11 @@ func EditorSchema(ctx context.Context, data []byte, path, override string) (map[
 				return nil, err
 			}
 		}
+		if reference == "" {
+			if reference, err = PathSchema(path); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if reference == "" {
 		return nil, nil
