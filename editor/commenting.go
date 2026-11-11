@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/flanksource/gavel/comments"
+	"github.com/flanksource/gavel/comments/agents"
 	"github.com/flanksource/gavel/comments/postgres"
 	"github.com/flanksource/gavel/internal/database"
 	ui "github.com/flanksource/gavel/pr/ui"
@@ -94,8 +95,15 @@ func (s *Server) OpenComments(ctx context.Context) (*comments.Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	if s.Agents == nil {
+		return nil, fmt.Errorf("editor comments need an agents bridge")
+	}
+	delivery, err := agents.Delivery(agents.Options{Bridge: s.Agents, Groups: store, Workdir: ui.CommentWorkdir})
+	if err != nil {
+		return nil, err
+	}
 	host := commentHost{store: s.Store}
-	return comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 10 << 20})
+	return comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 10 << 20, Routes: configRoutes{db: store, files: s.Store}, Delivery: delivery})
 }
 
 // me serves GET /api/me: the actor this editor authors comments as.

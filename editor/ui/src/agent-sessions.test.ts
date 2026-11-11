@@ -40,6 +40,19 @@ describe("sendToItems", () => {
     expect([send.mock.calls, startNew.mock.calls.length]).toEqual([[["s-1"]], 1]);
   });
 
+  it("offers the page agent first and hands the thread to it, disabled while a session works the thread", () => {
+    const handOff = vi.fn(async () => {});
+    const pageAgent = { label: "slides-review", send: handOff };
+    const idle = sendToItems(root(), [fixer], { ...noop, pageAgent });
+    idle[0]?.onSelect();
+    const busy = sendToItems(root({ sessionId: "s-1", requestedAt: "2026-11-08T10:01:00Z", state: "sent" }), [], { ...noop, pageAgent });
+    expect([idle.map((item) => item.label), handOff.mock.calls.length, Boolean(busy[0]?.disabled)]).toEqual([
+      ["Send to page agent: slides-review", "Send to rename-pass", "Run new agent session…"],
+      1,
+      true,
+    ]);
+  });
+
   it("offers nothing on a reply", () => {
     expect(sendToItems({ ...root(), parentId: "c-0" }, [fixer], noop)).toEqual([]);
   });

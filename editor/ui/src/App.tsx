@@ -23,6 +23,7 @@ import {
   isImagePath,
   lintFindings,
   relativeUrlPath,
+  testFindings,
   type FileFinding,
   type FileRef,
   type FileReviewTab,
@@ -36,7 +37,9 @@ import {
   violationIgnoreActions,
   type LintAction,
   type LinterResult,
+  type Test,
 } from "@flanksource/clicky-ui/data";
+import { useEventSourceFactory } from "@flanksource/clicky-ui/hooks";
 import { createAutosave, type Autosave } from "./autosave";
 import { request, type FileEntry, type Document } from "./api";
 import { commonRoot, editorFindingRef, nodePath, relativeToFile } from "./paths";
@@ -47,14 +50,38 @@ import { useFileComments } from "./file-comments";
 import { CreateProjectDialog } from "./CreateProjectDialog";
 import { CurrentUser } from "./CurrentUser";
 import { NewAgentSessionDialog } from "./NewAgentSessionDialog";
+import { PageAgentControl } from "./PageAgentControl";
 
+// The problems shown for the edited files: recorded lint violations and failed tests
+// (GET /api/lint, streamed from /api/lint/stream), and gavel runs in progress.
+type ActiveRun = { pid: number; command: string; groups: { name: string; summary: { total: number; passed: number; failed: number; pending?: number; running?: number } }[] };
 type Run = {
   running: boolean;
   results: LinterResult[] | null;
+  tests: Test[] | null;
   error?: string;
   stale?: boolean;
+  staleFiles: string[] | null;
+  recorded?: string;
   revisions: Record<string, string> | null;
+  active: ActiveRun[] | null;
 };
+
+function activeRunLabel(run: ActiveRun): string {
+  const progress = run.groups.map(({ name, summary }) => {
+    const done = summary.total - (summary.pending ?? 0) - (summary.running ?? 0);
+    return `${name} ${done}/${summary.total}`;
+  });
+  return [`${run.command} running`, ...progress].join(" · ");
+}
+
+function recordedLabel(recorded: string): string {
+  const minutes = Math.round((Date.now() - new Date(recorded).getTime()) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60 * 24) return `${Math.round(minutes / 60)}h ago`;
+  return new Date(recorded).toLocaleString();
+}
 // The open node is named by its path in the tree (relative to the edited files' common root).
 // `tasks` (present, "" for the list or a run id) shows the full task manager instead.
 type Route = { selection: FileTreeSelection | null; view: FileReviewView; line?: number; tasks?: string };
@@ -136,7 +163,7 @@ export function App() {
   const active = route.selection?.kind === "file" ? byRef.get(fileRefKey(route.selection.ref)) : undefined;
   const activeRef = active ? { file: relativePath(active) } : null;
   const draft = active ? queues.current.get(active.id)?.state() : undefined;
-  const { comments, missingProject, createProject, newSession } = useFileComments({
+  const { comments, missingProject, createProject, newSession, pageAgent } = useFileComments({
     fileId: active?.kind === "document" ? active.id : null,
     queue: active ? queues.current.get(active.id) : undefined,
     view: route.view,
@@ -251,18 +278,20 @@ export function App() {
     };
   }, [active?.id, draft?.source, active?.path]);
 
+  const openStream = useEventSourceFactory();
   useEffect(() => {
-    if (!run) return;
-    const timer = setInterval(() => {
-      void request<Run>("/api/lint")
-        .then(setRun)
-        .catch((cause) => {
-          setError(String(cause));
-          setRun(null);
-        });
-    }, run.running ? 500 : 2000);
-    return () => clearInterval(timer);
-  }, [run?.running]);
+    const stream = openStream("/api/lint/stream");
+    stream.onmessage = (event) => setRun(JSON.parse(event.data) as Run);
+    const failed = (event: Event) => {
+      const data = (event as MessageEvent).data;
+      if (typeof data === "string") setError(`problems stream: ${(JSON.parse(data) as { error: string }).error}`);
+    };
+    stream.addEventListener("error", failed);
+    return () => {
+      stream.removeEventListener("error", failed);
+      stream.close();
+    };
+  }, [openStream]);
 
   const lint = async (targets: FileEntry[]) => {
     try {
@@ -302,8 +331,9 @@ export function App() {
         return shown;
       }),
     );
-    return { findings, origins };
-  }, [run?.results, root]);
+    const tests = testFindings(run?.tests ?? []).map((finding) => ({ ...finding, ...editorFindingRef(finding, root), workDir: undefined }));
+    return { findings: [...findings, ...tests], origins };
+  }, [run?.results, run?.tests, root]);
   const ignore = async (action: LintAction) => {
     try {
       setError("");
@@ -314,6 +344,7 @@ export function App() {
     }
   };
   const findingActions = (shown: FileFinding): DropdownMenuItem[] => {
+    if (shown.kind === "test") return [];
     const origin = origins.get(shown);
     if (!origin) throw new Error(`no lint result recorded for the finding at ${shown.file}:${shown.line}`);
     const { linter, finding } = origin;
@@ -375,6 +406,16 @@ export function App() {
     const state = queues.current.get(entry.id)?.state();
     return (
       <div className="flex flex-wrap items-center gap-2 text-sm" role="status">
+        {pageAgent && entry.id === active?.id && (
+          <PageAgentControl
+            fileId={entry.id}
+            agent={pageAgent.agent}
+            choice={pageAgent.choice}
+            sessions={pageAgent.sessions}
+            onChoose={pageAgent.choose}
+            onSaved={pageAgent.refresh}
+          />
+        )}
         {state && <span>{state.status === "error" ? state.error : state.status}</span>}
         {state?.status === "error" && (
           <>
@@ -421,6 +462,7 @@ export function App() {
             path={ref.file}
             value={ctx.source}
             onChange={(source) => ctx.onSourceChange?.(source)}
+            frontmatterSchema={entry.id === active?.id ? schema : null}
             resolveImageUrl={(src) => {
               const path = relativeUrlPath(src);
               return path === null ? src : `/api/file/${entry.id}/image?path=${encodeURIComponent(path)}`;
@@ -635,7 +677,13 @@ export function App() {
             </span>
             {run && (
               <span role="status" className="text-muted-foreground">
-                {run.running ? "Linting…" : run.error ? run.error : stale ? "Results are stale" : "Lint complete"}
+                {[
+                  run.running ? "Linting…" : run.error ? run.error : run.recorded ? `From gavel run ${recordedLabel(run.recorded)}` : null,
+                  ...(run.active ?? []).map(activeRunLabel),
+                  !run.running && stale ? "Results are stale" : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               </span>
             )}
             <DropdownMenu

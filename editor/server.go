@@ -15,22 +15,35 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/route"
+	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/comments"
+	"github.com/flanksource/gavel/comments/agents"
 	"github.com/flanksource/gavel/internal/fileread"
-	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 	jsonlint "github.com/flanksource/gavel/linters/json"
+	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/verify"
 )
 
+// LintRun is the problems shown for the edited files: the lint violations and
+// failed tests the workspaces' recorded runs hold for them (see Reload), the
+// editor's own lint run in progress, and gavel runs in progress elsewhere.
 type LintRun struct {
-	Running   bool                    `json:"running"`
-	Results   []*linters.LinterResult `json:"results"`
-	Error     string                  `json:"error,omitempty"`
-	Revisions map[string]string       `json:"revisions"`
-	Stale     bool                    `json:"stale"`
+	Running bool                    `json:"running"`
+	Results []*linters.LinterResult `json:"results"`
+	Tests   []parsers.Test          `json:"tests"`
+	Error   string                  `json:"error,omitempty"`
+	// Revisions are the files' revisions when the problems were loaded.
+	Revisions map[string]string `json:"revisions"`
+	// StaleFiles are the ids of files changed since the run that checked them.
+	StaleFiles []string `json:"staleFiles"`
+	Stale      bool     `json:"stale"`
+	// Recorded is when the newest run the problems come from ended.
+	Recorded *time.Time `json:"recorded,omitempty"`
+	// Active are gavel test/lint processes running against the files' workspaces.
+	Active []ActiveRun `json:"active"`
 }
 type Server struct {
 	Comments       http.Handler
@@ -43,9 +56,15 @@ type Server struct {
 	DevProxy http.Handler
 	Context  context.Context
 	// Agents reaches the live agent sessions threads are sent to.
-	Agents AgentBridge
-	mu     sync.Mutex
-	run    LintRun
+	Agents agents.Bridge
+	// Version is the gavel version recorded on the lint runs the editor saves.
+	Version string
+	mu      sync.Mutex
+	run     LintRun
+	// staleAtLoad marks files changed on disk after the run that checked them.
+	staleAtLoad map[string]bool
+	stateRoots  []string
+	updated     sse.Notifier
 }
 
 func (s *Server) Handler() http.Handler {
@@ -55,12 +74,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/file/{id}/comments", s.listComments)
 	mux.HandleFunc("POST /api/file/{id}/comments/read", s.markFileCommentsRead)
 	mux.HandleFunc("GET /api/comments", s.commentSummary)
-	mux.HandleFunc("POST /api/file/{id}/comments/{cid}/send", s.sendComment)
-	mux.HandleFunc("GET /api/agent-sessions", s.agentSessions)
 	mux.HandleFunc("POST /api/projects", s.createProject)
-	mux.HandleFunc("POST /api/file/{id}/comments/{cid}/run", s.runComment)
-	mux.HandleFunc("POST /api/file/{id}/comments/{cid}/run/preview", s.previewRun)
 	mux.HandleFunc("GET /api/file/{id}/agent-run/context", s.agentRunContextOf)
+	mux.HandleFunc("GET /api/file/{id}/agent", s.pageAgentOf)
 	mux.HandleFunc("GET /api/file/{id}/agent-run/permissions", s.permissionCatalog)
 	mux.Handle("/api/captain/prompt/runs/", captainPromptRuns())
 	catalog := runtimeCatalog()
@@ -82,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/schema/{id}", s.schema)
 	mux.HandleFunc("POST /api/lint", s.startLint)
 	mux.HandleFunc("GET /api/lint", s.lintStatus)
+	mux.HandleFunc("GET /api/lint/stream", s.lintStream)
 	mux.HandleFunc("POST /api/lint/ignore", s.ignoreLint)
 	// The task-manager API behind the navbar indicator: lint runs as a clicky
 	// task group, so its progress shows up here alongside any other task.
@@ -208,41 +225,37 @@ func (s *Server) startLint(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "select files to lint", http.StatusBadRequest)
 		return
 	}
-	revisions := map[string]string{}
+	canonical := s.Store.Paths()
 	paths := []string{}
 	for _, id := range input.Files {
-		doc, err := s.Store.Read(id)
-		if err != nil {
+		if _, err := s.Store.Read(id); err != nil {
 			respond(w, nil, err)
 			return
 		}
-		paths = append(paths, doc.Path)
-		revisions[id] = doc.Revision
+		paths = append(paths, canonical[id])
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.run.Running {
+		s.mu.Unlock()
 		http.Error(w, "lint is already running", http.StatusConflict)
 		return
 	}
-	s.run = LintRun{Running: true, Revisions: revisions}
+	s.run.Running, s.run.Error = true, ""
+	s.mu.Unlock()
+	s.updated.Notify()
 	go func() {
-		fields := map[string]bool{"fix": true, "files": true, "changed": true, "since": true, "changed-files": true, "failed": true}
-		if s.Schema != "" {
-			fields["schema"] = true
-		}
-		results, err := lint.Run(s.Context, lint.Options{WorkDir: filepath.Dir(paths[0]), Files: paths, Schema: s.Schema, OptionFields: fields, Fix: false})
+		err := s.lintFiles(paths)
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		s.run.Running = false
-		s.run.Results = results
 		if err != nil {
 			s.run.Error = err.Error()
 		}
+		s.mu.Unlock()
+		s.updated.Notify()
 	}()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	respond(w, s.run, nil)
+	respond(w, s.lintState(), nil)
 }
 
 // ignoreLint saves an ignore rule to the .gavel.yaml of a work dir from the
@@ -268,17 +281,10 @@ func (s *Server) ignoreLint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filtered := linters.FilterIgnoredViolations(s.run.Results, []verify.LintIgnoreRule{rule})
+	s.updated.Notify()
 	respond(w, testui.IgnoreResponse{RuleCount: count, Filtered: filtered}, nil)
 }
 
 func (s *Server) lintStatus(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, revision := range s.run.Revisions {
-		doc, err := s.Store.Read(id)
-		if err != nil || doc.Revision != revision {
-			s.run.Stale = true
-		}
-	}
-	respond(w, s.run, nil)
+	respond(w, s.lintState(), nil)
 }

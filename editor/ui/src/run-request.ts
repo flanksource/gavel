@@ -35,7 +35,7 @@ export type RunContext = {
   dir: string;
 };
 
-/** POST /api/file/{id}/comments/{cid}/run (and /run/preview): captain's run request plus extra instructions. */
+/** The new-session dialog's run: captain's run request plus extra instructions, sent as a delivery target by runTargetOf. */
 export type RunRequest = {
   prompt?: string;
   presets?: string[];
@@ -44,7 +44,17 @@ export type RunRequest = {
   instructions?: string;
 };
 
-/** POST .../run/preview. */
+/** A run delivery target of the shared comments API (POST /api/v1/comments/{id}/deliver and /deliver/preview). */
+export type RunTarget = { kind: "run"; prompt: string; runOptions?: Omit<RunRequest, "prompt"> };
+
+/** The dialog's run as a delivery target: the prompt, and every other choice as its runOptions. */
+export function runTargetOf(run: RunRequest): RunTarget {
+  const { prompt, ...runOptions } = run;
+  if (!prompt) throw new Error("a new agent session needs a prompt to run");
+  return { kind: "run", prompt, ...(Object.keys(runOptions).length > 0 ? { runOptions } : {}) };
+}
+
+/** POST /api/v1/comments/{id}/deliver/preview. */
 export type RunPreview = {
   model?: string;
   mode?: string;

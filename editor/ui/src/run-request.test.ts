@@ -7,6 +7,7 @@ import {
   effectiveRuntimeOf,
   findPrompt,
   modeUnavailable,
+  runTargetOf,
   toolMetaOf,
   variablesSchemaOf,
   type PromptSummary,
@@ -51,6 +52,19 @@ describe("buildRunRequest", () => {
 
   it("is empty when nothing was chosen", () => {
     expect(buildRunRequest({ prompt: "", value: {}, instructions: "", hostVariables: HOST })).toEqual({});
+  });
+});
+
+describe("runTargetOf", () => {
+  const promptId = "library:editor-comments";
+  it("sends the prompt as the run target and every other choice as its runOptions", () => {
+    const options = { presets: ["fast"], variables: { tone: "terse" }, instructions: "Keep the heading" };
+    expect(runTargetOf({ prompt: promptId, ...options })).toEqual({ kind: "run", prompt: promptId, runOptions: options });
+  });
+
+  it("omits empty runOptions and refuses a run without a prompt", () => {
+    expect(runTargetOf({ prompt: promptId })).toEqual({ kind: "run", prompt: promptId });
+    expect(() => runTargetOf({ instructions: "x" })).toThrow("needs a prompt");
   });
 });
 

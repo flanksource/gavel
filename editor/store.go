@@ -139,6 +139,17 @@ func (s *Store) Files() []File {
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
 }
+
+// Paths maps each file id to its canonical (symlink-resolved) absolute path.
+func (s *Store) Paths() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	paths := make(map[string]string, len(s.files))
+	for id, e := range s.files {
+		paths[id] = filepath.Join(e.root, e.name)
+	}
+	return paths
+}
 func revision(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }
 
 // entry looks up id and confirms its selected path still resolves to the file

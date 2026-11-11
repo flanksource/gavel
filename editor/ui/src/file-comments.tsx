@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SessionTail } from "@flanksource/clicky-ui/ai";
+import { SessionInspector, SessionTail } from "@flanksource/clicky-ui/ai";
 import type { Comment, CommentAgentRun, CommentAuthor, CommentCreateInput } from "@flanksource/clicky-ui/comments";
+import { Button, Modal } from "@flanksource/clicky-ui/components";
 import { Badge } from "@flanksource/clicky-ui/data";
 import type { FileReviewComments } from "@flanksource/clicky-ui/file-findings";
 import type { Autosave } from "./autosave";
 import { ApiError, request } from "./api";
-import { sendToItems, useAgentSessions } from "./agent-sessions";
+import { sendToItems, useAgentSessions, type AgentSession, type PageAgentHandOff } from "./agent-sessions";
 import { anchorOf, selectorOf, type Selector } from "./comment-anchors";
-import type { RunPreview, RunRequest } from "./run-request";
+import { runOf, usePageAgent, type PageAgent, type ViewerChoice } from "./page-agent";
+import { runTargetOf, type RunPreview, type RunRequest, type RunTarget } from "./run-request";
 
 type Author = { label?: string; id: string; kind: "user" | "agent" };
 export type NativeComment = {
@@ -45,7 +47,36 @@ export type FileCommentsState = {
     start: (run: RunRequest) => Promise<void>;
     cancel: () => void;
   };
+  /** The page's configured agent, the viewer's hand-off choice and the live sessions it can pick from. */
+  pageAgent?: {
+    agent: PageAgent;
+    choice: ViewerChoice;
+    sessions: readonly AgentSession[];
+    choose: (choice: ViewerChoice) => void;
+    refresh: () => Promise<void>;
+  };
 };
+
+/** A thread's session as one live line, expanding into the full clicky session inspector. */
+function SessionPreview({ sessionId }: { sessionId: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const src = `/api/captain/sessions/${encodeURIComponent(sessionId)}`;
+  return (
+    <>
+      <div className="flex min-w-0 items-center gap-1">
+        <SessionTail src={src} emptyLabel="Waiting for the session…" className="min-w-0 flex-1" />
+        <Button size="sm" variant="ghost" onClick={() => setExpanded(true)} title="Show the full session">
+          Expand
+        </Button>
+      </div>
+      {expanded && (
+        <Modal open onClose={() => setExpanded(false)} title="Agent session" size="full">
+          <SessionInspector src={src} className="h-[75vh] min-h-0" layout="compact" />
+        </Modal>
+      )}
+    </>
+  );
+}
 
 export function missingProjectOf(cause: unknown): MissingProject | undefined {
   if (!(cause instanceof ApiError) || cause.status !== 409) return undefined;
@@ -144,7 +175,8 @@ export function useFileComments({
   const revision = queue?.state().revision;
   useEffect(() => void refresh(), [revision, refresh]);
 
-  const sessions = useAgentSessions(onError);
+  const sessions = useAgentSessions(listing.scope, onError);
+  const page = usePageAgent(listing.scope ? fileId : null, onError);
   const items = useMemo<Comment[]>(() => listing.comments.flatMap(threadItems), [listing]);
 
   const createProject = async (project: ProjectInput) => {
@@ -160,20 +192,48 @@ export function useFileComments({
     await refresh();
   };
 
+  // The shared comments delivery: the thread at its current version, to a live session or a new run.
+  const deliver = async (commentId: string, target: { kind: "session"; sessionId: string } | RunTarget) => {
+    const root = listing.comments.find((row) => row.id === commentId);
+    if (!root) throw new Error("Comment no longer exists; refresh comments");
+    await request(`/api/v1/comments/${commentId}/deliver`, { expectedVersion: root.version, requestId: crypto.randomUUID(), target });
+  };
   // A failed hand-off is recorded on the thread (agentRun.state "error") as well as reported.
   const send = async (commentId: string, sessionId: string) => {
     try {
-      await request(`/api/file/${fileId}/comments/${commentId}/send`, { sessionId });
+      await deliver(commentId, { kind: "session", sessionId });
     } catch (cause) {
       onError(String(cause));
     } finally {
       await refresh();
     }
   };
+  // "Send to page agent": the viewer's live session for the page, else a new run of its configured agent.
+  const pageHandOff = (commentId: string): PageAgentHandOff | undefined => {
+    const effective = page.agent?.effective;
+    if (page.choice.kind === "session") {
+      const sessionId = page.choice.sessionId;
+      const session = sessions.find((candidate) => candidate.id === sessionId);
+      return { label: session?.title ?? sessionId, send: () => send(commentId, sessionId) };
+    }
+    if (!effective) return undefined;
+    return {
+      label: effective.target.prompt,
+      send: async () => {
+        try {
+          await deliver(commentId, runTargetOf(runOf(effective)));
+        } catch (cause) {
+          onError(String(cause));
+        } finally {
+          await refresh();
+        }
+      },
+    };
+  };
   // A new managed session in the file's project; the dialog reports a failed launch itself.
   const startRun = async (commentId: string, run: RunRequest) => {
     try {
-      await request(`/api/file/${fileId}/comments/${commentId}/run`, run);
+      await deliver(commentId, runTargetOf(run));
       setNewSessionFor(undefined);
     } finally {
       await refresh();
@@ -182,7 +242,7 @@ export function useFileComments({
   const newSession = newSessionFor && {
     thread: newSessionFor.body,
     fileId,
-    preview: (run: RunRequest) => request<RunPreview>(`/api/file/${fileId}/comments/${newSessionFor.id}/run/preview`, run),
+    preview: (run: RunRequest) => request<RunPreview>(`/api/v1/comments/${newSessionFor.id}/deliver/preview`, { target: runTargetOf(run) }),
     start: (run: RunRequest) => startRun(newSessionFor.id, run),
     cancel: () => setNewSessionFor(undefined),
   };
@@ -220,7 +280,8 @@ export function useFileComments({
     pending.current = undefined;
   };
 
-  return { createProject, ...(newSession ? { newSession } : {}), comments: {
+  const pageAgent = page.agent && { agent: page.agent, choice: page.choice, sessions, choose: page.choose, refresh: page.refresh };
+  return { createProject, ...(newSession ? { newSession } : {}), ...(pageAgent ? { pageAgent } : {}), comments: {
     items,
     anchoring: "patch",
     targets: { element: true, document: true, screenshot: true },
@@ -236,8 +297,14 @@ export function useFileComments({
         if (window.confirm("Delete this comment and its replies?")) await act(id, "delete");
       },
     },
-    extraAssignItems: (comment) =>
-      sendToItems(comment, sessions, { send: (sessionId) => send(comment.id, sessionId), startNew: () => setNewSessionFor(comment) }),
+    extraAssignItems: (comment) => {
+      const handOff = pageHandOff(comment.id);
+      return sendToItems(comment, sessions, {
+        send: (sessionId) => send(comment.id, sessionId),
+        startNew: () => setNewSessionFor(comment),
+        ...(handOff ? { pageAgent: handOff } : {}),
+      });
+    },
     renderRootDetails: (comment) => {
       const row = listing.comments.find((candidate) => candidate.id === comment.id);
       if (!row) return null;
@@ -253,9 +320,7 @@ export function useFileComments({
             </a>
           )}
           {run && <AgentRunChip run={run} />}
-          {run?.sessionId && run.state !== "error" && comment.status === "in_progress" && (
-            <SessionTail src={`/api/captain/sessions/${encodeURIComponent(run.sessionId)}`} emptyLabel="Waiting for the session…" />
-          )}
+          {run?.sessionId && run.state !== "error" && <SessionPreview sessionId={run.sessionId} />}
         </div>
       );
     },

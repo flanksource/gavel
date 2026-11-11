@@ -40,7 +40,8 @@ function useDebounced<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
-function useRuntimeCatalogs(fileId: string) {
+/** The model and runtime catalogs and the file's run context every agent run choice is made from. */
+export function useRuntimeCatalogs(fileId: string) {
   const models = useQuery({
     queryKey: ["chat", "models"],
     queryFn: async () => {
