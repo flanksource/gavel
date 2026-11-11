@@ -73,3 +73,21 @@ it('says how to list substrate when serve runs without it', async () => {
 
   expect((await screen.findByRole('alert')).textContent).toContain('--sandbox substrate');
 });
+
+it('shows only one organization\'s actors, and no workers, when given one', async () => {
+  response = {
+    status: 200,
+    body: {
+      workers: [{ name: 'pool-a-0', pool: 'pool-a', node: 'node-1', state: 'active', capacity: { cpuMillicores: 0, memoryBytes: 0, actors: 1 }, allocated: { cpuMillicores: 0, memoryBytes: 0, actors: 1 } }],
+      actors: [
+        { atespace: 'ate-env', name: 'gavel-run-1', state: 'running', run: '1', org: { org: 'a', orgName: 'Alpha', kind: 'agent' } },
+        { atespace: 'ate-env', name: 'default-template-0', state: 'running' },
+      ],
+    },
+  };
+  render(<SubstrateInventoryPanel org="a" />, { wrapper: queryTestWrapper() });
+
+  await screen.findByRole('table', { name: 'Substrate actors by owner' });
+  expect(cells('Substrate actors by owner')).toEqual([['Alpha', '1', '0', '0', '0', '1']]);
+  expect(screen.queryByRole('table', { name: 'Substrate workers' })).toBeNull();
+});

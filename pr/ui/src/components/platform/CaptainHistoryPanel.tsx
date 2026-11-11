@@ -132,12 +132,19 @@ function Table({ title, headings, rows }: { title: string; headings: string[]; r
   );
 }
 
-export function CaptainHistoryPanel() {
+// CaptainHistoryPanel shows every organization's Captain history, or only org's when given one.
+export function CaptainHistoryPanel({ org }: { org?: string } = {}) {
   const history = useQuery({
     queryKey: queryKeys.platform('captain-history', historyWindowDays),
     queryFn: ({ signal }) => fetchJSON<CaptainHistory>({ url: `/api/platform/captain-history?days=${historyWindowDays}`, signal, context: 'load Captain\'s history' }),
   });
-  const data = history.data;
+  const data = history.data && (org
+    ? {
+        days: history.data.days.filter(row => row.org === org),
+        failures: history.data.failures.filter(row => row.org === org),
+        live: history.data.live.filter(row => row.org === org),
+      }
+    : history.data);
   const runs = data?.days.reduce((sum, row) => sum + row.runs, 0) ?? 0;
   const failed = data?.days.filter(row => row.state === 'failed').reduce((sum, row) => sum + row.runs, 0) ?? 0;
   const seconds = data?.days.reduce((sum, row) => sum + row.runSeconds, 0) ?? 0;

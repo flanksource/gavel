@@ -85,12 +85,13 @@ function orgShares(usage: SandboxUsage): OrgShare[] {
 // kindSeries are the run kinds as stacked segments, each in its --kind-* color from index.css.
 const kindSeries: DaySeries[] = runKinds.map(kind => ({ key: kind, label: kindLabels[kind] ?? kind, color: `var(--kind-${kind})` }));
 
-export function SandboxUsagePanel() {
+// SandboxUsagePanel shows every organization's runs, or only org's when given one.
+export function SandboxUsagePanel({ org }: { org?: string } = {}) {
   const usage = useQuery({
     queryKey: queryKeys.platform('sandbox-runs', usageWindowDays),
     queryFn: ({ signal }) => fetchJSON<SandboxUsage>({ url: `/api/platform/sandbox-runs?days=${usageWindowDays}`, signal, context: 'load sandbox usage' }),
   });
-  const data = usage.data;
+  const data = usage.data && (org ? { days: usage.data.days.filter(row => row.org === org), active: usage.data.active.filter(row => row.org === org) } : usage.data);
   const runs = data?.days.reduce((sum, row) => sum + row.runs, 0) ?? 0;
   const failed = data?.days.filter(row => row.status === 'failed').reduce((sum, row) => sum + row.runs, 0) ?? 0;
   const seconds = data?.days.reduce((sum, row) => sum + row.runSeconds, 0) ?? 0;

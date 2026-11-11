@@ -84,3 +84,12 @@ it('says why the usage is missing', async () => {
 
   expect((await screen.findByRole('alert')).textContent).toContain('connection refused');
 });
+
+it('shows only one organization\'s runs when given one', async () => {
+  response = { status: 200, body: usage };
+  render(<SandboxUsagePanel org="o-beta" />, { wrapper: queryTestWrapper() });
+
+  expect(await screen.findByText('1 runs')).toBeTruthy();
+  expect(screen.getByText('2 active now')).toBeTruthy();
+  expect(screen.queryByRole('row', { name: /Alpha/ })).toBeNull();
+});
