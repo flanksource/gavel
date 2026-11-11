@@ -185,7 +185,12 @@ type LintConfig struct {
 	Fix PromptSpec `yaml:"fix,omitempty" json:"fix,omitempty"`
 	// Ignore accumulates across config layers: a suppression is a standing
 	// statement about this repo, so adding one must not revoke the home config's.
-	Ignore  []LintIgnoreRule            `yaml:"ignore,omitempty" json:"ignore,omitempty" merge:"append"`
+	Ignore []LintIgnoreRule `yaml:"ignore,omitempty" json:"ignore,omitempty" merge:"append"`
+	// Schemas maps file globs to the JSON Schema (path or HTTP(S) URL) of the
+	// files, or of Markdown files' frontmatter, that declare none. Globs and
+	// relative schema paths resolve against the declaring .gavel.yaml's
+	// directory, so each layer's entries keep applying to its own files.
+	Schemas map[string]string           `yaml:"schemas,omitempty" json:"schemas,omitempty"`
 	Linters map[string]LintLinterConfig `yaml:"linters,omitempty" json:"linters,omitempty"`
 }
 
@@ -364,9 +369,12 @@ type GavelConfig struct {
 	// overrides it.
 	Checks types.AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
 	Todos  TodosConfig             `yaml:"todos,omitempty" json:"todos,omitempty"`
-	Status StatusConfig            `yaml:"status,omitempty" json:"status,omitempty"`
-	Test   TestConfig              `yaml:"test,omitempty" json:"test,omitempty"`
-	PR     PRConfig                `yaml:"pr,omitempty" json:"pr,omitempty"`
+	// Comments configures comment threads on the files beneath each .gavel.yaml;
+	// its agents are read per file (see CommentAgentsConfig), not from the merge.
+	Comments CommentsConfig `yaml:"comments,omitempty" json:"comments,omitempty"`
+	Status   StatusConfig   `yaml:"status,omitempty" json:"status,omitempty"`
+	Test     TestConfig     `yaml:"test,omitempty" json:"test,omitempty"`
+	PR       PRConfig       `yaml:"pr,omitempty" json:"pr,omitempty"`
 	// Storage is where gavel serve keeps run results, attachments, trace stores and logs. Only the
 	// home config's is read (see LoadGlobalGavelConfig), so a repository can't redirect it.
 	Storage blob.Config `yaml:"storage,omitempty" json:"storage,omitempty"`

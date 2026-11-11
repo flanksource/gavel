@@ -6,10 +6,11 @@ export interface RunInfo {
   path: string;
   started?: string;
   ended?: string;
-  kind: 'test' | 'lint' | 'test+lint';
+  kind: 'test' | 'lint' | 'test+lint' | 'fixture';
   repo?: string;
   sha?: string;
   frameworks?: string[];
+  fixtureFiles?: string[];
   passed: number;
   failed: number;
   skipped: number;
@@ -59,7 +60,7 @@ export function runStartLabel(run: Pick<RunInfo, 'runId' | 'started'>): string {
 export function runResultLabel(run: RunInfo): string {
   const parts: string[] = [];
   if (run.total > 0) parts.push(run.failed > 0 ? `${run.failed} failed / ${run.total} tests` : `${run.total} tests`);
-  if (run.kind !== 'test') parts.push(`${run.lintViolations} lint`);
+  if (run.kind === 'lint' || run.kind === 'test+lint') parts.push(`${run.lintViolations} lint`);
   return parts.join(' · ') || 'no results';
 }
 

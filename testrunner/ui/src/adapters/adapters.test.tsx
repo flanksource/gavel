@@ -15,6 +15,8 @@ const idleActions: NodeActionsConfig = {
   testEditSupported: false,
   onTestEdit: async () => {},
   testEditBusy: false,
+  onRetryFromStep: () => {},
+  rerunBusy: false,
 };
 
 interface HarnessOptions {
@@ -141,6 +143,39 @@ describe('source actions', () => {
   it('offers no source edits for a framework the server cannot edit', () => {
     renderNode({ name: 'fixture step', framework: 'fixture', file: 'a.fixture.md', failed: true }, { actions: { testEditSupported: true } });
     expect(screen.queryByText('Source')).toBeNull();
+  });
+});
+
+describe('retry from here', () => {
+  const stepNode: Test = {
+    name: 'stage', framework: 'fixture', file: '/repo/purge.fixture.yaml', work_dir: '/repo', failed: true,
+    detail: { step: { id: 'stageApproval', kind: 'form' } },
+  };
+
+  it('retries from a fixture step with the step and its file', () => {
+    const onRetryFromStep = vi.fn();
+    renderNode(stepNode, { actions: { onRetryFromStep } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Retry from here/ }));
+
+    expect(onRetryFromStep).toHaveBeenCalledWith(stepNode, 'stageApproval');
+  });
+
+  it.each([
+    ['a node that is not a fixture step', { ...stepNode, framework: 'vitest' }],
+    ['a fixture node without a step id', { ...stepNode, detail: { step: { kind: 'form' } } }],
+    ['a fixture node without step detail', { ...stepNode, detail: undefined }],
+  ])('offers no retry on %s', (_name, node) => {
+    renderNode(node as Test);
+    expect(screen.queryByRole('button', { name: /Retry from here/ })).toBeNull();
+  });
+
+  it('disables the retry while another rerun is running', () => {
+    const onRetryFromStep = vi.fn();
+    renderNode(stepNode, { actions: { onRetryFromStep, rerunBusy: true } });
+
+    const button = screen.getByRole('button', { name: /Retry from here/ }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
   });
 });
 

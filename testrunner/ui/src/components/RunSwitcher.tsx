@@ -12,7 +12,7 @@ export function RunSwitcher({ history, navigate }: { history: RunHistory; naviga
     { value: LATEST, label: 'Latest results' },
     ...history.runs.map(run => ({
       value: run.runId,
-      label: `${runStartLabel(run)} · ${run.kind} · ${runResultLabel(run)}${history.latest.includes(run.runId) ? ' (latest)' : ''}`,
+      label: `${runStartLabel(run)} · ${run.kind}${run.fixtureFiles?.length ? ` · ${run.fixtureFiles.join(', ')}` : ''} · ${runResultLabel(run)}${history.latest.includes(run.runId) ? ' (latest)' : ''}`,
     })),
   ];
   // A run opened from a page not loaded here still names itself.

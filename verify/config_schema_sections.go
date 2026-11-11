@@ -39,6 +39,12 @@ func lintSchema() map[string]any {
 					},
 				),
 			),
+			"schemas": mapObject(
+				"JSON Schemas keyed by doublestar file glob, for JSON/YAML files and Markdown frontmatter that "+
+					"declare no `$schema`. Globs and relative schema paths resolve against this .gavel.yaml's "+
+					"directory; entries merge across layers. A file matching several globs is an error.",
+				stringProp("JSON Schema path, or an HTTP(S) URL."),
+			),
 			"linters": mapObject(
 				"Per-linter overrides keyed by linter name. Useful for opt-in linters like jscpd or "+
 					"disabling a single tool.",

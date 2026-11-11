@@ -149,6 +149,44 @@ func TestRerunSuccessAndPayload(t *testing.T) {
 	}
 }
 
+func TestRerunFromFixtureStepPayload(t *testing.T) {
+	srv, handler := newTestServer(t)
+	var got testui.RerunRequest
+	srv.SetRerunFunc(func(req testui.RerunRequest, _ *testui.RerunOutputBuffer) error {
+		got = req
+		return nil
+	})
+	const fixture, step = "checks/purge.fixture.yaml", "stage"
+
+	body := `{"fixture":"` + fixture + `","from_step":"` + step + `","work_dir":"/workspace"}`
+	resp := doRequest(t, handler, http.MethodPost, "/api/rerun", strings.NewReader(body))
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+	want := testui.RerunRequest{Fixture: fixture, FromStep: step, WorkDir: "/workspace"}
+	if got.Fixture != want.Fixture || got.FromStep != want.FromStep || got.WorkDir != want.WorkDir {
+		t.Errorf("rerun callback received %+v, want %+v", got, want)
+	}
+}
+
+func TestRerunRefusalReturns400WithReason(t *testing.T) {
+	srv, handler := newTestServer(t)
+	const reason = `step "stage" was not in the last run of purge.fixture.yaml`
+	srv.SetRerunFunc(func(testui.RerunRequest, *testui.RerunOutputBuffer) error {
+		return testui.BadRerunRequest{Reason: reason}
+	})
+
+	resp := doRequest(t, handler, http.MethodPost, "/api/rerun", strings.NewReader(`{"fixture":"purge.fixture.yaml","from_step":"stage"}`))
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.Code)
+	}
+	if got := strings.TrimSpace(resp.Body.String()); got != reason {
+		t.Errorf("body = %q, want %q", got, reason)
+	}
+}
+
 func TestRerunConcurrentReturns409(t *testing.T) {
 	srv, handler := newTestServer(t)
 	release := make(chan struct{})

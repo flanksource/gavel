@@ -527,6 +527,11 @@ export interface RerunRequest {
   lint?: boolean;
   lint_files?: string[];
   lint_linters?: string[];
+  /** The fixture file a retry-from-step reruns: a fixture step test's `file`. */
+  fixture?: string;
+  /** The id of the fixture step to resume at; earlier steps reuse the last run's results. */
+  from_step?: string;
+  params?: Record<string, unknown>;
 }
 
 export type TestEditAction = 'skip' | 'delete';

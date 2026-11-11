@@ -13,19 +13,22 @@ import (
 )
 
 type SnapshotMetadata struct {
-	Changes    []*changeset.ChangeSet `json:"changes,omitempty"`
-	Version    string                 `json:"version,omitempty"`
-	Started    time.Time              `json:"started,omitempty"`
-	Ended      time.Time              `json:"ended,omitempty"`
-	Kind       string                 `json:"kind,omitempty"`
-	Sequence   int                    `json:"sequence,omitempty"`
-	Args       map[string]any         `json:"args,omitempty"`
-	PID        int                    `json:"pid,omitempty"`        // gavel's own PID (the parent orchestrator)
-	Command    string                 `json:"command,omitempty"`    // gavel command line (argv[0] + args)
-	Frameworks []string               `json:"frameworks,omitempty"` // test frameworks scheduled for the run (go test, ginkgo, …)
-	ExitCode   *int                   `json:"exit_code,omitempty"`  // final exit code once the run completes; nil while running
-	TimedOut   bool                   `json:"timed_out,omitempty"`  // true when the global --timeout fired during the run
-	RunID      string                 `json:"run_id,omitempty"`     // the run's trace store, .gavel/traces/<run_id>; empty when the run opened none
+	Changes []*changeset.ChangeSet `json:"changes,omitempty"`
+	Version string                 `json:"version,omitempty"`
+	Started time.Time              `json:"started,omitempty"`
+	Ended   time.Time              `json:"ended,omitempty"`
+	Kind    string                 `json:"kind,omitempty"`
+	// LintFiles are the absolute files or folders a lint run was limited to;
+	// empty for a run over the whole tree (or its Changes).
+	LintFiles  []string       `json:"lint_files,omitempty"`
+	Sequence   int            `json:"sequence,omitempty"`
+	Args       map[string]any `json:"args,omitempty"`
+	PID        int            `json:"pid,omitempty"`        // gavel's own PID (the parent orchestrator)
+	Command    string         `json:"command,omitempty"`    // gavel command line (argv[0] + args)
+	Frameworks []string       `json:"frameworks,omitempty"` // test frameworks scheduled for the run (go test, ginkgo, …)
+	ExitCode   *int           `json:"exit_code,omitempty"`  // final exit code once the run completes; nil while running
+	TimedOut   bool           `json:"timed_out,omitempty"`  // true when the global --timeout fired during the run
+	RunID      string         `json:"run_id,omitempty"`     // the run's trace store, .gavel/traces/<run_id>; empty when the run opened none
 	// PromptOwner scopes the run's pending form prompts (/api/prompts?owner=).
 	PromptOwner string `json:"prompt_owner,omitempty"`
 	StateRoot   string `json:"state_root,omitempty"` // the directory whose .gavel holds the run's trace store

@@ -98,6 +98,21 @@ var _ = Describe("Handler", func() {
 		Expect(runIDs(second)).To(Equal([]string{testRunID}))
 	})
 
+	It("serves fixture identity from recorded arguments even when parsing failed", func() {
+		workDir := GinkgoT().TempDir()
+		_, err := snapshots.SavePerRun(workDir, &testui.Snapshot{
+			Metadata: &testui.SnapshotMetadata{Started: testStarted, Args: map[string]any{"work_dir": "/repo", "fixture_files": []string{"/repo/hack/purge.fixture.yaml"}}},
+			Error:    "fixture parsing failed",
+		}, testStarted, "")
+		Expect(err).NotTo(HaveOccurred())
+		handler = runs.Handler(runs.Options{WorkDir: workDir, Latest: http.NotFoundHandler()})
+		page := listAt("/api/runs")
+		Expect(page.Runs).To(HaveLen(1))
+		Expect(page.Runs[0].Kind).To(Equal("fixture"))
+		Expect(page.Runs[0].FixtureFiles).To(Equal([]string{"hack/purge.fixture.yaml"}))
+		Expect(page.Runs[0].Frameworks).To(Equal([]string{"fixture"}))
+	})
+
 	It("serves a stored run's results under its prefix", func() {
 		rec := get("/runs/" + testRunID + "/api/tests")
 		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())

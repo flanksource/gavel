@@ -48,6 +48,7 @@ func gavelConfigSchema() map[string]any {
 			"procfile":       procfileSchema(),
 			"checks":         checksSchema(),
 			"todos":          todosSchema(specSchema),
+			"comments":       commentsSchema(specSchema),
 			"status":         statusSchema(),
 			"test":           testSchema(),
 			"pr":             prSchema(),

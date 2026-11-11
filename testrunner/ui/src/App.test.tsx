@@ -129,6 +129,41 @@ describe('App', () => {
     });
   });
 
+  describe('retry from here', () => {
+    const fixtureFile = '/repo/purge.fixture.yaml';
+    const fixtureStep = (id: string, over: Partial<Test> = {}): Test => ({
+      name: id, framework: 'fixture', file: fixtureFile, work_dir: '/repo', passed: true, detail: { step: { id, kind: 'exec' } }, ...over,
+    });
+    const fixtureRun = (children: Test[]) => snapshot({ tests: [{ name: 'purge.fixture.yaml', framework: 'fixture', file: fixtureFile, children }] });
+
+    it('reruns from the selected fixture step with its file and work dir, and shows the server\'s refusal', async () => {
+      const calls = serve(
+        fixtureRun([fixtureStep('seed'), fixtureStep('stage', { passed: false, failed: true })]),
+        { 'POST /api/rerun': () => new Response('step "stage" follows failed step "seed"\n', { status: 400 }) },
+      );
+      open('/');
+      fireEvent.click(await screen.findByText('stage'));
+
+      fireEvent.click(within(await detailHeader()).getByRole('button', { name: /Retry from here/ }));
+
+      await waitFor(() => expect(screen.getByText(/Rerun failed: step "stage" follows failed step "seed"/)).toBeTruthy());
+      const rerun = calls.find(call => call.url === '/api/rerun')!;
+      expect(JSON.parse(rerun.init!.body as string)).toEqual({ fixture: fixtureFile, from_step: 'stage', work_dir: '/repo' });
+    });
+
+    it.each([
+      ['a node that is not a fixture step', fixtureRun([fixtureStep('seed'), fixtureStep('plain', { framework: 'go test' })]), 'plain'],
+      ['a fixture node without a step id', fixtureRun([fixtureStep('seed'), fixtureStep('stage', { detail: { step: { kind: 'exec' } } })]), 'stage'],
+    ])('offers no retry on %s', async (_name, snap, label) => {
+      serve(snap);
+      open('/');
+      fireEvent.click(await screen.findByText(label));
+
+      const header = await detailHeader();
+      expect(within(header).queryByRole('button', { name: /Retry from here/ })).toBeNull();
+    });
+  });
+
   it('copies the AI prompt for a node from the markdown export narrowed to failed and timed-out tests', async () => {
     const written: string[] = [];
     vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text); } } });

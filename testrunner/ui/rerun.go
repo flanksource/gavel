@@ -25,7 +25,19 @@ type RerunRequest struct {
 	// Params pre-supply the fixtures' params: forms; without them a rerun
 	// keeps the run's own (--param / --params) and prompts for what is missing.
 	Params map[string]any `json:"params,omitempty"`
+	// Fixture is the fixture file (a fixture step test's File) and FromStep
+	// the step id a "retry from here" rerun resumes that file at.
+	Fixture  string `json:"fixture,omitempty"`
+	FromStep string `json:"from_step,omitempty"`
 }
+
+// BadRerunRequest refuses a rerun request before anything runs: handleRerun
+// answers it with 400 and Reason as the plain-text body.
+type BadRerunRequest struct {
+	Reason string
+}
+
+func (e BadRerunRequest) Error() string { return e.Reason }
 
 // RerunFunc is invoked to rerun the tests described by req.
 // The output buffer receives live process stdout/stderr for streaming to the UI.
@@ -131,7 +143,11 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		buf.Finish(false)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		status := http.StatusInternalServerError
+		if errors.As(err, new(BadRerunRequest)) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	buf.Finish(true)

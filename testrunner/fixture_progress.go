@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
@@ -252,6 +253,32 @@ type executionDetail struct {
 	// under the key a finished step's detail carries it, so the UI renders the
 	// same Query section while the step runs and updates it in place.
 	Query any `json:"query,omitempty"`
+	// Description and Status are what a running step last reported with its
+	// `::description` and `::status` workflow commands.
+	Description any `json:"description,omitempty"`
+	Status      any `json:"status,omitempty"`
+}
+
+// liveFindings are the findings a running step reported with its workflow
+// commands, as the child rows its finished result will have.
+func liveFindings(node *fixtures.ExecutionNode) (parsers.Tests, error) {
+	raw, ok := node.Metadata["findings"]
+	if !ok || node.Result != nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("live findings of %s: %w", node.Name, err)
+	}
+	var violations []models.Violation
+	if err := json.Unmarshal(data, &violations); err != nil {
+		return nil, fmt.Errorf("live findings of %s: %w", node.Name, err)
+	}
+	var tests parsers.Tests
+	for _, v := range violations {
+		tests = append(tests, fixtureNodeToTestsWithFile(fixtures.ViolationNode(v), "")...)
+	}
+	return tests, nil
 }
 
 func executionNodeToTest(node *fixtures.ExecutionNode) (parsers.Test, error) {
@@ -265,8 +292,19 @@ func executionNodeToTest(node *fixtures.ExecutionNode) (parsers.Test, error) {
 			Name: node.Name, Kind: node.Kind, State: node.State, Origin: node.Origin,
 			StartedAt: node.StartedAt, FinishedAt: node.FinishedAt, Duration: node.Duration,
 			Done: node.Done, Total: node.Total, Error: node.Error, PIDs: node.PIDs, Traces: node.Traces, Source: node.Source,
-			Query: node.Metadata[fixtures.QueryMetadataKey],
+			Query:       node.Metadata[fixtures.QueryMetadataKey],
+			Description: node.Metadata["description"], Status: node.Metadata["status"],
 		},
+	}
+	phase := string(node.Kind)
+	for _, key := range []string{"status", "description"} {
+		if text, ok := node.Metadata[key].(string); ok && text != "" {
+			phase = text
+			if test.Message == "" {
+				test.Message = text
+			}
+			break
+		}
 	}
 	if node.Origin != nil {
 		test.File = node.Origin.File
@@ -283,6 +321,11 @@ func executionNodeToTest(node *fixtures.ExecutionNode) (parsers.Test, error) {
 		}
 		test.Children = append(test.Children, childTest)
 	}
+	findings, err := liveFindings(node)
+	if err != nil {
+		return parsers.Test{}, err
+	}
+	test.Children = append(test.Children, findings...)
 	if err := applyNodeResult(&test, node); err != nil {
 		return parsers.Test{}, err
 	}
@@ -294,7 +337,7 @@ func executionNodeToTest(node *fixtures.ExecutionNode) (parsers.Test, error) {
 		test.Fixture = &parsers.FixtureExecution{Key: node.Key, Kind: string(node.Kind), State: string(node.State), PIDs: node.PIDs}
 	}
 	if node.Total > 0 {
-		test.Progress = &parsers.TestProgress{Phase: string(node.Kind), Done: node.Done, Total: node.Total}
+		test.Progress = &parsers.TestProgress{Phase: phase, Done: node.Done, Total: node.Total}
 	}
 	return test, nil
 }

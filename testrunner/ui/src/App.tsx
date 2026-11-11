@@ -417,6 +417,16 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     else void startRerun(request.body, node.name);
   }, [startRerun, say]);
 
+  const onRetryFromStep = useCallback((node: Test, stepId: string) => {
+    if (!node.file) {
+      say(`Cannot retry from step ${stepId}: it has no fixture file`);
+      return;
+    }
+    const request = rerunBody(node);
+    if ('error' in request) say(request.error);
+    else void startRerun({ fixture: node.file, from_step: stepId, work_dir: request.body.work_dir ?? '' }, `${node.name} from step ${stepId}`);
+  }, [startRerun, say]);
+
   const onRerunLint = useCallback(() => {
     const body = buildLintRerunBody(selectedLint, lint ?? []);
     if (!body.work_dir) say('Rerun across multiple lint roots is not supported');
@@ -517,7 +527,9 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     testEditSupported: snapshotStatus.test_edit_supported === true,
     onTestEdit,
     testEditBusy,
-  }), [route, snapshotStatus.test_edit_supported, onTestEdit, testEditBusy]);
+    onRetryFromStep,
+    rerunBusy,
+  }), [route, snapshotStatus.test_edit_supported, onTestEdit, testEditBusy, onRetryFromStep, rerunBusy]);
 
   const registry = useMemo(
     () => gavelRegistry({ traces, processes: trace.nodes, onOpenProcess: onSelectProcess, actions, scope, promptOwner: runMeta?.prompt_owner }),

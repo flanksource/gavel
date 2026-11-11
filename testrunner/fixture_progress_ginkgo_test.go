@@ -56,6 +56,29 @@ var _ = Describe("fixture progress adapter", func() {
 		Expect(tests[1].Children[0].TaskID).To(Equal("tests"))
 	})
 
+	It("shows a running step's workflow status as its message and its findings as child rows", func() {
+		findings := []any{
+			map[string]any{"severity": "warning", "message": "slow", "source": "workflow", "rule": map[string]any{"method": "::warning"}},
+			map[string]any{"severity": "error", "message": "boom", "source": "workflow", "rule": map[string]any{"method": "Lint"}, "file": "a.go", "line": 3},
+		}
+		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+			Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionRunning,
+			Children: []*fixtures.ExecutionNode{{
+				Key: "build", Name: "build", Kind: fixtures.ExecutionKindCommand, State: fixtures.ExecutionRunning,
+				Metadata: map[string]any{"description": "compiling", "status": "2 of 3", "findings": findings},
+			}},
+		}}
+
+		test := projectTests(snapshot)[0]
+
+		Expect(test.Message).To(Equal("2 of 3"))
+		var rows []string
+		for _, child := range test.Children {
+			rows = append(rows, child.Name+" warned="+strconv.FormatBool(child.Warned)+" failed="+strconv.FormatBool(child.Failed))
+		}
+		Expect(rows).To(Equal([]string{"::warning: slow warned=true failed=false", "Lint: boom warned=false failed=true"}))
+	})
+
 	It("carries a finished fixture's trace windows into its context, so the UI links them", func() {
 		windows := []parsers.TraceResult{{TraceRef: tracing.TraceRef{Kind: "terminal", Stream: "s1", ToSeq: 3}, Count: 3}}
 		snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{

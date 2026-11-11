@@ -1,6 +1,10 @@
 package verify
 
-import "github.com/flanksource/gavel/runconfig"
+import (
+	"path/filepath"
+
+	"github.com/flanksource/gavel/runconfig"
+)
 
 func (c GavelConfig) CommitFixSpec() PromptSpec { return Merge(c.Lint.Fix, c.Commit.Fix) }
 
@@ -29,6 +33,16 @@ func (c GavelConfig) configRuntimeLayers() []RuntimeLayer {
 
 func (c *GavelConfig) resolveOptionPaths(base string) {
 	runconfig.ResolvePaths(&c.Lint.Options, base)
+	if len(c.Lint.Schemas) > 0 {
+		schemas := make(map[string]string, len(c.Lint.Schemas))
+		for glob, schema := range c.Lint.Schemas {
+			if !filepath.IsAbs(glob) {
+				glob = filepath.Join(base, glob)
+			}
+			schemas[glob] = runconfig.ResolveURI(schema, base)
+		}
+		c.Lint.Schemas = schemas
+	}
 	runconfig.ResolvePaths(&c.Test.Options, base)
 	for name, config := range c.Lint.Linters {
 		runconfig.ResolvePaths(&config.Options, base)

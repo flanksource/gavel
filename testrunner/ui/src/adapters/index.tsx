@@ -100,7 +100,7 @@ export function fixtureFileAdapter(scope: { runId?: string } = {}): TestNodeAdap
   };
 }
 
-/** Download, AI-prompt copy and Skip/Delete source actions in the node's detail header. */
+/** Download, AI-prompt copy, Skip/Delete source and fixture Retry from here actions in the node's detail header. */
 export function nodeActionsAdapter(config: NodeActionsConfig): TestNodeAdapter {
   return {
     id: 'gavel-actions',

@@ -164,6 +164,7 @@ type RunOptions struct {
 	FixturePrompter          fixtures.Prompter                `json:"-" yaml:"-"`                                                       // Answers the fixtures' form steps (the --ui server's prompts); overrides the fixture runner's own.
 	FixtureRunID             string                           `json:"-" yaml:"-"`                                                       // The prompt owner FixturePrompter files the fixtures' forms under.
 	FixtureParams            map[string]any                   `json:"-" yaml:"-"`                                                       // Pre-supplied values for the fixtures' params: forms (a UI run request's params); overrides the fixture runner's own.
+	FixtureResume            *fixtures.Resume                 `json:"-" yaml:"-"`                                                       // Restarts the fixture run at a step, reusing the earlier steps' results (a UI "retry from here" rerun).
 	Frameworks               []string                         `json:"frameworks,omitempty" yaml:"framework,omitempty" flag:"framework"` // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
 	Baseline                 string                           `json:"baseline,omitempty" yaml:"baseline,omitempty" flag:"baseline"`     // Path to previous results JSON; only report NEW failures not in baseline
 	Failed                   string                           `json:"failed,omitempty" yaml:"failed,omitempty" flag:"failed"`           // Path to previous results JSON; re-run only failed tests
@@ -199,6 +200,9 @@ func (opts RunOptions) withFixtureForms(runner fixtures.RunnerOptions) fixtures.
 	}
 	if opts.FixtureParams != nil {
 		runner.Params = opts.FixtureParams
+	}
+	if opts.FixtureResume != nil {
+		runner.Resume = opts.FixtureResume
 	}
 	return runner
 }

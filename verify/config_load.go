@@ -249,6 +249,9 @@ func decodeGavelConfig(path string, encoded []byte) (GavelConfig, error) {
 	if err := gc.Todos.Validate(); err != nil {
 		return GavelConfig{}, fmt.Errorf("%s: %w", path, err)
 	}
+	if err := gc.Comments.Agents.Validate(); err != nil {
+		return GavelConfig{}, fmt.Errorf("%s: %w", path, err)
+	}
 	if err := gc.PR.Lifecycle.Validate(); err != nil {
 		return GavelConfig{}, fmt.Errorf("%s: pr.%w", path, err)
 	}

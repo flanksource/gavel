@@ -11,7 +11,7 @@ function ResultBadges({ run }: { run: RunInfo }) {
     <span className="inline-flex flex-wrap items-center gap-1">
       {run.total > 0 && <Badge tone={run.failed > 0 ? 'danger' : 'success'} variant="outline" size="xs">{run.failed > 0 ? `${run.failed} failed` : `${run.passed} passed`}</Badge>}
       {run.total > 0 && <span className="text-xs text-muted-foreground">of {run.total}</span>}
-      {run.kind !== 'test' && <Badge tone={run.lintViolations > 0 ? 'warning' : 'neutral'} variant="outline" size="xs">{run.lintViolations} lint</Badge>}
+      {(run.kind === 'lint' || run.kind === 'test+lint') && <Badge tone={run.lintViolations > 0 ? 'warning' : 'neutral'} variant="outline" size="xs">{run.lintViolations} lint</Badge>}
     </span>
   );
 }
@@ -35,6 +35,7 @@ export function RunHistory({ history, navigate }: { history: RunHistoryState; na
       ),
     },
     { key: 'kind', label: 'Kind', filterable: true, shrink: true },
+    { key: 'fixtureFiles', label: 'Fixture', filterable: true, accessor: run => (run.fixtureFiles ?? []).join(', '), render: value => <span className="break-all">{String(value)}</span> },
     { key: 'results', label: 'Results', accessor: run => run.failed + run.lintViolations, sortable: true, render: (_value, run) => <ResultBadges run={run} /> },
     { key: 'duration', label: 'Duration', accessor: run => runDurationMs(run) ?? null, sortable: true, align: 'right', shrink: true, render: value => (typeof value === 'number' ? formatDuration(value) : '') },
     { key: 'frameworks', label: 'Frameworks', kind: 'tags', accessor: run => run.frameworks ?? [] },
