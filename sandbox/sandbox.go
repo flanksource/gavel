@@ -103,6 +103,16 @@ func JobName(run uuid.UUID) string {
 // jobPrefix starts every run's job name.
 const jobPrefix = "gavel-run-"
 
+// RunOfJob is the run whose job is named name; false when name isn't one JobName gives.
+func RunOfJob(name string) (uuid.UUID, bool) {
+	raw, found := strings.CutPrefix(name, jobPrefix)
+	if !found {
+		return uuid.UUID{}, false
+	}
+	run, err := uuid.Parse(raw)
+	return run, err == nil
+}
+
 // SubstrateActor is the SPIFFE ID substrate's egress gateway reports for run's environment in
 // atespace, the actor named after the run.
 func SubstrateActor(atespace string, run uuid.UUID) string {
