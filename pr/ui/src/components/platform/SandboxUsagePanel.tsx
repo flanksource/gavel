@@ -5,6 +5,7 @@ import { StatStrip } from '@flanksource/clicky-ui/data';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { fetchJSON, queryKeys } from '../../query';
 import { kindLabels } from '../RunsView';
+import { formatSeconds } from './formatSeconds';
 import { windowDays } from './windowDays';
 
 export interface SandboxDay {
@@ -52,13 +53,6 @@ export function perDay(rows: SandboxDay[], days: number, now: Date, value: (row:
     if (bucket && kind) bucket[kind] += value(row);
   }
   return [...totals.values()];
-}
-
-// sandboxTime formats seconds of sandbox time as seconds, minutes or hours.
-function sandboxTime(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  return `${(seconds / 3600).toFixed(1)}h`;
 }
 
 interface OrgShare {
@@ -156,7 +150,7 @@ export function SandboxUsagePanel() {
             items={[
               { label: 'Runs', value: `${runs} runs` },
               { label: 'Failed', value: `${failed} failed (${runs ? Math.round((failed / runs) * 100) : 0}%)` },
-              { label: 'Sandbox time', value: `${sandboxTime(seconds)} sandbox time` },
+              { label: 'Sandbox time', value: `${formatSeconds(seconds)} sandbox time` },
               { label: 'Queued or running', value: `${active} active now` },
             ]}
           />
@@ -178,7 +172,7 @@ export function SandboxUsagePanel() {
                   <td className="px-2 py-1.5 font-medium">{share.name}</td>
                   <td className="px-2 py-1.5">{share.runs}</td>
                   <td className="px-2 py-1.5">{share.failed}</td>
-                  <td className="px-2 py-1.5">{sandboxTime(share.seconds)}</td>
+                  <td className="px-2 py-1.5">{formatSeconds(share.seconds)}</td>
                   <td className="px-2 py-1.5">{share.active}</td>
                 </tr>
               ))}
