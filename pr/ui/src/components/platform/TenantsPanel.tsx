@@ -25,7 +25,7 @@ export interface PlatformTenants {
 }
 
 // tenantWindowDays is how far back the panel counts sandbox runs.
-const tenantWindowDays = 30;
+export const tenantWindowDays = 30;
 
 function members(tenant: PlatformTenant): string {
   return tenant.clerkMembers === undefined ? `${tenant.members}` : `${tenant.members} of ${tenant.clerkMembers}`;
@@ -43,11 +43,17 @@ function presence(tenant: PlatformTenant, clerkListed: boolean): string {
   return '';
 }
 
-export function TenantsPanel() {
-  const tenants = useQuery({
+// useTenants reads every organization, as the tenant panel and an organization's view show them.
+export function useTenants() {
+  return useQuery({
     queryKey: queryKeys.platform('tenants', tenantWindowDays),
     queryFn: ({ signal }) => fetchJSON<PlatformTenants>({ url: `/api/platform/tenants?days=${tenantWindowDays}`, signal, context: 'load tenants' }),
   });
+}
+
+// TenantsPanel lists every organization; onSelect opens one gavel knows.
+export function TenantsPanel({ onSelect }: { onSelect?: (org: string) => void } = {}) {
+  const tenants = useTenants();
   const clerkListed = !tenants.data?.clerkError;
 
   return (
@@ -70,7 +76,11 @@ export function TenantsPanel() {
             {tenants.data.tenants.map(tenant => (
               <tr key={tenant.clerkOrgId} className="border-b border-border">
                 <td className="px-2 py-1.5">
-                  <span className="font-medium">{tenant.name || tenant.clerkOrgId}</span>
+                  {tenant.id && onSelect ? (
+                    <button type="button" className="font-medium underline" onClick={() => onSelect(tenant.id!)}>{tenant.name || tenant.clerkOrgId}</button>
+                  ) : (
+                    <span className="font-medium">{tenant.name || tenant.clerkOrgId}</span>
+                  )}
                   {tenant.slug && <span className="ml-1 text-muted-foreground">{tenant.slug}</span>}
                 </td>
                 <td className="px-2 py-1.5">{members(tenant)}</td>
