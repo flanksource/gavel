@@ -1,6 +1,6 @@
 // Tests the platform dashboard's tenant panel: every organization with what it uses, those
 // only one of gavel and Clerk knows marked, and the reason when a source can't answer.
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from '../todos/queryTestWrapper';
 import { TenantsPanel, type PlatformTenants } from './TenantsPanel';
@@ -57,4 +57,22 @@ it('tells a non-admin how to become a platform admin', async () => {
   render(<TenantsPanel />, { wrapper: queryTestWrapper() });
 
   expect((await screen.findByRole('alert')).textContent).toContain('"gavel_role": "platform_admin"');
+});
+
+it('opens an organization gavel knows, not one only Clerk has', async () => {
+  response = {
+    status: 200,
+    body: {
+      tenants: [
+        { ...usage, id: 'o-alpha', clerkOrgId: 'org_alpha', slug: 'alpha', name: 'Alpha', inGavel: true },
+        { ...usage, clerkOrgId: 'org_beta', slug: 'beta', name: 'Beta', inGavel: false },
+      ],
+    },
+  };
+  const onSelect = vi.fn();
+  render(<TenantsPanel onSelect={onSelect} />, { wrapper: queryTestWrapper() });
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Alpha' }));
+  expect(onSelect).toHaveBeenCalledWith('o-alpha');
+  expect(screen.queryByRole('button', { name: 'Beta' })).toBeNull();
 });
