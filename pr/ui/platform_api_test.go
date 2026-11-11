@@ -59,6 +59,18 @@ func TestPlatformAPIIsForPlatformAdmins(t *testing.T) {
 	assert.Contains(t, failure["message"], `gavel_role`, "the message says how to become a platform admin")
 }
 
+func TestPlatformWindowsStartAtUTCMidnight(t *testing.T) {
+	// The panels draw whole UTC days, so the oldest day's bar must count that whole day.
+	start, err := windowStart(httptest.NewRequest(http.MethodGet, "/api/platform/sandbox-runs?days=7", nil), 30)
+	require.NoError(t, err)
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	assert.Equal(t, today.AddDate(0, 0, -7), start)
+
+	start, err = windowStart(httptest.NewRequest(http.MethodGet, "/api/platform/sandbox-runs", nil), 30)
+	require.NoError(t, err)
+	assert.Equal(t, today.AddDate(0, 0, -30), start, "the fallback window")
+}
+
 func TestPlatformTenants(t *testing.T) {
 	db, _, gavelOnly := openOrgDB(t)
 	alpha := uuid.New()

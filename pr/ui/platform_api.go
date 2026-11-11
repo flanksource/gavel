@@ -77,7 +77,8 @@ func platformAdminsOnly(next http.Handler) http.Handler {
 	})
 }
 
-// windowStart is the start of the ?days= window that ends now, fallback days long without one.
+// windowStart is the UTC midnight that starts the ?days= window ending now, fallback days long
+// without one: the panels draw whole UTC days, the oldest of them days days before today.
 func windowStart(r *http.Request, fallback int) (time.Time, error) {
 	days := fallback
 	if raw := r.URL.Query().Get("days"); raw != "" {
@@ -87,7 +88,7 @@ func windowStart(r *http.Request, fallback int) (time.Time, error) {
 		}
 		days = n
 	}
-	return time.Now().AddDate(0, 0, -days), nil
+	return time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -days), nil
 }
 
 // PlatformTenants is every organization, from gavel and from Clerk. ClerkError says why
