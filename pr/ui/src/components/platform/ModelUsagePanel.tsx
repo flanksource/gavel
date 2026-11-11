@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { StatStrip } from '@flanksource/clicky-ui/data';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { fetchJSON, queryKeys } from '../../query';
+import { windowDays } from './windowDays';
 
 // ModelUsageDay is one UTC day's model calls of an organization with one model and provider;
 // org is absent for calls no organization of this Clerk instance owns.
@@ -47,11 +48,7 @@ export interface DayCost {
 // keeping days without calls so the axis shows them.
 export function costPerDay(rows: ModelUsageDay[], days: number, now: Date): DayCost[] {
   const totals = new Map<string, DayCost>();
-  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  for (let back = days; back >= 0; back--) {
-    const day = new Date(today - back * 86_400_000).toISOString().slice(0, 10);
-    totals.set(day, { day, costUSD: 0 });
-  }
+  for (const day of windowDays(days, now)) totals.set(day, { day, costUSD: 0 });
   for (const row of rows) {
     const bucket = totals.get(row.day);
     if (bucket) bucket.costUSD += row.costUSD;

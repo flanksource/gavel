@@ -5,6 +5,7 @@ import { StatStrip } from '@flanksource/clicky-ui/data';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { fetchJSON, queryKeys } from '../../query';
 import { kindLabels } from '../RunsView';
+import { windowDays } from './windowDays';
 
 export interface SandboxDay {
   day: string;
@@ -44,11 +45,7 @@ export type KindTotals = { day: string } & Record<(typeof runKinds)[number], num
 // keeping days without runs so the axis shows them.
 export function perDay(rows: SandboxDay[], days: number, now: Date, value: (row: SandboxDay) => number): KindTotals[] {
   const totals = new Map<string, KindTotals>();
-  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  for (let back = days; back >= 0; back--) {
-    const day = new Date(today - back * 86_400_000).toISOString().slice(0, 10);
-    totals.set(day, { day, test: 0, lint: 0, 'push-check': 0, agent: 0 });
-  }
+  for (const day of windowDays(days, now)) totals.set(day, { day, test: 0, lint: 0, 'push-check': 0, agent: 0 });
   for (const row of rows) {
     const bucket = totals.get(row.day);
     const kind = runKinds.find(k => k === row.kind);
