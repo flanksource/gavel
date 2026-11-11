@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
+	"github.com/flanksource/captain/pkg/substrate/substratetest"
 	"github.com/flanksource/gavel/api"
 	"github.com/flanksource/gavel/api/clerktest"
 	"github.com/flanksource/gavel/github"
@@ -16,6 +18,7 @@ import (
 	"github.com/flanksource/gavel/missioncontrol"
 	"github.com/flanksource/gavel/missioncontrol/missioncontroltest"
 	"github.com/flanksource/gavel/platform"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/incident-commander/clientapi"
 	"github.com/google/uuid"
@@ -165,6 +168,65 @@ func TestPlatformBudgets(t *testing.T) {
 	require.Len(t, got.Budgets, 1)
 	assert.Equal(t, "Monthly", got.Budgets[0].Name)
 	assert.NotNil(t, got.Budgets[0].WindowStart)
+}
+
+func TestPlatformSubstrateInventory(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	run := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend, created_at) VALUES (?, ?, 'agent', 'running', 'substrate', now())`, run, org).Error)
+	server := substratetest.Start(t)
+	worker := substrate.Worker{Name: "pool-a-0", Pool: "pool-a", Node: "node-1", State: "active",
+		Capacity: substrate.Resources{CPUMillicores: 4000, MemoryBytes: 8 << 30, Actors: 10}}
+	server.AddWorker(worker)
+	for atespace, name := range map[string]string{"ate-env": sandbox.JobName(run), "other": "default-template-0"} {
+		options := server.Options()
+		options.Atespace = atespace
+		client, err := substrate.Dial(options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, client.Close()) })
+		_, err = client.Create(t.Context(), substrate.Environment{ID: name})
+		require.NoError(t, err)
+	}
+	client, err := substrate.Dial(server.Options())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}, Substrate: client}
+
+	var got PlatformSubstrateInventory
+	require.Equal(t, http.StatusOK, platformGet(t, servePlatform(t, p, org, true)+"/api/platform/substrate/inventory", &got))
+	assert.Equal(t, []substrate.Worker{worker}, got.Workers)
+	require.Len(t, got.Actors, 2)
+	assert.Equal(t, sandbox.JobName(run), got.Actors[0].Name)
+	assert.Equal(t, &run, got.Actors[0].Run)
+	assert.Equal(t, &platform.RunOrg{Org: org, OrgName: "Other", Kind: "agent"}, got.Actors[0].Org)
+	assert.Equal(t, "default-template-0", got.Actors[1].Name)
+	assert.Nil(t, got.Actors[1].Run, "an actor that isn't a run's environment names no run")
+	assert.Empty(t, got.WorkersError)
+	assert.Empty(t, got.ActorsError)
+}
+
+func TestPlatformSubstrateInventoryWhenSubstrateIsDown(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	options := substratetest.Start(t).Options()
+	options.Control = "127.0.0.1:1"
+	client, err := substrate.Dial(options)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}, Substrate: client}
+
+	var failure map[string]string
+	assert.Equal(t, http.StatusBadGateway, platformGet(t, servePlatform(t, p, org, true)+"/api/platform/substrate/inventory", &failure))
+	assert.Contains(t, failure["error"], "list substrate's workers")
+	assert.Contains(t, failure["error"], "list the actors of every atespace")
+}
+
+func TestPlatformSubstrateInventoryWithoutSubstrate(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}}
+
+	var failure map[string]string
+	assert.Equal(t, http.StatusNotFound, platformGet(t, servePlatform(t, p, org, true)+"/api/platform/substrate/inventory", &failure))
+	assert.Contains(t, failure["error"], "--sandbox substrate")
 }
 
 func TestPlatformGitHub(t *testing.T) {

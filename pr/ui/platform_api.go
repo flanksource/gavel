@@ -12,10 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/gavel/api"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/missioncontrol"
 	"github.com/flanksource/gavel/platform"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 )
@@ -32,6 +34,14 @@ type PlatformAPI struct {
 	// SubstrateView is the namespace/name of the Mission Control View graphing substrate's
 	// metrics; empty when serve runs without one.
 	SubstrateView string
+	// Substrate lists substrate's workers and actors; nil when serve runs without --sandbox substrate.
+	Substrate SubstrateInventory
+}
+
+// SubstrateInventory lists what a substrate holds, as captain's substrate client does.
+type SubstrateInventory interface {
+	ListWorkers(ctx context.Context) ([]substrate.Worker, error)
+	ListActors(ctx context.Context, atespace string) ([]substrate.Actor, error)
 }
 
 // platformSourceTimeout bounds how long one route waits for its source.
@@ -50,6 +60,7 @@ func (p *PlatformAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/platform/github", p.gitHubApp)
 	mux.HandleFunc("GET /api/platform/infrastructure", p.infrastructure)
 	mux.HandleFunc("GET /api/platform/substrate/metrics", p.substrateMetrics)
+	mux.HandleFunc("GET /api/platform/substrate/inventory", p.substrateInventory)
 	return platformAdminsOnly(mux)
 }
 
@@ -323,4 +334,78 @@ func (p *PlatformAPI) substrateMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, view)
+}
+
+// PlatformSubstrateInventory is substrate's workers and the actors of every atespace. Each list's
+// error says why it is missing, when only one of them is.
+type PlatformSubstrateInventory struct {
+	Workers      []substrate.Worker `json:"workers"`
+	WorkersError string             `json:"workersError,omitempty"`
+	Actors       []PlatformActor    `json:"actors"`
+	ActorsError  string             `json:"actorsError,omitempty"`
+}
+
+// PlatformActor is one of substrate's actors. Run is set for a sandbox run's environment, and
+// Org when the run belongs to an organization of this Clerk instance.
+type PlatformActor struct {
+	substrate.Actor
+	Run *uuid.UUID       `json:"run,omitempty"`
+	Org *platform.RunOrg `json:"org,omitempty"`
+}
+
+// errNoSubstrate answers the substrate inventory route when serve runs without substrate.
+var errNoSubstrate = errors.New("substrate isn't configured: start gavel serve with --sandbox substrate and its --substrate-* flags")
+
+// substrateInventory answers substrate's workers and every atespace's actors, naming the
+// organization whose run each sandbox environment is.
+func (p *PlatformAPI) substrateInventory(w http.ResponseWriter, r *http.Request) {
+	if p.Substrate == nil {
+		writeJSONError(w, http.StatusNotFound, errNoSubstrate)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
+	defer cancel()
+	result := PlatformSubstrateInventory{Workers: []substrate.Worker{}, Actors: []PlatformActor{}}
+	workers, workersErr := p.Substrate.ListWorkers(ctx)
+	if workersErr != nil {
+		result.WorkersError = workersErr.Error()
+	} else {
+		result.Workers = workers
+	}
+	actors, actorsErr := p.Substrate.ListActors(ctx, "")
+	if workersErr != nil && actorsErr != nil {
+		writeJSONError(w, http.StatusBadGateway, errors.Join(workersErr, actorsErr))
+		return
+	}
+	if actorsErr != nil {
+		result.ActorsError = actorsErr.Error()
+		writeJSON(w, result)
+		return
+	}
+	var runs []uuid.UUID
+	for _, actor := range actors {
+		row := PlatformActor{Actor: actor}
+		if run, ok := sandbox.RunOfJob(actor.Name); ok {
+			row.Run = &run
+			runs = append(runs, run)
+		}
+		result.Actors = append(result.Actors, row)
+	}
+	orgs, err := p.Store.RunOrgs(ctx, runs)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for i, actor := range result.Actors {
+		if actor.Run == nil {
+			continue
+		}
+		if org, ok := orgs[*actor.Run]; ok {
+			result.Actors[i].Org = &org
+		}
+	}
+	slices.SortStableFunc(result.Actors, func(a, b PlatformActor) int {
+		return strings.Compare(a.Atespace+"/"+a.Name, b.Atespace+"/"+b.Name)
+	})
+	writeJSON(w, result)
 }
