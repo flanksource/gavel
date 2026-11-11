@@ -96,6 +96,9 @@ type RunOptions struct {
 	// Params are values supplied up front (--param/--params, a UI start
 	// request) for the fixture's `params:` form; satisfying values skip it.
 	Params map[string]any `json:"-" yaml:"-"`
+	// Resume restarts the run at Resume.FromStep, reusing the earlier steps'
+	// prior results instead of running them. Nil runs every step.
+	Resume *Resume `json:"resume,omitempty" yaml:"-"`
 	// Connections resolves connection references ahead of gavel's layered
 	// connection store, so a host (oipa-cli serve) can supply its catalog.
 	Connections dbcontext.ConnectionResolver `json:"-" yaml:"-"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/clicky/task"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -68,7 +69,35 @@ var _ = Describe("a params: form with conditional properties", func() {
 		results := runDocument(context.Background(), scaleDocument, fixtures.RunOptions{Prompter: prompter, Params: map[string]any{"db": "lab"}})
 
 		Expect(results[0].Status).To(Equal(task.StatusFAIL))
-		Expect(results[0].Error).To(ContainSubstring(`form "params": answer does not match its schema: missing required cluster`))
+		Expect(results[0].Error).To(ContainSubstring(`form "params": answer does not match its schema: missing required field "cluster"`))
+	})
+
+	It("keeps waiting when the prompt manager refuses a submit missing the active branch's required property, and passes on the corrected resubmit", func() {
+		manager := prompt.NewManager(nil)
+		done := make(chan []fixtures.FixtureResult, 1)
+		go func() {
+			defer GinkgoRecover()
+			done <- runDocument(context.Background(), scaleDocument, fixtures.RunOptions{Prompter: manager, Params: map[string]any{"db": "lab"}})
+		}()
+		var pending []prompt.PromptSnapshot
+		Eventually(func() []prompt.PromptSnapshot {
+			pending = manager.List(prompt.Filter{State: string(prompt.StatePending)})
+			return pending
+		}).Should(HaveLen(1))
+		id := pending[0].ID
+
+		Expect(manager.Resolve(id, prompt.Answer{Values: map[string]any{"db": "lab", "scale": true}})).
+			To(MatchError(ContainSubstring(`missing required field "cluster"`)))
+		_, stillPending := manager.Pending(id)
+		Expect(stillPending).To(BeTrue())
+		Consistently(done, "200ms").ShouldNot(Receive())
+
+		Expect(manager.Resolve(id, prompt.Answer{Values: map[string]any{"db": "lab", "scale": true, "cluster": "connection://acme"}})).To(Succeed())
+		var results []fixtures.FixtureResult
+		Eventually(done).Should(Receive(&results))
+		Expect(results[0].Status).To(Equal(task.StatusPASS), results[0].Error)
+		Expect(outputsOf(results[0])["cluster"]).To(Equal("connection://acme"))
+		Expect(ran).To(Equal([]string{"inspect"}))
 	})
 
 	It("offers a branch's connection property through the connection picker", func() {

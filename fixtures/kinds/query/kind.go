@@ -293,8 +293,13 @@ func (r *run) outputs(step *fixtures.StepContext, result *cdbquery.Result) (map[
 	if list == nil {
 		list = []any{}
 	}
+	sets, err := resultSetsOf(list, result.Batches)
+	if err != nil {
+		return nil, nil, err
+	}
 	outputs := map[string]any{
 		"rows": list, "rowCount": len(list), "columns": columnsOf(r.profile, result.Rows),
+		"resultSets": sets,
 		"truncated":  result.Truncated,
 		"connection": r.connectionOutput(),
 	}
@@ -326,6 +331,29 @@ func (r *run) connectionOutput() map[string]any {
 		}
 	}
 	return out
+}
+
+// resultSetsOf is every result set the query returned, in the order the server
+// sent them across batches and runs. A SELECT read as a page has no batches:
+// its rows are its one result set. A program's rows are its last set.
+func resultSetsOf(rows []any, batches []cdbquery.BatchResult) ([]any, error) {
+	if len(batches) == 0 {
+		return []any{rows}, nil
+	}
+	sets := []any{}
+	for _, batch := range batches {
+		for _, set := range batch.ResultSets {
+			plain, err := fixtures.PlainValue(set)
+			if err != nil {
+				return nil, err
+			}
+			if plain == nil {
+				plain = []any{}
+			}
+			sets = append(sets, plain)
+		}
+	}
+	return sets, nil
 }
 
 // addBatches exposes a SQL program's per-batch results as `batches`, and the
@@ -393,14 +421,4 @@ func stepName(step *fixtures.StepContext) string {
 		}
 	}
 	return "query"
-}
-
-func resultStatus(errors, warnings int) task.Status {
-	switch {
-	case errors > 0:
-		return task.StatusFAIL
-	case warnings > 0:
-		return task.StatusWarning
-	}
-	return task.StatusPASS
 }

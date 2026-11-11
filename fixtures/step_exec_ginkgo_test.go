@@ -397,6 +397,59 @@ var _ = Describe("kind default waits", func() {
 	})
 })
 
+var _ = Describe("a run resumed from a step", func() {
+	const fromStep = "apply"
+	runResumed := func(resume Resume, specs ...StepSpec) []FixtureResult {
+		GinkgoHelper()
+		nodes := make([]*FixtureNode, 0, len(specs))
+		for _, spec := range specs {
+			nodes = append(nodes, stepNode(spec))
+		}
+		results, _, err := RunNodes(context.Background(), nodes, RunOptions{WorkDir: GinkgoT().TempDir(), Resume: &resume})
+		Expect(err).ToNot(HaveOccurred())
+		return results
+	}
+
+	It("reuses the steps before it without running them, and runs it over their outputs and exports", func() {
+		executed := map[string]int{}
+		var seen string
+		useKind(fakeKind{name: "counted", execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
+			executed[step.Spec.ID]++
+			rendered, err := step.Expand("{{.steps.lookup.cluster}} $CLUSTER_URL")
+			seen = rendered
+			return StepOutcome{Result: FixtureResult{Status: task.StatusPASS}}, err
+		}})
+		resume := Resume{FromStep: fromStep, Prior: map[string]PriorStep{
+			"lookup":   {Outputs: map[string]any{"cluster": "east"}, Exports: map[string]ExportRecord{"CLUSTER_URL": {Value: "https://east.example", Step: "lookup"}}},
+			"approval": {Outputs: map[string]any{"approved": true}},
+		}}
+
+		results := runResumed(resume, StepSpec{ID: "lookup", Kind: "counted"}, StepSpec{ID: "approval", Kind: "counted"},
+			StepSpec{ID: fromStep, Kind: "counted", If: "approval.approved"})
+
+		Expect(executed).To(Equal(map[string]int{fromStep: 1}))
+		Expect([]task.Status{results[0].Status, results[1].Status, results[2].Status}).To(Equal(
+			[]task.Status{task.StatusPASS, task.StatusPASS, task.StatusPASS}), results[2].Error)
+		Expect(seen).To(Equal("east https://east.example"))
+		reused := metadataJSON(results[0])
+		Expect(reused).To(HaveKeyWithValue("reused", map[string]any{"step": "lookup", "from": fromStep}))
+		Expect(reused).To(HaveKeyWithValue("outputs", map[string]any{"cluster": "east"}))
+		Expect(reused).To(HaveKeyWithValue("exports", map[string]any{"CLUSTER_URL": map[string]any{"value": "https://east.example", "step": "lookup"}}))
+		Expect(metadataJSON(results[2])).ToNot(HaveKey("reused"))
+	})
+
+	It("errors a step before it that has no prior result, naming it, and skips the rest", func() {
+		useKind(fakeKind{name: "ok", execute: passing(nil, nil)})
+
+		results := runResumed(Resume{FromStep: fromStep, Prior: map[string]PriorStep{}},
+			StepSpec{ID: "lookup", Kind: "ok"}, StepSpec{ID: fromStep, Kind: "ok"})
+
+		Expect(results[0].Status).To(Equal(task.StatusERR))
+		Expect(results[0].Error).To(ContainSubstring(`step "lookup" runs before "apply" but the resumed run has no result for it`))
+		Expect(results[1].Status).To(Equal(task.StatusSKIP))
+	})
+})
+
 type selfTemplatingKind struct{ fakeKind }
 
 func (selfTemplatingKind) TemplatesOwnConfig() {}

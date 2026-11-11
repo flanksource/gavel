@@ -46,6 +46,9 @@ func runStep(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResu
 	if err != nil {
 		return nodeError(test, err.Error())
 	}
+	if test.Step != nil && opts.Resume != nil && step.Scope.beforeResume(spec.ID, opts.Resume.FromStep) {
+		return reuseStep(step, *opts.Resume)
+	}
 	// A typed step depends on the ones before it (their services, exports and
 	// todo state), so once one fails the rest are skipped, naming the cause,
 	// instead of each failing on a consequence of it. A markdown node is skipped
@@ -237,6 +240,12 @@ func executeStep(ctx context.Context, kind Kind, step *StepContext) FixtureResul
 		if err := scope.AddCleanup(stepLabel(step), outcome.Cleanup); err != nil {
 			result = result.Errorf(err, "register cleanup")
 		}
+		// A step that left teardown work (a service, a browser) cannot be
+		// reused by a resumed run: what it started does not outlive its run.
+		if result.Metadata == nil {
+			result.Metadata = map[string]interface{}{}
+		}
+		result.Metadata[CleanupMetadataKey] = true
 	}
 	outputs := outcome.Outputs
 	var waited *WaitReport

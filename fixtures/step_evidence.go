@@ -3,6 +3,7 @@ package fixtures
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -10,6 +11,9 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons/logger"
+
+	"github.com/flanksource/gavel/models"
 )
 
 // stepEvidence is what one attempt of a step recorded as it ran: its stdout
@@ -18,6 +22,10 @@ import (
 // published to the live view (the fixture's progress node) and, when the step
 // runs as a clicky task of its own, to that task's snapshot — so what a running
 // step showed is what its result keeps, even when Execute failed.
+//
+// Both streams are read for workflow commands (see workflow_commands.go): a
+// command line is applied and kept out of the output, everything else is kept
+// and streamed as it is written.
 type stepEvidence struct {
 	started  time.Time
 	live     io.Writer
@@ -28,6 +36,20 @@ type stepEvidence struct {
 	stdout, stderr bytes.Buffer
 	details        map[string]any
 	command, cwd   string
+
+	lines    [2]evidenceLine
+	filter   workflowFilter
+	groups   []string
+	findings []models.Violation
+	failures []error
+}
+
+// evidenceLine is where one stream is within its current line: pending holds
+// a line start that may be a workflow command until its newline; plain marks
+// a line already known not to be one, streamed as it arrives.
+type evidenceLine struct {
+	pending []byte
+	plain   bool
 }
 
 // newStepEvidence starts an attempt's record. ctx carries the live output
@@ -65,14 +87,22 @@ func (s *StepContext) SetDetail(key string, value any) error {
 	if err != nil {
 		return fmt.Errorf("step detail %q: %w", key, err)
 	}
-	e := s.recorder()
+	s.recorder().setDetail(key, plain)
+	return nil
+}
+
+func (e *stepEvidence) setDetail(key string, plain any) {
 	e.mu.Lock()
 	e.details[key] = plain
 	e.mu.Unlock()
+	e.publish(key, plain)
+}
+
+// publish sets key on the live view only.
+func (e *stepEvidence) publish(key string, plain any) {
 	if stream, ok := e.live.(*outputStream); ok {
 		stream.setMetadata(key, plain)
 	}
-	return nil
 }
 
 // SetCommand records the command the step runs and where, as the result's
@@ -87,7 +117,10 @@ func (s *StepContext) SetCommand(command, cwd string) {
 // Progress reports done of total units of the step's work (tests, linters) to
 // the live view and the step's task.
 func (s *StepContext) Progress(done, total int) error {
-	e := s.recorder()
+	return s.recorder().reportProgress(done, total)
+}
+
+func (e *stepEvidence) reportProgress(done, total int) error {
 	if e.task != nil {
 		e.task.SetProgress(done, total)
 	}
@@ -98,8 +131,11 @@ func (s *StepContext) Progress(done, total int) error {
 }
 
 // fill folds the record into result wherever the kind left the field empty:
-// what a kind set itself wins.
+// what a kind set itself wins. The findings the step's workflow commands
+// reported are added as its children, and only ever worsen its status.
 func (e *stepEvidence) fill(result FixtureResult) FixtureResult {
+	e.consume(false, nil, true)
+	e.consume(true, nil, true)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, field := range []struct {
@@ -120,6 +156,36 @@ func (e *stepEvidence) fill(result FixtureResult) FixtureResult {
 	}
 	if result.Duration == 0 {
 		result.Duration = time.Since(e.started)
+	}
+	return e.applyFindingsLocked(result)
+}
+
+func (e *stepEvidence) applyFindingsLocked(result FixtureResult) FixtureResult {
+	var errorCount, warnCount int
+	var firstError string
+	for _, v := range e.findings {
+		switch v.Severity {
+		case models.SeverityError:
+			if errorCount == 0 {
+				firstError = v.Rule.Method + ": " + *v.Message
+			}
+			errorCount++
+		case models.SeverityWarning:
+			warnCount++
+		}
+		result.Children = append(result.Children, ViolationNode(v))
+	}
+	if len(e.failures) > 0 {
+		return result.Errorf(errors.Join(e.failures...), "workflow commands")
+	}
+	completed := isPassingStatus(result.Status) || result.Status == task.StatusWarning
+	switch status := FindingsStatus(errorCount, warnCount); {
+	case status == task.StatusFAIL && completed:
+		result.Status = status
+		result.Error = fmt.Sprintf("%d error finding(s), %d other: %s", errorCount, len(e.findings)-errorCount, firstError)
+	case status == task.StatusWarning && isPassingStatus(result.Status):
+		result.Status = status
+		result.Error = fmt.Sprintf("%d warning finding(s)", warnCount)
 	}
 	return result
 }
@@ -152,13 +218,174 @@ type evidenceStream struct {
 }
 
 func (w evidenceStream) Write(p []byte) (int, error) {
-	w.e.mu.Lock()
-	if w.stderr {
-		w.e.stderr.Write(p)
-	} else {
-		w.e.stdout.Write(p)
-	}
-	w.e.mu.Unlock()
-	_, _ = w.e.live.Write(p)
+	w.e.consume(w.stderr, p, false)
 	return len(p), nil
+}
+
+// consume reads p into the stream's record; final ends its last line, as when
+// the step finished without a trailing newline. The commands it read are
+// applied after the lock is released: they publish, and a publish may call
+// back into the record.
+func (e *stepEvidence) consume(stderr bool, p []byte, final bool) {
+	e.mu.Lock()
+	kept, commands, found := e.scanLocked(stderr, p, final)
+	var findings any
+	var err error
+	if found {
+		findings, err = PlainValue(e.findings)
+	}
+	e.mu.Unlock()
+	if len(kept) > 0 {
+		_, _ = e.live.Write(kept)
+	}
+	if err != nil {
+		e.fail(fmt.Errorf("publish workflow findings: %w", err))
+	} else if found {
+		e.publish("findings", findings)
+	}
+	for _, cmd := range commands {
+		e.apply(cmd)
+	}
+}
+
+// scanLocked appends p to the stream's line and reads off every complete
+// line: a line that cannot be a workflow command is kept as it arrives, one
+// that may be is held until its newline. kept is what it added to the stream,
+// commands the ones to apply, found whether it recorded a finding.
+func (e *stepEvidence) scanLocked(stderr bool, p []byte, final bool) (kept []byte, commands []workflowCommand, found bool) {
+	line, buffer := &e.lines[0], &e.stdout
+	if stderr {
+		line, buffer = &e.lines[1], &e.stderr
+	}
+	keep := func(b []byte) {
+		buffer.Write(b)
+		kept = append(kept, b...)
+	}
+	line.pending = append(line.pending, p...)
+	for len(line.pending) > 0 {
+		newline := bytes.IndexByte(line.pending, '\n')
+		if line.plain || !mayBeWorkflowCommand(line.pending) {
+			if newline < 0 {
+				keep(line.pending)
+				line.pending, line.plain = line.pending[:0], true
+				break
+			}
+			keep(line.pending[:newline+1])
+			line.pending, line.plain = line.pending[newline+1:], false
+			continue
+		}
+		if newline < 0 && !final {
+			break
+		}
+		end := newline
+		if end < 0 {
+			end = len(line.pending)
+		}
+		parsed := e.filter.line(string(line.pending[:end]))
+		if !parsed.Drop {
+			keep([]byte(parsed.Text))
+			if newline >= 0 {
+				keep([]byte{'\n'})
+			}
+		}
+		if parsed.Err != nil {
+			e.findings, found = append(e.findings, invalidWorkflowCommand(parsed.Err)), true
+		} else if parsed.Command != nil {
+			if cmd, recorded := e.recordLocked(*parsed.Command); recorded {
+				found = true
+			} else if cmd != nil {
+				commands = append(commands, *cmd)
+			}
+		}
+		line.pending = line.pending[end:]
+		if newline >= 0 {
+			line.pending = line.pending[1:]
+		}
+	}
+	return kept, commands, found
+}
+
+// recordLocked records what a command changes in the record itself (the open
+// groups, the findings) and returns any command still to apply.
+func (e *stepEvidence) recordLocked(cmd workflowCommand) (*workflowCommand, bool) {
+	switch cmd.Name {
+	case "group":
+		e.groups = append(e.groups, cmd.Message)
+	case "endgroup":
+		if len(e.groups) > 0 {
+			e.groups = e.groups[:len(e.groups)-1]
+		}
+	case "error", "warning", "notice":
+		var group string
+		if len(e.groups) > 0 {
+			group = e.groups[len(e.groups)-1]
+		}
+		v, err := workflowFinding(cmd, group)
+		if err != nil {
+			v = invalidWorkflowCommand(err)
+		}
+		e.findings = append(e.findings, v)
+		return nil, true
+	case "progress":
+		var err error
+		if cmd.Done, cmd.Total, err = workflowProgress(cmd); err != nil {
+			e.findings = append(e.findings, invalidWorkflowCommand(err))
+			return nil, true
+		}
+		return &cmd, false
+	default:
+		return &cmd, false
+	}
+	return nil, false
+}
+
+// apply publishes a command that reports on the running step.
+func (e *stepEvidence) apply(cmd workflowCommand) {
+	switch cmd.Name {
+	case "progress":
+		if err := e.reportProgress(cmd.Done, cmd.Total); err != nil {
+			e.fail(fmt.Errorf("::progress %d/%d: %w", cmd.Done, cmd.Total, err))
+		}
+	case "description":
+		if e.task != nil {
+			e.task.SetDescription(cmd.Message)
+		}
+		e.setDetail("description", cmd.Message)
+	case "status":
+		if e.task != nil {
+			e.task.Infof("%s", cmd.Message)
+		}
+		e.setDetail("status", cmd.Message)
+	case "debug":
+		if e.task != nil {
+			e.task.Debugf("%s", cmd.Message)
+		} else {
+			logger.Debugf("%s", cmd.Message)
+		}
+	}
+}
+
+func (e *stepEvidence) fail(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.failures = append(e.failures, err)
+}
+
+// mayBeWorkflowCommand reports whether a line starting with b could still be
+// a workflow command: every command line starts with "::".
+func mayBeWorkflowCommand(b []byte) bool {
+	switch len(b) {
+	case 0:
+		return true
+	case 1:
+		return b[0] == ':'
+	}
+	return b[0] == ':' && b[1] == ':'
+}
+
+// invalidWorkflowCommand is a command line that did not parse, reported as
+// an error finding rather than dropped.
+func invalidWorkflowCommand(err error) models.Violation {
+	return models.Violation{Severity: models.SeverityError, Message: models.StringPtr(err.Error()),
+		Source: WorkflowCommandSource, Rule: &models.Rule{Method: "::invalid"}}
 }

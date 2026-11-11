@@ -192,7 +192,7 @@ func ResultDetail(result *FixtureResult) json.RawMessage {
 	// A typed (YAML/JSON) step's record: which step it was, what it produced and
 	// exported, how its wait went, every Execute attempt and what a background
 	// watcher saw.
-	for _, key := range []string{"step", "outputs", ViewMetadataKey, FormMetadataKey, ViolationMetadataKey, QueryMetadataKey, "exports", "wait", "attempts", "events", "background", "source"} {
+	for _, key := range []string{"step", "outputs", ViewMetadataKey, FormMetadataKey, ViolationMetadataKey, QueryMetadataKey, "exports", "wait", "attempts", "events", "background", "source", "reused", CleanupMetadataKey} {
 		if value, ok := result.Metadata[key]; ok {
 			if key == "attempts" {
 				if attempts, typed := value.([]AttemptReport); typed {

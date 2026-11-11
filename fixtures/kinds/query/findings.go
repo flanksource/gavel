@@ -117,19 +117,23 @@ func evalFindingsExpression(expression string, vars map[string]any) ([]map[strin
 	return elements, nil
 }
 
-// apply renders one violation map per row where When holds.
+// apply renders one violation map per row where When holds, over the rows of
+// every result set in order; resultSet is the 0-based index of a row's set.
 func (m *rowMapper) apply(step *fixtures.StepContext, outputs map[string]any) ([]map[string]any, error) {
-	rows, _ := outputs["rows"].([]any)
+	sets, _ := outputs["resultSets"].([]any)
 	var elements []map[string]any
-	for i, row := range rows {
-		vars := step.CELVars(outputs)
-		vars["row"] = row
-		element, keep, err := m.applyRow(step, vars)
-		if err != nil {
-			return nil, fmt.Errorf("findings row %d: %w", i, err)
-		}
-		if keep {
-			elements = append(elements, element)
+	for s, set := range sets {
+		rows, _ := set.([]any)
+		for i, row := range rows {
+			vars := step.CELVars(outputs)
+			vars["row"], vars["resultSet"] = row, s
+			element, keep, err := m.applyRow(step, vars)
+			if err != nil {
+				return nil, fmt.Errorf("findings result set %d row %d: %w", s, i, err)
+			}
+			if keep {
+				elements = append(elements, element)
+			}
 		}
 	}
 	return elements, nil
@@ -271,16 +275,15 @@ func findingsResult(step *fixtures.StepContext, violations []models.Violation) f
 	result := fixtures.FixtureResult{Name: stepName(step), Type: "query"}
 	var errorCount, warnCount int
 	for _, v := range violations {
-		child := violationNode(v)
 		switch v.Severity {
 		case models.SeverityError:
 			errorCount++
 		default:
 			warnCount++
 		}
-		result.Children = append(result.Children, child)
+		result.Children = append(result.Children, fixtures.ViolationNode(v))
 	}
-	result.Status = resultStatus(errorCount, warnCount)
+	result.Status = fixtures.FindingsStatus(errorCount, warnCount)
 	switch result.Status {
 	case task.StatusFAIL:
 		result.Error = fmt.Sprintf("%d error finding(s), %d other", errorCount, warnCount)
@@ -288,19 +291,6 @@ func findingsResult(step *fixtures.StepContext, violations []models.Violation) f
 		result.Error = fmt.Sprintf("%d warning/info finding(s)", warnCount)
 	}
 	return result
-}
-
-func violationNode(v models.Violation) *fixtures.FixtureNode {
-	name := v.Rule.Method + ": " + *v.Message
-	status := map[models.ViolationSeverity]task.Status{
-		models.SeverityError: task.StatusFAIL, models.SeverityWarning: task.StatusWarning, models.SeverityInfo: task.StatusPASS,
-	}[v.Severity]
-	result := &fixtures.FixtureResult{Name: name, Type: "finding", Status: status, Test: fixtures.FixtureTest{Name: name},
-		Metadata: map[string]any{fixtures.ViolationMetadataKey: v}}
-	if status != task.StatusPASS {
-		result.Error = *v.Message
-	}
-	return &fixtures.FixtureNode{Name: name, Type: fixtures.TestNode, Results: result}
 }
 
 func evalBool(expression string, vars map[string]any) (bool, error) {

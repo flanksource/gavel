@@ -195,7 +195,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	maps.Copy(childEnv, lease.Env())
 	var p *clickyExec.ExecResult
 	if exec.Terminal == "pty" || terminalTrace != nil {
-		p = runWithPTY(ctx, ptyRun{exec: exec, workDir: workDir, env: childEnv, terminal: terminalTrace, runtime: opts.ProcessRuntime})
+		p = runWithPTY(ctx, ptyRun{exec: exec, workDir: workDir, env: childEnv, terminal: terminalTrace, runtime: opts.ProcessRuntime, output: e.Stdout})
 	} else {
 		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir).WithProcessGroup().WithExactEnv(childEnv)
 		if e.Stdout != nil && e.Stderr != nil {
@@ -208,6 +208,11 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	}
 	if err := lease.Close(); err != nil {
 		return result.Errorf(err, "release fixture slots")
+	}
+	// The step's StepContext streams applied the workflow commands; what the
+	// command printed, its expectations and CEL see without them.
+	if p != nil {
+		p.Stdout, p.Stderr = fixtures.StripWorkflowCommands(p.Stdout), fixtures.StripWorkflowCommands(p.Stderr)
 	}
 
 	result.Actual = p
@@ -323,14 +328,16 @@ func processLaunchError(p *clickyExec.ExecResult) error {
 }
 
 // ptyRun is one command run under a pseudo-terminal: the fixture's command,
-// where and with which environment it runs, and the terminal trace its output
-// feeds, nil when none is armed.
+// where and with which environment it runs, the terminal trace its output
+// feeds, nil when none is armed, and the stream its output is copied to as it
+// is read, nil for none.
 type ptyRun struct {
 	exec     fixtures.ExecFixtureBase
 	workDir  string
 	env      map[string]string
 	terminal *fixtures.TerminalTrace
 	runtime  processruntime.Options
+	output   io.Writer
 }
 
 // runWithPTY runs the command under a pseudo-terminal, of the terminal trace's
@@ -363,6 +370,14 @@ func runWithPTY(ctx context.Context, run ptyRun) *clickyExec.ExecResult {
 			return failed(err)
 		}
 		opts.Output = feed
+	}
+	if run.output != nil {
+		// The feed goes first: a failed feed fails the command, the step's
+		// stream never fails a write.
+		opts.Output = run.output
+		if feed != nil {
+			opts.Output = io.MultiWriter(feed, run.output)
+		}
 	}
 	capture, err := fixtures.CaptureANSI(opts)
 	if err != nil {

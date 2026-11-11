@@ -11,6 +11,8 @@ import (
 	flanksourceContext "github.com/flanksource/commons/context"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/flanksource/gavel/models"
 )
 
 var _ = Describe("a step's recorded evidence", func() {
@@ -130,6 +132,75 @@ var _ = Describe("a step's recorded evidence", func() {
 		Expect([]any{snapshot.Stdout, snapshot.Progress, snapshot.MaxValue}).To(Equal([]any{printed + "\n", 2, 5}))
 		Expect(snapshot.Details).To(Equal(map[string]any{QueryMetadataKey: map[string]any{"template": template, "arguments": []any{nil}},
 			"command": command, "cwd": workDir}))
+	})
+
+	Describe("workflow commands", func() {
+		printing := func(status task.Status, chunks ...string) FixtureResult {
+			useKind(fakeKind{name: "printer", execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
+				for _, chunk := range chunks {
+					fmt.Fprint(step.Stdout(), chunk)
+				}
+				return StepOutcome{Result: FixtureResult{Status: status}}, nil
+			}})
+			return runSteps(StepSpec{ID: "print", Kind: "printer"})[0]
+		}
+		findings := func(result FixtureResult) []string {
+			var out []string
+			for _, child := range result.Children {
+				out = append(out, string(child.Results.Status)+" "+child.Name)
+			}
+			return out
+		}
+
+		It("keeps output and group markers, applies commands split across writes, and drops their lines", func() {
+			result := printing(task.StatusPASS,
+				"::group::Bu", "ild\ncompiling\n::desc", "ription::copying files\n",
+				"::status::2 of 3\n::notice title=Cache::hit\n::endgroup::\n", "done")
+
+			Expect(result.Status).To(Equal(task.StatusPASS), result.Error)
+			Expect(result.Stdout).To(Equal("::group::Build\ncompiling\n::endgroup::\ndone"))
+			Expect([]any{result.Metadata["description"], result.Metadata["status"]}).To(Equal([]any{"copying files", "2 of 3"}))
+			Expect(findings(result)).To(Equal([]string{string(task.StatusPASS) + " Cache: hit"}))
+			Expect(*result.Children[0].Results.Metadata[ViolationMetadataKey].(models.Violation).Code).To(Equal("Build"))
+		})
+
+		It("fails a step that passed when it printed an ::error", func() {
+			result := printing(task.StatusPASS, "::warning::slow\n::error file=a.go,line=3::boom\n")
+
+			Expect(result.Status).To(Equal(task.StatusFAIL))
+			Expect(result.Error).To(Equal("1 error finding(s), 1 other: ::error: boom"))
+			Expect(findings(result)).To(Equal([]string{string(task.StatusWarning) + " ::warning: slow", string(task.StatusFAIL) + " ::error: boom"}))
+		})
+
+		It("warns a step that passed when it printed only a ::warning", func() {
+			result := printing(task.StatusPASS, "::warning::deprecated flag\n")
+
+			Expect([]string{string(result.Status), result.Error}).To(Equal([]string{string(task.StatusWarning), "1 warning finding(s)"}))
+		})
+
+		It("keeps the kind's own failure when the step also printed an ::error", func() {
+			result := printing(task.StatusFAIL, "::error::boom\n")
+
+			Expect(result.Status).To(Equal(task.StatusFAIL))
+			Expect(result.Error).To(BeEmpty())
+		})
+
+		It("reports a malformed command as an error finding instead of dropping it", func() {
+			result := printing(task.StatusPASS, "::progress::half\n")
+
+			Expect(result.Status).To(Equal(task.StatusFAIL))
+			Expect(findings(result)).To(Equal([]string{string(task.StatusFAIL) + " ::invalid: ::progress \"half\": want a <done>/<total> message or done and total properties"}))
+		})
+
+		It("streams a partial plain line at once, and holds one that may be a command until its newline", func() {
+			step := &StepContext{}
+			fmt.Fprint(step.Stdout(), "downloading 40%")
+			fmt.Fprint(step.Stdout(), "\n::progr")
+			Expect(step.evidence.output().Stdout).To(Equal("downloading 40%\n"))
+
+			fmt.Fprint(step.Stdout(), "ess::1/2\n")
+			Expect(step.evidence.output().Stdout).To(Equal("downloading 40%\n"))
+		})
 	})
 
 	It("records without a runner — a kind's unit test — and publishes nowhere", func() {

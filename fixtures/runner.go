@@ -79,6 +79,8 @@ type RunnerOptions struct {
 	Prompter Prompter `json:"-" yaml:"-"`
 	// Params pre-supply the fixture's `params:` form (RunOptions.Params).
 	Params map[string]any
+	// Resume restarts the run mid-file (RunOptions.Resume).
+	Resume *Resume `json:"resume,omitempty" yaml:"-"`
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -624,6 +626,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		RunID:          r.options.RunID,
 		Prompter:       r.options.Prompter,
 		Params:         r.options.Params,
+		Resume:         r.options.Resume,
 		ExtraArgs: map[string]interface{}{
 			"flanksource_context": ctx,
 		},

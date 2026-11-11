@@ -49,6 +49,41 @@ steps:
 		Expect(seen).To(Equal(answered))
 	})
 
+	It("is prepared after reused params when the run resumes past the params form", func() {
+		asked := 0
+		useKind(fakeKind{name: FormKind, execute: func(context.Context, *StepContext) (StepOutcome, error) {
+			asked++
+			return StepOutcome{Result: FixtureResult{Status: task.StatusPASS}}, nil
+		}})
+		var seen string
+		useKind(fakeKind{name: "probe", execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
+			cfg, err := KindConfig[map[string]any](step)
+			seen, _ = cfg["url"].(string)
+			return StepOutcome{Result: FixtureResult{Status: task.StatusPASS}}, err
+		}})
+		path := writeDocument("resumed-params-setup.fixture.yaml", `
+kind: Fixture
+params:
+  type: object
+  properties:
+    greeting: {type: string}
+setup:
+  envVars:
+    - name: GREETING
+      value: "{{.params.greeting}}"
+steps:
+  - { id: use, kind: probe, url: "{{.env.GREETING}}" }
+`)
+		resume := &Resume{FromStep: "use", Prior: map[string]PriorStep{ParamsStepID: {Outputs: map[string]any{"greeting": answered}}}}
+		runner, err := NewRunner(RunnerOptions{Paths: []string{path}, WorkDir: filepath.Dir(path), MaxWorkers: 1, Resume: resume})
+		Expect(err).ToNot(HaveOccurred())
+		tree, err := runner.Run()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(tree.GetStats().Passed).To(Equal(2))
+		Expect(asked).To(BeZero())
+		Expect(seen).To(Equal(answered))
+	})
+
 	It("leaves the connection unconfigured when its $cel value is nil", func() {
 		answerParams()
 		useKind(fakeKind{name: "probe", execute: passing(nil, nil)})
