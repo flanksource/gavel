@@ -53,20 +53,23 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 		}
 	}
 	runtimeEqual := true
-	if len(packagesByFramework[parsers.GoTest]) > 0 && len(ginkgo) > 0 {
-		goRuntime, goRuntimeArgs, err := o.runtimeFor(parsers.GoTest)
+	var ginkgoRuntimeArgs []string
+	if len(ginkgo) > 0 {
+		ginkgoRuntime, runtimeArgs, err := o.runtimeFor(parsers.Ginkgo)
 		if err != nil {
 			return nil, err
 		}
-		ginkgoRuntime, ginkgoRuntimeArgs, err := o.runtimeFor(parsers.Ginkgo)
+		ginkgoRuntimeArgs, err = runners.GinkgoGoTestArgs(runtimeArgs)
 		if err != nil {
 			return nil, err
 		}
-		ginkgoRuntimeArgs, err = runners.GinkgoGoTestArgs(ginkgoRuntimeArgs)
-		if err != nil {
-			return nil, err
+		if len(packagesByFramework[parsers.GoTest]) > 0 {
+			goRuntime, goRuntimeArgs, err := o.runtimeFor(parsers.GoTest)
+			if err != nil {
+				return nil, err
+			}
+			runtimeEqual = reflect.DeepEqual(goRuntime, ginkgoRuntime) && slices.Equal(goRuntimeArgs, ginkgoRuntimeArgs)
 		}
-		runtimeEqual = reflect.DeepEqual(goRuntime, ginkgoRuntime) && slices.Equal(goRuntimeArgs, ginkgoRuntimeArgs)
 	}
 	var bases []goBatchPlan
 	if len(packagesByFramework[parsers.GoTest]) == 0 {
@@ -86,7 +89,7 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 		for _, pkg := range base.packages {
 			args := o.augmentBenchArgs(runner, pkg, base.args)
 			// A Ginkgo-only run must not also run the plain Go tests that share the package binary.
-			if base.framework == parsers.Ginkgo && !slices.ContainsFunc(args, isGoRunArg) {
+			if base.framework == parsers.Ginkgo && !slices.ContainsFunc(args, isGoRunArg) && !slices.ContainsFunc(ginkgoRuntimeArgs, isGoRunArg) {
 				bootstrap, err := ginkgoBootstrap(filepath.Join(o.WorkDir, pkg))
 				if err != nil {
 					return nil, err

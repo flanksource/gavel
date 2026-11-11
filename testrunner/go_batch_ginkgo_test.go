@@ -1,6 +1,7 @@
 package testrunner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -10,6 +11,10 @@ import (
 )
 
 var _ = Describe("unified Go runner", func() {
+	BeforeEach(func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+	})
+
 	It("uses a recursive selector for an unfocused mixed run", func() {
 		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: ".", Recursive: true}}
 		plans, err := o.planGoBatches(map[Framework][]string{
@@ -217,9 +222,15 @@ var _ = Describe("unified Go runner", func() {
 
 	It("keeps distinct Ginkgo runtime arguments on the test binary", func() {
 		workDir := GinkgoT().TempDir()
-		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		Expect(os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte("test: {frameworks: {ginkgo: {args: [--focus=selected]}}}\n"), 0o600)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(workDir, "sample_test.go"), []byte("package sample\nimport \"github.com/onsi/ginkgo/v2\"\n"), 0o600)).To(Succeed())
+		code := `package sample
+import (
+	"testing"
+	. "github.com/onsi/ginkgo/v2"
+)
+func TestSample(t *testing.T) { RunSpecs(t, "sample") }
+`
+		Expect(os.WriteFile(filepath.Join(workDir, "sample_test.go"), []byte(code), 0o600)).To(Succeed())
 		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir}}
 		plans, err := o.planGoBatches(map[Framework][]string{parsers.GoTest: {"."}, parsers.Ginkgo: {"."}}, nil, false)
 		Expect(err).NotTo(HaveOccurred())
@@ -232,6 +243,38 @@ var _ = Describe("unified Go runner", func() {
 		}
 		process, err := o.buildGoBatchCommand(ginkgoPlan)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(process.Args).To(ContainElements("-args", "-ginkgo.focus=selected"))
+		Expect(process.Args).To(ContainElements("-run=^(?:TestSample)$", "-args", "-ginkgo.focus=selected"))
 	})
+
+	DescribeTable("preserves explicit Go selectors for Ginkgo batches", func(configArgs string, passThroughArgs, wantGoArgs []string) {
+		workDir := GinkgoT().TempDir()
+		config := fmt.Sprintf("test: {frameworks: {ginkgo: {args: [%s]}}}\n", configArgs)
+		Expect(os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte(config), 0o600)).To(Succeed())
+		code, err := os.ReadFile("runners/testdata/overlayfixture/fixture_test.go")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(os.WriteFile(filepath.Join(workDir, "sample_test.go"), code, 0o600)).To(Succeed())
+		for _, mixed := range []bool{false, true} {
+			packages := map[Framework][]string{parsers.Ginkgo: {"."}}
+			if mixed {
+				packages[parsers.GoTest] = []string{"."}
+			}
+			o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir}}
+			plans, err := o.planGoBatches(packages, map[Framework][]string{parsers.Ginkgo: passThroughArgs}, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plans).To(HaveLen(len(packages)))
+			plan := plans[len(plans)-1]
+			Expect(plan.framework).To(Equal(parsers.Ginkgo))
+			Expect(plan.args).To(Equal(passThroughArgs))
+			process, err := o.buildGoBatchCommand(plan)
+			Expect(err).NotTo(HaveOccurred())
+			wantTail := append(append([]string(nil), wantGoArgs...), ".", "-args", "-ginkgo.focus=selected")
+			Expect(process.Args[len(process.Args)-len(wantTail):]).To(Equal(wantTail))
+		}
+	},
+		Entry("configured equals form", "--focus=selected, -run=^$", nil, []string{"-run=^$"}),
+		Entry("configured separate value", "--focus=selected, -run, ^$", nil, []string{"-run", "^$"}),
+		Entry("pass-through equals form", "--focus=selected", []string{"-run=^$"}, []string{"-run=^$"}),
+		Entry("pass-through separate value", "--focus=selected", []string{"-run", "^$"}, []string{"-run", "^$"}),
+		Entry("pass-through overrides configuration", "--focus=selected, -run=^$", []string{"-run=^TestOrdinary$"}, []string{"-run=^$", "-run=^TestOrdinary$"}),
+	)
 })
