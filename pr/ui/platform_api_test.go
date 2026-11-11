@@ -242,6 +242,32 @@ func TestPlatformSubstrateInventory(t *testing.T) {
 	assert.Empty(t, got.ActorsError)
 }
 
+func TestPlatformSubstrateInventoryListsActorsByAtespaceThenName(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	server := substratetest.Start(t)
+	for _, atespace := range []string{"a-b", "a"} {
+		options := server.Options()
+		options.Atespace = atespace
+		client, err := substrate.Dial(options)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, client.Close()) })
+		_, err = client.Create(t.Context(), substrate.Environment{ID: "env"})
+		require.NoError(t, err)
+	}
+	client, err := substrate.Dial(server.Options())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}, Substrate: client}
+
+	var got PlatformSubstrateInventory
+	require.Equal(t, http.StatusOK, platformGet(t, servePlatform(t, p, org, true)+"/api/platform/substrate/inventory", &got))
+	var order []string
+	for _, actor := range got.Actors {
+		order = append(order, actor.Atespace)
+	}
+	assert.Equal(t, []string{"a", "a-b"}, order)
+}
+
 func TestPlatformSubstrateInventoryWhenSubstrateIsDown(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	options := substratetest.Start(t).Options()
