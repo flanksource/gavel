@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -27,7 +28,8 @@ func TestPlatformListsALiveSubstratesInventory(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	env, err := client.Create(t.Context(), substrate.Environment{ID: sandbox.JobName(run)})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, env.Delete(t.Context())) })
+	// t.Context() is canceled before cleanups run, so the environment is deleted with its own.
+	t.Cleanup(func() { require.NoError(t, env.Delete(context.Background())) })
 	p := &PlatformAPI{Store: platform.Store{DB: db, Issuer: "https://clerk.example"}, Substrate: client}
 
 	var got PlatformSubstrateInventory
