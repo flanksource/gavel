@@ -15,7 +15,7 @@ beforeEach(() => {
         org: { id: 'o-alpha', slug: 'alpha', name: 'Alpha', role: 'org:admin' }, orgs: [] }), { status: 200 }));
     }
     if (String(input) === '/api/platform/infrastructure') {
-      return Promise.resolve(new Response(JSON.stringify({ missionControl: 'https://mc.example.com/api', configs: [], checks: [], changes: [] }), { status: 200 }));
+      return Promise.resolve(new Response(JSON.stringify({ missionControl: 'https://mc.example.com/api', configs: [], checks: [], changes: [], changesDays: 7 }), { status: 200 }));
     }
     if (String(input) === '/api/platform/tenants?days=30') {
       return Promise.resolve(new Response(JSON.stringify({ tenants: [{ id: 'o-alpha', clerkOrgId: 'org_alpha', slug: 'alpha', name: 'Alpha', createdAt: '2026-10-01T00:00:00Z',

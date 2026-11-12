@@ -1,6 +1,5 @@
-// Package missioncontroltest runs a fake Mission Control for tests: the resource search and the
-// views the platform dashboard reads, answering one access token and refusing others, and refusing
-// change searches on fields Mission Control can't search changes by, like Mission Control.
+// Package missioncontroltest runs a fake Mission Control for tests: the resource search, the
+// changes search and the views the platform dashboard reads, answering one access token only.
 package missioncontroltest
 
 import (
@@ -29,9 +28,10 @@ type Server struct {
 
 	mu        sync.Mutex
 	resources clientapi.SearchResourcesResponse
-	changes   map[string][]clientapi.SelectedResource
+	changes   map[string][]clientapi.ConfigChangeRow
 	refused   map[string]string
 	searches  []clientapi.SearchResourcesRequest
+	changeReq []clientapi.CatalogChangesSearchRequest
 	views     map[string]any
 	viewReads []map[string]any
 }
@@ -46,19 +46,19 @@ func New(t TB) *Server {
 }
 
 // SetResources makes searches for config items and health checks answer resources' Configs and
-// Checks.
+// Checks, leaving out their timestamps unless the search asks for them, as Mission Control does.
 func (s *Server) SetResources(resources clientapi.SearchResourcesResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resources = resources
 }
 
-// SetChanges makes a change search selecting the config item configID answer changes.
-func (s *Server) SetChanges(configID string, changes ...clientapi.SelectedResource) {
+// SetChanges makes a changes search for the config item configID answer changes.
+func (s *Server) SetChanges(configID string, changes ...clientapi.ConfigChangeRow) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.changes == nil {
-		s.changes = map[string][]clientapi.SelectedResource{}
+		s.changes = map[string][]clientapi.ConfigChangeRow{}
 	}
 	s.changes[configID] = changes
 }
@@ -97,6 +97,13 @@ func (s *Server) Searches() []clientapi.SearchResourcesRequest {
 	return append([]clientapi.SearchResourcesRequest(nil), s.searches...)
 }
 
+// ChangeSearches lists the changes searches served, in order.
+func (s *Server) ChangeSearches() []clientapi.CatalogChangesSearchRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]clientapi.CatalogChangesSearchRequest(nil), s.changeReq...)
+}
+
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -121,6 +128,25 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		_ = json.NewEncoder(w).Encode(found)
+	case r.Method == http.MethodPost && r.URL.Path == "/catalog/changes":
+		var search clientapi.CatalogChangesSearchRequest
+		if err := json.NewDecoder(r.Body).Decode(&search); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		s.changeReq = append(s.changeReq, search)
+		if message, ok := s.refused["changes"]; ok {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+			return
+		}
+		var found clientapi.CatalogChangesSearchResponse
+		for _, id := range strings.Split(search.CatalogID, ",") {
+			found.Changes = append(found.Changes, s.changes[id]...)
+		}
+		found.Total = int64(len(found.Changes))
 		_ = json.NewEncoder(w).Encode(found)
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/view/"):
 		var body map[string]any
@@ -150,49 +176,29 @@ func (s *Server) search(search clientapi.SearchResourcesRequest) (clientapi.Sear
 	for _, kind := range []struct {
 		name      string
 		selectors []clientapi.ResourceSelector
-	}{{"configs", search.Configs}, {"checks", search.Checks}, {"changes", search.ConfigChanges}} {
+	}{{"configs", search.Configs}, {"checks", search.Checks}} {
 		if message, ok := s.refused[kind.name]; ok && len(kind.selectors) > 0 {
 			return clientapi.SearchResourcesResponse{}, fmt.Errorf("%s", message)
 		}
 	}
 	if len(search.Configs) > 0 {
-		found.Configs = s.resources.Configs
+		found.Configs = withTimestamps(s.resources.Configs, search.Timestamps)
 	}
 	if len(search.Checks) > 0 {
-		found.Checks = s.resources.Checks
-	}
-	for _, selector := range search.ConfigChanges {
-		configIDs, err := changeConfigIDs(selector.Search)
-		if err != nil {
-			return clientapi.SearchResourcesResponse{}, err
-		}
-		for _, id := range configIDs {
-			found.ConfigChanges = append(found.ConfigChanges, s.changes[id]...)
-		}
+		found.Checks = withTimestamps(s.resources.Checks, search.Timestamps)
 	}
 	return found, nil
 }
 
-// changeFields are the fields Mission Control searches changes by: the columns of duty's
-// ConfigChangeQueryModel, besides tags.<key>.
-var changeFields = map[string]bool{
-	"id": true, "config_id": true, "name": true, "type": true, "created_at": true, "severity": true,
-	"change_type": true, "summary": true, "count": true, "first_observed": true, "agent_id": true,
-}
-
-// changeConfigIDs is the config items a change search selects with config_id=<id>,<id>; it refuses
-// a field Mission Control can't search changes by, with Mission Control's error.
-func changeConfigIDs(search string) ([]string, error) {
-	var ids []string
-	for _, term := range strings.Fields(search) {
-		field, value, _ := strings.Cut(term, "=")
-		field = strings.TrimPrefix(field, "!")
-		if !changeFields[field] && !strings.HasPrefix(field, "tags.") {
-			return nil, fmt.Errorf("error applying query model: query for column:%s in table:catalog_changes not supported", field)
-		}
-		if field == "config_id" {
-			ids = append(ids, strings.Split(value, ",")...)
-		}
+// withTimestamps is resources, without their timestamps unless asked for.
+func withTimestamps(resources []clientapi.SelectedResource, asked bool) []clientapi.SelectedResource {
+	if asked {
+		return resources
 	}
-	return ids, nil
+	found := make([]clientapi.SelectedResource, len(resources))
+	for i, resource := range resources {
+		resource.CreatedAt, resource.UpdatedAt, resource.DeletedAt = nil, nil, nil
+		found[i] = resource
+	}
+	return found
 }
