@@ -43,6 +43,13 @@ it('shows gavel\'s configs, checks and changes from Mission Control, with their 
     ['gavel-data', 'Kubernetes::PersistentVolumeClaim', 'healthy', 'Bound'],
     ['gavel-postgres', 'Kubernetes::StatefulSet', 'unhealthy', 'CrashLoopBackOff'],
   ]);
+  const badge = (cell: HTMLElement) => cell.firstElementChild as HTMLElement | null;
+  const typeCell = within(catalog).getByText('Kubernetes::Deployment').closest('td')!;
+  expect(badge(typeCell)?.textContent, 'each config item\'s type is a badge').toBe('Kubernetes::Deployment');
+  const healthy = badge(within(catalog).getAllByText('healthy')[0].closest('td')!)!;
+  expect(healthy.className, 'badges keep their tone\'s background with plain text').toContain('bg-green-100');
+  expect(healthy.className).toContain('text-foreground');
+  expect(healthy.className).not.toMatch(/text-green/);
   expect(within(catalog).getByRole('link', { name: 'gavel-postgres' }).getAttribute('href'), 'each name opens the config item in Mission Control')
     .toBe('https://mc.example.com/catalog/c2');
   expect(within(within(catalog).getAllByRole('row')[1]).getAllByRole('cell')[5].textContent, 'with when it was last updated')
