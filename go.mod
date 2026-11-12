@@ -28,7 +28,7 @@ require (
 	github.com/flanksource/commons-db/tracing v0.1.72-0.20261112081050-7314063ddb26
 	github.com/flanksource/deps v1.0.51
 	github.com/flanksource/deps/start v0.0.0-20261103114210-92d640aba10a
-	github.com/flanksource/gavel/sdk v0.1.0
+	github.com/flanksource/gavel/sdk v0.0.0-20261112084248-03d7d7223e26
 	github.com/flanksource/gomplate/v3 v3.24.91
 	github.com/flanksource/repomap v0.4.1
 	github.com/fsnotify/fsnotify v1.10.1
