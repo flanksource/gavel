@@ -52,7 +52,10 @@ func (formKind) Execute(ctx context.Context, step *fixtures.StepContext) (fixtur
 	if err != nil {
 		return failed(step, start, err), nil
 	}
-	f, err := newForm(step, cfg)
+	// The step's lookup bindings answer only while it asks.
+	low := &lowering{ctx: ctx, step: step}
+	defer low.release()
+	f, err := newForm(step, cfg, low)
 	if err != nil {
 		return failed(step, start, err), nil
 	}
@@ -108,11 +111,12 @@ type form struct {
 	schema json.RawMessage
 	shape  formSchema
 	values map[string]any
+	low    *lowering
 }
 
-func newForm(step *fixtures.StepContext, cfg config) (*form, error) {
+func newForm(step *fixtures.StepContext, cfg config, low *lowering) (*form, error) {
 	id := firstNonEmpty(step.Spec.ID, step.Test.Name)
-	schema, err := normaliseSchema(cfg.Schema)
+	schema, err := normaliseSchema(cfg.Schema, low)
 	if err != nil {
 		return nil, fmt.Errorf("form %q: %w", id, err)
 	}
@@ -128,7 +132,7 @@ func newForm(step *fixtures.StepContext, cfg config) (*form, error) {
 	if err != nil {
 		return nil, fmt.Errorf("form %q: %w", id, err)
 	}
-	return &form{step: step, cfg: cfg, id: id, schema: schema, shape: shape, values: values}, nil
+	return &form{step: step, cfg: cfg, id: id, schema: schema, shape: shape, values: values, low: low}, nil
 }
 
 func (f *form) noPrompter() error {
@@ -146,7 +150,7 @@ func (f *form) noPrompter() error {
 func (f *form) ask(ctx context.Context) (prompt.Answer, error) {
 	p := prompt.Prompt{
 		Kind: fixtures.FormKind, Title: firstNonEmpty(f.cfg.Title, f.id), Description: f.cfg.Description,
-		Schema: f.schema, Default: f.values, Owner: f.step.Opts.RunID, CreatedAt: time.Now(),
+		Schema: f.schema, Default: f.low.withPrefill(f.values), Owner: f.step.Opts.RunID, CreatedAt: time.Now(),
 		// node is the step's name in the run's progress tree, so the run view can
 		// show the pending form inline on that step.
 		Labels: map[string]string{"fixture": f.step.Test.SourceDir, "step": f.id, "node": f.step.Test.Name},

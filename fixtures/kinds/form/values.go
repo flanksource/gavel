@@ -102,7 +102,6 @@ func (s formSchema) prefill(defaults, supplied map[string]any) (map[string]any, 
 	return s.prune(s.integers(schemaform.ApplyDefaults(s.parsed, values))), nil
 }
 
-
 // coerce types a string value by its property's type; any other value is
 // already typed (a --params file, a UI start request).
 func coerce(prop map[string]any, value any) (any, error) {

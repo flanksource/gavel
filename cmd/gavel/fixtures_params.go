@@ -59,7 +59,7 @@ func fixtureTerminalPrompter(ctx context.Context, workDir string) (fixtures.Prom
 	if err != nil {
 		return nil, err
 	}
-	return form.TTYPrompter{By: by, Lookup: dbconn.TerminalLookup(workDir, dbconn.Options{})}, nil
+	return form.TTYPrompter{By: by, Lookup: form.TerminalLookup(workDir, dbconn.Options{})}, nil
 }
 
 func init() {

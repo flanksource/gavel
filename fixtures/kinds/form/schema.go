@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -21,8 +22,9 @@ const (
 // name, and refuses an enum with no or repeated options (a `{$cel: …}` enum
 // computed from an earlier query can come back empty). It also records the
 // authored property order as `x-order`, which a re-encoded schema would
-// otherwise lose.
-func normaliseSchema(schema json.RawMessage) (json.RawMessage, error) {
+// otherwise lose. An `x-query` property, and a connection picker in a fixture
+// that declares `connections:`, is lowered to a lookup bound through l.
+func normaliseSchema(schema json.RawMessage, l *lowering) (json.RawMessage, error) {
 	if len(bytes.TrimSpace(schema)) == 0 {
 		return nil, fmt.Errorf("schema is required")
 	}
@@ -40,46 +42,41 @@ func normaliseSchema(schema json.RawMessage) (json.RawMessage, error) {
 	if _, declared := doc["x-order"]; !declared && len(order) > 0 {
 		doc["x-order"] = order
 	}
-	if err := normaliseProperties(doc, ""); err != nil {
+	if err := l.normaliseProperties(doc, nil, scopeProps(doc)); err != nil {
 		return nil, err
 	}
 	return json.Marshal(doc)
 }
 
-func normaliseProperties(doc map[string]any, path string) error {
+// normaliseProperties normalises the properties doc declares at path;
+// siblings are every property of the object they belong to, which an
+// `x-query.connection` may name.
+func (l *lowering) normaliseProperties(doc map[string]any, path []string, siblings map[string]map[string]any) error {
 	props, _ := doc["properties"].(map[string]any)
 	for name, raw := range props {
+		at := append(slices.Clone(path), name)
 		prop, ok := raw.(map[string]any)
 		if !ok {
-			return fmt.Errorf("schema property %s%s must be an object", path, name)
+			return fmt.Errorf("schema property %s must be an object", strings.Join(at, "."))
 		}
-		if err := normaliseConnectionProp(prop, path+name); err != nil {
+		if err := l.normaliseConnectionProp(prop, at); err != nil {
 			return err
 		}
-		if err := checkEnum(prop, path+name); err != nil {
+		if err := l.lowerQuery(prop, at, siblings); err != nil {
 			return err
 		}
-		if err := normaliseProperties(prop, path+name+"."); err != nil {
+		if err := checkEnum(prop, strings.Join(at, ".")); err != nil {
+			return err
+		}
+		if err := l.normaliseProperties(prop, at, scopeProps(prop)); err != nil {
 			return err
 		}
 	}
 	// A conditional branch declares properties too: a `format: connection`
 	// under `then:` is the same picker.
-	for _, key := range []string{"then", "else"} {
-		if branch, ok := doc[key].(map[string]any); ok {
-			if err := normaliseProperties(branch, path); err != nil {
-				return err
-			}
-		}
-	}
-	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
-		items, _ := doc[key].([]any)
-		for _, item := range items {
-			if branch, ok := item.(map[string]any); ok {
-				if err := normaliseProperties(branch, path); err != nil {
-					return err
-				}
-			}
+	for _, branch := range branches(doc) {
+		if err := l.normaliseProperties(branch, path, siblings); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -115,7 +112,8 @@ func checkEnum(prop map[string]any, name string) error {
 	return nil
 }
 
-func normaliseConnectionProp(prop map[string]any, name string) error {
+func (l *lowering) normaliseConnectionProp(prop map[string]any, path []string) error {
+	name := strings.Join(path, ".")
 	types, hasTypes := prop["x-connection-types"]
 	if prop["format"] != "connection" {
 		if hasTypes {
@@ -130,17 +128,23 @@ func normaliseConnectionProp(prop map[string]any, name string) error {
 		return fmt.Errorf("schema property %s: a connection is its name, so type must be string, got %v", name, t)
 	}
 	url := ConnectionLookupURL
+	var list []string
 	if hasTypes {
-		list, err := connectionTypes(types)
-		if err != nil {
+		var err error
+		if list, err = connectionTypes(types); err != nil {
 			return fmt.Errorf("schema property %s: %w", name, err)
 		}
 		url += "?types=" + strings.Join(list, ",")
 	}
 	prop["type"] = "string"
-	prop["x-clicky-lookup"] = map[string]any{
-		"url": url, "filter": ConnectionLookupFilter, "searchParam": "__lookup_q", "multi": false,
+	spec, err := l.connectionLookup(prop, path, list)
+	if err != nil {
+		return fmt.Errorf("schema property %s: %w", name, err)
 	}
+	if spec == nil {
+		spec = map[string]any{"url": url, "filter": ConnectionLookupFilter, "searchParam": "__lookup_q", "multi": false}
+	}
+	prop["x-clicky-lookup"] = spec
 	return nil
 }
 

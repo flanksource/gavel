@@ -13,6 +13,9 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/clicky/schemaform"
+
+	"github.com/flanksource/gavel/fixtures/kinds/dbconn"
+	"github.com/flanksource/gavel/fixtures/kinds/lookup"
 )
 
 // TTYPrompter answers form steps on the controlling terminal through clicky's
@@ -36,6 +39,32 @@ func (t TTYPrompter) Ask(ctx context.Context, p prompt.Prompt) (prompt.Answer, e
 		return prompt.Answer{}, err
 	}
 	return prompt.Answer{Values: values, At: time.Now(), By: t.By}, nil
+}
+
+// TerminalLookup resolves a terminal form's `x-clicky-lookup` fields: a
+// field bound by its step (an `x-query`, or a connection picker in a fixture
+// declaring `connections:`) through its lookup token, scoped by the form's
+// values; any other `format: connection` picker over Catalog(workDir), scoped
+// by the types in its lookup URL.
+func TerminalLookup(workDir string, opts dbconn.Options) schemaform.Lookup {
+	return func(ctx context.Context, req schemaform.LookupRequest) (schemaform.LookupResult, error) {
+		token, pointer, bound, err := lookup.ParseURL(req.Spec.URL)
+		if err != nil {
+			return schemaform.LookupResult{}, err
+		}
+		if bound {
+			result, err := lookup.Resolve(ctx, lookup.Request{Token: token, Pointer: pointer, Query: req.Query, Values: req.Values})
+			return result.LookupResult, err
+		}
+		if req.Spec.Filter != ConnectionLookupFilter {
+			return schemaform.LookupResult{}, fmt.Errorf("no terminal lookup for x-clicky-lookup filter %q", req.Spec.Filter)
+		}
+		types, err := dbconn.LookupTypes(req.Spec.URL)
+		if err != nil {
+			return schemaform.LookupResult{}, err
+		}
+		return lookup.ConnectionOptions(ctx, lookup.ConnectionQuery{WorkDir: workDir, Options: opts, Types: types, Query: req.Query})
+	}
 }
 
 // TerminalAnswerer names the person at this terminal: $USER (else the OS
