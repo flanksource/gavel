@@ -47,7 +47,9 @@ gavel test --failed .tmp/previous.json
 gavel test --pr 12
 ```
 
-`--changed` and `--since` limit the run to affected code. `--failed` reruns failures from an explicit snapshot, from `--baseline` when supplied, or from `.gavel/last.json`. Missing history is an error. `--pr` loads failed-test selection from a PR's Gavel CI artifacts and requires access to that repository.
+`--changed` selects packages affected by local staged, unstaged and nonignored untracked files, or by the runner changeset in CI. `--since` accepts refs, `HEAD` and `staged`. Combined `--lint` runs use the same changeset. See [Changed code](/docs/change-selection) for selection semantics, CI setup and empty selections.
+
+`--failed` reruns failures from an explicit snapshot, from `--baseline` when supplied, or from `.gavel/last.json`. Missing history is an error. `--pr` loads failed-test selection from a PR's Gavel CI artifacts and requires access to that repository.
 
 A test baseline marks matching existing failures as baseline passes so only new failures remain actionable. Use `--failed <snapshot>` without baseline suppression when checking whether a known failure has been repaired. Preserve a snapshot before running another command if you need a stable comparison, since the latest-run pointer changes as runs finish. See [Reporting](/docs/reporting).
 
