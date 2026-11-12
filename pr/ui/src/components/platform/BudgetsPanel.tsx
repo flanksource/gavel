@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchJSON, queryKeys } from '../../query';
 import { PanelHeading } from './PanelHeading';
+import { formatDay } from './dates';
 
 export interface BudgetGroup {
   values: Record<string, string>;
@@ -44,7 +45,7 @@ interface Row {
 // budgetRows is one row per group of each rule, or one saying why the rule has none.
 function budgetRows(budgets: Budget[]): Row[] {
   return budgets.flatMap(budget => {
-    const window = budget.windowStart ? `${budget.window} since ${budget.windowStart.slice(0, 10)}` : budget.window;
+    const window = budget.windowStart ? `${budget.window} since ${formatDay(budget.windowStart.slice(0, 10))}` : budget.window;
     const amount = usd.format(budget.amountUSD);
     if (budget.windowError) return [{ key: budget.id, cells: [budget.name, window, budget.windowError, '—', amount, '—'] }];
     if (budget.groups.length === 0) return [{ key: budget.id, cells: [budget.name, window, 'No spend in this window', usd.format(0), amount, used(0, budget.amountUSD)] }];

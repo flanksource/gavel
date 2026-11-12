@@ -60,6 +60,7 @@ it('shows the spend, each organization\'s and model\'s share, and calls left out
   const models = screen.getByRole('table', { name: 'Model spend by model' });
   expect(within(models).getAllByRole('row').slice(1).map(row => within(row).getAllByRole('cell')[0].textContent))
     .toEqual(['claude-sonnet', 'gpt-5']);
+  expect(within(screen.getByRole('table', { name: 'Model spend per day (USD)' })).getByRole('row', { name: /^10\/11\/2026/ }), 'days are written day first').toBeTruthy();
 });
 
 it('says why model usage didn\'t load', async () => {

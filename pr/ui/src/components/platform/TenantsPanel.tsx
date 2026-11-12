@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchJSON, queryKeys } from '../../query';
 import { PanelHeading } from './PanelHeading';
+import { formatDate, formatDateTime } from './dates';
 
 export interface PlatformTenant {
   id?: string;
@@ -88,8 +89,8 @@ export function TenantsPanel({ onSelect }: { onSelect?: (org: string) => void } 
                 <td className="px-2 py-1.5">{repos(tenant)}</td>
                 <td className="px-2 py-1.5">{tenant.githubInstallations}</td>
                 <td className="px-2 py-1.5">{tenant.sandboxRuns}</td>
-                <td className="px-2 py-1.5 text-muted-foreground">{tenant.lastRunAt ? new Date(tenant.lastRunAt).toLocaleString() : '—'}</td>
-                <td className="px-2 py-1.5 text-muted-foreground">{new Date(tenant.createdAt).toLocaleDateString()}</td>
+                <td className="px-2 py-1.5 text-muted-foreground">{tenant.lastRunAt ? formatDateTime(tenant.lastRunAt) : '—'}</td>
+                <td className="px-2 py-1.5 text-muted-foreground">{formatDate(tenant.createdAt)}</td>
                 <td className="px-2 py-1.5 text-muted-foreground">{presence(tenant, clerkListed)}</td>
               </tr>
             ))}

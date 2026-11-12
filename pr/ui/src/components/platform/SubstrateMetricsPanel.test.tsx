@@ -4,6 +4,7 @@ import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from '../todos/queryTestWrapper';
 import { SubstrateMetricsPanel, seriesLabel, timeRows, type MetricsView } from './SubstrateMetricsPanel';
+import { formatDateTime } from './dates';
 
 let response: { status: number; body: unknown };
 
@@ -62,6 +63,9 @@ it('draws the view\'s timeseries with their numbers as a table, and its single v
   expect(within(table).getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['Time', 'pool-a', 'pool-b']);
   expect(within(table).getAllByRole('row').slice(1).map(row => within(row).getAllByRole('cell').slice(1).map(cell => cell.textContent)))
     .toEqual([['3', '—'], ['4', '2']]);
+  expect(within(table).getAllByRole('row').slice(1).map(row => within(row).getAllByRole('cell')[0].textContent), 'each sample\'s time, day first')
+    .toEqual([formatDateTime(at(0)), formatDateTime(at(1))]);
+  expect(screen.getByText(`· refreshed ${formatDateTime('2026-11-10T10:05:00Z')}`, { exact: false })).toBeTruthy();
   expect(screen.getByText(/By pool: gavel doesn't draw piechart panels/)).toBeTruthy();
   expect(screen.getByRole('link', { name: 'Substrate' }).getAttribute('href')).toBe('https://mc.example.com');
 });

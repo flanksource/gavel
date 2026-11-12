@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchJSON, queryKeys } from '../../query';
 import { PanelHeading } from './PanelHeading';
+import { formatDate } from './dates';
 
 export interface PlatformRateLimit {
   limit: number;
@@ -39,7 +40,7 @@ function rateLimit(install: PlatformInstallation): string {
 
 function state(install: PlatformInstallation): string {
   if (install.uninstalled) return 'Uninstalled from GitHub';
-  if (install.suspendedAt) return `Suspended ${new Date(install.suspendedAt).toLocaleDateString()}`;
+  if (install.suspendedAt) return `Suspended ${formatDate(install.suspendedAt)}`;
   return '';
 }
 
@@ -77,7 +78,7 @@ export function GitHubPanel({ org }: { org?: string } = {}) {
                 <td className="px-2 py-1.5">{install.repos}</td>
                 <td className={`px-2 py-1.5 ${install.rateLimitError ? 'text-red-600' : ''}`}>{rateLimit(install)}</td>
                 <td className="px-2 py-1.5 text-muted-foreground">{state(install)}</td>
-                <td className="px-2 py-1.5 text-muted-foreground">{install.createdAt ? new Date(install.createdAt).toLocaleDateString() : '—'}</td>
+                <td className="px-2 py-1.5 text-muted-foreground">{install.createdAt ? formatDate(install.createdAt) : '—'}</td>
               </tr>
             ))}
           </tbody>

@@ -8,6 +8,7 @@ import { PlatformSections } from './PlatformSections';
 import { SandboxUsagePanel } from './SandboxUsagePanel';
 import { SubstrateInventoryPanel } from './SubstrateInventoryPanel';
 import { tenantWindowDays, useTenants } from './TenantsPanel';
+import { formatDateTime } from './dates';
 
 export function OrganizationView({ org, onBack }: { org: string; onBack: () => void }) {
   const tenants = useTenants();
@@ -23,7 +24,7 @@ export function OrganizationView({ org, onBack }: { org: string; onBack: () => v
           { label: 'Members', value: tenant.clerkMembers === undefined ? `${tenant.members} members` : `${tenant.members} of ${tenant.clerkMembers} members` },
           { label: 'Repositories', value: tenant.pushedRepos > 0 ? `${tenant.repos} repositories (${tenant.pushedRepos} pushed)` : `${tenant.repos} repositories` },
           { label: 'GitHub', value: `${tenant.githubInstallations} GitHub installations` },
-          { label: 'Last run', value: tenant.lastRunAt ? `Last run ${new Date(tenant.lastRunAt).toLocaleString()}` : `No runs in ${tenantWindowDays} days` },
+          { label: 'Last run', value: tenant.lastRunAt ? `Last run ${formatDateTime(tenant.lastRunAt)}` : `No runs in ${tenantWindowDays} days` },
         ]}
       />
     </section>

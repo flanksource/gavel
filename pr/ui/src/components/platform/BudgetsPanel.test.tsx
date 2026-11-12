@@ -51,10 +51,10 @@ it('shows each group\'s spend against its rule\'s amount, and why one has no tot
   await screen.findByRole('table', { name: 'Budgets' });
   expect(rows()).toEqual([
     ['Broken', '2026-11-01', 'budget window "2026-11-01" must be relative to now', '—', '$10.00', '—'],
-    ['Daily per org', 'now/d since 2026-11-11', 'org=alpha', '$3.50', '$10.00', '35%'],
-    ['Daily per org', 'now/d since 2026-11-11', 'org=beta', '$12.00', '$10.00', '120% · over budget'],
-    ['Daily per org', 'now/d since 2026-11-11', 'org=gamma', '1 completed call is priced in another currency, which can\'t be added to USD spend', '$10.00', '—'],
-    ['Monthly', 'now/M since 2026-11-01', 'No spend in this window', '$0.00', '$500.00', '0%'],
+    ['Daily per org', 'now/d since 11/11/2026', 'org=alpha', '$3.50', '$10.00', '35%'],
+    ['Daily per org', 'now/d since 11/11/2026', 'org=beta', '$12.00', '$10.00', '120% · over budget'],
+    ['Daily per org', 'now/d since 11/11/2026', 'org=gamma', '1 completed call is priced in another currency, which can\'t be added to USD spend', '$10.00', '—'],
+    ['Monthly', 'now/M since 01/11/2026', 'No spend in this window', '$0.00', '$500.00', '0%'],
   ]);
 });
 

@@ -4,6 +4,7 @@ import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from '../todos/queryTestWrapper';
 import { InfrastructurePanel, healthTone, infrastructureSubsections, severityTone, type Infrastructure } from './InfrastructurePanel';
+import { formatDateTime } from './dates';
 
 let response: { status: number; body: unknown };
 
@@ -45,11 +46,11 @@ it('shows gavel\'s configs, checks and changes from Mission Control, with their 
   expect(within(catalog).getByRole('link', { name: 'gavel-postgres' }).getAttribute('href'), 'each name opens the config item in Mission Control')
     .toBe('https://mc.example.com/catalog/c2');
   expect(within(within(catalog).getAllByRole('row')[1]).getAllByRole('cell')[5].textContent, 'with when it was last updated')
-    .toBe(new Date('2026-11-10T10:00:00Z').toLocaleString());
+    .toBe(formatDateTime('2026-11-10T10:00:00Z'));
   expect(within(screen.getByRole('table', { name: 'Health checks' })).getByText('gavel-http')).toBeTruthy();
   const changes = screen.getByRole('table', { name: 'Changes' });
   expect(within(changes).getAllByRole('row').slice(1).map(row => within(row).getAllByRole('cell').map(cell => cell.textContent)), 'each change names its config item and says when it happened').toEqual([
-    ['gavel', 'diff', 'status.replicas', 'info', new Date('2026-11-10T09:00:00Z').toLocaleString()],
+    ['gavel', 'diff', 'status.replicas', 'info', formatDateTime('2026-11-10T09:00:00Z')],
   ]);
   expect(within(changes).getByRole('link', { name: 'gavel' }).getAttribute('href')).toBe('https://mc.example.com/catalog/c1');
   expect(screen.getByText('1 in 7 days'), 'the changes count says how far back it reaches').toBeTruthy();
