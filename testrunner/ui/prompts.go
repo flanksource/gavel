@@ -2,16 +2,20 @@ package testui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/prompt"
+	connections "github.com/flanksource/commons-db/cmd/query/connections"
+	"github.com/flanksource/commons-db/cmd/query/secretcatalog"
 
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/fixtures/kinds/dbconn"
 	"github.com/flanksource/gavel/fixtures/kinds/form"
+	"github.com/flanksource/gavel/fixtures/kinds/lookup"
 )
 
 // PromptsMount is where the server's prompt API lives: GET prompts,
@@ -64,22 +68,24 @@ func (s *Server) promptAnswerer(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// SetConnectionCatalog points GET /api/v1/connection, the form connection
-// pickers' lookup, at the gavel connection catalog as workDir sees it.
+// ConnectionsMount is the connection API's base, the form's
+// `connectionApiBase`: {base}/connection lists (a picker's lookup), creates
+// and describes (its JSON Schema) connections, and commons-db serves the
+// connection form's test, storage, file, secret and workload routes under it.
+const ConnectionsMount = "/api/v1"
+
+// SetConnectionCatalog points the connection API at the gavel connection
+// catalog as workDir sees it; a connection created there lands in workDir's
+// `.connections` unless the form picks another writable layer.
 func (s *Server) SetConnectionCatalog(workDir string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.connectionDir = workDir
 }
 
-// handleConnectionLookup answers a `format: connection` picker in clicky's
-// lookup wire shape: the catalog's connections of the requested `types`
-// whose name contains `__lookup_q`, keyed by the value the picker commits.
-func (s *Server) handleConnectionLookup(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "connections are read-only here", http.StatusMethodNotAllowed)
-		return
-	}
+// handleConnections serves the connection API over the catalog: commons-db's
+// connection Service.Handler, in front of the picker lookup and create.
+func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	dir := s.connectionDir
 	s.mu.RUnlock()
@@ -87,25 +93,119 @@ func (s *Server) handleConnectionLookup(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "this server has no connection catalog", http.StatusServiceUnavailable)
 		return
 	}
-	service, err := dbconn.Service(r.Context(), dir, dbconn.Options{})
+	service, err := dbconn.Service(r.Context(), dir, dbconn.Options{Secrets: &secretcatalog.Options{}})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("open the connection catalog: %v", err), http.StatusInternalServerError)
 		return
 	}
+	service.Handler(ConnectionsMount, connectionRoutes{service: service, workDir: dir}).ServeHTTP(w, r)
+}
+
+type connectionRoutes struct {
+	service *connections.Service
+	workDir string
+}
+
+func (c connectionRoutes) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != ConnectionsMount+"/connection" {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		c.lookup(w, r)
+	case http.MethodPost:
+		c.create(w, r)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// lookup answers a `format: connection` picker in clicky's lookup wire shape:
+// the catalog's connections of the requested `types` whose name contains
+// `__lookup_q`, keyed by the value the picker commits.
+func (c connectionRoutes) lookup(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	matched, err := dbconn.Lookup(service, dbconn.LookupQuery{Types: strings.Split(query.Get("types"), ","), Query: query.Get("__lookup_q")})
+	var types []string
+	if raw := query.Get("types"); raw != "" {
+		types = strings.Split(raw, ",")
+	}
+	result, err := lookup.ConnectionOptions(r.Context(), lookup.ConnectionQuery{WorkDir: c.workDir, Types: types, Query: query.Get("__lookup_q")})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("list connections: %v", err), http.StatusInternalServerError)
 		return
 	}
-	options := make(map[string]entity.LookupNode, len(matched))
-	for _, connection := range matched {
-		label := dbconn.PickerLabel(connection)
-		options[dbconn.PickerValue(connection)] = entity.LookupNode{Kind: "text", Text: label, Plain: label}
+	writeLookup(w, lookup.Response(form.ConnectionLookupFilter, lookup.Result{LookupResult: result, Label: "Connection"}))
+}
+
+// createdConnection is what create answers: enough for the picker to select
+// the new connection by its connection:// ref, and nothing of its URL, which
+// can carry a password in its userinfo.
+type createdConnection struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	Type      string `json:"type"`
+	Ref       string `json:"ref"`
+}
+
+// create saves the connection a picker's inline form posts.
+func (c connectionRoutes) create(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, fmt.Sprintf("decode the connection: %v", err), http.StatusBadRequest)
+		return
+	}
+	created, err := c.service.Create(r.Context(), body)
+	if err != nil {
+		entity.WriteError(w, err)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(createdConnection{ID: created.ID.String(), Name: created.Name,
+		Namespace: created.Namespace, Type: created.Type, Ref: dbconn.PickerValue(created)})
+}
+
+// handleLookup answers a field bound by its form step (lookup.Register):
+// GET {lookup.URLPrefix}<token>/<field pointer>?__lookup_filter=<filter>,
+// with the search text in `__lookup_q` and the linked connection, once
+// chosen, in `connection`.
+func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token, pointer, _, err := lookup.ParseURL(r.URL.String())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	query := r.URL.Query()
+	filter := query.Get("__lookup_filter")
+	if filter == "" {
+		http.Error(w, "a lookup request names its field's filter in __lookup_filter", http.StatusBadRequest)
+		return
+	}
+	req := lookup.Request{Token: token, Pointer: pointer, Query: query.Get("__lookup_q")}
+	if query.Has("connection") {
+		req.Scope = map[string]any{"connection": query.Get("connection")}
+	}
+	result, err := lookup.Resolve(r.Context(), req)
+	switch {
+	case errors.Is(err, lookup.ErrNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeLookup(w, lookup.Response(filter, result))
+}
+
+func writeLookup(w http.ResponseWriter, response entity.LookupResponse) {
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(entity.LookupResponse{Filters: map[string]entity.LookupFilter{
-		form.ConnectionLookupFilter: {Label: "Connection", Options: options, Total: len(matched)},
-	}})
+	_ = json.NewEncoder(w).Encode(response)
 }

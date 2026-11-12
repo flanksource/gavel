@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/fixtures/kinds/lookup"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -401,7 +402,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	s.prompter().RegisterHandlers(mux, PromptsMount)
-	mux.HandleFunc("/api/v1/connection", s.handleConnectionLookup)
+	for _, route := range []string{"/connection", "/connection/", "/connections/"} {
+		mux.HandleFunc(ConnectionsMount+route, s.handleConnections)
+	}
+	mux.HandleFunc(lookup.URLPrefix, s.handleLookup)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("/api/lint/dismiss", s.handleLintDismiss)
 	mux.HandleFunc("/api/lint/fix", s.handleLintFix)
