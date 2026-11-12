@@ -4,6 +4,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from '../todos/queryTestWrapper';
 import { TenantsPanel, type PlatformTenants } from './TenantsPanel';
+import { formatDateTime } from './dates';
 
 let response: { status: number; body: unknown };
 
@@ -36,6 +37,8 @@ it('lists every organization with what it uses', async () => {
   expect(within(alpha).getByText('2 of 4'), 'members who used gavel, of Clerk\'s').toBeTruthy();
   expect(within(alpha).getByText('3 (1 pushed)')).toBeTruthy();
   expect(within(alpha).getByText('12')).toBeTruthy();
+  expect(within(alpha).getByText(formatDateTime('2026-11-09T10:00:00Z')), 'its last run').toBeTruthy();
+  expect(within(alpha).getByText('01/10/2026'), 'and the day it was created, day first').toBeTruthy();
   expect(within(screen.getByRole('row', { name: /Beta/ })).getByText('Clerk only')).toBeTruthy();
   expect(within(screen.getByRole('row', { name: /Gamma/ })).getByText('Not in Clerk')).toBeTruthy();
   expect(screen.getByRole('heading', { name: 'Tenants · 3' })).toBeTruthy();

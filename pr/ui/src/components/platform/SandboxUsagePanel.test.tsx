@@ -67,12 +67,12 @@ it('gives each chart a table of its numbers, for readers who can\'t tell its col
     const runs = await screen.findByRole('table', { name: 'Runs per day' });
     expect(within(runs).getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['Day', 'Test', 'Lint', 'Push check', 'Agent run', 'Total']);
     const cells = (day: string) => within(within(runs).getByRole('row', { name: new RegExp(`^${day}`) })).getAllByRole('cell').map(cell => cell.textContent);
-    expect(cells('2026-11-08')).toEqual(['2026-11-08', '3', '0', '0', '0', '3']);
-    expect(cells('2026-11-09'), 'a day without runs').toEqual(['2026-11-09', '0', '0', '0', '0', '0']);
-    expect(cells('2026-11-10')).toEqual(['2026-11-10', '0', '0', '0', '1', '1']);
+    expect(cells('08/11/2026'), 'days are written day first').toEqual(['08/11/2026', '3', '0', '0', '0', '3']);
+    expect(cells('09/11/2026'), 'a day without runs').toEqual(['09/11/2026', '0', '0', '0', '0', '0']);
+    expect(cells('10/11/2026')).toEqual(['10/11/2026', '0', '0', '0', '1', '1']);
     const minutes = screen.getByRole('table', { name: 'Sandbox minutes per day' });
-    expect(within(within(minutes).getByRole('row', { name: /^2026-11-08/ })).getAllByRole('cell').map(cell => cell.textContent))
-      .toEqual(['2026-11-08', '4', '0', '0', '0', '4']);
+    expect(within(within(minutes).getByRole('row', { name: /^08\/11\/2026/ })).getAllByRole('cell').map(cell => cell.textContent))
+      .toEqual(['08/11/2026', '4', '0', '0', '0', '4']);
   } finally {
     vi.useRealTimers();
   }

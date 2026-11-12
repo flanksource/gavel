@@ -5,6 +5,7 @@ import { Badge, StatStrip, type BadgeTone } from '@flanksource/clicky-ui/data';
 import { fetchJSON, queryKeys } from '../../query';
 import { PanelHeading, PanelSubheading } from './PanelHeading';
 import { sectionAnchor } from './PlatformSections';
+import { formatDateTime } from './dates';
 
 // MissionControlResource is a resource as Mission Control's search returns it.
 export interface MissionControlResource {
@@ -82,7 +83,7 @@ function healthSummary(resources: MissionControlResource[]): string {
 const unread = 'couldn\'t be read';
 
 function when(at?: string): string {
-  return at ? new Date(at).toLocaleString() : '—';
+  return at ? formatDateTime(at) : '—';
 }
 
 // infrastructureSubsections are the panel's parts, as the sidebar lists them: none until Mission

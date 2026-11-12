@@ -5,6 +5,7 @@ import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, X
 import { StatStrip } from '@flanksource/clicky-ui/data';
 import { fetchJSON, queryKeys } from '../../query';
 import { PanelHeading } from './PanelHeading';
+import { formatDateTime } from './dates';
 
 export interface MetricPoint {
   time: string;
@@ -118,7 +119,7 @@ function SeriesLines({ panel }: { panel: MetricPanel }) {
             <tbody>
               {rows.map(row => (
                 <tr key={row.time} className="border-b border-border">
-                  <td className="px-2 py-1 font-mono">{new Date(row.time).toLocaleString()}</td>
+                  <td className="px-2 py-1 font-mono">{formatDateTime(row.time)}</td>
                   {series.map((_, index) => {
                     const value = row[`s${index}`];
                     return <td key={index} className="px-2 py-1">{typeof value === 'number' ? figure(value) : '—'}</td>;
@@ -149,7 +150,7 @@ export function SubstrateMetricsPanel() {
         Substrate metrics
         {view && (
           <> · <a className="underline" href={view.missionControl.replace(/\/api\/?$/, '')} target="_blank" rel="noreferrer">{view.title || 'Mission Control'}</a>
-            <span className="font-normal"> · refreshed {new Date(view.lastRefreshedAt).toLocaleString()}</span>
+            <span className="font-normal"> · refreshed {formatDateTime(view.lastRefreshedAt)}</span>
           </>
         )}
       </PanelHeading>

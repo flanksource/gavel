@@ -37,7 +37,8 @@ it('lists the App\'s installations with their organization, repositories and rat
   expect(await screen.findByRole('heading', { name: 'GitHub App gavel-dev · 4 installations, 2 linked, 1 suspended' })).toBeTruthy();
   expect(cells(/acme/).slice(0, 4)).toEqual(['acme', 'Alpha', '3', '4200 of 5000 left']);
   expect(cells(/solo/)[1], 'linked to no organization').toBe('Not linked');
-  expect(cells(/solo/)[4]).toContain('Suspended');
+  expect(cells(/solo/)[4]).toBe('Suspended 01/11/2026');
+  expect(cells(/acme/), 'installed on, day first').toContain('01/10/2026');
   expect(cells(/flaky/)[3]).toContain('Server Error');
   expect(cells(/gone/)[4], 'linked in gavel, gone from GitHub').toBe('Uninstalled from GitHub');
 });

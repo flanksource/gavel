@@ -6,6 +6,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { fetchJSON, queryKeys } from '../../query';
 import { windowDays } from './windowDays';
 import { PanelHeading } from './PanelHeading';
+import { formatDay, formatDayShort } from './dates';
 
 // ModelUsageDay is one UTC day's model calls of an organization with one model and provider;
 // org is absent for calls no organization of this Clerk instance owns.
@@ -115,7 +116,7 @@ function CostBars({ data }: { data: DayCost[] }) {
         <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 480, height: 192 }}>
           <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.15} />
-            <XAxis dataKey="day" tickFormatter={(day: string) => day.slice(5)} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
+            <XAxis dataKey="day" tickFormatter={formatDayShort} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
             <YAxis width={44} tickFormatter={(value: number) => usd.format(value)} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
             <Tooltip formatter={value => [usd.format(Number(value)), 'Spent']} cursor={{ fillOpacity: 0.08 }} />
             <Bar dataKey="costUSD" fill="var(--series-1)" radius={[4, 4, 0, 0]} maxBarSize={24} isAnimationActive={false} />
@@ -133,7 +134,7 @@ function CostBars({ data }: { data: DayCost[] }) {
           <tbody>
             {data.map(row => (
               <tr key={row.day} className="border-b border-border">
-                <td className="px-2 py-1 font-mono">{row.day}</td>
+                <td className="px-2 py-1 font-mono">{formatDay(row.day)}</td>
                 <td className="px-2 py-1">{usd.format(row.costUSD)}</td>
               </tr>
             ))}

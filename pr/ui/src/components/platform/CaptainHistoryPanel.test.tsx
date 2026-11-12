@@ -4,6 +4,7 @@ import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from '../todos/queryTestWrapper';
 import { CaptainHistoryPanel, runsPerDay, type CaptainHistory, type CaptainRunDay } from './CaptainHistoryPanel';
+import { formatDateTime } from './dates';
 
 let response: { status: number; body: unknown };
 
@@ -66,8 +67,8 @@ it('shows the runs, each organization\'s share and live sessions, and the latest
     ['Unattributed', '1', '1', '30s', '0'],
   ]);
   expect(cells('Latest failed prompt runs')).toEqual([
-    [new Date('2026-11-10T09:00:00Z').toLocaleString(), 'Unattributed', 'cli', 'no model key'],
-    [new Date('2026-11-10T08:00:00Z').toLocaleString(), 'Alpha', 'todo', 'the model refused'],
+    [formatDateTime('2026-11-10T09:00:00Z'), 'Unattributed', 'cli', 'no model key'],
+    [formatDateTime('2026-11-10T08:00:00Z'), 'Alpha', 'todo', 'the model refused'],
   ]);
 });
 

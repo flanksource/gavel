@@ -1,6 +1,7 @@
 // Stacked bars of a platform dashboard window's days, one segment per series in its fixed color,
 // with the same numbers as a table: some of the colors are faint on the light surface.
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { formatDay, formatDayShort } from './dates';
 
 // DaySeries is one stacked segment: the key its value is under in each day's row, its label and color.
 export interface DaySeries {
@@ -22,7 +23,7 @@ export function StackedDayBars({ title, data, series, unit }: { title: string; d
         <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 480, height: 192 }}>
           <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.15} />
-            <XAxis dataKey="day" tickFormatter={(day: string) => day.slice(5)} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
+            <XAxis dataKey="day" tickFormatter={formatDayShort} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
             <YAxis allowDecimals={false} width={36} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
             <Tooltip formatter={(v, key) => [`${Math.round(Number(v))} ${unit}`, labels[String(key)] ?? String(key)]} cursor={{ fillOpacity: 0.08 }} />
             <Legend formatter={(key: string) => <span className="text-xs text-foreground">{labels[key] ?? key}</span>} iconSize={8} />
@@ -45,7 +46,7 @@ export function StackedDayBars({ title, data, series, unit }: { title: string; d
           <tbody>
             {data.map(row => (
               <tr key={row.day} className="border-b border-border">
-                <td className="px-2 py-1 font-mono">{row.day}</td>
+                <td className="px-2 py-1 font-mono">{formatDay(row.day)}</td>
                 {series.map(s => <td key={s.key} className="px-2 py-1">{Math.round(value(row, s.key))}</td>)}
                 <td className="px-2 py-1">{Math.round(series.reduce((sum, s) => sum + value(row, s.key), 0))}</td>
               </tr>

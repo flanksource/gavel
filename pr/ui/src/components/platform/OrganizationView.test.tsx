@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from '../todos/queryTestWrapper';
 import { OrganizationView } from './OrganizationView';
+import { formatDateTime } from './dates';
 
 const bodies: Record<string, unknown> = {
   '/api/platform/tenants?days=30': {
@@ -43,6 +44,7 @@ it('shows the organization\'s summary and only its rows in each panel', async ()
   expect(await screen.findByRole('heading', { name: 'Alpha alpha' })).toBeTruthy();
   expect(screen.getByText('2 of 4 members')).toBeTruthy();
   expect(screen.getByText('3 repositories (1 pushed)')).toBeTruthy();
+  expect(screen.getByText(`Last run ${formatDateTime('2026-11-09T10:00:00Z')}`)).toBeTruthy();
   expect(await screen.findByText('2 runs'), 'Beta\'s 9 runs are left out').toBeTruthy();
 });
 

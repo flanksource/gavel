@@ -7,6 +7,7 @@ import { formatSeconds } from './formatSeconds';
 import { StackedDayBars, type DaySeries } from './StackedDayBars';
 import { windowDays } from './windowDays';
 import { PanelHeading } from './PanelHeading';
+import { formatDateTime } from './dates';
 
 // CaptainRunDay is one UTC day's prompt runs of an organization with one origin and state; org
 // is absent for runs no organization of this Clerk instance owns.
@@ -181,7 +182,7 @@ export function CaptainHistoryPanel({ org }: { org?: string } = {}) {
               headings={['When', 'Organization', 'Origin', 'Error']}
               rows={data.failures.map(failure => ({
                 key: failure.id,
-                cells: [new Date(failure.createdAt).toLocaleString(), failure.orgName || 'Unattributed', failure.origin, failure.error],
+                cells: [formatDateTime(failure.createdAt), failure.orgName || 'Unattributed', failure.origin, failure.error],
               }))}
             />
           )}
