@@ -1,7 +1,7 @@
 // The platform dashboard's infrastructure panel: gavel's catalog by type, its health checks when it
 // has any, and the catalog's changes, from Mission Control, each a subsection the sidebar lists.
 import { useQuery } from '@tanstack/react-query';
-import { StatStrip } from '@flanksource/clicky-ui/data';
+import { Badge, StatStrip, type BadgeTone } from '@flanksource/clicky-ui/data';
 import { fetchJSON, queryKeys } from '../../query';
 import { PanelHeading, PanelSubheading } from './PanelHeading';
 import { sectionAnchor } from './PlatformSections';
@@ -31,11 +31,28 @@ export interface Infrastructure {
   changesError?: string;
 }
 
-const healthClass: Record<string, string> = {
-  healthy: 'text-green-600',
-  unhealthy: 'text-red-600',
-  warning: 'text-amber-600',
-};
+// healthTone is the badge color of a resource's health.
+export function healthTone(health: string): BadgeTone {
+  return ({ healthy: 'success', unhealthy: 'danger', warning: 'warning' } as Record<string, BadgeTone>)[health] ?? 'neutral';
+}
+
+// severityTone is the badge color of a change's severity.
+export function severityTone(severity: string): BadgeTone {
+  return ({ critical: 'danger', high: 'danger', medium: 'warning', low: 'info' } as Record<string, BadgeTone>)[severity] ?? 'neutral';
+}
+
+// Cell is a table cell: plain text, a badge of tone, or a link to href.
+interface Cell {
+  text: string;
+  tone?: BadgeTone;
+  href?: string;
+}
+
+function CellContent({ cell }: { cell: Cell }) {
+  if (cell.tone) return cell.text ? <Badge tone={cell.tone} variant="soft" size="sm">{cell.text}</Badge> : null;
+  if (cell.href) return <a className="underline" href={cell.href} target="_blank" rel="noreferrer">{cell.text}</a>;
+  return <>{cell.text}</>;
+}
 
 // healthSummary counts resources by health: always healthy and unhealthy, then any others.
 function healthSummary(resources: MissionControlResource[]): string {
@@ -75,7 +92,7 @@ function ResourceTable({ label, error, empty, headings, rows }: {
   error?: string;
   empty: string;
   headings: string[];
-  rows: { id: string; cells: { text: string; className?: string }[] }[];
+  rows: { id: string; cells: Cell[] }[];
 }) {
   if (error) return <p role="alert" className="text-red-600">{error}</p>;
   if (rows.length === 0) return <p className="text-xs text-muted-foreground">{empty}</p>;
@@ -91,7 +108,7 @@ function ResourceTable({ label, error, empty, headings, rows }: {
       <tbody>
         {rows.map(row => (
           <tr key={row.id} className="border-b border-border">
-            {row.cells.map((cell, i) => <td key={i} className={`px-2 py-1.5 ${cell.className ?? ''}`}>{cell.text}</td>)}
+            {row.cells.map((cell, i) => <td key={i} className="px-2 py-1.5"><CellContent cell={cell} /></td>)}
           </tr>
         ))}
       </tbody>
@@ -111,13 +128,15 @@ export function InfrastructurePanel() {
   const infrastructure = useInfrastructure();
   const data = infrastructure.data;
   const parts = new Set(infrastructureSubsections(data).map(part => part.id));
-  const health = (resource: MissionControlResource) => ({ text: resource.health || 'unknown', className: healthClass[resource.health ?? ''] });
+  const health = (resource: MissionControlResource): Cell => ({ text: resource.health || 'unknown', tone: healthTone(resource.health ?? '') });
+  // ui is Mission Control's web UI, which serves its backend under /api.
+  const ui = data?.missionControl.replace(/\/api\/?$/, '') ?? '';
 
   return (
     <section className="flex flex-col gap-3">
       <PanelHeading>
         Infrastructure
-        {data && <> · <a className="underline" href={data.missionControl.replace(/\/api\/?$/, '')} target="_blank" rel="noreferrer">{data.missionControl}</a></>}
+        {data && <> · <a className="underline" href={ui} target="_blank" rel="noreferrer">{data.missionControl}</a></>}
       </PanelHeading>
       {infrastructure.error && <p role="alert" className="text-red-600">{infrastructure.error.message}</p>}
       {data && (
@@ -135,10 +154,10 @@ export function InfrastructurePanel() {
               label="Catalog"
               error={data.configsError}
               empty="No config items match the search."
-              headings={['Type', 'Name', 'Health', 'Status', 'Namespace', 'Updated']}
+              headings={['Name', 'Type', 'Health', 'Status', 'Namespace', 'Updated']}
               rows={[...data.configs].sort(byType).map(config => ({
                 id: config.id,
-                cells: [{ text: config.type }, { text: config.name }, health(config), { text: config.status ?? '' }, { text: config.namespace }, { text: when(config.updated_at) }],
+                cells: [{ text: config.name, href: `${ui}/catalog/${encodeURIComponent(config.id)}` }, { text: config.type }, health(config), { text: config.status ?? '' }, { text: config.namespace }, { text: when(config.updated_at) }],
               }))}
             />
           </div>
@@ -166,7 +185,7 @@ export function InfrastructurePanel() {
               headings={['Config', 'Change', 'Severity', 'When']}
               rows={data.changes.map(change => ({
                 id: change.id,
-                cells: [{ text: change.name }, { text: change.type }, { text: change.severity ?? '' }, { text: when(change.created_at) }],
+                cells: [{ text: change.name }, { text: change.type, tone: 'neutral' }, { text: change.severity ?? '', tone: severityTone(change.severity ?? '') }, { text: when(change.created_at) }],
               }))}
             />
           </div>
