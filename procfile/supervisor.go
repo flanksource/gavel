@@ -504,8 +504,10 @@ func (s *Supervisor) persist() {
 	}
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
-	state := s.State()
+	// Stamp before snapshotting: PublishedAt must be a lower bound on how fresh
+	// the state is, or a reader that trusts it can be handed a pre-stamp state.
 	now := time.Now()
+	state := s.State()
 	state.PublishedAt = &now
 	if err := WriteState(s.dir, state); err != nil {
 		logger.Warnf("write proc state: %v", err)
