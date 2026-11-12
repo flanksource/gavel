@@ -74,7 +74,7 @@ func (r *Vitest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 		return nil, fmt.Errorf("create vitest report dir: %w", err)
 	}
 
-	reporterPath, err := r.writeReporter()
+	reporterPath, err := writeVitestReporter(cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -96,13 +96,18 @@ func (r *Vitest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 	}, nil
 }
 
-// writeReporter materializes the embedded live-progress reporter under
-// .vitest/, content-addressed so concurrent package runs share one file.
-func (r *Vitest) writeReporter() (string, error) {
+// writeVitestReporter materializes the embedded live-progress reporter under
+// the package's .vitest/, content-addressed so concurrent runs share one file.
+// It must sit inside the package: Vite only loads files under its workspace
+// root, and a package with its own pnpm-workspace.yaml is its own root.
+func writeVitestReporter(packageDir string) (string, error) {
 	digest := sha256.Sum256(vitestReporterSource)
-	path, err := filepath.Abs(filepath.Join(r.workDir, ".vitest", "gavel-reporter-"+hex.EncodeToString(digest[:8])+".mjs"))
+	path, err := filepath.Abs(filepath.Join(packageDir, ".vitest", "gavel-reporter-"+hex.EncodeToString(digest[:8])+".mjs"))
 	if err != nil {
 		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create vitest reporter dir: %w", err)
 	}
 	if err := writeOverlayFile(path, vitestReporterSource); err != nil {
 		return "", fmt.Errorf("write vitest progress reporter: %w", err)

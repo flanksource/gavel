@@ -35,6 +35,29 @@ test("slow", async () => {
 `
 
 var _ = Describe("Vitest progress reporter", func() {
+	It("loads from a nested package whose workspace file confines Vite's file access", func() {
+		if _, err := exec.LookPath("node"); err != nil {
+			Skip("node is not installed")
+		}
+		vitestBin, err := filepath.Abs("../ui/node_modules/vitest/vitest.mjs")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(vitestBin).To(BeAnExistingFile(), "run `pnpm install` in testrunner/ui")
+
+		root := GinkgoT().TempDir()
+		pkg := filepath.Join(root, "web")
+		Expect(os.Mkdir(pkg, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(pkg, "pnpm-workspace.yaml"), []byte("packages:\n  - .\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(pkg, "nested.test.js"), []byte(`test("nested", () => { expect(1).toBe(1) })`+"\n"), 0o600)).To(Succeed())
+		run, err := NewVitest(root).BuildCommand("web")
+		Expect(err).NotTo(HaveOccurred())
+
+		args := run.Process.Args[slices.Index(run.Process.Args, "vitest")+1:]
+		cmd := exec.Command("node", append(append([]string{vitestBin}, args...), "--globals")...)
+		cmd.Dir = pkg
+		out, err := cmd.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(out))
+		Expect(run.ReportPath).To(BeAnExistingFile())
+	})
 	It("streams a finished test before the vitest process exits", func() {
 		if _, err := exec.LookPath("node"); err != nil {
 			Skip("node is not installed")
