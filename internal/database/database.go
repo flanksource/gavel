@@ -129,6 +129,7 @@ func open(ctx context.Context, deps openDependencies, optionFns ...Option) (*DB,
 	// statement as the own database's (connection.OwnDatabase) while an
 	// `sql_statements` trace observes it — how a fixture traces gavel's queries.
 	config := commonsdb.DefaultGormConfig()
+	config.Logger = queryLog{config.Logger}
 	// Name columns instead of SELECT *: Captain and Gavel migrate this shared
 	// database while other pools stay open, and an added column would otherwise
 	// change the result type of statements those pools already prepared.
