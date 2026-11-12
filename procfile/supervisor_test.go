@@ -380,15 +380,18 @@ var _ = Describe("Supervisor", func() {
 		sup, dir := newSupervisor("web: sh -c 'sleep 30'\n", verify.ProcfileConfig{})
 		defer sup.Shutdown()
 		waitFor(5*time.Second, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+		observedRunning := time.Now()
 
 		first, err := pf.ReadState(dir)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(first.PublishedAt).NotTo(BeNil(), "the start-time persist must stamp PublishedAt")
 
 		// A later publish must advance the stamp with no lifecycle event at all.
+		// Only a publish stamped after the running observation is guaranteed to
+		// carry it: an earlier one may hold a snapshot from before promotion.
 		waitFor(10*time.Second, func() bool {
 			later, err := pf.ReadState(dir)
-			return err == nil && later.PublishedAt != nil && later.PublishedAt.After(*first.PublishedAt)
+			return err == nil && later.PublishedAt != nil && later.PublishedAt.After(observedRunning)
 		})
 
 		published, err := pf.ReadState(dir)
