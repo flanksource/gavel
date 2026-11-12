@@ -128,7 +128,7 @@ Each location is a `models.ViolationLocation` object (`file`, `line`, `column`, 
 
 An `error` finding fails the step. `warning` and `info` findings only warn it. An unknown severity, a CEL result that is not a list of maps, an unparsable shortcut, or a URL target with two selector strategies is an error that names the element index.
 
-In Markdown, a table row with a `Query` column runs as a query step. It takes its connection from a `Connection` column or the front-matter `connection:` key, and an optional `Findings` column in the CEL form.
+In Markdown, a table row with a `Query` column runs as a query step. It takes its connection from a `Connection` column, else the fixture's single default from the front-matter [`connections:`](./fixture-kind-form#connections) list, and an optional `Findings` column in the CEL form. A query step of either format without a connection uses that default too. With no default, or several, it fails naming them. The older front-matter `connection:` key is read as `connections: [<value>]` with a deprecation warning.
 
 ## Complete step reference
 

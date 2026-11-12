@@ -69,7 +69,45 @@ Who answers depends on where the run happens:
 
 Run cancellation or the step's `timeout:` expires the prompt and fails the step.
 
-A property with `format: connection`, optionally with `x-connection-types: [sql_server]`, is a connection picker over the gavel connection catalog. Its value is the connection name, ready to pass to a query step's `connection:`. The UI resolves it through `GET /api/v1/connection?types=…&__lookup_q=…`, which lists names and types only.
+### Connection pickers
+
+A property with `format: connection`, optionally with `x-connection-types: [sql_server]`, is a connection picker. It lists the fixture's [named connections](#connections) of those types, then the gavel connection catalog's. Its value is a `connection://` reference such as `connection://lab`, ready to pass to a query step's `connection:`. When the fixture declares a default of the picker's type, the picker is prefilled with it, but the form is still asked.
+
+Each option shows the connection's type icon, the host, port and database it reaches as its description (never credentials), and badges for how it is reached: `proxy` for a port-forward, `svc` for an in-cluster service, and `via <connection>` for a connection delegating to another. The UI resolves the picker through `GET /api/v1/connection?types=…&__lookup_q=…`, which carries none of the connections' secrets.
+
+In the browser, the picker's footer offers **New \<type\> connection…**. It opens the connection form, saves the new connection to the project's `.connections/` directory (or another writable layer the form offers), and selects it. The terminal cannot create connections, so a terminal picker with nothing to list fails and names where connections live.
+
+### Query lookups
+
+A property with `x-query` takes its options from a query run on the server. Its SQL and any credentials never reach the browser, which sees only an opaque lookup URL valid while the form is asked:
+
+```yaml
+params:
+  type: object
+  required: [db, table]
+  properties:
+    db: {type: string, format: connection, x-connection-types: [sqlite]}
+    table:
+      type: string
+      title: Table
+      x-query:
+        connection: db
+        sql: |
+          SELECT name AS value, name AS label, 'ph:table-thin' AS icon, type AS badges
+          FROM sqlite_master
+          WHERE type IN ('table', 'view') AND name LIKE '%' || @q || '%'
+          ORDER BY name
+```
+
+- `connection` names a sibling `format: connection` property, and the query runs against the connection chosen there. Until it is chosen the field lists nothing and reads "Choose db first". Otherwise `connection` is a named or catalog connection, resolved when the form is built, so a typo fails the step. Without `connection`, the query uses the fixture's single default connection.
+- `@q` binds the text typed into the field.
+- The `value` column is the answer. `label`, `description`, `icon` (a runtime icon name such as `postgres` or `ph:table-thin`), `badges` and `tone` decorate the option. `badges` accepts a string, a comma-separated list, a JSON array of strings, or a JSON array of `{label, icon, tone}` objects. `x-query.columns: {value: id, label: name}` maps differently named columns without rewriting the SQL.
+- A query with several columns and none named `value` is an error, because rows carry no column order. A query with a single column uses it as the value.
+- Results are capped at 200 options. Typing narrows them.
+
+An `x-query` property cannot also declare `format`, `enum` or `x-clicky-lookup`. The SQL and connection stay in the process that runs the form step: in an isolated run, the worker answers each lookup through the run's parent, which only relays it while the form is open.
+
+### Options from an earlier step
 
 To pick from what an earlier step found, compute the property's `enum` with `{$cel: …}` (see [step outputs](./fixture-step-reference#outputs-and-exports)). For example, a database picker is a query that lists the names, followed by a form that offers them:
 
@@ -92,6 +130,28 @@ An `enum` that is empty, repeats an option, or holds something other than string
 ## Params
 
 Front-matter, or a YAML fixture's top level, may declare `params:` as an object JSON Schema. It becomes a leading form step with the id `params`, so `{{.params.x}}` and CEL `params.x` read its answers. Values come from `--param key=value` (repeatable), `--params file.yaml`, or a UI rerun request's `params`. They are typed by the schema and filled with its defaults. When they satisfy the schema the step resolves without asking. Otherwise it asks with the gathered values pre-filled.
+
+## Connections
+
+Front-matter, or a YAML fixture's top level, may declare the database connections the fixture uses once, under `connections:`. A list makes each entry the default of its type:
+
+```yaml
+connections:
+  - connection://pg/main
+  - sqlserver-dev
+```
+
+A query step or `x-query` without `connection` uses the single default, and a `format: connection` picker of that type is prefilled with it. Two defaults of one type, or an entry that does not resolve, fail the fixture load and name the entries.
+
+A map declares named connections, each a reference or an inline connection:
+
+```yaml
+connections:
+  warehouse: connection://pg/warehouse
+  scratch: {type: sqlite, url: ./scratch.db}
+```
+
+Named connections resolve by name ahead of the host and the catalog, so `connection: scratch` reaches the inline one. Their credentials stay on the server: a picker lists them without the URL's password. The older single `connection:` key still works as `connections: [<value>]` with a deprecation warning. Declaring both is an error.
 
 ## if: and step-id roots
 

@@ -92,6 +92,8 @@ steps:
   - {id: nodes, kind: exec, if: params.scale, script: kubectl get nodes}   # the picked cluster's KUBECONFIG
 ```
 
+`setup.connections:` injects cloud and Kubernetes credentials into the environment. The top-level `connections:` is different: it declares the database connections that query steps, `format: connection` pickers and `x-query` lookups use, either as a list of per-type defaults or as a map of named connections. See [Connections](/docs/fixture-kind-form#connections) and [Query lookups](/docs/fixture-kind-form#query-lookups).
+
 Download a runnable <a href="/examples/smoke.fixture.yaml" download>YAML example</a> or <a href="/examples/smoke.fixture.md" download>Markdown example</a>. The Markdown download includes the table above and a JSON command assertion. Both run with Bash and `printf`.
 
 Expand nested objects and lists to inspect their fields. Paths use `[]` for arrays and `<name>` for maps. Referenced Captain types open below the frontmatter hierarchy. For practical format choices, see [Fixture formats](/docs/fixture-formats).

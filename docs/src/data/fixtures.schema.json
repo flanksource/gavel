@@ -2131,6 +2131,10 @@
                   "description": "CEL verdict over the step's outputs, env and steps.",
                   "type": "string"
                 },
+                "cleanup": {
+                  "description": "Shell script run with bash -c at fixture teardown, on every exit path once this step ran (passed or failed), with the step's env and cwd. A non-zero exit fails the teardown.",
+                  "type": "string"
+                },
                 "continueOnError": {
                   "description": "Report this step's failure without skipping the steps after it, which do not depend on it.",
                   "type": "boolean"
@@ -2930,7 +2934,7 @@
                   "type": "object"
                 },
                 "schema": {
-                  "description": "JSON Schema (type: object) of the answer; format: connection picks a saved connection.",
+                  "description": "JSON Schema (type: object) of the answer; format: connection picks a saved connection; like any step config it is templated, and {$cel: \u003cexpr\u003e} computes a typed value, e.g. enum: {$cel: \"databases.rows.map(r, r.name)\"} offers an earlier query's rows.",
                   "type": "object"
                 },
                 "timeout": {
@@ -3891,7 +3895,7 @@
                   "x-cli-group": "Tasks"
                 },
                 "sandbox": {
-                  "description": "Sandbox for the run: off|native|docker|git-agent, or a configured Docker/Git Agent backend",
+                  "description": "Sandbox for the run: off|native|docker|git-agent|substrate, or a configured Docker, Git Agent or substrate backend",
                   "title": "Sandbox",
                   "type": "string",
                   "x-cli-group": "Model permissions"
@@ -5138,6 +5142,18 @@
               "additionalProperties": false,
               "description": "Runs a commons-db query profile against a connection; its rows become outputs and, through findings, lint violations.",
               "properties": {
+                "autoDiagnose": {
+                  "description": "How long a statement runs before its server session (Postgres pg_stat_activity, SQL Server sys.dm_exec_requests) is sampled every 2s for state, CPU, IO, waits and blocking, streamed onto the step's query record under diagnose. Defaults to 10s; \"0s\" turns it off; -1 samples from the start. SQL Server needs VIEW SERVER STATE to see the session.",
+                  "oneOf": [
+                    {
+                      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$|^0$|^-1$",
+                      "type": "string"
+                    },
+                    {
+                      "const": -1
+                    }
+                  ]
+                },
                 "background": {
                   "description": "Run for the rest of the fixture; the verdict is collected at teardown.",
                   "type": "boolean"
@@ -5161,6 +5177,11 @@
                 "continueOnError": {
                   "description": "Report this step's failure without skipping the steps after it, which do not depend on it.",
                   "type": "boolean"
+                },
+                "database": {
+                  "description": "The database on the connection's server to run against (the SQL provider's database option); overrides the connection's own database and the profile's provider.options.database.",
+                  "minLength": 1,
+                  "type": "string"
                 },
                 "export": {
                   "additionalProperties": {
@@ -7751,6 +7772,39 @@
                   "title": "Tree",
                   "type": "boolean",
                   "x-cli-group": "Formatting"
+                },
+                "uir-binary": {
+                  "default": "uir",
+                  "description": "UIR executable used by --uir-skip",
+                  "title": "Uir Binary",
+                  "type": "string",
+                  "x-cli-group": "Command flags"
+                },
+                "uir-export": {
+                  "description": "Write the run's results, coverage and inputs digest as a uir tests import (v1 normally; v2 with --uir-skip)",
+                  "title": "Uir Export",
+                  "type": "string",
+                  "x-cli-group": "Command flags"
+                },
+                "uir-input-context": {
+                  "description": "Identity of declared service, environment and other runtime inputs for --uir-skip",
+                  "title": "Uir Input Context",
+                  "type": "string",
+                  "x-cli-group": "Command flags"
+                },
+                "uir-skip": {
+                  "default": false,
+                  "description": "Opt in to UIR-proved ordinary Go test skipping; requires --framework go, --uir-export and --uir-input-context",
+                  "title": "Uir Skip",
+                  "type": "boolean",
+                  "x-cli-group": "Command flags"
+                },
+                "uir-test-coverage": {
+                  "default": false,
+                  "description": "With --uir-export, also rerun each Go test and Ginkgo spec alone to record its own coverage (slow)",
+                  "title": "Uir Test Coverage",
+                  "type": "boolean",
+                  "x-cli-group": "Command flags"
                 },
                 "wait": {
                   "additionalProperties": false,
@@ -10669,7 +10723,7 @@
             "x-cli-group": "Tasks"
           },
           "sandbox": {
-            "description": "Sandbox for the run: off|native|docker|git-agent, or a configured Docker/Git Agent backend",
+            "description": "Sandbox for the run: off|native|docker|git-agent|substrate, or a configured Docker, Git Agent or substrate backend",
             "title": "Sandbox",
             "type": "string",
             "x-cli-group": "Model permissions"
@@ -11334,6 +11388,39 @@
             "type": "boolean",
             "x-cli-group": "Formatting"
           },
+          "uir-binary": {
+            "default": "uir",
+            "description": "UIR executable used by --uir-skip",
+            "title": "Uir Binary",
+            "type": "string",
+            "x-cli-group": "Command flags"
+          },
+          "uir-export": {
+            "description": "Write the run's results, coverage and inputs digest as a uir tests import (v1 normally; v2 with --uir-skip)",
+            "title": "Uir Export",
+            "type": "string",
+            "x-cli-group": "Command flags"
+          },
+          "uir-input-context": {
+            "description": "Identity of declared service, environment and other runtime inputs for --uir-skip",
+            "title": "Uir Input Context",
+            "type": "string",
+            "x-cli-group": "Command flags"
+          },
+          "uir-skip": {
+            "default": false,
+            "description": "Opt in to UIR-proved ordinary Go test skipping; requires --framework go, --uir-export and --uir-input-context",
+            "title": "Uir Skip",
+            "type": "boolean",
+            "x-cli-group": "Command flags"
+          },
+          "uir-test-coverage": {
+            "default": false,
+            "description": "With --uir-export, also rerun each Go test and Ginkgo spec alone to record its own coverage (slow)",
+            "title": "Uir Test Coverage",
+            "type": "boolean",
+            "x-cli-group": "Command flags"
+          },
           "work-dir": {
             "description": "",
             "title": "Work Dir",
@@ -11410,6 +11497,11 @@
           "timeout",
           "timings",
           "tree",
+          "uir-binary",
+          "uir-export",
+          "uir-input-context",
+          "uir-skip",
+          "uir-test-coverage",
           "work-dir",
           "yaml",
           "show-failed"
@@ -12473,7 +12565,8 @@
               "off",
               "native",
               "docker",
-              "git-agent"
+              "git-agent",
+              "substrate"
             ],
             "description": "Isolation boundary: off, provider-native, Docker, or Git Agent"
           },
@@ -12497,7 +12590,8 @@
                   "off",
                   "native",
                   "docker",
-                  "git-agent"
+                  "git-agent",
+                  "substrate"
                 ],
                 "description": "Isolation boundary: off, provider-native, Docker, or Git Agent"
               },
@@ -13428,6 +13522,65 @@
           "source": "fixtures --help"
         }
       },
+      "connections": {
+        "description": "Database connections the fixture declares once: a list of connection names or connection:// references, each the default of its type, or a map of names to a reference or an inline connection.",
+        "examples": [
+          [
+            "connection://pg/main",
+            "sqlserver-dev"
+          ],
+          {
+            "scratch": {
+              "type": "sqlite",
+              "url": "./scratch.db"
+            },
+            "warehouse": "connection://pg/warehouse"
+          }
+        ],
+        "oneOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "title": "Defaults",
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "title": "Reference",
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": true,
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "title": "Inline connection",
+                  "type": "object"
+                }
+              ]
+            },
+            "title": "Named",
+            "type": "object"
+          }
+        ],
+        "title": "Connections",
+        "x-help": {
+          "body": "List entries become the default of their resolved type: a query step or `x-query` without `connection` uses the single default, and a `format: connection` picker of that type is prefilled with it. Two defaults of one type are an error. Map entries are named connections, resolved by name ahead of the catalog; inline credentials stay on the server and never reach the browser. Replaces the deprecated `connection:` key.",
+          "section": "Connections",
+          "source": "fixtures --help"
+        }
+      },
       "cwd": {
         "description": "Default working directory, resolved relative to the fixture file.",
         "examples": [
@@ -13539,6 +13692,63 @@
         "x-help": {
           "body": "Skip fixtures on non-matching operating systems. Prefix with `!` to negate.",
           "section": "File structure",
+          "source": "fixtures --help"
+        }
+      },
+      "params": {
+        "additionalProperties": true,
+        "description": "JSON Schema (type: object) of the run's parameters, asked for in a form before the first step and read as {{.params.x}} or CEL params.x.",
+        "examples": [
+          {
+            "properties": {
+              "db": {
+                "format": "connection",
+                "type": "string",
+                "x-connection-types": [
+                  "postgres"
+                ]
+              },
+              "table": {
+                "type": "string",
+                "x-query": {
+                  "connection": "db",
+                  "sql": "select table_name as value from information_schema.tables where table_name ilike '%' || @q || '%'"
+                }
+              }
+            },
+            "required": [
+              "db",
+              "table"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "properties": {
+            "additionalProperties": {
+              "type": "object"
+            },
+            "type": "object"
+          },
+          "required": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "object"
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ],
+        "title": "Params",
+        "type": "object",
+        "x-help": {
+          "body": "Lowered to a leading `params` form step. Values from `--param k=v`, `--params file.yaml` or the UI start request skip the form when they satisfy the schema. A `format: connection` property (with `x-connection-types`) is a connection picker, prefilled with the declared default of its type. An `x-query: {connection, sql}` property takes its options from a query: `connection` names a sibling `format: connection` property (the query runs once it is chosen) or a named/catalog connection, `@q` binds the search text, and the `value`, `label`, `description`, `icon`, `badges` and `tone` columns shape each option (`x-query.columns` renames them).",
+          "section": "Params",
           "source": "fixtures --help"
         }
       },
@@ -14467,6 +14677,8 @@
       "env",
       "cwd",
       "terminal",
+      "connections",
+      "params",
       "setup",
       "traces",
       "goProfiles",

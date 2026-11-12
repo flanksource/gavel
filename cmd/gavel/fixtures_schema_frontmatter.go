@@ -27,7 +27,7 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"fixtures --help",
 		),
 		"x-order": []string{
-			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "setup", "traces", "goProfiles", "files", "codeBlocks",
+			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "connections", "params", "setup", "traces", "goProfiles", "files", "codeBlocks",
 			"timeout", "os", "arch", "skip", "ai", "verify",
 		},
 		"properties": map[string]any{
@@ -49,8 +49,26 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 					"required":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				},
 				"additionalProperties": true,
-			}, "Params", "Lowered to a leading `params` form step. Values from `--param k=v`, `--params file.yaml` or the UI start request skip the form when they satisfy the schema. A `format: connection` property (with `x-connection-types`) is a connection picker.", "fixtures --help",
-				map[string]any{"type": "object", "required": []string{"db"}, "properties": map[string]any{"db": map[string]any{"type": "string", "format": "connection", "x-connection-types": []string{"sql_server"}}}}),
+			}, "Params", "Lowered to a leading `params` form step. Values from `--param k=v`, `--params file.yaml` or the UI start request skip the form when they satisfy the schema. A `format: connection` property (with `x-connection-types`) is a connection picker, prefilled with the declared default of its type. An `x-query: {connection, sql}` property takes its options from a query: `connection` names a sibling `format: connection` property (the query runs once it is chosen) or a named/catalog connection, `@q` binds the search text, and the `value`, `label`, `description`, `icon`, `badges` and `tone` columns shape each option (`x-query.columns` renames them).", "fixtures --help",
+				map[string]any{"type": "object", "required": []string{"db", "table"}, "properties": map[string]any{
+					"db": map[string]any{"type": "string", "format": "connection", "x-connection-types": []string{"postgres"}},
+					"table": map[string]any{"type": "string", "x-query": map[string]any{"connection": "db",
+						"sql": "select table_name as value from information_schema.tables where table_name ilike '%' || @q || '%'"}},
+				}}),
+			"connections": withHelp(fixtureSchemaProperty{
+				"title":       "Connections",
+				"description": "Database connections the fixture declares once: a list of connection names or connection:// references, each the default of its type, or a map of names to a reference or an inline connection.",
+				"oneOf": []any{
+					map[string]any{"type": "array", "title": "Defaults", "items": map[string]any{"type": "string"}},
+					map[string]any{"type": "object", "title": "Named", "additionalProperties": map[string]any{"oneOf": []any{
+						map[string]any{"type": "string", "title": "Reference"},
+						map[string]any{"type": "object", "title": "Inline connection", "required": []string{"type"}, "additionalProperties": true,
+							"properties": map[string]any{"type": map[string]any{"type": "string"}, "url": map[string]any{"type": "string"}}},
+					}}},
+				},
+			}, "Connections", "List entries become the default of their resolved type: a query step or `x-query` without `connection` uses the single default, and a `format: connection` picker of that type is prefilled with it. Two defaults of one type are an error. Map entries are named connections, resolved by name ahead of the catalog; inline credentials stay on the server and never reach the browser. Replaces the deprecated `connection:` key.", "fixtures --help",
+				[]string{"connection://pg/main", "sqlserver-dev"},
+				map[string]any{"warehouse": "connection://pg/warehouse", "scratch": map[string]any{"type": "sqlite", "url": "./scratch.db"}}),
 			"setup":      fixtureSetupSchema(),
 			"traces":     fixtureTracesSchema(),
 			"goProfiles": fixtureGoProfilesSchema(),
