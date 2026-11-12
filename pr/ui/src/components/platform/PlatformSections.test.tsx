@@ -1,5 +1,5 @@
-// Tests the platform dashboard's section sidebar: one entry per section, a click scrolls to its
-// section, and the entry of the section being read stays highlighted while scrolling.
+// Tests the platform dashboard's section sidebar: one entry per section and subsection, a click
+// scrolls to its section, and the entry of the section being read stays highlighted while scrolling.
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { PlatformSections } from './PlatformSections';
@@ -83,4 +83,28 @@ it('highlights the first section when the sections arrive after the first render
   rerender(<PlatformSections sections={sections} />);
 
   expect(current()).toBe('Tenants');
+});
+
+it('lists a section\'s subsections indented under it, scrolls to them and highlights the one being read', () => {
+  const withParts = [
+    sections[0],
+    { id: 'infrastructure', label: 'Infrastructure', subsections: [{ id: 'infrastructure-catalog', label: 'Catalog' }, { id: 'infrastructure-changes', label: 'Changes' }],
+      content: <><div id="platform-infrastructure-catalog">catalog</div><div id="platform-infrastructure-changes">changes</div></> },
+  ];
+  render(<PlatformSections sections={withParts} />);
+  const nav = screen.getByRole('navigation', { name: 'Platform sections' });
+
+  expect([...nav.querySelectorAll('button')].map(button => button.textContent)).toEqual(['Tenants', 'Infrastructure', 'Catalog', 'Changes']);
+  expect(screen.getByRole('button', { name: 'Changes' }).dataset.depth).toBe('1');
+  expect(screen.getByRole('button', { name: 'Infrastructure' }).dataset.depth).toBe('0');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
+  expect(scrolledTo).toEqual(['platform-infrastructure-changes']);
+  expect(current()).toBe('Changes');
+
+  const tops: Record<string, number> = { 'platform-tenants': -900, 'platform-infrastructure': -300, 'platform-infrastructure-catalog': -200, 'platform-infrastructure-changes': 500 };
+  for (const [id, top] of Object.entries(tops)) document.getElementById(id)!.getBoundingClientRect = () => ({ top }) as DOMRect;
+  fireEvent.wheel(screen.getByTestId('platform-sections-scroll'));
+  fireEvent.scroll(screen.getByTestId('platform-sections-scroll'));
+  expect(current()).toBe('Catalog');
 });

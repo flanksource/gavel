@@ -14,6 +14,9 @@ beforeEach(() => {
       return Promise.resolve(new Response(JSON.stringify({ user: { id: 'u1', name: 'Ada', email: 'ada@example.com', githubLogin: 'ada', platformAdmin },
         org: { id: 'o-alpha', slug: 'alpha', name: 'Alpha', role: 'org:admin' }, orgs: [] }), { status: 200 }));
     }
+    if (String(input) === '/api/platform/infrastructure') {
+      return Promise.resolve(new Response(JSON.stringify({ missionControl: 'https://mc.example.com/api', configs: [], checks: [], changes: [] }), { status: 200 }));
+    }
     if (String(input) === '/api/platform/tenants?days=30') {
       return Promise.resolve(new Response(JSON.stringify({ tenants: [{ id: 'o-alpha', clerkOrgId: 'org_alpha', slug: 'alpha', name: 'Alpha', createdAt: '2026-10-01T00:00:00Z',
         members: 1, repos: 0, pushedRepos: 0, githubInstallations: 0, sandboxRuns: 0, inGavel: true }] }), { status: 200 }));
@@ -51,4 +54,15 @@ it('tells anyone who isn\'t a platform admin how to become one, once, and loads 
   expect(screen.getByText('{ "gavel_role": "platform_admin" }')).toBeTruthy();
   const urls = vi.mocked(fetch).mock.calls.map(([input]) => String(input));
   expect(urls.filter(url => url.startsWith('/api/platform/'))).toEqual([]);
+});
+
+it('lists every section in the sidebar, with the infrastructure panel\'s parts under it', async () => {
+  render(<PlatformView selectedOrg="" onSelectOrg={() => {}} />, { wrapper: queryTestWrapper() });
+
+  const nav = await screen.findByRole('navigation', { name: 'Platform sections' });
+  await screen.findByRole('button', { name: 'Catalog' });
+  expect([...nav.querySelectorAll('button')].map(button => button.textContent)).toEqual([
+    'Tenants', 'Sandbox usage', 'Substrate inventory', 'Substrate metrics', 'Model usage', 'Budgets', 'Captain history', 'GitHub App',
+    'Infrastructure', 'Catalog', 'Changes',
+  ]);
 });
