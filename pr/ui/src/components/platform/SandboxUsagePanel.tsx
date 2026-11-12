@@ -7,6 +7,7 @@ import { kindLabels } from '../RunsView';
 import { formatSeconds } from './formatSeconds';
 import { StackedDayBars, type DaySeries } from './StackedDayBars';
 import { windowDays } from './windowDays';
+import { PanelHeading } from './PanelHeading';
 
 export interface SandboxDay {
   day: string;
@@ -100,7 +101,7 @@ export function SandboxUsagePanel({ org }: { org?: string } = {}) {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-xs font-semibold uppercase text-muted-foreground">Sandbox usage · {usageWindowDays} days</h2>
+      <PanelHeading>Sandbox usage · {usageWindowDays} days</PanelHeading>
       {usage.error && <p role="alert" className="text-red-600">{usage.error.message}</p>}
       {data && (
         <>

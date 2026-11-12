@@ -6,6 +6,7 @@ import { fetchJSON, queryKeys } from '../../query';
 import { formatSeconds } from './formatSeconds';
 import { StackedDayBars, type DaySeries } from './StackedDayBars';
 import { windowDays } from './windowDays';
+import { PanelHeading } from './PanelHeading';
 
 // CaptainRunDay is one UTC day's prompt runs of an organization with one origin and state; org
 // is absent for runs no organization of this Clerk instance owns.
@@ -153,7 +154,7 @@ export function CaptainHistoryPanel({ org }: { org?: string } = {}) {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-xs font-semibold uppercase text-muted-foreground">Captain history · {historyWindowDays} days</h2>
+      <PanelHeading>Captain history · {historyWindowDays} days</PanelHeading>
       {history.error && <p role="alert" className="text-red-600">{history.error.message}</p>}
       {data && (
         <>

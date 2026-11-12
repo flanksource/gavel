@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { StatStrip } from '@flanksource/clicky-ui/data';
 import { fetchJSON, queryKeys } from '../../query';
+import { PanelHeading } from './PanelHeading';
 
 export interface SubstrateResources {
   cpuMillicores: number;
@@ -105,7 +106,7 @@ export function SubstrateInventoryPanel({ org }: { org?: string } = {}) {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-xs font-semibold uppercase text-muted-foreground">Substrate inventory</h2>
+      <PanelHeading>Substrate inventory</PanelHeading>
       {inventory.error && <p role="alert" className="text-red-600">{inventory.error.message}</p>}
       {data?.workersError && <p role="alert" className="text-red-600">{data.workersError}</p>}
       {data?.actorsError && <p role="alert" className="text-red-600">{data.actorsError}</p>}

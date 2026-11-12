@@ -2,6 +2,7 @@
 // members, repositories, GitHub App installations and recent sandbox runs.
 import { useQuery } from '@tanstack/react-query';
 import { fetchJSON, queryKeys } from '../../query';
+import { PanelHeading } from './PanelHeading';
 
 export interface PlatformTenant {
   id?: string;
@@ -58,9 +59,9 @@ export function TenantsPanel({ onSelect }: { onSelect?: (org: string) => void } 
 
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-xs font-semibold uppercase text-muted-foreground">
+      <PanelHeading>
         Tenants{tenants.data ? ` · ${tenants.data.tenants.length}` : ''}
-      </h2>
+      </PanelHeading>
       {tenants.error && <p role="alert" className="text-red-600">{tenants.error.message}</p>}
       {tenants.data?.clerkError && <p role="alert" className="text-amber-600">{tenants.data.clerkError}</p>}
       {!!tenants.data?.tenants.length && (

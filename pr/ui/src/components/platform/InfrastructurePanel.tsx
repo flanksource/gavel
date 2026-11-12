@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { StatStrip } from '@flanksource/clicky-ui/data';
 import { fetchJSON, queryKeys } from '../../query';
+import { PanelHeading } from './PanelHeading';
 
 // MissionControlResource is a resource as Mission Control's search returns it.
 export interface MissionControlResource {
@@ -85,10 +86,10 @@ export function InfrastructurePanel() {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-xs font-semibold uppercase text-muted-foreground">
+      <PanelHeading>
         Infrastructure
-        {data && <> · <a className="normal-case underline" href={data.missionControl.replace(/\/api\/?$/, '')} target="_blank" rel="noreferrer">{data.missionControl}</a></>}
-      </h2>
+        {data && <> · <a className="underline" href={data.missionControl.replace(/\/api\/?$/, '')} target="_blank" rel="noreferrer">{data.missionControl}</a></>}
+      </PanelHeading>
       {infrastructure.error && <p role="alert" className="text-red-600">{infrastructure.error.message}</p>}
       {data && (
         <>

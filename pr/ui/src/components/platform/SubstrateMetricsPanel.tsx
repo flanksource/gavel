@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { StatStrip } from '@flanksource/clicky-ui/data';
 import { fetchJSON, queryKeys } from '../../query';
+import { PanelHeading } from './PanelHeading';
 
 export interface MetricPoint {
   time: string;
@@ -144,14 +145,14 @@ export function SubstrateMetricsPanel() {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-xs font-semibold uppercase text-muted-foreground">
+      <PanelHeading>
         Substrate metrics
         {view && (
-          <> · <a className="normal-case underline" href={view.missionControl.replace(/\/api\/?$/, '')} target="_blank" rel="noreferrer">{view.title || 'Mission Control'}</a>
-            <span className="normal-case font-normal"> · refreshed {new Date(view.lastRefreshedAt).toLocaleString()}</span>
+          <> · <a className="underline" href={view.missionControl.replace(/\/api\/?$/, '')} target="_blank" rel="noreferrer">{view.title || 'Mission Control'}</a>
+            <span className="font-normal"> · refreshed {new Date(view.lastRefreshedAt).toLocaleString()}</span>
           </>
         )}
-      </h2>
+      </PanelHeading>
       {metrics.error && <p role="alert" className="text-red-600">{metrics.error.message}</p>}
       {view?.refreshError && <p role="status" className="text-amber-600">Mission Control couldn't refresh the view, so what it shows may be old or missing: {view.refreshError}</p>}
       {values.length > 0 && (
