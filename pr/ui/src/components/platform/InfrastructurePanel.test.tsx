@@ -29,7 +29,7 @@ it('shows gavel\'s configs, checks and changes from Mission Control, with their 
       { id: 'c3', agent: '', name: 'gavel-data', namespace: 'gavel', type: 'Kubernetes::PersistentVolumeClaim', health: 'healthy', status: 'Bound' },
     ],
     checks: [{ id: 'k1', agent: '', name: 'gavel-http', namespace: 'gavel', type: 'http', health: 'unhealthy', status: 'failing' }],
-    changes: [{ id: 'ch1', config_id: 'c1', name: 'gavel', change_type: 'diff', summary: 'status.replicas', severity: 'info', created_at: '2026-11-10T09:00:00Z' }],
+    changes: [{ id: 'ch1', config_id: 'c1', name: 'gavel', type: 'Kubernetes::Deployment', change_type: 'diff', summary: 'status.replicas', severity: 'info', created_at: '2026-11-10T09:00:00Z' }],
     changesDays: 7,
   };
   response = { status: 200, body: infrastructure };
@@ -49,10 +49,13 @@ it('shows gavel\'s configs, checks and changes from Mission Control, with their 
     .toBe(formatDateTime('2026-11-10T10:00:00Z'));
   expect(within(screen.getByRole('table', { name: 'Health checks' })).getByText('gavel-http')).toBeTruthy();
   const changes = screen.getByRole('table', { name: 'Changes' });
-  expect(within(changes).getAllByRole('row').slice(1).map(row => within(row).getAllByRole('cell').map(cell => cell.textContent)), 'each change names its config item and says when it happened').toEqual([
-    ['gavel', 'diff', 'status.replicas', 'info', formatDateTime('2026-11-10T09:00:00Z')],
+  expect(within(changes).getAllByRole('row').slice(1).map(row => within(row).getAllByRole('cell').map(cell => cell.textContent)), 'each change names its config item and its type, and says when it happened').toEqual([
+    ['gavel', 'Kubernetes::Deployment', 'diff', 'status.replicas', 'info', formatDateTime('2026-11-10T09:00:00Z')],
   ]);
   expect(within(changes).getByRole('link', { name: 'gavel' }).getAttribute('href')).toBe('https://mc.example.com/catalog/c1');
+  expect(within(changes).getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['Config', 'Type', 'Change', 'Summary', 'Severity', 'When']);
+  expect(within(changes).getByText('Kubernetes::Deployment').closest('td')?.firstElementChild?.tagName, 'the config type is a badge, like the change type')
+    .toBe(within(changes).getByText('diff').closest('td')?.firstElementChild?.tagName);
   expect(screen.getByText('1 in 7 days'), 'the changes count says how far back it reaches').toBeTruthy();
   expect(screen.getAllByRole('heading', { level: 3 }).map(heading => [heading.textContent, heading.closest('[id]')?.id]), 'each part is a subsection the sidebar scrolls to').toEqual([
     ['Catalog', 'platform-infrastructure-catalog'],
