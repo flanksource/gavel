@@ -44,7 +44,7 @@ tasks:
     cmds:
       - cd testrunner/ui && CI=true corepack pnpm install --no-frozen-lockfile
       - cd pr/ui && CI=true corepack pnpm install --no-frozen-lockfile
-      - CI=true corepack pnpm --dir editor/ui install --no-frozen-lockfile
+      - cd editor/ui && CI=true corepack pnpm install --no-frozen-lockfile
     sources:
       - testrunner/ui/package.json
       - testrunner/ui/pnpm-workspace.yaml
