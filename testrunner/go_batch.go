@@ -53,20 +53,23 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 		}
 	}
 	runtimeEqual := true
-	if len(packagesByFramework[parsers.GoTest]) > 0 && len(ginkgo) > 0 {
-		goRuntime, goRuntimeArgs, err := o.runtimeFor(parsers.GoTest)
+	var ginkgoRuntimeArgs []string
+	if len(ginkgo) > 0 {
+		ginkgoRuntime, runtimeArgs, err := o.runtimeFor(parsers.Ginkgo)
 		if err != nil {
 			return nil, err
 		}
-		ginkgoRuntime, ginkgoRuntimeArgs, err := o.runtimeFor(parsers.Ginkgo)
+		ginkgoRuntimeArgs, err = runners.GinkgoGoTestArgs(runtimeArgs)
 		if err != nil {
 			return nil, err
 		}
-		ginkgoRuntimeArgs, err = runners.GinkgoGoTestArgs(ginkgoRuntimeArgs)
-		if err != nil {
-			return nil, err
+		if len(packagesByFramework[parsers.GoTest]) > 0 {
+			goRuntime, goRuntimeArgs, err := o.runtimeFor(parsers.GoTest)
+			if err != nil {
+				return nil, err
+			}
+			runtimeEqual = reflect.DeepEqual(goRuntime, ginkgoRuntime) && slices.Equal(goRuntimeArgs, ginkgoRuntimeArgs)
 		}
-		runtimeEqual = reflect.DeepEqual(goRuntime, ginkgoRuntime) && slices.Equal(goRuntimeArgs, ginkgoRuntimeArgs)
 	}
 	var bases []goBatchPlan
 	if len(packagesByFramework[parsers.GoTest]) == 0 {
@@ -85,6 +88,14 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 	for _, base := range bases {
 		for _, pkg := range base.packages {
 			args := o.augmentBenchArgs(runner, pkg, base.args)
+			// A Ginkgo-only run must not also run the plain Go tests that share the package binary.
+			if base.framework == parsers.Ginkgo && !slices.ContainsFunc(args, isGoRunArg) && !slices.ContainsFunc(ginkgoRuntimeArgs, isGoRunArg) {
+				bootstrap, err := ginkgoBootstrap(filepath.Join(o.WorkDir, pkg))
+				if err != nil {
+					return nil, err
+				}
+				args = append(slices.Clone(args), "-run=^(?:"+regexp.QuoteMeta(bootstrap)+")$")
+			}
 			if base.framework == parsers.GoTest {
 				if skippable := o.UIRSkippable[pkg]; len(skippable) > 0 {
 					quoted := make([]string, len(skippable))
@@ -113,6 +124,10 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 		}
 	}
 	return plans, nil
+}
+
+func isGoRunArg(arg string) bool {
+	return arg == "-run" || strings.HasPrefix(arg, "-run=")
 }
 
 func (o *TestOrchestrator) planUnfocusedGoBatch(base goBatchPlan) []goBatchPlan {
@@ -282,7 +297,15 @@ func emptyGoPackage(suites parsers.TestSuiteResults) bool {
 }
 
 func resolveGoBatchPaths(workDir string, packages, importPaths []string, allowExtras bool) (map[string]string, error) {
-	module, _ := parsers.GoModuleName(workDir)
+	// Inside a module, import paths are exact; only module-less "_/..." paths
+	// need suffix matching, which would otherwise map examples/har onto ./har.
+	prefix, prefixErr := goImportPrefix(workDir)
+	matchesPackage := func(importPath, rel string) bool {
+		if prefixErr == nil {
+			return rel == "." && importPath == prefix || rel != "." && importPath == prefix+"/"+rel
+		}
+		return rel != "." && strings.HasSuffix(importPath, "/"+rel)
+	}
 	rels := make(map[string]string, len(packages))
 	for _, pkg := range packages {
 		rel := filepath.Clean(pkg)
@@ -308,7 +331,7 @@ func resolveGoBatchPaths(workDir string, packages, importPaths []string, allowEx
 			if used[pkg] {
 				continue
 			}
-			if rel == "." && importPath == module || rel != "." && (importPath == module+"/"+rel || strings.HasSuffix(importPath, "/"+rel)) {
+			if matchesPackage(importPath, rel) {
 				if len(rel) > longest {
 					matches = nil
 					longest = len(rel)
@@ -342,9 +365,8 @@ func resolveGoBatchPaths(workDir string, packages, importPaths []string, allowEx
 		return paths, nil
 	}
 	if len(remainingImports) > 0 {
-		prefix, err := goImportPrefix(workDir)
-		if err != nil {
-			return nil, err
+		if prefixErr != nil {
+			return nil, prefixErr
 		}
 		var unmapped []string
 		for _, importPath := range remainingImports {
