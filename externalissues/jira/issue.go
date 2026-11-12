@@ -43,7 +43,7 @@ func ParseIssue(raw json.RawMessage) (Issue, error) {
 	}
 	var key, summary, link string
 	if err := json.Unmarshal(fields["key"], &key); err != nil || key == "" {
-		return Issue{}, fmt.Errorf("Jira issue has no valid key")
+		return Issue{}, fmt.Errorf("jira issue has no valid key")
 	}
 	if err := json.Unmarshal(fields["summary"], &summary); err != nil {
 		return Issue{}, fmt.Errorf("issue %s summary: %w", key, err)
