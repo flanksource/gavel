@@ -53,6 +53,7 @@ type CommitOptions struct {
 	AIFixMaxIterations int    `flag:"ai-fix-max-iterations" help:"Maximum commit AI repair iterations; overrides commit.lint.aiFixMaxIterations"`
 	Tidy               string `flag:"tidy" help:"Run 'go mod tidy' in every Go module whose go.mod is staged before committing and stage any go.mod/go.sum updates: true|false (default: false, or true with -p; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
 	WorkDir            string `flag:"work-dir" help:"Working directory"`
+	IndexPatch         string `flag:"index-patch" help:"Commit exactly this staged snapshot (an absolute patch path written by the dashboard commit queue) from a private index, leaving the rest of the index untouched; deletes the patch once committed. Not valid with file arguments, -i, --fixup or --since."`
 	Yes                bool   `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
 	AddMetadata        bool   `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`
 
@@ -88,6 +89,13 @@ Positional file arguments (gavel commit <files>) commit exactly those paths:
 gavel resets the index and stages only the named files or directories, so
 --stage is ignored. Combine with -A to group just those paths into logical
 commits. Not valid with -i, --fixup, or --since.
+
+--index-patch <file> commits a staged snapshot instead of the index: the
+dashboard commit queue snapshots each queued commit's staged changes (line
+selections included) and removes them from the index, so later staging cannot
+leak into the queued commit. The commit runs from a private index of HEAD plus
+the patch, then the real index's entries for the committed paths move to the
+new HEAD and the patch is deleted; a failed run keeps the patch for a retry.
 
 Explicitly named ignored paths offer Force-add and continue or Cancel commit
 before the index changes. Approval applies only to those paths; ignore rules
@@ -209,6 +217,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		WorkDir:         workDir,
 		Stage:           opts.Stage,
 		Files:           files,
+		IndexPatch:      opts.IndexPatch,
 		CommitAll:       opts.CommitAll,
 		Interactive:     opts.Interactive || opts.Tree,
 		Batch:           opts.Batch,
@@ -246,7 +255,7 @@ func runCommit(opts CommitOptions) (any, error) {
 		commitpkg.ErrLinkedDepsCancelled, commitpkg.ErrNothingToPush, commitpkg.ErrInteractiveWithCommitAll,
 		commitpkg.ErrInteractiveWithMessage, commitpkg.ErrBatchRequiresInteractive, commitpkg.ErrBatchWithSummary,
 		commitpkg.ErrInteractiveNonTTY, commitpkg.ErrInteractiveCancelled, commitpkg.ErrInteractiveEmpty,
-		commitpkg.ErrFilesWithInteractive, commitpkg.ErrFilesWithSince, commitpkg.ErrFilesWithFixup,
+		commitpkg.ErrFilesWithInteractive, commitpkg.ErrFilesWithSince, commitpkg.ErrFilesWithFixup, commitpkg.ErrIndexPatchExclusive,
 		commitpkg.ErrFixupWithCommitAll, commitpkg.ErrFixupWithInteractive, commitpkg.ErrFixupWithMessage,
 		commitpkg.ErrFixupInvalidTarget, commitpkg.ErrFixupNoBase, commitpkg.ErrSinceInvalidRef,
 		commitpkg.ErrSincePushed, commitpkg.ErrSinceNeedsConfirm, commitpkg.ErrSinceWithMessage,
@@ -415,7 +424,7 @@ func handleCommitLintFindings(feedback commitFeedback, workDir string, result *c
 		return lintFindingsBlocked
 	}
 	repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRules...)
-	if err := verify.SaveGavelConfig(workDir, repoCfg); err != nil {
+	if err := verify.SaveGavelConfig(filepath.Join(workDir, verify.GavelConfigFileName), repoCfg); err != nil {
 		fmt.Fprintf(feedback.Output, "failed to save %s: %v\n", cfgPath, err)
 		return lintFindingsBlocked
 	}

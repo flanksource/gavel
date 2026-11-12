@@ -89,7 +89,7 @@ func readStagedSource(workDir string) (stagedSource, error) {
 
 func stagedDiff(workDir string) (string, error) {
 	cmd := exec.Command("git", "diff", "--cached", "--find-renames")
-	cmd.Dir = workDir
+	cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -101,7 +101,7 @@ func stagedDiff(workDir string) (string, error) {
 
 func stagedFiles(workDir string) ([]string, error) {
 	cmd := exec.Command("git", "diff", "--cached", "--name-only", "--find-renames")
-	cmd.Dir = workDir
+	cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -129,7 +129,7 @@ func gitAddUpdate(ctx context.Context, workDir string) error {
 // filter those out.
 func untrackedFiles(workDir string) ([]string, error) {
 	cmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
-	cmd.Dir = workDir
+	cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -147,7 +147,7 @@ func trackedFiles(workDir string, paths []string) (map[string]struct{}, error) {
 		return tracked, nil
 	}
 	cmd := exec.Command("git", append([]string{"ls-files", "-z", "--"}, paths...)...)
-	cmd.Dir = workDir
+	cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

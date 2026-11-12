@@ -133,7 +133,7 @@ func EvaluateLinkedDeps(workDir, gitRoot string, stagedFiles, deletedFiles []str
 // readStagedBlob returns the contents of path as staged in the index.
 func readStagedBlob(workDir, path string) ([]byte, error) {
 	cmd := exec.Command("git", "show", ":"+path)
-	cmd.Dir = workDir
+	cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

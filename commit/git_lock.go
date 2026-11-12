@@ -82,7 +82,7 @@ func heldGitLock(output string) (string, bool) {
 // more. At most one lock is removed per call.
 func runGitRetryingLocks(ctx context.Context, workDir string, args ...string) ([]byte, error) {
 	for retry := 1; ; retry++ {
-		out, err := execGit(workDir, args)
+		out, err := execGit(ctx, workDir, args)
 		if err == nil {
 			return out, nil
 		}
@@ -100,9 +100,12 @@ func runGitRetryingLocks(ctx context.Context, workDir string, args ...string) ([
 	}
 }
 
-func execGit(workDir string, args []string) ([]byte, error) {
+func execGit(ctx context.Context, workDir string, args []string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = workDir
+	if real, _ := ctx.Value(realIndexKey{}).(bool); !real {
+		cmd.Env = gitIndexEnv(workDir)
+	}
 	return cmd.CombinedOutput()
 }
 
@@ -114,7 +117,7 @@ func retryAfterStaleLock(ctx context.Context, workDir string, args []string, loc
 		return nil, fmt.Errorf("%w: %s still held after %d retries (%w): %w",
 			ErrGitLockHeld, lock, gitLockRetries, reason, gitErr)
 	}
-	out, err := execGit(workDir, args)
+	out, err := execGit(ctx, workDir, args)
 	if err == nil {
 		return out, nil
 	}

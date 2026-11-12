@@ -61,6 +61,13 @@ type Options struct {
 	// paths (see stageExplicitFiles), so --stage is ignored. Rejected together
 	// with --interactive / --since / --fixup (see validateFilesOptions).
 	Files []string
+	// IndexPatch is an absolute path to a staged snapshot written by
+	// SnapshotStagedPatch. Run commits exactly that patch from a private index
+	// (HEAD plus the patch), as --stage=staged would, then points the real
+	// index's entries for the committed paths at the new HEAD and deletes the
+	// patch. The real index's other staging is never touched. Rejected
+	// together with file arguments, --interactive, --fixup and --since.
+	IndexPatch string
 	// CommitAll stages all changes and asks the LLM to split them into logical
 	// commit groups (plus a separate chore commit for lock/generated files).
 	// Set implicitly when MaxCommits is provided.
@@ -215,6 +222,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err := validateFilesOptions(opts); err != nil {
 		return nil, err
 	}
+	if err := validateIndexPatchOptions(opts); err != nil {
+		return nil, err
+	}
 	if err := validateInteractiveOptions(opts); err != nil {
 		return nil, err
 	}
@@ -251,30 +261,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 		opts.Stage = StageStaged
 	}
-
-	var (
-		result *Result
-	)
-	switch {
-	case opts.Since != "":
-		result, err = runIssueIdSquash(ctx, opts)
-	case opts.Fixup != "":
-		result, err = runFixup(ctx, opts)
-	case opts.CommitAll:
-		if opts.Message != "" {
-			return nil, ErrCommitAllWithMessage
-		}
-		if opts.MaxCommits == 0 {
-			opts.MaxCommits = defaultMaxCommits
-		}
-		result, err = runCommitAll(ctx, opts)
-	case opts.Batch:
-		result, err = runInteractiveBatch(ctx, opts)
-	case opts.Interactive && !opts.DryRun:
-		result, err = runInteractiveLoop(ctx, opts)
-	default:
-		result, err = runSingleCommit(ctx, opts)
+	if opts.CommitAll && opts.Message != "" {
+		return nil, ErrCommitAllWithMessage
 	}
+
+	result, err := runCommitFlow(ctx, opts)
 	if err != nil {
 		// With --push, "nothing staged" is not fatal: fall through and
 		// push existing local commits / open a PR for what HEAD already
@@ -291,6 +282,38 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 	}
 	return result, nil
+}
+
+// runCommitFlow dispatches to the commit mode opts select. An --index-patch
+// run commits from its private index and syncs the real index before Run
+// pushes, since a push may rebase the worktree.
+func runCommitFlow(ctx context.Context, opts Options) (*Result, error) {
+	if opts.IndexPatch != "" {
+		index, err := openPrivateIndex(ctx, opts.WorkDir, opts.IndexPatch)
+		if err != nil {
+			return nil, err
+		}
+		opts.IndexPatch, opts.Stage = "", StageStaged
+		result, err := runCommitFlow(ctx, opts)
+		return result, index.close(ctx, err)
+	}
+	switch {
+	case opts.Since != "":
+		return runIssueIdSquash(ctx, opts)
+	case opts.Fixup != "":
+		return runFixup(ctx, opts)
+	case opts.CommitAll:
+		if opts.MaxCommits == 0 {
+			opts.MaxCommits = defaultMaxCommits
+		}
+		return runCommitAll(ctx, opts)
+	case opts.Batch:
+		return runInteractiveBatch(ctx, opts)
+	case opts.Interactive && !opts.DryRun:
+		return runInteractiveLoop(ctx, opts)
+	default:
+		return runSingleCommit(ctx, opts)
+	}
 }
 
 func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {

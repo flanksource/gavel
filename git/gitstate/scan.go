@@ -244,6 +244,11 @@ func scanStatus(ctx context.Context, store *Store, repoID uuid.UUID, path string
 	return true, store.ApplyStatus(ctx, repoID, path, StatusUpdate{Fingerprint: fingerprint, Changes: changes, TouchedAt: touched, Files: files})
 }
 
+// statusScanFormat is part of every status fingerprint; bump it whenever the
+// stored scan's shape changes so existing scans are recomputed once. Format 2
+// lists each file of an untracked directory instead of one "dir/" entry.
+const statusScanFormat = 2
+
 func statusFingerprint(ctx context.Context, path string, gitArgs []string) (string, error) {
 	head, err := runGit(ctx, path, slices.Concat(gitArgs, []string{"rev-parse", "--verify", "--quiet", "HEAD"})...)
 	// --quiet exits 1, and only 1, when HEAD names no commit: an unborn branch,
@@ -260,6 +265,7 @@ func statusFingerprint(ctx context.Context, path string, gitArgs []string) (stri
 		return "", err
 	}
 	hash := sha256.New()
+	fmt.Fprintf(hash, "status-format %d\n", statusScanFormat)
 	hash.Write(head)
 	hash.Write(porcelain)
 	for _, file := range porcelainPaths(porcelain) {

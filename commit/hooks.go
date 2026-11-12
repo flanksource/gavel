@@ -35,7 +35,7 @@ func RunHooks(workDir string, hooks []verify.CommitHook, stagedFiles []string) (
 
 		logger.Infof("Running commit hook: %s", hook.Name)
 		cmd := exec.Command("sh", "-c", hook.Run)
-		cmd.Dir = workDir
+		cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
 		err = cmd.Run()

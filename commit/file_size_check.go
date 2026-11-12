@@ -567,7 +567,7 @@ type lsEntry struct {
 func lsFilesStage(workDir string, files []string) ([]lsEntry, error) {
 	args := append([]string{"ls-files", "-s", "-z", "--"}, files...)
 	cmd := exec.Command("git", args...)
-	cmd.Dir = workDir
+	cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

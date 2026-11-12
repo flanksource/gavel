@@ -503,7 +503,7 @@ func appendAllow(saveDir string, entries []string) ([]string, error) {
 	if len(added) == 0 {
 		return nil, nil
 	}
-	if err := verify.SaveGavelConfig(saveDir, cfg); err != nil {
+	if err := verify.SaveGavelConfig(filepath.Join(saveDir, verify.GavelConfigFileName), cfg); err != nil {
 		return nil, err
 	}
 	return added, nil
