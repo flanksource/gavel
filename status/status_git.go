@@ -22,14 +22,10 @@ func withGitConfig(gitArgs []string, args ...string) []string {
 	return append(append(make([]string, 0, len(gitArgs)+len(args)), gitArgs...), args...)
 }
 
-func runGitStatus(ctx context.Context, workDir string, gitConfig []string, expandUntracked bool) ([]byte, error) {
+func runGitStatus(ctx context.Context, workDir string, gitConfig []string) ([]byte, error) {
 	stopGit := rpchttp.Track(ctx, "git")
 	defer stopGit()
-	args := withGitConfig(gitConfig, "status", "--porcelain=v1", "-z")
-	if expandUntracked {
-		args = append(args, "--untracked-files=all")
-	}
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", withGitConfig(gitConfig, "status", "--porcelain=v1", "-z", "--untracked-files=all")...)
 	cmd.Dir = workDir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

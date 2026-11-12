@@ -105,7 +105,7 @@ var _ = Describe("TODO runtime preset configuration", func() {
 			Verify:  PromptSpec{Presets: []string{"reviewer"}, PresetsSet: true},
 			Steps:   map[string]PromptSpec{"handoff": {Presets: []string{"publisher"}, PresetsSet: true}},
 		}}
-		Expect(SaveGavelConfig(dir, cfg)).To(Succeed())
+		Expect(SaveGavelConfig(filepath.Join(dir, GavelConfigFileName), cfg)).To(Succeed())
 		loaded, err := LoadSingleGavelConfig(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(loaded.Todos.Presets).To(Equal([]string{"project-default"}))

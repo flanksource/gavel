@@ -17,33 +17,41 @@ import (
 // load skipped parsing; nothing else depends on it.
 var gavelConfigParses atomic.Int64
 
-// gavelConfigLayer is one .gavel.yaml LoadGavelConfig consults, read in full. A
-// missing file is part of the fingerprint too: its later appearance must change
-// the result.
+// gavelConfigLayer is one config file LoadGavelConfig consults, read in full:
+// a directory's .gavel.yaml or one of its .gavel.<name>.yaml snippets. A
+// missing .gavel.yaml is part of the fingerprint too, as is the set of
+// snippets: a file appearing later must change the result.
 type gavelConfigLayer struct {
+	origin string
 	path   string
 	data   []byte
 	exists bool
 }
 
-// readGavelConfigLayers reads the .gavel.yaml in each of dirs. The directory
-// may come from a request, so each file is read through an os.Root opened on
-// its directory: the name read is always exactly GavelConfigFileName, and a
-// symlink that resolves outside the directory is refused rather than followed.
+// readGavelConfigLayers reads, for each of dirs, its .gavel.yaml then its
+// snippets by name. The directory may come from a request, so each file is
+// read through an os.Root opened on its directory: only config file names are
+// read, and a symlink that resolves outside the directory is refused rather
+// than followed.
 func readGavelConfigLayers(dirs []GavelConfigDir) ([]gavelConfigLayer, error) {
 	layers := make([]gavelConfigLayer, 0, len(dirs))
 	for _, layerDir := range dirs {
-		dir := layerDir.Dir
-		path := filepath.Join(dir, GavelConfigFileName)
-		data, err := readFileInDir(dir, GavelConfigFileName)
-		if os.IsNotExist(err) {
-			layers = append(layers, gavelConfigLayer{path: path})
-			continue
-		}
+		snippets, err := snippetFiles(layerDir.Dir)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", path, err)
+			return nil, err
 		}
-		layers = append(layers, gavelConfigLayer{path: path, data: data, exists: true})
+		for _, name := range append([]string{GavelConfigFileName}, snippets...) {
+			path := filepath.Join(layerDir.Dir, name)
+			data, err := readFileInDir(layerDir.Dir, name)
+			if os.IsNotExist(err) {
+				layers = append(layers, gavelConfigLayer{origin: layerDir.Origin, path: path})
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read %s: %w", path, err)
+			}
+			layers = append(layers, gavelConfigLayer{origin: layerDir.Origin, path: path, data: data, exists: true})
+		}
 	}
 	return layers, nil
 }

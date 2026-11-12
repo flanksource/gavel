@@ -118,7 +118,7 @@ func runConfigure(opts ConfigureOptions) (any, error) {
 		return nil, err
 	}
 
-	if err := verify.SaveGavelConfig(dir, cfg); err != nil {
+	if err := verify.SaveGavelConfig(filepath.Join(dir, verify.GavelConfigFileName), cfg); err != nil {
 		return nil, fmt.Errorf("write %s: %w", filepath.Join(dir, ".gavel.yaml"), err)
 	}
 	return ConfigureResult{Path: filepath.Join(dir, ".gavel.yaml"), Written: written}, nil

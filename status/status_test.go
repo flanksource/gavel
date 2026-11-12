@@ -167,6 +167,29 @@ func TestGatherFromRepo(t *testing.T) {
 	assert.Equal(t, "go", byPath["staged.go"].FileMap.Language)
 }
 
+func TestGatherListsEachFileOfAnUntrackedDirectory(t *testing.T) {
+	repo := initStatusRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "notes", "drafts"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "notes", "a.md"), []byte("# a\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "notes", "drafts", "b.md"), []byte("# b\n"), 0o644))
+
+	restore := stubFileMap(func(path, commit string) (*repomap.FileMap, error) {
+		return &repomap.FileMap{Path: path, Language: "markdown"}, nil
+	})
+	defer restore()
+
+	result, err := Gather(repo, Options{})
+	require.NoError(t, err)
+	states := map[string]FileState{}
+	for _, f := range result.Files {
+		states[f.Path] = f.State
+	}
+	assert.Equal(t, map[string]FileState{
+		"notes/a.md":        StateUntracked,
+		"notes/drafts/b.md": StateUntracked,
+	}, states)
+}
+
 func TestGatherHidesGitIgnoredTrackedFiles(t *testing.T) {
 	repo := initStatusRepo(t)
 	gitRun(t, repo, "config", "core.excludesFile", "/dev/null")

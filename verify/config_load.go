@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/flanksource/repomap"
 	"github.com/ghodss/yaml"
@@ -28,6 +30,8 @@ type GavelConfigTrace struct {
 	GitRoot    string              `json:"gitRoot,omitempty" yaml:"gitRoot,omitempty"`
 	Sources    []GavelConfigSource `json:"sources,omitempty" yaml:"sources,omitempty"`
 	Merged     GavelConfig         `json:"merged" yaml:"merged"`
+	// Provenance maps each configured leaf (a JSON pointer) to the path of the source that set it.
+	Provenance map[string]string `json:"provenance,omitempty" yaml:"provenance,omitempty"`
 }
 
 // LoadGavelConfig merges the built-in defaults with the user's home config, the
@@ -164,37 +168,143 @@ func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
 		TargetPath: targetPath,
 		TargetDir:  targetDir,
 		GitRoot:    repomap.FindGitRoot(targetDir),
-		Merged:     DefaultGavelConfig(),
 	}
 
-	for _, dir := range GavelConfigDirs(targetDir) {
-		candidate := GavelConfigSource{Origin: dir.Origin, Path: filepath.Join(dir.Dir, GavelConfigFileName)}
+	layers, err := readGavelConfigLayers(GavelConfigDirs(targetDir))
+	if err != nil {
+		return GavelConfigTrace{}, err
+	}
+	for _, layer := range layers {
+		if !layer.exists {
+			continue
+		}
+		candidate := GavelConfigSource{Origin: layer.origin, Path: layer.path}
 		if candidate.Origin == originTargetDirectory && targetPath != targetDir {
 			candidate.Origin = originParentDirectory
 		}
-		data, err := readFileInDir(dir.Dir, GavelConfigFileName)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return GavelConfigTrace{}, err
-		}
-
-		cfg, err := parseGavelConfig(candidate.Path, data)
+		cfg, err := parseGavelConfig(candidate.Path, layer.data)
 		if err != nil {
 			return GavelConfigTrace{}, err
 		}
-		candidate.Raw = string(data)
+		candidate.Raw = string(layer.data)
 		candidate.Config = cfg
 		trace.Sources = append(trace.Sources, candidate)
-		trace.Merged = MergeGavelConfig(trace.Merged, cfg)
 	}
-
-	return trace, nil
+	trace.Merged, trace.Provenance, err = ComposeGavelConfig(trace.Sources)
+	return trace, err
 }
 
-// LoadSingleGavelConfig reads one .gavel.yaml file from the given absolute
-// path without layering with home/gitRoot/cwd siblings. Returns a zero-value
+// ComposeGavelConfig layers sources over the built-in defaults in order, the
+// way captain's ComposeSpecLayers composes spec layers: each source's set
+// fields win field by field, and Provenance names, per configured leaf (a JSON
+// pointer such as /comments/agents/default/prompt), the source that last set it.
+func ComposeGavelConfig(sources []GavelConfigSource) (GavelConfig, map[string]string, error) {
+	merged := DefaultGavelConfig()
+	provenance := map[string]string{}
+	for _, source := range sources {
+		encoded, err := json.Marshal(source.Config)
+		if err != nil {
+			return GavelConfig{}, nil, fmt.Errorf("encode %s: %w", source.Path, err)
+		}
+		pruned, err := pruneEmptyConfigNodes(encoded)
+		if err != nil {
+			return GavelConfig{}, nil, fmt.Errorf("encode %s: %w", source.Path, err)
+		}
+		var tree any
+		if err := json.Unmarshal(pruned, &tree); err != nil {
+			return GavelConfig{}, nil, fmt.Errorf("encode %s: %w", source.Path, err)
+		}
+		for _, leaf := range configLeaves(tree, "") {
+			provenance[leaf] = source.Path
+		}
+		merged = MergeGavelConfig(merged, source.Config)
+	}
+	return merged, provenance, nil
+}
+
+// configLeaves lists the JSON pointers of node's scalar and list values.
+func configLeaves(node any, pointer string) []string {
+	object, ok := node.(map[string]any)
+	if !ok {
+		return []string{pointer}
+	}
+	var leaves []string
+	for key, child := range object {
+		escaped := strings.NewReplacer("~", "~0", "/", "~1").Replace(key)
+		leaves = append(leaves, configLeaves(child, pointer+"/"+escaped)...)
+	}
+	return leaves
+}
+
+// IsGavelConfigFile is whether name is a file a config layer reads: the
+// layer's .gavel.yaml, or a snippet .gavel.<name>.yaml splitting the layer's
+// config across several files.
+func IsGavelConfigFile(name string) bool {
+	if name == GavelConfigFileName {
+		return true
+	}
+	middle, ok := strings.CutPrefix(name, ".gavel.")
+	if !ok {
+		return false
+	}
+	middle, ok = strings.CutSuffix(middle, ".yaml")
+	return ok && middle != "" && !strings.ContainsAny(middle, `/\`)
+}
+
+// snippetFiles lists the snippets in dir, by name: they apply after the
+// directory's .gavel.yaml, in this order. A missing directory has none.
+func snippetFiles(dir string) ([]string, error) {
+	root, err := os.OpenRoot(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close() //nolint:errcheck
+	listing, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer listing.Close() //nolint:errcheck
+	entries, err := listing.ReadDir(-1)
+	if err != nil {
+		return nil, fmt.Errorf("list %s: %w", dir, err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && entry.Name() != GavelConfigFileName && IsGavelConfigFile(entry.Name()) {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// LoadGavelConfigDir reads dir's layer: its .gavel.yaml, then its snippets by
+// name. A missing directory or file contributes nothing.
+func LoadGavelConfigDir(dir string) ([]GavelConfigSource, error) {
+	snippets, err := snippetFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	var sources []GavelConfigSource
+	for _, name := range append([]string{GavelConfigFileName}, snippets...) {
+		path := filepath.Join(dir, name)
+		cfg, err := LoadSingleGavelConfig(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, GavelConfigSource{Path: path, Config: cfg})
+	}
+	return sources, nil
+}
+
+// LoadSingleGavelConfig reads one .gavel.yaml or snippet file from the given
+// absolute path without layering with home/gitRoot/cwd siblings. Returns a zero-value
 // config with os.ErrNotExist when the file is missing so callers can detect
 // "need to create" vs. a real read/parse error.
 func LoadSingleGavelConfig(path string) (GavelConfig, error) {
@@ -208,8 +318,8 @@ func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 	// other file to parse and echo back (the settings API resolves its
 	// directory from a request parameter), and a path that names anything else
 	// is a caller bug worth reporting rather than a missing config.
-	if filepath.Base(path) != GavelConfigFileName {
-		return GavelConfig{}, "", fmt.Errorf("load gavel config: %q is not a %s file", path, GavelConfigFileName)
+	if !IsGavelConfigFile(filepath.Base(path)) {
+		return GavelConfig{}, "", fmt.Errorf("load gavel config: %q is not a %s or .gavel.<name>.yaml file", path, GavelConfigFileName)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -271,24 +381,32 @@ func decodeGavelConfig(path string, encoded []byte) (GavelConfig, error) {
 	return gc, nil
 }
 
-func SaveGavelConfig(dir string, cfg GavelConfig) error {
-	path := filepath.Join(dir, ".gavel.yaml")
-	// Marshal through JSON rather than yaml.Marshal so the document can be pruned
-	// before it is written: ghodss/yaml encodes via JSON anyway, and writing every
-	// zero-valued struct as `{}` is what fills these files with dead keys.
-	encoded, err := json.Marshal(cfg)
+// SaveGavelConfig writes cfg to path, a directory's .gavel.yaml or one of its
+// .gavel.<name>.yaml snippets.
+func SaveGavelConfig(path string, cfg GavelConfig) error {
+	if !IsGavelConfigFile(filepath.Base(path)) {
+		return fmt.Errorf("save gavel config: %q is not a %s or .gavel.<name>.yaml file", path, GavelConfigFileName)
+	}
+	// ghodss/yaml encodes via JSON anyway, so the pruned JSON document is written as YAML.
+	encoded, err := MarshalGavelConfig(cfg)
 	if err != nil {
 		return err
 	}
-	pruned, err := pruneEmptyConfigNodes(encoded)
-	if err != nil {
-		return err
-	}
-	data, err := yaml.JSONToYAML(pruned)
+	data, err := yaml.JSONToYAML(encoded)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// MarshalGavelConfig is cfg as the JSON document a config file or settings row
+// holds: only the configured keys, with every zero-valued struct's `{}` pruned.
+func MarshalGavelConfig(cfg GavelConfig) ([]byte, error) {
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return pruneEmptyConfigNodes(encoded)
 }
 
 func resolveGavelConfigTarget(path string) (string, string, error) {

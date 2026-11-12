@@ -225,7 +225,7 @@ func TestSaveGavelConfig_RoundTrip(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, SaveGavelConfig(dir, cfg))
+	require.NoError(t, SaveGavelConfig(filepath.Join(dir, GavelConfigFileName), cfg))
 
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 	loaded, err := LoadGavelConfig(dir)

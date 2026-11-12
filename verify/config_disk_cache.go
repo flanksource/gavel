@@ -15,7 +15,9 @@ import (
 	"github.com/gofrs/flock"
 )
 
-const configCacheVersion = 1
+// configCacheVersion 2 keys layers by file path, since a directory now holds
+// its .gavel.yaml and snippets.
+const configCacheVersion = 2
 
 type configDiskLayer struct {
 	Exists bool            `json:"exists"`
@@ -95,7 +97,7 @@ func (c *configDiskCache) resolve(layers []gavelConfigLayer) ([]GavelConfig, boo
 	configs := make([]GavelConfig, 0, len(layers))
 	changed := false
 	for _, layer := range layers {
-		key := filepath.Dir(layer.path)
+		key := layer.path
 		entry := configDiskLayer{Exists: layer.exists}
 		if layer.exists {
 			hash := sha256.Sum256(layer.data)

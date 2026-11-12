@@ -8,13 +8,15 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+func ptr[T any](value T) *T { return &value }
+
 var _ = Describe("comment agents config", func() {
 	DescribeTable("accepts only a clean relative file path beneath the directory as a page key",
 		func(key string, valid bool) {
 			Expect(IsCommentPageKey(key)).To(Equal(valid))
 		},
-		Entry("a file", "19-security.mdx", true),
-		Entry("a nested file", "arb/19-security.mdx", true),
+		Entry("a file", "16-security.mdx", true),
+		Entry("a nested file", "arb/16-security.mdx", true),
 		Entry("the directory itself", ".", false),
 		Entry("empty", "", false),
 		Entry("a parent", "../other.md", false),
@@ -31,29 +33,69 @@ var _ = Describe("comment agents config", func() {
 		Expect(err).To(MatchError(ContainSubstring(`comments.agents.pages: "../x.md"`)))
 	})
 
-	It("saves a page agent and a directory opt-out beside the file's other settings, then removes the page", func() {
-		dir := GinkgoT().TempDir()
-		path := filepath.Join(dir, GavelConfigFileName)
-		Expect(os.WriteFile(path, []byte("commit:\n  types:\n  - feat\n"), 0o644)).To(Succeed())
-		reviewer := CommentAgent{Enabled: true, Assign: true, Prompt: "slides-review", Presets: []string{"fast"}, Instructions: "Keep the tables"}
+	It("sets a page entry and a default, then removes the page entry without leaving an empty map", func() {
+		reviewer := CommentAgent{Enabled: ptr(true), Assign: ptr(true), Prompt: "slides-review", Presets: []string{"fast"}, Instructions: "Keep the tables"}
+		var configured CommentAgentsConfig
 
-		Expect(SaveCommentAgent(dir, "19-security.mdx", &reviewer)).To(Succeed())
-		Expect(SaveCommentAgent(dir, "", &CommentAgent{Enabled: false})).To(Succeed())
-		saved, err := LoadSingleGavelConfig(path)
-		Expect(err).NotTo(HaveOccurred())
-		Expect([]any{saved.Commit.Types, saved.Comments.Agents}).To(Equal([]any{
-			[]string{"feat"},
-			CommentAgentsConfig{Default: &CommentAgent{Enabled: false}, Pages: map[string]CommentAgent{"19-security.mdx": reviewer}},
-		}))
+		Expect(configured.Set("16-security.mdx", &reviewer)).To(Succeed())
+		Expect(configured.Set("", &CommentAgent{Enabled: ptr(false)})).To(Succeed())
+		Expect(configured).To(Equal(CommentAgentsConfig{Default: &CommentAgent{Enabled: ptr(false)}, Pages: map[string]CommentAgent{"16-security.mdx": reviewer}}))
 
-		Expect(SaveCommentAgent(dir, "19-security.mdx", nil)).To(Succeed())
-		saved, err = LoadSingleGavelConfig(path)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(saved.Comments.Agents).To(Equal(CommentAgentsConfig{Default: &CommentAgent{Enabled: false}}))
+		Expect(configured.Set("16-security.mdx", nil)).To(Succeed())
+		Expect(configured).To(Equal(CommentAgentsConfig{Default: &CommentAgent{Enabled: ptr(false)}}))
 	})
 
-	It("defaults an agent with no prompt to the editor's comment prompt", func() {
-		Expect([]string{CommentAgent{}.PromptOrDefault(), CommentAgent{Prompt: "slides-review"}.PromptOrDefault()}).
-			To(Equal([]string{DefaultCommentAgentPrompt, "slides-review"}))
+	It("refuses a page key that escapes the layer's directory", func() {
+		var configured CommentAgentsConfig
+		Expect(configured.Set("../x.md", &CommentAgent{})).To(MatchError(ContainSubstring(`"../x.md" must be a relative file path`)))
+	})
+
+	Describe("resolving a file's agent across layers", func() {
+		project := CommentAgentLayer{Label: "/repo/.gavel.yaml", Dir: ".", Agents: CommentAgentsConfig{Default: &CommentAgent{Enabled: ptr(true), Prompt: "editor-comments", Presets: []string{"fast"}}}}
+		slides := CommentAgentLayer{Label: "db:path:slides", Dir: "slides", Agents: CommentAgentsConfig{
+			Default: &CommentAgent{Assign: ptr(true)},
+			Pages:   map[string]CommentAgent{"16-security.mdx": {Prompt: "slides-review"}, "draft.mdx": {Enabled: ptr(false)}},
+		}}
+		layers := []CommentAgentLayer{project, slides}
+
+		DescribeTable("merges ancestors first, then the directory default, then the page entry, field by field",
+			func(file string, want CommentAgent, found bool) {
+				resolved, err := ResolveCommentAgent(layers, file)
+				Expect(err).NotTo(HaveOccurred())
+				Expect([]any{resolved.Agent, resolved.Found}).To(Equal([]any{want, found}))
+			},
+			Entry("a page entry overriding only the prompt", "slides/16-security.mdx",
+				CommentAgent{Enabled: ptr(true), Assign: ptr(true), Prompt: "slides-review", Presets: []string{"fast"}}, true),
+			Entry("a page opting out", "slides/draft.mdx",
+				CommentAgent{Enabled: ptr(false), Assign: ptr(true), Prompt: "editor-comments", Presets: []string{"fast"}}, true),
+			Entry("a folder page with no entry", "slides/other.mdx",
+				CommentAgent{Enabled: ptr(true), Assign: ptr(true), Prompt: "editor-comments", Presets: []string{"fast"}}, true),
+			Entry("a file outside the folder", "README.md",
+				CommentAgent{Enabled: ptr(true), Prompt: "editor-comments", Presets: []string{"fast"}}, true),
+			Entry("a sibling sharing the folder's leading characters", "slides-old/x.mdx",
+				CommentAgent{Enabled: ptr(true), Prompt: "editor-comments", Presets: []string{"fast"}}, true),
+		)
+
+		It("traces each field to the layer default or page entry that last set it", func() {
+			resolved, err := ResolveCommentAgent(layers, "slides/16-security.mdx")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved.Provenance).To(Equal(map[string]CommentAgentSource{
+				"enabled": {Layer: "/repo/.gavel.yaml"},
+				"presets": {Layer: "/repo/.gavel.yaml"},
+				"assign":  {Layer: "db:path:slides"},
+				"prompt":  {Layer: "db:path:slides", Page: "16-security.mdx"},
+			}))
+		})
+
+		It("finds nothing when no layer configures the file", func() {
+			resolved, err := ResolveCommentAgent([]CommentAgentLayer{slides}, "README.md")
+			Expect(err).NotTo(HaveOccurred())
+			Expect([]any{resolved.Found, resolved.Provenance}).To(Equal([]any{false, map[string]CommentAgentSource{}}))
+		})
+
+		It("treats an unset enabled as off and an unset prompt as the editor prompt", func() {
+			Expect([]any{CommentAgent{}.IsEnabled(), CommentAgent{}.Assigns(), CommentAgent{}.PromptOrDefault(), CommentAgent{Prompt: "slides-review"}.PromptOrDefault()}).
+				To(Equal([]any{false, false, DefaultCommentAgentPrompt, "slides-review"}))
+		})
 	})
 })

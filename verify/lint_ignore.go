@@ -20,7 +20,8 @@ func SaveLintIgnore(directory string, rule LintIgnoreRule) (int, error) {
 	}
 	lintIgnoreMu.Lock()
 	defer lintIgnoreMu.Unlock()
-	cfg, err := LoadSingleGavelConfig(filepath.Join(directory, GavelConfigFileName))
+	path := filepath.Join(directory, GavelConfigFileName)
+	cfg, err := LoadSingleGavelConfig(path)
 	if err != nil && !os.IsNotExist(err) {
 		return 0, err
 	}
@@ -29,7 +30,7 @@ func SaveLintIgnore(directory string, rule LintIgnoreRule) (int, error) {
 		return existing == rule
 	}) {
 		cfg.Lint.Ignore = append(cfg.Lint.Ignore, rule)
-		if err := SaveGavelConfig(directory, cfg); err != nil {
+		if err := SaveGavelConfig(path, cfg); err != nil {
 			return 0, err
 		}
 	}

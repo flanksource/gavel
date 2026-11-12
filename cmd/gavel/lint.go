@@ -216,7 +216,7 @@ func runLint(ctx context.Context, opts LintOptions) (value any, runErr error) {
 				return nil, fmt.Errorf("failed to read repo .gavel.yaml: %w", err)
 			}
 			repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRules...)
-			if err := verify.SaveGavelConfig(gitRoot, repoCfg); err != nil {
+			if err := verify.SaveGavelConfig(filepath.Join(gitRoot, verify.GavelConfigFileName), repoCfg); err != nil {
 				return nil, fmt.Errorf("failed to save .gavel.yaml: %w", err)
 			}
 			logger.Infof("Saved %d new ignore rules to .gavel.yaml", len(newRules))
