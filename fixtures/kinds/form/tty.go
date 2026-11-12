@@ -45,7 +45,9 @@ func (t TTYPrompter) Ask(ctx context.Context, p prompt.Prompt) (prompt.Answer, e
 // field bound by its step (an `x-query`, or a connection picker in a fixture
 // declaring `connections:`) through its lookup token, scoped by the form's
 // values; any other `format: connection` picker over Catalog(workDir), scoped
-// by the types in its lookup URL.
+// by the types in its lookup URL. A connection picker with nothing to pick is
+// an error naming where connections live: unlike the browser, the terminal
+// cannot create one inline.
 func TerminalLookup(workDir string, opts dbconn.Options) schemaform.Lookup {
 	return func(ctx context.Context, req schemaform.LookupRequest) (schemaform.LookupResult, error) {
 		token, pointer, bound, err := lookup.ParseURL(req.Spec.URL)
@@ -54,6 +56,9 @@ func TerminalLookup(workDir string, opts dbconn.Options) schemaform.Lookup {
 		}
 		if bound {
 			result, err := lookup.Resolve(ctx, lookup.Request{Token: token, Pointer: pointer, Query: req.Query, Values: req.Values})
+			if err == nil && req.Spec.Filter == ConnectionLookupFilter && len(result.Options) == 0 && req.Query == "" {
+				return schemaform.LookupResult{}, noConnections(workDir, nil)
+			}
 			return result.LookupResult, err
 		}
 		if req.Spec.Filter != ConnectionLookupFilter {
@@ -63,8 +68,20 @@ func TerminalLookup(workDir string, opts dbconn.Options) schemaform.Lookup {
 		if err != nil {
 			return schemaform.LookupResult{}, err
 		}
-		return lookup.ConnectionOptions(ctx, lookup.ConnectionQuery{WorkDir: workDir, Options: opts, Types: types, Query: req.Query})
+		result, err := lookup.ConnectionOptions(ctx, lookup.ConnectionQuery{WorkDir: workDir, Options: opts, Types: types, Query: req.Query})
+		if err == nil && len(result.Options) == 0 && req.Query == "" {
+			return schemaform.LookupResult{}, noConnections(workDir, types)
+		}
+		return result, err
 	}
+}
+
+func noConnections(workDir string, types []string) error {
+	kind := strings.Join(types, "/")
+	if kind == "" {
+		kind = "matching"
+	}
+	return fmt.Errorf("no %s connection in the fixture's connections or the gavel connection catalog (%s/.connections or `gavel connections`)", kind, workDir)
 }
 
 // TerminalAnswerer names the person at this terminal: $USER (else the OS

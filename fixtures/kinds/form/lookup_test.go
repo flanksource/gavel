@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/gavel/fixtures/kinds/dbconn"
 	"github.com/flanksource/gavel/fixtures/kinds/form"
 	"github.com/flanksource/gavel/fixtures/kinds/lookup"
+	"github.com/flanksource/gavel/processruntime"
 )
 
 // lookupFixture is a fixture directory holding lab.db (a `tables` table) and
@@ -56,7 +57,7 @@ func lookupDocument(connections, extra string) string {
 
 // askedSchema runs document in dir and returns the params form it asked,
 // with what the terminal lookup listed for table while the form was open.
-func askedSchema(dir, document string) (prompt.Prompt, schemaform.LookupResult, []fixtures.FixtureResult) {
+func askedSchema(dir, document string, opts fixtures.RunOptions) (prompt.Prompt, schemaform.LookupResult, []fixtures.FixtureResult) {
 	GinkgoHelper()
 	var asked prompt.Prompt
 	var listed schemaform.LookupResult
@@ -79,7 +80,8 @@ func askedSchema(dir, document string) (prompt.Prompt, schemaform.LookupResult, 
 	Expect(os.WriteFile(path, []byte(document), 0o600)).To(Succeed())
 	file, err := fixtures.ParseFixtureFile(path)
 	Expect(err).NotTo(HaveOccurred())
-	results, _, err := fixtures.RunNodes(context.Background(), []*fixtures.FixtureNode{file}, fixtures.RunOptions{WorkDir: dir, Prompter: prompter})
+	opts.WorkDir, opts.Prompter = dir, prompter
+	results, _, err := fixtures.RunNodes(context.Background(), []*fixtures.FixtureNode{file}, opts)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(asked.Schema).NotTo(BeEmpty(), "the params form was not asked: %v", results)
 	Expect(listErr).NotTo(HaveOccurred())
@@ -108,7 +110,7 @@ var _ = Describe("x-query lowering", func() {
 	It("binds a linked query to a step-scoped token the terminal resolves with the form's values", func() {
 		dir, dbPath := lookupFixture()
 		asked, listed, _ := askedSchema(dir, lookupDocument("connections:\n  lab: {type: sqlite, url: "+dbPath+"}\n",
-			"    fixed:\n      type: string\n      x-query: {connection: lab, sql: \"select 'x' as value\"}\n"))
+			"    fixed:\n      type: string\n      x-query: {connection: lab, sql: \"select 'x' as value\"}\n"), fixtures.RunOptions{})
 
 		table := lookupSpecOf(asked.Schema, "table")
 		Expect(table["url"]).To(HavePrefix(lookup.URLPrefix))
@@ -128,14 +130,51 @@ var _ = Describe("x-query lowering", func() {
 
 	It("prefills a one-type picker with its declared default, still asking", func() {
 		dir, _ := lookupFixture()
-		asked, _, _ := askedSchema(dir, lookupDocument("connections: [lab]\n", ""))
+		asked, _, _ := askedSchema(dir, lookupDocument("connections: [lab]\n", ""), fixtures.RunOptions{})
 		Expect(asked.Default).To(Equal(map[string]any{"db": "connection://lab"}))
+	})
+
+	DescribeTable("lists the example's tables matching the search, decorated, from its inline sqlite connection, then ends the field",
+		func(isolated bool) {
+			GinkgoT().Setenv("XDG_CONFIG_HOME", GinkgoT().TempDir())
+			example, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "query-lookup.fixture.yaml"))
+			Expect(err).NotTo(HaveOccurred())
+			var opts fixtures.RunOptions
+			if isolated {
+				executable, err := os.Executable()
+				Expect(err).NotTo(HaveOccurred())
+				timeout := "60s"
+				opts = fixtures.RunOptions{ExecutablePath: executable, ProcessRuntime: processruntime.Options{Timeout: &timeout}}
+			}
+
+			asked, listed, _ := askedSchema(GinkgoT().TempDir(), string(example), opts)
+
+			Expect(listed.Options).To(Equal([]schemaform.Option{
+				{Value: "order_items", Label: "Order items", Icon: "ph:table-thin", Badges: []schemaform.Badge{{Label: "fk"}}},
+				{Value: "orders", Label: "Orders", Icon: "ph:table-thin", Badges: []schemaform.Badge{{Label: "pk"}, {Label: "fk"}}},
+			}))
+			token, pointer, _, err := lookup.ParseURL(lookupSpecOf(asked.Schema, "table")["url"].(string))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = lookup.Resolve(context.Background(), lookup.Request{Token: token, Pointer: pointer})
+			Expect(err).To(MatchError(lookup.ErrNotFound))
+		},
+		Entry("in the run's process", false),
+		Entry("in an isolated worker, relayed through the parent", true),
+	)
+
+	It("fails a terminal connection picker with nothing to pick, naming where connections live", func() {
+		GinkgoT().Setenv("XDG_CONFIG_HOME", GinkgoT().TempDir())
+		dir := GinkgoT().TempDir()
+		_, err := form.TerminalLookup(dir, dbconn.Options{})(context.Background(), schemaform.LookupRequest{
+			Spec: schemaform.LookupSpec{URL: form.ConnectionLookupURL + "?types=postgres", Filter: form.ConnectionLookupFilter},
+		})
+		Expect(err).To(MatchError(ContainSubstring("no postgres connection in the fixture's connections or the gavel connection catalog")))
 	})
 
 	It("keeps the global catalog lookup for a picker in a fixture declaring no connections", func() {
 		dir, _ := lookupFixture()
 		document := strings.Replace(lookupDocument("", ""), "{connection: db, sql:", "{connection: lab, sql:", 1)
-		asked, _, _ := askedSchema(dir, document)
+		asked, _, _ := askedSchema(dir, document, fixtures.RunOptions{})
 		Expect(lookupSpecOf(asked.Schema, "db")).To(HaveKeyWithValue("url", form.ConnectionLookupURL+"?types=sqlite"))
 	})
 
