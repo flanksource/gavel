@@ -402,7 +402,7 @@ func mergeViolations(structured, reported []models.Violation) []models.Violation
 		}
 	}
 	seen := map[string]bool{}
-	merged := make([]models.Violation, 0, len(structured)+len(reported))
+	var merged []models.Violation
 	for _, v := range structured {
 		if checked, ok := byKey[key(v)]; ok {
 			v = checked

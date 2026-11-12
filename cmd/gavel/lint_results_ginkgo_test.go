@@ -38,6 +38,11 @@ var _ = Describe("Standalone lint output", func() {
 		Entry("error finding", &linters.LinterResult{Linter: "uir", Success: true, Violations: []models.Violation{{Severity: models.SeverityError}}}, 1),
 		Entry("execution failure", &linters.LinterResult{Linter: "uir", Error: "analysis failed"}, 1),
 		Entry("clean", &linters.LinterResult{Linter: "uir", Success: true}, 0),
+		Entry("warnings only", &linters.LinterResult{Linter: "react-doctor", Success: true,
+			Violations: []models.Violation{{Severity: models.SeverityWarning}, {Severity: models.SeverityInfo}}}, 0),
+		Entry("an error among warnings", &linters.LinterResult{Linter: "react-doctor", Success: true,
+			Violations: []models.Violation{{Severity: models.SeverityWarning}, {Severity: models.SeverityError}}}, 1),
+		Entry("linter not installed", &linters.LinterResult{Linter: "tsc", Skipped: true, Error: "not found on PATH"}, 0),
 	)
 	DescribeTable("serializes complete lint snapshots for artifact consumers",
 		func(format string, summary bool) {

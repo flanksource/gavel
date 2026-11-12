@@ -40,7 +40,7 @@ func buildProfile(ctx context.Context, step *fixtures.StepContext, cfg Config) (
 	if profile.Name == "" {
 		profile.Name = stepName(step)
 	}
-	params := make(map[string]any, len(refParams)+len(cfg.Params))
+	params := make(map[string]any)
 	for k, v := range refParams {
 		params[k] = v
 	}

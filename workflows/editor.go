@@ -60,11 +60,7 @@ func Preview(kind, dir string, edit *Edit) (View, error) {
 			return view, err
 		}
 		if config.File != "" {
-			path, err := utils.ResolveWithin(filepath.Dir(layer.Path), config.File)
-			if err != nil {
-				return view, err
-			}
-			data, err := os.ReadFile(path)
+			data, err := utils.ReadFileWithin(filepath.Dir(layer.Path), config.File)
 			if err != nil {
 				return view, err
 			}
@@ -181,46 +177,17 @@ func writeDocument(kind, dir string, view View, document yaml.Node) (View, error
 		return View{}, err
 	}
 	if view.FileSource != nil {
-		path, err := utils.ResolveWithin(dir, view.Source.File)
-		if err != nil {
-			return view, err
-		}
 		fileData, err := yaml.Marshal(view.FileSource)
 		if err != nil {
 			return view, err
 		}
-		if err := writeAtomic(path, fileData); err != nil {
+		if err := utils.WriteFileWithin(dir, view.Source.File, fileData, 0o600); err != nil {
 			return view, err
 		}
 	}
-	if err := writeAtomic(view.Path, data); err != nil {
+	if err := utils.WriteFileWithin(dir, verify.GavelConfigFileName, data, 0o600); err != nil {
 		return View{}, err
 	}
 	return Inspect(kind, dir)
 }
 
-func writeAtomic(path string, data []byte) error {
-	mode := os.FileMode(0600)
-	if info, err := os.Stat(path); err == nil {
-		mode = info.Mode().Perm()
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".lifecycle-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err := file.Chmod(mode); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
-}
