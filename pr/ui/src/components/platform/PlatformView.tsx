@@ -8,6 +8,7 @@ import { GitHubPanel } from './GitHubPanel';
 import { InfrastructurePanel } from './InfrastructurePanel';
 import { ModelUsagePanel } from './ModelUsagePanel';
 import { OrganizationView } from './OrganizationView';
+import { PlatformSections } from './PlatformSections';
 import { SandboxUsagePanel } from './SandboxUsagePanel';
 import { SubstrateInventoryPanel } from './SubstrateInventoryPanel';
 import { SubstrateMetricsPanel } from './SubstrateMetricsPanel';
@@ -23,17 +24,19 @@ export function PlatformView({ selectedOrg, onSelectOrg }: { selectedOrg: string
   if (!me.data.user?.platformAdmin) return <PlatformAdminsOnly />;
   if (selectedOrg) return <OrganizationView org={selectedOrg} onBack={() => onSelectOrg('')} />;
   return (
-    <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto p-4 text-sm">
-      <TenantsPanel onSelect={onSelectOrg} />
-      <SandboxUsagePanel />
-      <SubstrateInventoryPanel />
-      <SubstrateMetricsPanel />
-      <ModelUsagePanel />
-      <BudgetsPanel />
-      <CaptainHistoryPanel />
-      <GitHubPanel />
-      <InfrastructurePanel />
-    </div>
+    <PlatformSections
+      sections={[
+        { id: 'tenants', label: 'Tenants', content: <TenantsPanel onSelect={onSelectOrg} /> },
+        { id: 'sandbox-usage', label: 'Sandbox usage', content: <SandboxUsagePanel /> },
+        { id: 'substrate-inventory', label: 'Substrate inventory', content: <SubstrateInventoryPanel /> },
+        { id: 'substrate-metrics', label: 'Substrate metrics', content: <SubstrateMetricsPanel /> },
+        { id: 'model-usage', label: 'Model usage', content: <ModelUsagePanel /> },
+        { id: 'budgets', label: 'Budgets', content: <BudgetsPanel /> },
+        { id: 'captain-history', label: 'Captain history', content: <CaptainHistoryPanel /> },
+        { id: 'github-app', label: 'GitHub App', content: <GitHubPanel /> },
+        { id: 'infrastructure', label: 'Infrastructure', content: <InfrastructurePanel /> },
+      ]}
+    />
   );
 }
 
