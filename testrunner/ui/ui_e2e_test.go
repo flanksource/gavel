@@ -306,7 +306,7 @@ var _ = Describe("Test UI E2E", func() {
 	It("renders the test tree with all frameworks", func() {
 		var treeText string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(url + "/"),
+			chromedp.Navigate(url+"/"),
 			chromedp.WaitVisible(`body`, chromedp.ByQuery),
 			chromedp.Sleep(2*time.Second),
 			chromedp.Text(`body`, &treeText, chromedp.ByQuery),
@@ -455,7 +455,7 @@ var _ = Describe("Test UI E2E", func() {
 	It("shows Ginkgo suite path in detail panel", func() {
 		var detailText string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(url + "/"),
+			chromedp.Navigate(url+"/"),
 			chromedp.Sleep(2*time.Second),
 			clickWithTimeout(`//span[contains(text(), "parses valid JSON")]`),
 			chromedp.Sleep(500*time.Millisecond),
@@ -497,7 +497,7 @@ var _ = Describe("Test UI E2E", func() {
 
 		var text1 string
 		err := chromedp.Run(streamCtx,
-			chromedp.Navigate(streamURL + "/"),
+			chromedp.Navigate(streamURL+"/"),
 			chromedp.Sleep(3*time.Second),
 			chromedp.Text(`body`, &text1, chromedp.ByQuery),
 		)
@@ -607,7 +607,7 @@ var _ = Describe("Test UI E2E", func() {
 	It("shows passed Go test detail with stdout and file location", func() {
 		var detailText string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(url + "/"),
+			chromedp.Navigate(url+"/"),
 			chromedp.Sleep(2*time.Second),
 			clickWithTimeout(`//span[contains(text(), "Parser")]`),
 			chromedp.Sleep(500*time.Millisecond),
@@ -629,7 +629,7 @@ var _ = Describe("Test UI E2E", func() {
 	It("shows passed Go subtest detail with parent test context", func() {
 		var detailText string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(url + "/"),
+			chromedp.Navigate(url+"/"),
 			chromedp.Sleep(2*time.Second),
 			clickWithTimeout(`//span[contains(text(), "Registry / DetectsGinkgo")]`),
 			chromedp.Sleep(500*time.Millisecond),
@@ -645,7 +645,7 @@ var _ = Describe("Test UI E2E", func() {
 		// Load once to confirm it works
 		var text1 string
 		err := chromedp.Run(ctx,
-			chromedp.Navigate(url + "/"),
+			chromedp.Navigate(url+"/"),
 			chromedp.Sleep(2*time.Second),
 			chromedp.Text(`body`, &text1, chromedp.ByQuery),
 		)
@@ -655,7 +655,7 @@ var _ = Describe("Test UI E2E", func() {
 		// Reload the page
 		var text2 string
 		err = chromedp.Run(ctx,
-			chromedp.Navigate(url + "/"),
+			chromedp.Navigate(url+"/"),
 			chromedp.Sleep(2*time.Second),
 			chromedp.Text(`body`, &text2, chromedp.ByQuery),
 		)
