@@ -26,7 +26,7 @@ describe('RunPrompts', () => {
     render(<RunPrompts owner="run-2" />);
 
     expect(screen.getAllByTestId('prompt-indicator')).toHaveLength(1);
-    expect(indicatorProps.at(-1)).toMatchObject({ basePath: '/api', owner: 'run-2', autoOpen: true });
+    expect(indicatorProps.at(-1)).toMatchObject({ basePath: '/api', owner: 'run-2', autoOpen: true, connectionApiBase: '/api/v1' });
   });
 
   it('resolves a form\'s connection picker against the run\'s server', async () => {
@@ -40,7 +40,7 @@ describe('RunPrompts', () => {
     expect(lookup).toBeDefined();
     await expect(lookup!({ descriptor: { url: '/api/v1/connection', filter: 'connection' }, query: 'la' }))
       .resolves.toEqual([{ value: 'lab', label: 'lab (sql_server)' }]);
-    expect(fetch.mock.calls[0]?.[0]).toBe('/api/v1/connection?__lookup_q=la');
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/v1/connection?__lookup_filter=connection&__lookup_q=la');
   });
 
   it('shows nothing for a run with no prompt owner', () => {
@@ -62,11 +62,45 @@ describe('connectionLookupFetcher', () => {
       query: 'la b',
     });
 
-    expect(fetch.mock.calls[0]?.[0]).toBe('/api/v1/connection?types=sql_server&__lookup_q=la+b');
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/v1/connection?types=sql_server&__lookup_filter=connection&__lookup_q=la+b');
     expect(options).toEqual([
       { value: 'lab', label: 'lab (sql_server)' },
       { value: 'connection://ops/warehouse', label: 'ops/warehouse' },
     ]);
+  });
+
+  it('scopes a query field to the connection its linked param holds and keeps each option\'s icon, description, group and badges', async () => {
+    const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify({
+      filters: { query: { options: { orders: {
+        plain: 'Orders', icon: 'ph:table-thin', description: '12 rows', group: 'public', badges: [{ label: 'pk', tone: 'info' }],
+      } } } },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    const options = await connectionLookupFetcher()({
+      descriptor: { url: '/api/v1/lookup/abc/table', filter: 'query', searchParam: '__lookup_q', scope: { param: 'connection', from: 'db' } },
+      query: 'ord',
+      rootValue: { db: 'connection://lab' },
+    });
+
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/v1/lookup/abc/table?connection=connection%3A%2F%2Flab&__lookup_filter=query&__lookup_q=ord');
+    expect(options).toEqual([{
+      value: 'orders', label: 'Orders', icon: 'ph:table-thin', description: '12 rows', group: 'public', badges: [{ label: 'pk', tone: 'info' }],
+    }]);
+  });
+
+  it('sends no connection for a query field whose linked param is still empty', async () => {
+    const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify({ filters: { query: { label: 'Choose db first' } } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    const options = await connectionLookupFetcher()({
+      descriptor: { url: '/api/v1/lookup/abc/table', filter: 'query', scope: { param: 'connection', from: 'db' } },
+      query: '',
+      rootValue: {},
+    });
+
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/v1/lookup/abc/table?__lookup_filter=query&__lookup_q=');
+    expect(options).toEqual([]);
   });
 
   it('fails loudly when the server refuses the lookup', async () => {

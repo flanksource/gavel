@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { PromptForm, usePrompts, type Test } from '@flanksource/clicky-ui/data';
-import { connectionLookupFetcher, promptsBase } from '../prompts';
+import { connectionLookupFetcher, connectionsBase, promptsBase } from '../prompts';
 
 export interface StepPendingFormProps {
   /** The fixture step waiting on its form; gavel labels the step's prompt `node` with this name. */
@@ -24,7 +24,14 @@ export function StepPendingForm({ node, owner, scope = {} }: StepPendingFormProp
   return (
     <div className="space-y-density-3">
       {pending.map(prompt => (
-        <PromptForm key={prompt.id} prompt={prompt} basePath={basePath} lookupFetcher={lookupFetcher} idPrefix={`step-prompt-${prompt.id}`} />
+        <PromptForm
+          key={prompt.id}
+          prompt={prompt}
+          basePath={basePath}
+          lookupFetcher={lookupFetcher}
+          connectionApiBase={connectionsBase(scope)}
+          idPrefix={`step-prompt-${prompt.id}`}
+        />
       ))}
     </div>
   );

@@ -47,10 +47,10 @@ describe('StepPendingForm', () => {
     render(<StepPendingForm node={{ name: STEP }} owner={OWNER} />);
 
     expect(screen.getAllByTestId('prompt-form').map((form) => form.textContent)).toEqual(['Purge staged activities?', 'Confirm reload']);
-    expect(formProps.map((props) => ({ id: props.prompt.id, basePath: props.basePath, idPrefix: props.idPrefix })))
+    expect(formProps.map((props) => ({ id: props.prompt.id, basePath: props.basePath, connectionApiBase: props.connectionApiBase, idPrefix: props.idPrefix })))
       .toEqual([
-        { id: 'p1', basePath: '/api', idPrefix: 'step-prompt-p1' },
-        { id: 'p2', basePath: '/api', idPrefix: 'step-prompt-p2' },
+        { id: 'p1', basePath: '/api', connectionApiBase: '/api/v1', idPrefix: 'step-prompt-p1' },
+        { id: 'p2', basePath: '/api', connectionApiBase: '/api/v1', idPrefix: 'step-prompt-p2' },
       ]);
     expect(formProps.every((props) => typeof props.lookupFetcher === 'function')).toBe(true);
   });
