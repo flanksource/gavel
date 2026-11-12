@@ -71,6 +71,8 @@ type workerEvent struct {
 	Results       []FixtureResult    `json:"results,omitempty"`
 	PromptID      string             `json:"prompt_id,omitempty"`
 	Prompt        *prompt.Prompt     `json:"prompt,omitempty"`
+	LookupID      string             `json:"lookup_id,omitempty"`
+	LookupResult  json.RawMessage    `json:"lookup_result,omitempty"`
 	Error         string             `json:"error,omitempty"`
 	// ErrorCode carries the identity of a sentinel error across the process
 	// boundary, which Error's text alone loses.
@@ -145,19 +147,26 @@ func RunWorker(wio WorkerIO) error {
 	request.Options.ProgressSink = func(_ context.Context, snapshot ExecutionSnapshot) error {
 		return send(workerEvent{Version: 1, Kind: "progress", Snapshot: &snapshot})
 	}
+	// The result is the last event: no lookup result may follow it.
+	stopLookups := func() {}
 	if request.Prompts {
-		if request.Options.Prompter, err = startWorkerPrompter(send, wio.Answers); err != nil {
+		prompter, err := startWorkerPrompter(ctx, send, wio.Answers)
+		if err != nil {
 			return err
 		}
+		request.Options.Prompter, stopLookups = prompter, prompter.stopLookups
 	}
 	if request.NodeOptions != nil {
-		return send(runWorkerNodes(ctx, request))
+		event := runWorkerNodes(ctx, request)
+		stopLookups()
+		return send(event)
 	}
 	runner, err := NewRunner(request.Options)
 	if err != nil {
 		return err
 	}
 	tree, runErr := runner.Run()
+	stopLookups()
 	event := workerEvent{Version: 1, Kind: "result", Tree: tree, Benchmark: runner.BenchmarkReport()}
 	if event.Benchmark != nil {
 		event.BenchmarkPath = event.Benchmark.Path

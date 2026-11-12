@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -98,12 +99,38 @@ func Resolve(ctx context.Context, req Request) (Result, error) {
 	found, ok := registry.entries[req.Token]
 	registry.Unlock()
 	if !ok {
-		return Result{}, fmt.Errorf("lookup token %q is unknown or its form step has ended", req.Token)
+		return Result{}, fmt.Errorf("lookup token %q is unknown or its form step has ended: %w", req.Token, ErrNotFound)
 	}
 	if found.pointer != req.Pointer {
-		return Result{}, fmt.Errorf("lookup token %q is for field %s, not %s", req.Token, found.pointer, req.Pointer)
+		return Result{}, fmt.Errorf("lookup token %q is for field %s, not %s: %w", req.Token, found.pointer, req.Pointer, ErrNotFound)
 	}
 	return found.binding.resolve(ctx, req)
+}
+
+// ErrNotFound is what Resolve wraps when no registered field answers a
+// request's token and pointer.
+var ErrNotFound = errors.New("no such lookup field")
+
+// Response is result in clicky's lookup wire shape under filter, the key the
+// field's `x-clicky-lookup` reads.
+func Response(filter string, result Result) entity.LookupResponse {
+	options := make(map[string]entity.LookupNode, len(result.Options))
+	for _, option := range result.Options {
+		options[option.Value] = Node(option)
+	}
+	return entity.LookupResponse{Filters: map[string]entity.LookupFilter{filter: {
+		Label: result.Label, Options: options, Truncated: result.Truncated, Total: result.Total,
+	}}}
+}
+
+// Node is option as a lookup node: its label and how pickers decorate it.
+func Node(option schemaform.Option) entity.LookupNode {
+	node := entity.LookupNode{Kind: "text", Text: option.Label, Plain: option.Label, Icon: option.Icon,
+		Description: option.Description, Tone: option.Tone, Group: option.Group}
+	for _, badge := range option.Badges {
+		node.Badges = append(node.Badges, entity.LookupBadge{Label: badge.Label, Icon: badge.Icon, Tone: badge.Tone})
+	}
+	return node
 }
 
 // Pointer is the JSON pointer of the property at path.

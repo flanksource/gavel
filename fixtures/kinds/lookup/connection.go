@@ -3,7 +3,6 @@ package lookup
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/flanksource/clicky/schemaform"
@@ -51,8 +50,7 @@ type ConnectionQuery struct {
 
 // ConnectionOptions lists the named connections whose name contains the
 // search text, then the catalog's (a catalog entry a named one shadows is
-// left out), each a dbconn.PickerOption, capped at MaxOptions. Nothing to
-// pick from with no search text is an error naming where connections live.
+// left out), each a dbconn.PickerOption, capped at MaxOptions.
 func ConnectionOptions(ctx context.Context, q ConnectionQuery) (schemaform.LookupResult, error) {
 	service, err := dbconn.Service(ctx, q.WorkDir, q.Options)
 	if err != nil {
@@ -78,9 +76,6 @@ func ConnectionOptions(ctx context.Context, q ConnectionQuery) (schemaform.Looku
 		if option := dbconn.PickerOption(connection, all); !seen[option.Value] {
 			options = append(options, option)
 		}
-	}
-	if len(options) == 0 && q.Query == "" {
-		return schemaform.LookupResult{}, fmt.Errorf("no %s connection in the fixture's connections or the gavel connection catalog (%s/.connections or `gavel connections`)", strings.Join(q.Types, "/"), q.WorkDir)
 	}
 	result := schemaform.LookupResult{Total: len(options)}
 	if len(options) > MaxOptions {
