@@ -22,11 +22,12 @@ export interface MissionControlResource {
 }
 
 // MissionControlChange is a change to a config item as Mission Control's changes search returns
-// it: name is the config item's.
+// it: name and type are the config item's.
 export interface MissionControlChange {
   id: string;
   config_id: string;
   name: string;
+  type?: string;
   change_type: string;
   summary?: string;
   severity?: string;
@@ -198,11 +199,12 @@ export function InfrastructurePanel() {
               label="Changes"
               error={data.changesError}
               empty={`No changes to these config items in the last ${data.changesDays} days.`}
-              headings={['Config', 'Change', 'Summary', 'Severity', 'When']}
+              headings={['Config', 'Type', 'Change', 'Summary', 'Severity', 'When']}
               rows={data.changes.map(change => ({
                 id: change.id,
                 cells: [
                   { text: change.name, href: catalogLink(change.config_id) },
+                  { text: change.type ?? '', tone: 'neutral' },
                   { text: change.change_type, tone: 'neutral' },
                   { text: change.summary ?? '' },
                   { text: change.severity ?? '', tone: severityTone(change.severity ?? '') },
