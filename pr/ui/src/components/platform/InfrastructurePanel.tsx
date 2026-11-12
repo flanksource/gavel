@@ -64,8 +64,11 @@ interface Cell {
   href?: string;
 }
 
+// badgeText keeps a badge's text the page's text color, black in light mode, over its tone's background.
+const badgeText = 'text-foreground dark:text-foreground';
+
 function CellContent({ cell }: { cell: Cell }) {
-  if (cell.tone) return cell.text ? <Badge tone={cell.tone} variant="soft" size="sm">{cell.text}</Badge> : null;
+  if (cell.tone) return cell.text ? <Badge tone={cell.tone} variant="soft" size="sm" className={badgeText}>{cell.text}</Badge> : null;
   if (cell.href) return <a className="underline" href={cell.href} target="_blank" rel="noreferrer">{cell.text}</a>;
   return <>{cell.text}</>;
 }
@@ -174,7 +177,7 @@ export function InfrastructurePanel() {
               headings={['Name', 'Type', 'Health', 'Status', 'Namespace', 'Updated']}
               rows={[...data.configs].sort(byType).map(config => ({
                 id: config.id,
-                cells: [{ text: config.name, href: catalogLink(config.id) }, { text: config.type }, health(config), { text: config.status ?? '' }, { text: config.namespace }, { text: when(config.updated_at) }],
+                cells: [{ text: config.name, href: catalogLink(config.id) }, { text: config.type, tone: 'neutral' }, health(config), { text: config.status ?? '' }, { text: config.namespace }, { text: when(config.updated_at) }],
               }))}
             />
           </div>
