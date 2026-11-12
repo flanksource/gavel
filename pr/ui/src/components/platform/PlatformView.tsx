@@ -5,7 +5,7 @@ import { meQuery } from '../oneShotQueries';
 import { BudgetsPanel } from './BudgetsPanel';
 import { CaptainHistoryPanel } from './CaptainHistoryPanel';
 import { GitHubPanel } from './GitHubPanel';
-import { InfrastructurePanel } from './InfrastructurePanel';
+import { InfrastructurePanel, infrastructureSubsections, useInfrastructure } from './InfrastructurePanel';
 import { ModelUsagePanel } from './ModelUsagePanel';
 import { OrganizationView } from './OrganizationView';
 import { PlatformSections } from './PlatformSections';
@@ -23,6 +23,13 @@ export function PlatformView({ selectedOrg, onSelectOrg }: { selectedOrg: string
   if (!me.data) return null;
   if (!me.data.user?.platformAdmin) return <PlatformAdminsOnly />;
   if (selectedOrg) return <OrganizationView org={selectedOrg} onBack={() => onSelectOrg('')} />;
+  return <EveryOrganization onSelectOrg={onSelectOrg} />;
+}
+
+// EveryOrganization is the dashboard of every organization, with the infrastructure panel's parts
+// listed under it in the sidebar.
+function EveryOrganization({ onSelectOrg }: { onSelectOrg: (org: string) => void }) {
+  const infrastructure = useInfrastructure();
   return (
     <PlatformSections
       sections={[
@@ -34,7 +41,7 @@ export function PlatformView({ selectedOrg, onSelectOrg }: { selectedOrg: string
         { id: 'budgets', label: 'Budgets', content: <BudgetsPanel /> },
         { id: 'captain-history', label: 'Captain history', content: <CaptainHistoryPanel /> },
         { id: 'github-app', label: 'GitHub App', content: <GitHubPanel /> },
-        { id: 'infrastructure', label: 'Infrastructure', content: <InfrastructurePanel /> },
+        { id: 'infrastructure', label: 'Infrastructure', content: <InfrastructurePanel />, subsections: infrastructureSubsections(infrastructure.data) },
       ]}
     />
   );
