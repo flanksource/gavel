@@ -3,7 +3,7 @@
 import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from '../todos/queryTestWrapper';
-import { InfrastructurePanel, infrastructureSubsections, type Infrastructure } from './InfrastructurePanel';
+import { InfrastructurePanel, healthTone, infrastructureSubsections, severityTone, type Infrastructure } from './InfrastructurePanel';
 
 let response: { status: number; body: unknown };
 
@@ -36,11 +36,13 @@ it('shows gavel\'s configs, checks and changes from Mission Control, with their 
   expect(await screen.findByText('2 healthy, 1 unhealthy')).toBeTruthy();
   expect(screen.getByText('0 healthy, 1 unhealthy')).toBeTruthy();
   const catalog = screen.getByRole('table', { name: 'Catalog' });
-  expect(within(catalog).getAllByRole('row').slice(1).map(row => within(row).getAllByRole('cell').map(cell => cell.textContent).slice(0, 4)), 'the catalog is ordered by type').toEqual([
-    ['Kubernetes::Deployment', 'gavel', 'healthy', 'Running'],
-    ['Kubernetes::PersistentVolumeClaim', 'gavel-data', 'healthy', 'Bound'],
-    ['Kubernetes::StatefulSet', 'gavel-postgres', 'unhealthy', 'CrashLoopBackOff'],
+  expect(within(catalog).getAllByRole('row').slice(1).map(row => within(row).getAllByRole('cell').map(cell => cell.textContent).slice(0, 4)), 'the catalog shows names first, ordered by type').toEqual([
+    ['gavel', 'Kubernetes::Deployment', 'healthy', 'Running'],
+    ['gavel-data', 'Kubernetes::PersistentVolumeClaim', 'healthy', 'Bound'],
+    ['gavel-postgres', 'Kubernetes::StatefulSet', 'unhealthy', 'CrashLoopBackOff'],
   ]);
+  expect(within(catalog).getByRole('link', { name: 'gavel-postgres' }).getAttribute('href'), 'each name opens the config item in Mission Control')
+    .toBe('https://mc.example.com/catalog/c2');
   expect(within(screen.getByRole('table', { name: 'Health checks' })).getByText('gavel-http')).toBeTruthy();
   expect(within(screen.getByRole('table', { name: 'Changes' })).getByText('diff')).toBeTruthy();
   expect(screen.getAllByRole('heading', { level: 3 }).map(heading => [heading.textContent, heading.closest('[id]')?.id]), 'each part is a subsection the sidebar scrolls to').toEqual([
@@ -98,4 +100,9 @@ it('names the subsections the sidebar lists: health checks only when gavel has s
   expect(infrastructureSubsections(base).map(s => s.label)).toEqual(['Catalog', 'Changes']);
   expect(infrastructureSubsections({ ...base, checks: [check] }).map(s => s.label)).toEqual(['Catalog', 'Health checks', 'Changes']);
   expect(infrastructureSubsections({ ...base, checksError: 'down' }).map(s => s.id)).toEqual(['infrastructure-catalog', 'infrastructure-checks', 'infrastructure-changes']);
+});
+
+it('colors health and change severity badges by what they say', () => {
+  expect(['healthy', 'unhealthy', 'warning', 'unknown', ''].map(healthTone)).toEqual(['success', 'danger', 'warning', 'neutral', 'neutral']);
+  expect(['critical', 'high', 'medium', 'low', 'info', ''].map(severityTone)).toEqual(['danger', 'danger', 'warning', 'info', 'neutral', 'neutral']);
 });
