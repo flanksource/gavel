@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"path/filepath"
 
-	ui "github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/projects"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -15,8 +16,10 @@ const fixtureProject = "demo"
 
 // useProject registers dir as the only project in a spec-local catalog.
 func useProject(dir string) {
-	DeferCleanup(ui.UseProjectsFileForTest(filepath.Join(GinkgoT().TempDir(), "projects.json")))
-	Expect(ui.SaveProjects([]ui.Project{{Name: fixtureProject, Dir: dir}})).To(Succeed())
+	path := filepath.Join(GinkgoT().TempDir(), "projects.json")
+	DeferCleanup(projects.UseFileForTest(path))
+	_, err := projects.NewFile(path).Create(context.Background(), projects.Project{Name: fixtureProject, Dir: dir})
+	Expect(err).NotTo(HaveOccurred())
 }
 
 func jsonString(value string) string {

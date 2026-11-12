@@ -10,8 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/comments"
-	ui "github.com/flanksource/gavel/pr/ui"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -61,7 +62,7 @@ var _ = Describe("Editor comment boundaries", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		place := mustTarget(doc)
-		edited, err := store.editedFile(place.Scope, place.URI)
+		edited, err := store.editedFile(context.Background(), place.Scope, place.URI)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect([]string{doc.Path, place.URI, edited.ID}).To(Equal([]string{
@@ -96,8 +97,8 @@ var _ = Describe("Editor comment boundaries", func() {
 		}
 		missing := list()
 		var body struct {
-			Code       string     `json:"code"`
-			Suggestion ui.Project `json:"suggestion"`
+			Code       string           `json:"code"`
+			Suggestion projects.Project `json:"suggestion"`
 		}
 		Expect(json.Unmarshal(missing.Body.Bytes(), &body)).To(Succeed())
 		Expect([]any{missing.Code, body.Code, body.Suggestion.Dir}).To(Equal([]any{http.StatusConflict, "no_project", dir}))

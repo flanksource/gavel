@@ -87,7 +87,7 @@ var _ = Describe("Delivering an editor comment thread through the shared comment
 		delivery, err := agents.Delivery(agents.Options{Bridge: bridge, Groups: storage, Workdir: ui.CommentWorkdir})
 		Expect(err).NotTo(HaveOccurred())
 		host := commentHost{store: files}
-		svc, err = comments.New(comments.Options{Store: storage, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: storage, AttachmentLimit: 1024, Routes: storage, Delivery: delivery})
+		svc, err = comments.New(comments.Options{Store: storage, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: storage, AttachmentLimit: 1024, Delivery: delivery})
 		Expect(err).NotTo(HaveOccurred())
 		// The service `gavel comments` runs: pr/ui's project host over the same tables.
 		cli, err = comments.New(comments.Options{Store: storage, Access: ui.CommentAccess{}, Targets: ui.CommentAccess{}, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: storage, AttachmentLimit: 1024})

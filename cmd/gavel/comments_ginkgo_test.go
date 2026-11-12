@@ -11,8 +11,8 @@ import (
 )
 
 var _ = Describe("comments CLI registration", func() {
-	It("exposes structured creation, native publication, agent delivery, routes, lint and dispatch commands", func() {
-		for _, path := range [][]string{{"comments", "create"}, {"comments", "publish"}, {"comments", "dispatch"}, {"comments", "deliver"}, {"comments", "routes", "set"}, {"comments", "routes", "list"}, {"comments", "routes", "delete"}, {"comment-lint", "preview"}, {"comment-lint", "run"}} {
+	It("exposes structured creation, native publication, agent delivery, agent settings, lint and dispatch commands", func() {
+		for _, path := range [][]string{{"comments", "create"}, {"comments", "publish"}, {"comments", "dispatch"}, {"comments", "deliver"}, {"comments", "agents", "get"}, {"comments", "agents", "set"}, {"comments", "agents", "delete"}, {"comment-lint", "preview"}, {"comment-lint", "run"}} {
 			command, remaining, err := rootCmd.Find(path)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(remaining).To(BeEmpty())

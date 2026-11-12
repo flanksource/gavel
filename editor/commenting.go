@@ -14,6 +14,8 @@ import (
 	"github.com/flanksource/gavel/comments/postgres"
 	"github.com/flanksource/gavel/internal/database"
 	ui "github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/projects"
+	"github.com/flanksource/gavel/settings"
 )
 
 type CommentSelector struct {
@@ -38,7 +40,7 @@ func (h commentHost) Resolve(ctx context.Context, p comments.Principal, t commen
 	if err := h.Authorize(ctx, p, "create", t); err != nil {
 		return t, err
 	}
-	doc, err := h.store.editedFile(t.ScopeURI, t.URI)
+	doc, err := h.store.editedFile(ctx, t.ScopeURI, t.URI)
 	if errors.Is(err, errInvalidTarget) {
 		return t, fmt.Errorf("%w: %v", comments.ErrInvalid, err)
 	}
@@ -102,8 +104,16 @@ func (s *Server) OpenComments(ctx context.Context) (*comments.Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	catalog, err := projects.Shared(ctx)
+	if err != nil {
+		return nil, err
+	}
+	configured, err := settings.Open(ctx, catalog)
+	if err != nil {
+		return nil, err
+	}
 	host := commentHost{store: s.Store}
-	return comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 10 << 20, Routes: configRoutes{db: store, files: s.Store}, Delivery: delivery})
+	return comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 10 << 20, Routes: agents.ProjectRoutes(catalog, configured), Delivery: delivery})
 }
 
 // me serves GET /api/me: the actor this editor authors comments as.

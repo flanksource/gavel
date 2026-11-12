@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/comments"
 	"github.com/flanksource/gavel/comments/agents"
 	commentblob "github.com/flanksource/gavel/comments/blob"
@@ -15,6 +17,7 @@ import (
 	"github.com/flanksource/gavel/comments/postgres"
 	"github.com/flanksource/gavel/comments/providers"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/settings"
 	"github.com/flanksource/gavel/tenant"
 	"gorm.io/gorm"
 )
@@ -58,7 +61,15 @@ func OpenComments(ctx context.Context) (*comments.Service, error) {
 		if options.Delivery, err = agents.Delivery(agents.Options{Bridge: agents.Captain{}, Groups: store, Workdir: CommentWorkdir}); err != nil {
 			return nil, err
 		}
-		options.Routes = store
+		catalog, err := projects.Shared(ctx)
+		if err != nil {
+			return nil, err
+		}
+		configured, err := settings.Open(ctx, catalog)
+		if err != nil {
+			return nil, err
+		}
+		options.Routes = agents.ProjectRoutes(catalog, configured)
 	}
 	return comments.New(options)
 }
@@ -72,7 +83,7 @@ func CommentWorkdir(ctx context.Context, t comments.Target) (string, error) {
 	if project.Dir == "" {
 		return "", fmt.Errorf("project %q has no local directory for an agent session to run in", project.Name)
 	}
-	return CanonicalPath(project.Dir)
+	return projects.CanonicalPath(project.Dir)
 }
 
 // CommentAccess is the comment host for gavel://project/<name> scopes: the
@@ -162,20 +173,20 @@ func commentProject(ctx context.Context, scope string) (projectInfo, error) {
 	if err != nil || url.PathEscape(name) != raw {
 		return projectInfo{}, comments.ErrInvalid
 	}
-	var projects []projectInfo
+	var infos []projectInfo
 	if s := entityServer(ctx); s != nil && s.hosted {
-		projects, err = s.projectList(ctx)
+		infos, err = s.projectList(ctx)
 	} else {
-		var local []Project
-		local, err = LoadProjects()
+		var local []projects.Project
+		local, err = loadProjects(ctx)
 		for _, p := range local {
-			projects = append(projects, projectInfo{Name: p.Name, Dir: p.ResolvedDir(), Repos: p.Repos})
+			infos = append(infos, projectInfo{Name: p.Name, Dir: p.ResolvedDir(), Repos: p.Repos})
 		}
 	}
 	if err != nil {
 		return projectInfo{}, err
 	}
-	for _, p := range projects {
+	for _, p := range infos {
 		if p.Name == name {
 			return p, nil
 		}

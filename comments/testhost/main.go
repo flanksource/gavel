@@ -2,6 +2,7 @@
 // browser and backend tests. Each request is scoped by X-Gavel-Comment-Scope
 // (tenant and scope) and may assert X-Gavel-Comment-Actor. Agent delivery runs
 // against an in-memory Captain bridge with one live session, "fake-session".
+// Each scope is a web project whose comment agents PUT /settings/agent configures.
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	captaincli "github.com/flanksource/captain/pkg/cli"
@@ -24,6 +26,9 @@ import (
 	api "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/comments/postgres"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/projects"
+	"github.com/flanksource/gavel/settings"
+	"github.com/flanksource/gavel/verify"
 	"gorm.io/gorm"
 )
 
@@ -96,6 +101,13 @@ func newHandler(db *gorm.DB, bridge agents.Bridge, dir, baseURL string) (http.Ha
 	if err != nil {
 		return nil, err
 	}
+	// Each scope is its own web project; none is imported from a projects.json.
+	catalog := projects.NewDB(db, filepath.Join(dir, ".testhost-no-projects.json"))
+	configured, err := settings.NewDB(db)
+	if err != nil {
+		return nil, err
+	}
+	routes := agents.WebRoutes(catalog, configured)
 	resolve := func(ctx context.Context) (*comments.Service, error) {
 		r := ctx.Value(requestKey{}).(*http.Request)
 		a := comments.Actor{Kind: "user", ID: "user:You", Label: "You"}
@@ -109,7 +121,7 @@ func newHandler(db *gorm.DB, bridge agents.Bridge, dir, baseURL string) (http.Ha
 			}
 		}
 		h := host{scope: r.Header.Get("X-Gavel-Comment-Scope"), actor: a}
-		return comments.New(comments.Options{Store: store, Access: h, Targets: h, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 32 << 20, Routes: store, Delivery: delivery})
+		return comments.New(comments.Options{Store: store, Access: h, Targets: h, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 32 << 20, Routes: routes, Delivery: delivery})
 	}
 	if err = api.Register(resolve); err != nil {
 		return nil, err
@@ -117,10 +129,50 @@ func newHandler(db *gorm.DB, bridge agents.Bridge, dir, baseURL string) (http.Ha
 	handler := api.Handler(resolve)
 	mux := http.NewServeMux()
 	mux.Handle("POST /fixtures", fixtures(db))
+	mux.Handle("PUT /settings/agent", saveAgent(catalog, configured))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestKey{}, r)))
 	}))
 	return mux, nil
+}
+
+// saveAgent configures the comment agent of a page of the request scope's web
+// project: PUT {uri, layer, page, agent} saves agent (null removes it) at
+// layer of uri's settings chain and answers the agent uri now resolves to.
+func saveAgent(catalog projects.Service, configured settings.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			URI   string               `json:"uri"`
+			Layer settings.Ref         `json:"layer"`
+			Page  bool                 `json:"page"`
+			Agent *verify.CommentAgent `json:"agent"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		target, err := agents.WebTarget(r.Context(), catalog, r.Header.Get("X-Gavel-Comment-Scope"), input.URI)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := settings.SaveCommentAgent(r.Context(), configured, target, input.Layer, input.Page, input.Agent); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		resolved, err := configured.Resolve(r.Context(), target)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		agent, err := resolved.CommentAgent(target)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(agent)
+	})
 }
 
 // fixtures replaces the scope's comments with the posted ones.
@@ -142,7 +194,7 @@ func fixtures(db *gorm.DB) http.Handler {
 }
 
 func replaceFixtures(ctx context.Context, tx *gorm.DB, tenant string, rows []comments.Comment) error {
-	for _, table := range []string{"comment_operations", "comment_bindings", "comment_reads", "comment_attachments", "comment_events", "comment_messages", "comments", "comment_sequences", "comment_blobs", "comment_lint_runs", "comment_routes", "comment_agent_sessions"} {
+	for _, table := range []string{"comment_operations", "comment_bindings", "comment_reads", "comment_attachments", "comment_events", "comment_messages", "comments", "comment_sequences", "comment_blobs", "comment_lint_runs", "comment_agent_sessions"} {
 		if err := tx.Exec("DELETE FROM "+table+" WHERE tenant_id=?", tenant).Error; err != nil {
 			return err
 		}

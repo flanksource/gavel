@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/comments"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -12,10 +14,8 @@ import (
 
 var _ = Describe("Gavel comments authorization", func() {
 	It("uses registered project scope and rejects foreign repositories and changed captured revisions", func() {
-		previous := projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		DeferCleanup(func() { projectsPath = previous })
-		Expect(SaveProjects([]Project{{Name: "demo", Dir: GinkgoT().TempDir(), Repos: []string{"acme/demo"}}})).To(Succeed())
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
+		Expect(seedProjects([]projects.Project{{Name: "demo", Dir: GinkgoT().TempDir(), Repos: []string{"acme/demo"}}})).To(Succeed())
 		access := CommentAccess{}
 		ctx := context.Background()
 		p, err := access.Principal(ctx)

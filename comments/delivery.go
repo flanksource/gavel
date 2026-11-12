@@ -59,6 +59,14 @@ type AgentSession struct {
 	CWD    string `json:"cwd,omitempty"`
 	Status string `json:"status,omitempty"`
 	InCmux bool   `json:"inCmux"`
+
+	Context *AgentSessionContext `json:"context,omitempty"`
+}
+
+// AgentSessionContext is how much of the model's context window the session currently fills.
+type AgentSessionContext struct {
+	UsedTokens   int `json:"usedTokens"`
+	WindowTokens int `json:"windowTokens"`
 }
 
 // SessionQuery narrows live sessions to those working in ScopeURI's directory, unless All.

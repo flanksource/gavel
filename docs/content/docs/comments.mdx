@@ -1,6 +1,6 @@
 ---
 title: Comments and agent delivery
-description: Send comment threads to Claude and Codex sessions, and route new comments to agents automatically.
+description: Send comment threads to Claude and Codex sessions, and send new comments to agents automatically.
 ---
 
 Gavel stores comments made in `gavel edit`, the dashboard, `gavel launch serve` and the playground grabber. Each comment lives under a scope, such as `gavel://project/<name>` for a project, and its target URI sits beneath that scope (`.../files/<path>` for a file, `.../pages/<url>` for a web page).
@@ -29,22 +29,36 @@ A failed delivery is recorded on the thread as an error and reported by the comm
 
 The agent receives the thread with the context it was left in, whenever the comment has it: the page URL and title, the element's component and source file, the locators that find the element again, its HTML (trimmed to 4 KB), and links to the thread's attachments such as screenshots, followed by the comment and its replies.
 
-## Route new comments to agents
+## Send new comments to agents automatically
 
-A route sends every new comment under a target prefix to an agent, without anyone choosing **Send to agent**. Only comments written by a person are routed; replies, review decisions and comments written by agents are not. Delivery runs in the background, so creating a comment never waits for it.
+A comment agent sends every new comment on a file to an agent, without anyone choosing **Send to agent**. Only comments written by a person are sent; replies, review decisions and comments written by agents are not. Delivery runs in the background, so creating a comment never waits for it.
 
-A prefix covers the target URI equal to it and everything beneath it after a `/`: `.../pages/team` covers `.../pages/team/members` but not `.../pages/team-x`. When several routes match, the one with the longest prefix wins. A disabled route opts its prefix out, so you can route a whole project but exclude one page.
+Comment agents are configured as `comments.agents` in the gavel settings of the file: the `.gavel.yaml` and `.gavel.<name>.yaml` files of your home directory, the project root and each folder down to the file, plus settings saved in the database where no file exists. A layer has a `default` agent for everything beneath its directory, and a `pages` map of agents for single files, keyed by path relative to the layer's directory:
 
-A routed delivery never gets in the way of the comment's author: attaching a screenshot right after creating the comment, with the version the create returned, succeeds while the agent picks the thread up.
-
-```sh
-gavel comments routes set --scope 'gavel://project/demo' --prefix 'gavel://project/demo/pages/' --prompt editor-comments --group pages
-gavel comments routes set --scope 'gavel://project/demo' --prefix 'gavel://project/demo/pages/private' --session <session-id> --disabled
-gavel comments routes list --scope 'gavel://project/demo'
-gavel comments routes delete <route-id>
+```yaml
+comments:
+  agents:
+    default:
+      enabled: true
+      prompt: editor-comments
+    pages:
+      16-security.mdx:
+        assign: true
+        instructions: Check every claim against the security controls.
 ```
 
-Pass `--id <route-id>` to `routes set` to replace an existing route. A route set with `--fresh` starts a new session for every comment it routes.
+Layers merge field by field, ancestors first, and within a layer its `default` then its page entry. `enabled: false` opts a folder or file out of an agent set further up. With `assign: true` the thread is assigned to the agent as soon as it is created.
+
+A delivery never gets in the way of the comment's author: attaching a screenshot right after creating the comment, with the version the create returned, succeeds while the agent picks the thread up.
+
+```sh
+gavel comments agents set slides/16-security.mdx --layer slides --file .gavel.agents.yaml --page --prompt editor-comments --enabled
+gavel comments agents set slides/16-security.mdx --layer project --file .gavel.yaml --enabled=false
+gavel comments agents get slides/16-security.mdx
+gavel comments agents delete slides/16-security.mdx --layer slides --file .gavel.agents.yaml --page
+```
+
+`--layer` is `user`, `project`, a folder relative to the project, or an absolute directory above it. `--file` names the config file to write (created when absent), or `--db` writes the database layer. `--page` edits the layer's entry for the file instead of its default. `get` prints every layer and the agent that applies, each field traced to the layer that set it. For a web project, pass `--scope <scope-uri>` and the page key instead of a file path.
 
 ## HTTP API
 
@@ -55,8 +69,7 @@ Every host that serves `/api/v1/comments` also serves:
 | `GET /api/v1/comments/agent-sessions[?scope=][&all=1]` | | Live sessions: `{id, source, title, model, cwd, status, inCmux}` |
 | `POST /api/v1/comments/{id}/deliver` | `{expectedVersion, requestId, target}` | The updated comment; 409 on a stale version, 502 when delivery failed |
 | `POST /api/v1/comments/{id}/deliver/preview` | `{target}` | The resolved run and its tools, without starting it |
-| `GET /api/v1/comments/routes?scope=` | | The scope's routes |
-| `PUT /api/v1/comments/routes` | `{id?, scopeUri, targetPrefix, workflowId, target, enabled}` | The saved route |
-| `DELETE /api/v1/comments/routes/{routeId}` | | 204 |
 
 A target is `{kind: "session", sessionId}` or `{kind: "run", prompt, runOptions?, groupKey?, fresh?}`; `fresh` on a session target answers 400. Retrying a hand-off is another `deliver` with the thread's latest version and a new `requestId`. With `scope`, the session listing shows only sessions working in that scope's project directory; `all=1` lists every live session.
+
+`gavel edit` also serves a file's comment agent settings: `GET /api/file/{id}/settings` answers its layers and the resolved agent with each field's layer, and `PUT /api/file/{id}/settings/agent` with `{layer, page, agent}` saves an agent at a layer (a null `agent` removes the entry) and answers the updated settings. Only a person can save one.

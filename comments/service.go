@@ -22,7 +22,7 @@ type Service struct {
 	providers       map[string]Provider
 	blobs           Blobs
 	attachmentLimit int64
-	routes          RouteStore
+	routes          RouteResolver
 	delivery        Delivery
 }
 

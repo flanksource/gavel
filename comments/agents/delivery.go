@@ -167,6 +167,9 @@ func overlaps(dir, cwd string) bool {
 
 func agentSession(record captaincli.SessionRecord) comments.AgentSession {
 	session := comments.AgentSession{ID: record.ID, Source: record.Source, Model: record.Model, CWD: record.CWD}
+	if c := record.Context; c != nil && c.WindowTokens > 0 {
+		session.Context = &comments.AgentSessionContext{UsedTokens: c.UsedTokens, WindowTokens: c.WindowTokens}
+	}
 	session.Title = strings.TrimSpace(strings.SplitN(record.InitialPrompt, "\n", 2)[0])
 	for _, title := range []string{record.Slug, record.Title} {
 		if title != "" {

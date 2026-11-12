@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,73 +19,67 @@ import (
 	"github.com/flanksource/gavel/comments/postgres"
 	"github.com/flanksource/gavel/internal/database"
 	ui "github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/projects"
+	"github.com/flanksource/gavel/settings"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Page agents configured in .gavel.yaml and projected into comment routes", Ordered, func() {
+func ptr[T any](value T) *T { return &value }
+
+var _ = Describe("Page agents configured in the settings layers of a file", Ordered, func() {
 	var (
 		handler  http.Handler
-		storage  *postgres.Store
 		svc      *comments.Service
 		bridge   *agentstest.Bridge
-		files    *Store
-		tenant   string
 		slides   string
 		security Document
 		solution Document
 	)
-	call := func(method, path, body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(method, path, strings.NewReader(body))
+	folder := settings.Ref{Kind: settings.KindPath, Path: "slides"}
+	call := func(method, path string, body any) *httptest.ResponseRecorder {
+		data, err := json.Marshal(body)
+		Expect(err).NotTo(HaveOccurred())
+		req := httptest.NewRequest(method, path, strings.NewReader(string(data)))
 		req.RemoteAddr = "127.0.0.1:40000"
 		req.Header.Set("Content-Type", "application/json")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, req)
 		return response
 	}
-	pageAgentFor := func(doc Document) pageAgent {
-		response := call("GET", "/api/file/"+doc.ID+"/agent", "")
+	settingsOf := func(doc Document) fileSettings {
+		GinkgoHelper()
+		response := call("GET", "/api/file/"+doc.ID+"/settings", nil)
 		Expect(response.Code).To(Equal(200), response.Body.String())
-		var out pageAgent
+		var out fileSettings
 		Expect(json.Unmarshal(response.Body.Bytes(), &out)).To(Succeed())
 		return out
 	}
-	saveRoute := func(prefix, prompt string, enabled bool) comments.Route {
-		body := `{"scopeUri":` + jsonString(mustTarget(security).Scope) + `,"targetPrefix":` + jsonString(prefix) + `,"workflowId":"human-review","target":{"kind":"run","prompt":"` + prompt + `"},"enabled":` + map[bool]string{true: "true", false: "false"}[enabled] + `,"assign":true}`
-		response := call("PUT", "/api/v1/comments/routes", body)
-		Expect(response.Code).To(Equal(200), response.Body.String())
-		var r comments.Route
-		Expect(json.Unmarshal(response.Body.Bytes(), &r)).To(Succeed())
-		return r
+	saveAgent := func(doc Document, layer settings.Ref, page bool, agent *verify.CommentAgent) *httptest.ResponseRecorder {
+		return call("PUT", "/api/file/"+doc.ID+"/settings/agent", map[string]any{"layer": layer, "page": page, "agent": agent})
 	}
-	configured := func() verify.CommentAgentsConfig {
-		cfg, err := verify.LoadSingleGavelConfig(filepath.Join(slides, verify.GavelConfigFileName))
+	configured := func(name string) verify.CommentAgentsConfig {
+		GinkgoHelper()
+		cfg, err := verify.LoadSingleGavelConfig(filepath.Join(slides, name))
 		Expect(err).NotTo(HaveOccurred())
 		return cfg.Comments.Agents
 	}
-	projected := func(ctx context.Context) map[string]bool {
-		routes, err := storage.Routes(ctx, tenant, mustTarget(security).Scope)
-		Expect(err).NotTo(HaveOccurred())
-		out := map[string]bool{}
-		for _, r := range routes {
-			out[r.TargetPrefix] = r.Enabled
-		}
-		return out
-	}
 
 	BeforeAll(func(ctx SpecContext) {
+		// Settings chains start at the user's home: keep the developer's own out.
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		db := dbtest.ForGinkgo(dbtest.Options{Name: "editor_page_agents"})
 		Expect(database.Migrate(ctx, db.DSN())).To(Succeed())
-		dir := GinkgoT().TempDir()
+		dir, err := projects.CanonicalPath(GinkgoT().TempDir())
+		Expect(err).NotTo(HaveOccurred())
 		useProject(dir)
 		slides = filepath.Join(dir, "slides")
 		Expect(os.MkdirAll(slides, 0o755)).To(Succeed())
 		for _, name := range []string{"19-security.mdx", "09-solution.mdx"} {
 			Expect(os.WriteFile(filepath.Join(slides, name), []byte("# "+name+"\n"), 0o600)).To(Succeed())
 		}
-		var err error
-		files, err = NewStore([]string{filepath.Join(slides, "19-security.mdx"), filepath.Join(slides, "09-solution.mdx")})
+		files, err := NewStore([]string{filepath.Join(slides, "19-security.mdx"), filepath.Join(slides, "09-solution.mdx")})
 		Expect(err).NotTo(HaveOccurred())
 		for _, file := range files.Files() {
 			doc, err := files.Read(file.ID)
@@ -97,16 +90,15 @@ var _ = Describe("Page agents configured in .gavel.yaml and projected into comme
 				solution = doc
 			}
 		}
-		storage, err = postgres.New(db.Gorm())
+		storage, err := postgres.New(db.Gorm())
 		Expect(err).NotTo(HaveOccurred())
 		bridge = &agentstest.Bridge{Dir: mustTarget(security).Dir, Sessions: []captaincli.SessionRecord{}}
 		delivery, err := agents.Delivery(agents.Options{Bridge: bridge, Groups: storage, Workdir: ui.CommentWorkdir})
 		Expect(err).NotTo(HaveOccurred())
-		host := commentHost{store: files}
-		principal, err := host.Principal(ctx)
+		catalog, err := projects.Shared(ctx)
 		Expect(err).NotTo(HaveOccurred())
-		tenant = principal.TenantID
-		svc, err = comments.New(comments.Options{Store: storage, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: storage, AttachmentLimit: 1024, Routes: configRoutes{db: storage, files: files}, Delivery: delivery})
+		host := commentHost{store: files}
+		svc, err = comments.New(comments.Options{Store: storage, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: storage, AttachmentLimit: 1024, Routes: agents.ProjectRoutes(catalog, settings.File{}), Delivery: delivery})
 		Expect(err).NotTo(HaveOccurred())
 		server := &Server{Store: files, CommentService: func(context.Context) (*comments.Service, error) { return svc, nil }, Agents: bridge}
 		Expect(commentapi.Register(func(context.Context) (*comments.Service, error) { return svc, nil })).To(Succeed())
@@ -116,30 +108,40 @@ var _ = Describe("Page agents configured in .gavel.yaml and projected into comme
 		handler = server.Handler()
 	})
 
-	It("saves a folder agent and a page opt-out into the folder's .gavel.yaml and projects both into comment_routes", func(ctx SpecContext) {
-		page := pageAgentFor(security)
-		folder := saveRoute(page.FolderPrefix, "editor-comments", true)
-		optOut := saveRoute(pageAgentFor(solution).PagePrefix, "editor-comments", false)
+	It("lists the file's chain from the user's home to its folder, each position holding files only in file mode", func() {
+		positions := settingsOf(security).Positions
+		kinds := []string{}
+		for _, position := range positions {
+			Expect(position.DB).To(BeFalse(), "position %s %q", position.Kind, position.Path)
+			kinds = append(kinds, string(position.Kind)+":"+position.Path)
+		}
+		Expect(kinds[0]).To(Equal("user:"))
+		Expect(kinds[len(kinds)-2:]).To(Equal([]string{"project:", "path:slides"}))
+	})
 
-		Expect(configured()).To(Equal(verify.CommentAgentsConfig{
-			Default: &verify.CommentAgent{Enabled: true, Assign: true, Prompt: "editor-comments"},
-			Pages:   map[string]verify.CommentAgent{"09-solution.mdx": {Enabled: false, Assign: true, Prompt: "editor-comments"}},
+	It("saves a folder default into .gavel.yaml and a page opt-out into a new snippet, tracing each field to its file", func() {
+		Expect(saveAgent(security, settings.Ref{Kind: settings.KindPath, Path: "slides", File: verify.GavelConfigFileName}, false, &verify.CommentAgent{Enabled: ptr(true), Assign: ptr(true), Prompt: "editor-comments"}).Code).To(Equal(200))
+		response := saveAgent(solution, settings.Ref{Kind: settings.KindPath, Path: "slides", File: ".gavel.agents.yaml"}, true, &verify.CommentAgent{Enabled: ptr(false)})
+		Expect(response.Code).To(Equal(200), response.Body.String())
+
+		Expect([]any{configured(verify.GavelConfigFileName), configured(".gavel.agents.yaml")}).To(Equal([]any{
+			verify.CommentAgentsConfig{Default: &verify.CommentAgent{Enabled: ptr(true), Assign: ptr(true), Prompt: "editor-comments"}},
+			verify.CommentAgentsConfig{Pages: map[string]verify.CommentAgent{"09-solution.mdx": {Enabled: ptr(false)}}},
 		}))
-		Expect(projected(ctx)).To(Equal(map[string]bool{folder.TargetPrefix: true, optOut.TargetPrefix: false}))
-		Expect([]any{pageAgentFor(security).Effective.ID, pageAgentFor(solution).Effective.ID, pageAgentFor(solution).Effective.Enabled}).
-			To(Equal([]any{folder.ID, optOut.ID, false}))
+		main, snippet := filepath.Join(slides, verify.GavelConfigFileName), filepath.Join(slides, ".gavel.agents.yaml")
+		page, other := settingsOf(security).Agent, settingsOf(solution).Agent
+		Expect([]any{page.Agent.IsEnabled(), page.Provenance["enabled"], other.Agent.IsEnabled(), other.Provenance["enabled"], other.Provenance["prompt"]}).To(Equal([]any{
+			true, verify.CommentAgentSource{Layer: main},
+			false, verify.CommentAgentSource{Layer: snippet, Page: "09-solution.mdx"}, verify.CommentAgentSource{Layer: main},
+		}))
 	})
 
-	It("re-projects a hand edit of the canonical .gavel.yaml the next time routes are read", func(ctx SpecContext) {
-		Expect(verify.SaveCommentAgent(slides, "19-security.mdx", &verify.CommentAgent{Enabled: true, Prompt: "slides-review"})).To(Succeed())
+	It("starts the prompt a hand-edited page entry configures for a new human thread", func(ctx SpecContext) {
+		cfg, err := verify.LoadSingleGavelConfig(filepath.Join(slides, verify.GavelConfigFileName))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Comments.Agents.Set("19-security.mdx", &verify.CommentAgent{Prompt: "slides-review"})).To(Succeed())
+		Expect(verify.SaveGavelConfig(filepath.Join(slides, verify.GavelConfigFileName), cfg)).To(Succeed())
 
-		page := pageAgentFor(security)
-		Expect([]any{page.Page.Target.Prompt, page.Effective.TargetPrefix, page.Folder.Target.Prompt}).
-			To(Equal([]any{"slides-review", page.PagePrefix, "editor-comments"}))
-		Expect(projected(ctx)).To(HaveKeyWithValue(page.PagePrefix, true))
-	})
-
-	It("starts the page's configured prompt for a new human thread on it", func(ctx SpecContext) {
 		selector, err := json.Marshal(CommentSelector{Kind: "document", View: "source", Version: 1})
 		Expect(err).NotTo(HaveOccurred())
 		place := mustTarget(security)
@@ -156,19 +158,19 @@ var _ = Describe("Page agents configured in .gavel.yaml and projected into comme
 		}).WithTimeout(10 * time.Second).Should(Equal([]string{"slides-review"}))
 	})
 
-	It("deletes a page's agent from .gavel.yaml and its route from the projection", func(ctx SpecContext) {
-		page := pageAgentFor(solution)
-		response := call("DELETE", "/api/v1/comments/routes/"+url.PathEscape(page.Page.ID), "")
-		Expect(response.Code).To(Equal(http.StatusNoContent), response.Body.String())
-
-		Expect(configured().Pages).To(HaveKey("19-security.mdx"))
-		Expect(configured().Pages).NotTo(HaveKey("09-solution.mdx"))
-		Expect(projected(ctx)).NotTo(HaveKey(page.PagePrefix))
+	It("removes a page's entry from the layer it was saved to", func() {
+		response := saveAgent(solution, settings.Ref{Kind: settings.KindPath, Path: "slides", File: ".gavel.agents.yaml"}, true, nil)
+		Expect(response.Code).To(Equal(200), response.Body.String())
+		Expect([]any{configured(".gavel.agents.yaml").Pages, settingsOf(solution).Agent.Agent.IsEnabled()}).To(Equal([]any{map[string]verify.CommentAgent(nil), true}))
 	})
 
-	It("refuses to configure a live session, which is a viewer's own choice", func() {
-		body := `{"scopeUri":` + jsonString(mustTarget(security).Scope) + `,"targetPrefix":` + jsonString(mustTarget(security).URI) + `,"workflowId":"human-review","target":{"kind":"session","sessionId":"live-1"},"enabled":true}`
-		response := call("PUT", "/api/v1/comments/routes", body)
-		Expect([]any{response.Code, response.Body.String()}).To(ConsistOf(http.StatusBadRequest, ContainSubstring("choose a live session per viewer")))
-	})
+	DescribeTable("refuses a layer it cannot write",
+		func(layer settings.Ref, message string) {
+			response := saveAgent(security, layer, false, &verify.CommentAgent{Enabled: ptr(true)})
+			Expect([]any{response.Code, response.Body.String()}).To(ConsistOf(http.StatusBadRequest, ContainSubstring(message)))
+		},
+		Entry("a database layer in file-only mode", folder, "file-only settings have no database layer"),
+		Entry("a folder outside the file's chain", settings.Ref{Kind: settings.KindPath, Path: "other", File: verify.GavelConfigFileName}, "is not in the target's configuration chain"),
+		Entry("a file that is not a gavel config", settings.Ref{Kind: settings.KindPath, Path: "slides", File: "agents.yaml"}, "is not a .gavel.yaml"),
+	)
 })

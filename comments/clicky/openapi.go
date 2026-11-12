@@ -61,11 +61,10 @@ func HTTPPaths(prefix string) map[string]any {
 	return paths
 }
 
-// deliveryPaths are the agent delivery and route operations RegisterDeliveryRoutes mounts.
+// deliveryPaths are the agent delivery operations RegisterDeliveryRoutes mounts.
 func deliveryPaths(id map[string]any, parameter func(name, kind string, required bool) map[string]any) map[string]any {
 	str := map[string]string{"type": "string"}
-	target := map[string]any{"type": "object", "required": []string{"kind"}, "description": `{kind:"session", sessionId} or {kind:"run", prompt, runOptions?, groupKey?, fresh?}`, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"session", "run"}}, "sessionId": str, "prompt": str, "runOptions": map[string]string{"type": "object"}, "groupKey": str, "fresh": map[string]string{"type": "boolean", "description": "Run targets only: always start a new session instead of reusing groupKey's; it becomes the group's session. On a route, every routed comment starts its own session"}}}
-	route := map[string]any{"type": "object", "required": []string{"scopeUri", "targetPrefix", "workflowId", "target", "enabled"}, "properties": map[string]any{"id": str, "scopeUri": str, "targetPrefix": map[string]string{"type": "string", "description": "Matches a target URI equal to it or beneath it at a / boundary"}, "workflowId": str, "target": target, "enabled": map[string]string{"type": "boolean"}}}
+	target := map[string]any{"type": "object", "required": []string{"kind"}, "description": `{kind:"session", sessionId} or {kind:"run", prompt, runOptions?, groupKey?, fresh?}`, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"session", "run"}}, "sessionId": str, "prompt": str, "runOptions": map[string]string{"type": "object"}, "groupKey": str, "fresh": map[string]string{"type": "boolean", "description": "Run targets only: always start a new session instead of reusing groupKey's; it becomes the group's session"}}}
 	body := func(schema map[string]any) map[string]any {
 		return map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": schema}}}
 	}
@@ -75,16 +74,10 @@ func deliveryPaths(id map[string]any, parameter func(name, kind string, required
 	deliverResponses := ok("Delivered; the comment with its agentRun")
 	deliverResponses["409"] = map[string]any{"description": "Stale expectedVersion, or a delivery is already active"}
 	deliverResponses["502"] = map[string]any{"description": "Delivery ran and failed; the failure is recorded in the comment's agentRun"}
-	routeID := map[string]any{"name": "routeId", "in": "path", "required": true, "schema": str}
 	return map[string]any{
 		"/comments/agent-sessions":       map[string]any{"get": map[string]any{"operationId": "comments-agent-sessions", "summary": "List live agent sessions a thread can be delivered to", "parameters": []any{parameter("scope", "string", false), parameter("all", "string", false)}, "responses": ok("Live agent sessions")}},
 		"/comments/{id}/deliver":         map[string]any{"post": map[string]any{"operationId": "comments-deliver", "summary": "Deliver a thread to a live agent session or a new managed run", "parameters": []any{id}, "requestBody": body(map[string]any{"type": "object", "required": []string{"expectedVersion", "requestId", "target"}, "properties": map[string]any{"expectedVersion": map[string]string{"type": "integer", "format": "int64"}, "requestId": str, "target": target}}), "responses": deliverResponses}},
 		"/comments/{id}/deliver/preview": map[string]any{"post": map[string]any{"operationId": "comments-deliver-preview", "summary": "Render what a run target would start for a thread", "parameters": []any{id}, "requestBody": body(map[string]any{"type": "object", "required": []string{"target"}, "properties": map[string]any{"target": target}}), "responses": ok("Rendered run preview")}},
-		"/comments/routes": map[string]any{
-			"get": map[string]any{"operationId": "comments-routes", "summary": "List the scope's automatic delivery routes", "parameters": []any{parameter("scope", "string", true)}, "responses": ok("Routes")},
-			"put": map[string]any{"operationId": "comments-set-route", "summary": "Create (no id) or replace an automatic delivery route", "requestBody": body(route), "responses": ok("Saved route")},
-		},
-		"/comments/routes/{routeId}": map[string]any{"delete": map[string]any{"operationId": "comments-delete-route", "summary": "Delete an automatic delivery route", "parameters": []any{routeID}, "responses": map[string]any{"204": map[string]any{"description": "Deleted"}, "501": map[string]any{"description": "Comment routes are not enabled on this host"}}}},
 	}
 }
 

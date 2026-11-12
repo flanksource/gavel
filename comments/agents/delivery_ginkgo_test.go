@@ -57,7 +57,39 @@ func contentOf(c comments.Comment) agentContent {
 	return content
 }
 
+// pageRoutes resolves a root's route from its page (the target URI below
+// <scope>/pages/), as a host's settings would; a page without one is not routed.
+type pageRoutes map[string]comments.Route
+
+func (p pageRoutes) RouteFor(_ context.Context, c comments.Comment) (comments.Route, bool, error) {
+	r, ok := p[strings.TrimPrefix(c.Target.URI, scope+"/pages/")]
+	return r, ok, nil
+}
+
+// gatedRoutes holds an automatic delivery's route lookup until the test releases it.
+type gatedRoutes struct {
+	comments.RouteResolver
+	reached, release chan struct{}
+}
+
+func (g gatedRoutes) RouteFor(ctx context.Context, c comments.Comment) (comments.Route, bool, error) {
+	g.reached <- struct{}{}
+	<-g.release
+	return g.RouteResolver.RouteFor(ctx, c)
+}
+
+func sessionRoute(source, session string) comments.Route {
+	return comments.Route{Source: source, Target: comments.DeliverTarget{Kind: "session", SessionID: session}}
+}
+
 var _ = Describe("Delivering comment threads to agents", Ordered, func() {
+	routes := pageRoutes{
+		"blog":       sessionRoute("/repo/.gavel.yaml", "live-1"),
+		"docs/intro": sessionRoute("db:path:pages/docs", "live-2"),
+		"blog-agent": sessionRoute("/repo/.gavel.yaml", "live-1"),
+		"race":       sessionRoute("/repo/.gavel.yaml", "live-1"),
+		"assigned":   {Source: "db:path:pages", Target: comments.DeliverTarget{Kind: "session", SessionID: "live-2"}, Assign: true},
+	}
 	var (
 		svc         *comments.Service
 		store       *postgres.Store
@@ -94,7 +126,7 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		bridge.Sessions = []captaincli.SessionRecord{live("live-1", "rename-pass"), live("live-2", "docs-pass")}
 		newDelivery, err = agents.Delivery(agents.Options{Bridge: bridge, Groups: store, Workdir: func(context.Context, comments.Target) (string, error) { return dir, nil }})
 		Expect(err).NotTo(HaveOccurred())
-		svc, err = comments.New(comments.Options{Store: store, Access: host{}, Targets: host{}, Workflows: []comments.Workflow{comments.HumanReview()}, Routes: store, Delivery: newDelivery})
+		svc, err = comments.New(comments.Options{Store: store, Access: host{}, Targets: host{}, Workflows: []comments.Workflow{comments.HumanReview()}, Routes: routes, Delivery: newDelivery})
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -199,14 +231,7 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		Expect(get(ctx, c.ID).Version).To(Equal(c.Version))
 	})
 
-	It("routes a new human root to the longest matching route, skips disabled subtrees and agent-authored roots", func(ctx SpecContext) {
-		save := func(prefix, session string, enabled bool) {
-			_, err := svc.SaveRoute(ctx, comments.Route{ScopeURI: scope, TargetPrefix: scope + prefix, WorkflowID: "human-review", Target: comments.DeliverTarget{Kind: "session", SessionID: session}, Enabled: enabled})
-			Expect(err).NotTo(HaveOccurred())
-		}
-		save("/pages/", "live-1", true)
-		save("/pages/docs", "live-2", true)
-		save("/pages/private", "live-1", false)
+	It("routes a new human root through the route its target resolves to, and skips unrouted and agent-authored roots", func(ctx SpecContext) {
 		sessionOf := func(id string) func() string {
 			return func() string { return contentOf(get(ctx, id)).AgentRun.SessionID }
 		}
@@ -217,16 +242,11 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		byAgent := create(commentapi.WithActor(ctx, comments.Actor{Kind: "agent", ID: "claude:live-1"}), "blog-agent", "Agent note")
 		Consistently(func() []string { return []string{sessionOf(private.ID)(), sessionOf(byAgent.ID)()} }).
 			WithTimeout(time.Second).Should(Equal([]string{"", ""}))
-		routes, err := svc.Routes(ctx, scope)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(routes).To(HaveLen(3))
 	})
 
 	It("lets the creator attach screenshots with its create version while a routed delivery claims and sends the thread", func(ctx SpecContext) {
-		routes := gatedRoutes{RouteStore: store, reached: make(chan struct{}), release: make(chan struct{})}
-		routed, err := comments.New(comments.Options{Store: store, Access: host{}, Targets: host{}, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 1 << 20, Routes: routes, Delivery: newDelivery})
-		Expect(err).NotTo(HaveOccurred())
-		_, err = routed.SaveRoute(ctx, comments.Route{ScopeURI: scope, TargetPrefix: scope + "/pages/race", WorkflowID: "human-review", Target: comments.DeliverTarget{Kind: "session", SessionID: "live-1"}, Enabled: true})
+		gated := gatedRoutes{RouteResolver: routes, reached: make(chan struct{}), release: make(chan struct{})}
+		routed, err := comments.New(comments.Options{Store: store, Access: host{}, Targets: host{}, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 1 << 20, Routes: gated, Delivery: newDelivery})
 		Expect(err).NotTo(HaveOccurred())
 		stages, release := make(chan string), map[string]chan struct{}{"live": make(chan struct{}), "deliver": make(chan struct{})}
 		bridge.SetHold(func(stage string) { stages <- stage; <-release[stage] })
@@ -238,9 +258,9 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 			_, err := routed.Upload(ctx, comments.Upload{CommentID: c.ID, ExpectedVersion: c.Version, Name: name, MediaType: "image/png", Body: strings.NewReader("png " + name)})
 			Expect(err).NotTo(HaveOccurred(), "uploading %s with the create version %d", name, c.Version)
 		}
-		Eventually(routes.reached).Should(Receive())
+		Eventually(gated.reached).Should(Receive())
 		attach("before-queue.png")
-		close(routes.release)
+		close(gated.release)
 		Eventually(stages).WithTimeout(10 * time.Second).Should(Receive(Equal("live")))
 		attach("before-claim.png")
 		close(release["live"])
@@ -259,8 +279,6 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 	})
 
 	It("assigns a thread to an assign route's agent before its delivery reaches a session, then to the session's agent", func(ctx SpecContext) {
-		route, err := svc.SaveRoute(ctx, comments.Route{ScopeURI: scope, TargetPrefix: scope + "/pages/assigned", WorkflowID: "human-review", Target: comments.DeliverTarget{Kind: "session", SessionID: "live-2"}, Enabled: true, Assign: true})
-		Expect(err).NotTo(HaveOccurred())
 		stages, release := make(chan string), make(chan struct{})
 		bridge.SetHold(func(stage string) {
 			if stage == "live" {
@@ -280,20 +298,8 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 
 		c := create(ctx, "assigned", "Check the table")
 		Eventually(stages).WithTimeout(10 * time.Second).Should(Receive(Equal("live")))
-		Expect(assigneeOf(c.ID)()).To(Equal(comments.Actor{Kind: "agent", ID: "route:" + route.ID, Label: "live-2"}))
+		Expect(assigneeOf(c.ID)()).To(Equal(comments.Actor{Kind: "agent", ID: "route:db:path:pages", Label: "live-2"}))
 		close(release)
 		Eventually(assigneeOf(c.ID)).WithTimeout(10 * time.Second).Should(Equal(comments.Actor{Kind: "agent", ID: "claude:live-2", Label: "claude-opus"}))
 	})
 })
-
-// gatedRoutes holds an automatic delivery's route lookup until the test releases it.
-type gatedRoutes struct {
-	comments.RouteStore
-	reached, release chan struct{}
-}
-
-func (g gatedRoutes) Routes(ctx context.Context, tenant, scope string) ([]comments.Route, error) {
-	g.reached <- struct{}{}
-	<-g.release
-	return g.RouteStore.Routes(ctx, tenant, scope)
-}
