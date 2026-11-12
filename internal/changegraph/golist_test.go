@@ -67,6 +67,7 @@ var _ = Describe("Graph.AffectedPackages", func() {
 	var graph *changegraph.Graph
 
 	BeforeEach(func() {
+		GinkgoT().Setenv("GOWORK", "off")
 		root = buildFixtureModule()
 		runGoModTidy(root)
 
