@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/flanksource/commons-db/cmd/query/secretcatalog"
 	"github.com/flanksource/commons-db/connection/crd"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -35,6 +36,9 @@ const inlineName = "inline"
 type Options struct {
 	// App is the connection store application layer (<config>/<app>/connections).
 	App string
+	// Secrets, when set, makes the Service's HTTP handler serve the connection
+	// form's secret, namespace and workload pickers.
+	Secrets *secretcatalog.Options
 }
 
 // Resolved is a hydrated connection and the commons-db context that answers

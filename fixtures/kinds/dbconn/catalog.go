@@ -29,8 +29,9 @@ func Catalog(workDir string, opts Options) (*store.Store, error) {
 	return store.New(layers...)
 }
 
-// Service is the commons-db connection service over Catalog(workDir), for
-// reading only: its List scopes by type and redacts every credential.
+// Service is the commons-db connection service over Catalog(workDir): its
+// List scopes by type and redacts every credential, and Create saves to
+// workDir's `.connections` unless the body names another writable layer.
 func Service(ctx context.Context, workDir string, opts Options) (*connections.Service, error) {
 	catalog, err := Catalog(workDir, opts)
 	if err != nil {
@@ -42,12 +43,11 @@ func Service(ctx context.Context, workDir string, opts Options) (*connections.Se
 	}
 	dbctx := catalog.Attach(dbcontext.NewContext(ctx))
 	return connections.New(connections.Options{
-		Virtual: provider,
-		Context: func() dbcontext.Context { return dbctx },
-		DecodeBody: func(context.Context, map[string]any) (map[string]any, error) {
-			return nil, fmt.Errorf("connections are read-only here")
-		},
-		Profiles: func(context.Context) ([]query.Profile, error) { return nil, nil },
+		Virtual:    provider,
+		Context:    func() dbcontext.Context { return dbctx },
+		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
+		Profiles:   func(context.Context) ([]query.Profile, error) { return nil, nil },
+		Secrets:    opts.Secrets,
 	})
 }
 
