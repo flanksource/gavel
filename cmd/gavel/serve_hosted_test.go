@@ -226,8 +226,9 @@ func TestHostedPlatformReadsMissionControl(t *testing.T) {
 	}
 
 	assert.Contains(t, get("/api/platform/infrastructure"), `"name":"gavel"`)
-	require.Len(t, mc.Searches(), 1)
+	require.Len(t, mc.Searches(), 2, "config items, then health checks")
 	assert.Equal(t, "namespace=gavel", mc.Searches()[0].Configs[0].Search)
+	assert.Equal(t, "c1", mc.ChangeSearches()[0].CatalogID, "and the changes of the config items found")
 	assert.Contains(t, get("/api/platform/substrate/metrics"), `"name":"Crashes","type":"number","value":3`)
 }
 

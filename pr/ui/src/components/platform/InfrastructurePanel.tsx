@@ -20,14 +20,28 @@ export interface MissionControlResource {
   updated_at?: string;
 }
 
-// Infrastructure is each list Mission Control has for gavel, or why it couldn't be read.
+// MissionControlChange is a change to a config item as Mission Control's changes search returns
+// it: name is the config item's.
+export interface MissionControlChange {
+  id: string;
+  config_id: string;
+  name: string;
+  change_type: string;
+  summary?: string;
+  severity?: string;
+  created_at?: string;
+}
+
+// Infrastructure is each list Mission Control has for gavel, or why it couldn't be read; changes
+// reach changesDays days back.
 export interface Infrastructure {
   missionControl: string;
   configs: MissionControlResource[];
   configsError?: string;
   checks: MissionControlResource[];
   checksError?: string;
-  changes: MissionControlResource[];
+  changes: MissionControlChange[];
+  changesDays: number;
   changesError?: string;
 }
 
@@ -131,6 +145,7 @@ export function InfrastructurePanel() {
   const health = (resource: MissionControlResource): Cell => ({ text: resource.health || 'unknown', tone: healthTone(resource.health ?? '') });
   // ui is Mission Control's web UI, which serves its backend under /api.
   const ui = data?.missionControl.replace(/\/api\/?$/, '') ?? '';
+  const catalogLink = (id: string) => `${ui}/catalog/${encodeURIComponent(id)}`;
 
   return (
     <section className="flex flex-col gap-3">
@@ -145,7 +160,7 @@ export function InfrastructurePanel() {
             items={[
               { label: 'Catalog', value: data.configsError ? unread : healthSummary(data.configs) },
               ...(parts.has('infrastructure-checks') ? [{ label: 'Health checks', value: data.checksError ? unread : healthSummary(data.checks) }] : []),
-              { label: 'Changes', value: data.changesError ? unread : `${data.changes.length}` },
+              { label: 'Changes', value: data.changesError ? unread : `${data.changes.length} in ${data.changesDays} days` },
             ]}
           />
           <div id={sectionAnchor('infrastructure-catalog')} className="flex scroll-mt-4 flex-col gap-2">
@@ -157,7 +172,7 @@ export function InfrastructurePanel() {
               headings={['Name', 'Type', 'Health', 'Status', 'Namespace', 'Updated']}
               rows={[...data.configs].sort(byType).map(config => ({
                 id: config.id,
-                cells: [{ text: config.name, href: `${ui}/catalog/${encodeURIComponent(config.id)}` }, { text: config.type }, health(config), { text: config.status ?? '' }, { text: config.namespace }, { text: when(config.updated_at) }],
+                cells: [{ text: config.name, href: catalogLink(config.id) }, { text: config.type }, health(config), { text: config.status ?? '' }, { text: config.namespace }, { text: when(config.updated_at) }],
               }))}
             />
           </div>
@@ -181,11 +196,17 @@ export function InfrastructurePanel() {
             <ResourceTable
               label="Changes"
               error={data.changesError}
-              empty="No changes to these config items."
-              headings={['Config', 'Change', 'Severity', 'When']}
+              empty={`No changes to these config items in the last ${data.changesDays} days.`}
+              headings={['Config', 'Change', 'Summary', 'Severity', 'When']}
               rows={data.changes.map(change => ({
                 id: change.id,
-                cells: [{ text: change.name }, { text: change.type, tone: 'neutral' }, { text: change.severity ?? '', tone: severityTone(change.severity ?? '') }, { text: when(change.created_at) }],
+                cells: [
+                  { text: change.name, href: catalogLink(change.config_id) },
+                  { text: change.change_type, tone: 'neutral' },
+                  { text: change.summary ?? '' },
+                  { text: change.severity ?? '', tone: severityTone(change.severity ?? '') },
+                  { text: when(change.created_at) },
+                ],
               }))}
             />
           </div>

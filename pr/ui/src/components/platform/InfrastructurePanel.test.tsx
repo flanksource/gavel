@@ -28,7 +28,8 @@ it('shows gavel\'s configs, checks and changes from Mission Control, with their 
       { id: 'c3', agent: '', name: 'gavel-data', namespace: 'gavel', type: 'Kubernetes::PersistentVolumeClaim', health: 'healthy', status: 'Bound' },
     ],
     checks: [{ id: 'k1', agent: '', name: 'gavel-http', namespace: 'gavel', type: 'http', health: 'unhealthy', status: 'failing' }],
-    changes: [{ id: 'ch1', agent: '', name: 'gavel', namespace: 'gavel', type: 'diff', severity: 'info', created_at: '2026-11-10T09:00:00Z' }],
+    changes: [{ id: 'ch1', config_id: 'c1', name: 'gavel', change_type: 'diff', summary: 'status.replicas', severity: 'info', created_at: '2026-11-10T09:00:00Z' }],
+    changesDays: 7,
   };
   response = { status: 200, body: infrastructure };
   render(<InfrastructurePanel />, { wrapper: queryTestWrapper() });
@@ -43,8 +44,15 @@ it('shows gavel\'s configs, checks and changes from Mission Control, with their 
   ]);
   expect(within(catalog).getByRole('link', { name: 'gavel-postgres' }).getAttribute('href'), 'each name opens the config item in Mission Control')
     .toBe('https://mc.example.com/catalog/c2');
+  expect(within(within(catalog).getAllByRole('row')[1]).getAllByRole('cell')[5].textContent, 'with when it was last updated')
+    .toBe(new Date('2026-11-10T10:00:00Z').toLocaleString());
   expect(within(screen.getByRole('table', { name: 'Health checks' })).getByText('gavel-http')).toBeTruthy();
-  expect(within(screen.getByRole('table', { name: 'Changes' })).getByText('diff')).toBeTruthy();
+  const changes = screen.getByRole('table', { name: 'Changes' });
+  expect(within(changes).getAllByRole('row').slice(1).map(row => within(row).getAllByRole('cell').map(cell => cell.textContent)), 'each change names its config item and says when it happened').toEqual([
+    ['gavel', 'diff', 'status.replicas', 'info', new Date('2026-11-10T09:00:00Z').toLocaleString()],
+  ]);
+  expect(within(changes).getByRole('link', { name: 'gavel' }).getAttribute('href')).toBe('https://mc.example.com/catalog/c1');
+  expect(screen.getByText('1 in 7 days'), 'the changes count says how far back it reaches').toBeTruthy();
   expect(screen.getAllByRole('heading', { level: 3 }).map(heading => [heading.textContent, heading.closest('[id]')?.id]), 'each part is a subsection the sidebar scrolls to').toEqual([
     ['Catalog', 'platform-infrastructure-catalog'],
     ['Health checks', 'platform-infrastructure-checks'],
@@ -74,6 +82,7 @@ it('says why one list is missing and shows the others', async () => {
     checks: [],
     checksError: 'read gavel\'s health checks from Mission Control at https://mc.example.com/api: server 500: canaries are down',
     changes: [],
+    changesDays: 7,
   };
   response = { status: 200, body: infrastructure };
   render(<InfrastructurePanel />, { wrapper: queryTestWrapper() });
@@ -85,16 +94,17 @@ it('says why one list is missing and shows the others', async () => {
 });
 
 it('leaves health checks out when gavel has none', async () => {
-  response = { status: 200, body: { missionControl: 'https://mc.example.com/api', configs: [], checks: [], changes: [] } satisfies Infrastructure };
+  response = { status: 200, body: { missionControl: 'https://mc.example.com/api', configs: [], checks: [], changes: [], changesDays: 7 } satisfies Infrastructure };
   render(<InfrastructurePanel />, { wrapper: queryTestWrapper() });
 
   expect(await screen.findByText('No config items match the search.')).toBeTruthy();
+  expect(screen.getByText('No changes to these config items in the last 7 days.')).toBeTruthy();
   expect(screen.getAllByRole('heading', { level: 3 }).map(heading => heading.textContent)).toEqual(['Catalog', 'Changes']);
   expect(screen.queryByText('Health checks')).toBeNull();
 });
 
 it('names the subsections the sidebar lists: health checks only when gavel has some, or they couldn\'t be read', () => {
-  const base: Infrastructure = { missionControl: '', configs: [], checks: [], changes: [] };
+  const base: Infrastructure = { missionControl: '', configs: [], checks: [], changes: [], changesDays: 7 };
   const check = { id: 'k1', agent: '', name: 'gavel-http', namespace: 'gavel', type: 'http' };
   expect(infrastructureSubsections(undefined)).toEqual([]);
   expect(infrastructureSubsections(base).map(s => s.label)).toEqual(['Catalog', 'Changes']);
