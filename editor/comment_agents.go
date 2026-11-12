@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -230,7 +231,12 @@ func placeOf(scope, prefix string) (agentPlace, error) {
 		return agentPlace{}, fmt.Errorf("%w: %s is not a clean path under the project", comments.ErrInvalid, prefix)
 	}
 	path := filepath.Join(root, filepath.FromSlash(rel))
-	info, err := os.Stat(path)
+	projectDir, err := os.OpenRoot(root)
+	if err != nil {
+		return agentPlace{}, fmt.Errorf("open project root %s: %w", root, err)
+	}
+	defer projectDir.Close()
+	info, err := projectDir.Stat(cmp.Or(filepath.FromSlash(rel), "."))
 	if err != nil {
 		return agentPlace{}, fmt.Errorf("%w: %s: %v", comments.ErrInvalid, prefix, err)
 	}

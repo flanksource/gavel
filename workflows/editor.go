@@ -190,4 +190,3 @@ func writeDocument(kind, dir string, view View, document yaml.Node) (View, error
 	}
 	return Inspect(kind, dir)
 }
-
