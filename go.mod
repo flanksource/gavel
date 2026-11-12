@@ -66,6 +66,7 @@ require (
 	github.com/timberio/go-datemath v0.1.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.16
 	github.com/yuin/goldmark v1.7.17
+	github.com/zclconf/go-cty v1.18.1
 	golang.org/x/crypto v0.58.0
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.62.0
@@ -393,7 +394,6 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	github.com/zclconf/go-cty v1.18.1 // indirect
 	github.com/zclconf/go-cty-yaml v1.2.0 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
