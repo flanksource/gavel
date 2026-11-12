@@ -5,6 +5,7 @@ import { StatStrip } from '@flanksource/clicky-ui/data';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { fetchJSON, queryKeys } from '../../query';
 import { windowDays } from './windowDays';
+import { PanelHeading } from './PanelHeading';
 
 // ModelUsageDay is one UTC day's model calls of an organization with one model and provider;
 // org is absent for calls no organization of this Clerk instance owns.
@@ -159,7 +160,7 @@ export function ModelUsagePanel({ org }: { org?: string } = {}) {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-xs font-semibold uppercase text-muted-foreground">Model usage · {usageWindowDays} days</h2>
+      <PanelHeading>Model usage · {usageWindowDays} days</PanelHeading>
       {usage.error && <p role="alert" className="text-red-600">{usage.error.message}</p>}
       {usage.data && (
         <>

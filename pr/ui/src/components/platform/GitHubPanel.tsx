@@ -2,6 +2,7 @@
 // organization each is linked to, its repositories, core rate limit and state.
 import { useQuery } from '@tanstack/react-query';
 import { fetchJSON, queryKeys } from '../../query';
+import { PanelHeading } from './PanelHeading';
 
 export interface PlatformRateLimit {
   limit: number;
@@ -54,9 +55,9 @@ export function GitHubPanel({ org }: { org?: string } = {}) {
 
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-xs font-semibold uppercase text-muted-foreground">
+      <PanelHeading>
         {data ? `GitHub App ${data.app.slug} · ${data.installations.length} installations, ${linked} linked, ${suspended} suspended` : 'GitHub App'}
-      </h2>
+      </PanelHeading>
       {github.error && <p role="alert" className="text-red-600">{github.error.message}</p>}
       {data?.githubError && <p role="alert" className="text-amber-600">{data.githubError}</p>}
       {!!data?.installations.length && (

@@ -2,6 +2,7 @@
 // the rule's current window against its amount, and why a rule or group has no total.
 import { useQuery } from '@tanstack/react-query';
 import { fetchJSON, queryKeys } from '../../query';
+import { PanelHeading } from './PanelHeading';
 
 export interface BudgetGroup {
   values: Record<string, string>;
@@ -65,7 +66,7 @@ export function BudgetsPanel() {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-xs font-semibold uppercase text-muted-foreground">Budgets</h2>
+      <PanelHeading>Budgets</PanelHeading>
       {budgets.error && <p role="alert" className="text-red-600">{budgets.error.message}</p>}
       {data && data.length === 0 && (
         <p className="text-xs text-muted-foreground">No budget rules. Add one with captain budget-rule create, or on captain serve's Budgets page.</p>
