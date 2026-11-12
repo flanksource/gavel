@@ -24,37 +24,45 @@ const (
 	workerEventPromptCancel = "prompt_cancel"
 )
 
-var workerEventKinds = []string{"progress", "result", workerEventPrompt, workerEventPromptCancel}
+var workerEventKinds = []string{"progress", "result", workerEventPrompt, workerEventPromptCancel, workerEventLookupResult}
 
-// workerAnswer is the parent's reply to one `prompt` event.
+// workerAnswer is a message on the answer descriptor: the parent's reply to
+// one `prompt` event, or (LookupID set) a lookup the worker resolves.
 type workerAnswer struct {
 	Version  int            `json:"version"`
-	PromptID string         `json:"prompt_id"`
+	PromptID string         `json:"prompt_id,omitempty"`
 	Answer   *prompt.Answer `json:"answer,omitempty"`
 	Error    string         `json:"error,omitempty"`
+	LookupID string         `json:"lookup_id,omitempty"`
+	Lookup   *workerLookup  `json:"lookup,omitempty"`
 }
 
-// workerPrompter is the Prompter a worker's form steps ask through.
+// workerPrompter is the Prompter a worker's form steps ask through, and what
+// resolves the lookups the parent forwards to them.
 type workerPrompter struct {
+	ctx       context.Context
 	send      func(workerEvent) error
 	mu        sync.Mutex
 	next      int
 	pending   map[string]chan workerAnswer
 	abandoned map[string]bool
 	closed    error
+	lookups   map[string]context.CancelFunc
+	lookupWG  sync.WaitGroup
 }
 
-func newWorkerPrompter(send func(workerEvent) error) *workerPrompter {
-	return &workerPrompter{send: send, pending: map[string]chan workerAnswer{}, abandoned: map[string]bool{}}
+func newWorkerPrompter(ctx context.Context, send func(workerEvent) error) *workerPrompter {
+	return &workerPrompter{ctx: ctx, send: send, pending: map[string]chan workerAnswer{}, abandoned: map[string]bool{},
+		lookups: map[string]context.CancelFunc{}}
 }
 
 // startWorkerPrompter relays the worker's prompts over send and reads the
-// parent's answers from answers.
-func startWorkerPrompter(send func(workerEvent) error, answers io.Reader) (*workerPrompter, error) {
+// parent's answers and lookups from answers.
+func startWorkerPrompter(ctx context.Context, send func(workerEvent) error, answers io.Reader) (*workerPrompter, error) {
 	if answers == nil {
 		return nil, fmt.Errorf("fixture worker relays prompts but has no answer descriptor")
 	}
-	relay := newWorkerPrompter(send)
+	relay := newWorkerPrompter(ctx, send)
 	go relay.read(answers)
 	return relay, nil
 }
@@ -116,19 +124,29 @@ func (w *workerPrompter) read(answers io.Reader) {
 			w.close(fmt.Errorf("fixture parent answer channel closed: %w", err))
 			return
 		}
-		if err := w.deliver(answer); err != nil {
+		if err := w.receive(answer); err != nil {
 			w.close(err)
 			return
 		}
 	}
 }
 
-func (w *workerPrompter) deliver(answer workerAnswer) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func (w *workerPrompter) receive(answer workerAnswer) error {
 	if answer.Version != 1 {
 		return fmt.Errorf("fixture parent answer version %d", answer.Version)
 	}
+	if answer.LookupID == "" {
+		return w.deliver(answer)
+	}
+	if answer.Lookup == nil {
+		return fmt.Errorf("fixture parent sent lookup %s without a request", answer.LookupID)
+	}
+	return w.lookup(answer.LookupID, *answer.Lookup)
+}
+
+func (w *workerPrompter) deliver(answer workerAnswer) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if reply, ok := w.pending[answer.PromptID]; ok {
 		delete(w.pending, answer.PromptID)
 		reply <- answer
@@ -152,24 +170,30 @@ func (w *workerPrompter) close(err error) {
 }
 
 // promptRelay is the parent's side: it asks the run's Prompter for each prompt
-// its worker relays and writes the answer back.
+// its worker relays and writes the answer back, and forwards the lookups of
+// the prompt's fields to the worker while it is open.
 type promptRelay struct {
-	prompter Prompter
-	answers  io.Writer
-	ctx      context.Context
-	stop     context.CancelFunc
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	cancels  map[string]context.CancelFunc
-	errs     []error
+	prompter         Prompter
+	answers          io.Writer
+	ctx              context.Context
+	stop             context.CancelFunc
+	wg               sync.WaitGroup
+	mu               sync.Mutex
+	cancels          map[string]context.CancelFunc
+	errs             []error
+	nextLookup       int
+	lookups          map[string]chan workerEvent
+	abandonedLookups map[string]bool
 }
 
 func newPromptRelay(ctx context.Context, prompter Prompter, answers io.Writer) *promptRelay {
 	ctx, stop := context.WithCancel(ctx)
-	return &promptRelay{prompter: prompter, answers: answers, ctx: ctx, stop: stop, cancels: map[string]context.CancelFunc{}}
+	return &promptRelay{prompter: prompter, answers: answers, ctx: ctx, stop: stop, cancels: map[string]context.CancelFunc{},
+		lookups: map[string]chan workerEvent{}, abandonedLookups: map[string]bool{}}
 }
 
-// handle routes a prompt or prompt_cancel event; any other kind is not its.
+// handle routes a prompt, prompt_cancel or lookup_result event; any other
+// kind is not its.
 func (r *promptRelay) handle(event workerEvent) error {
 	switch event.Kind {
 	case workerEventPrompt:
@@ -179,18 +203,25 @@ func (r *promptRelay) handle(event workerEvent) error {
 		if event.Prompt == nil || event.PromptID == "" {
 			return fmt.Errorf("fixture worker sent a prompt event without a prompt or id")
 		}
-		r.ask(event.PromptID, *event.Prompt)
+		release, err := r.forward(*event.Prompt)
+		if err != nil {
+			return err
+		}
+		r.ask(event.PromptID, *event.Prompt, release)
 	case workerEventPromptCancel:
 		r.mu.Lock()
 		if cancel, ok := r.cancels[event.PromptID]; ok {
 			cancel()
 		}
 		r.mu.Unlock()
+	case workerEventLookupResult:
+		return r.deliverLookup(event)
 	}
 	return nil
 }
 
-func (r *promptRelay) ask(id string, p prompt.Prompt) {
+// ask asks p and writes its answer back, then releases its forwarded lookups.
+func (r *promptRelay) ask(id string, p prompt.Prompt, release func()) {
 	ctx, cancel := context.WithCancel(r.ctx)
 	r.mu.Lock()
 	r.cancels[id] = cancel
@@ -199,27 +230,32 @@ func (r *promptRelay) ask(id string, p prompt.Prompt) {
 	go func() {
 		defer r.wg.Done()
 		defer cancel()
+		defer release()
 		reply := workerAnswer{Version: 1, PromptID: id}
 		if answer, err := r.prompter.Ask(ctx, p); err != nil {
 			reply.Error = err.Error()
 		} else {
 			reply.Answer = &answer
 		}
-		r.write(reply)
+		r.mu.Lock()
+		delete(r.cancels, id)
+		r.mu.Unlock()
+		if err := r.send(reply); err != nil && r.ctx.Err() == nil {
+			r.mu.Lock()
+			r.errs = append(r.errs, fmt.Errorf("answer fixture worker prompt %s: %w", id, err))
+			r.mu.Unlock()
+		}
 	}()
 }
 
-func (r *promptRelay) write(reply workerAnswer) {
+// send writes message to the worker, refusing once the worker has exited.
+func (r *promptRelay) send(message workerAnswer) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.cancels, reply.PromptID)
 	if r.ctx.Err() != nil {
-		// The worker has exited: nobody reads the answer.
-		return
+		return fmt.Errorf("the fixture worker has exited")
 	}
-	if err := json.NewEncoder(r.answers).Encode(reply); err != nil {
-		r.errs = append(r.errs, fmt.Errorf("answer fixture worker prompt %s: %w", reply.PromptID, err))
-	}
+	return json.NewEncoder(r.answers).Encode(message)
 }
 
 // close ends every ask still open once the worker has exited and reports the
