@@ -6,10 +6,11 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/internal/database"
-	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/spf13/cobra"
 )
@@ -37,15 +38,20 @@ type projectListRow struct {
 }
 
 func runProjectsList(_ ProjectsListOptions) ([]projectListRow, error) {
-	ps, err := ui.LoadProjects()
+	ctx := context.Background()
+	catalog, err := projects.Shared(ctx)
 	if err != nil {
 		return nil, err
 	}
-	store, err := localFilterStore(context.Background(), "gavel projects list")
+	ps, err := catalog.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	hidden, err := store.Get(context.Background(), tenant.Local(), filters.HiddenProjects)
+	store, err := localFilterStore(ctx, "gavel projects list")
+	if err != nil {
+		return nil, err
+	}
+	hidden, err := store.Get(ctx, tenant.Local(), filters.HiddenProjects)
 	if err != nil {
 		return nil, err
 	}
@@ -77,15 +83,11 @@ type ProjectsGetOptions struct {
 	Args []string `args:"true"`
 }
 
-func runProjectsGet(opts ProjectsGetOptions) (ui.Project, error) {
+func runProjectsGet(opts ProjectsGetOptions) (projects.Project, error) {
 	if len(opts.Args) < 1 {
-		return ui.Project{}, fmt.Errorf("usage: gavel projects get <name>")
+		return projects.Project{}, fmt.Errorf("usage: gavel projects get <name>")
 	}
-	p, err := ui.GetProject(opts.Args[0])
-	if err != nil {
-		return ui.Project{}, err
-	}
-	return p, nil
+	return getProject(context.Background(), opts.Args[0])
 }
 
 type ProjectsAddOptions struct {
@@ -93,15 +95,16 @@ type ProjectsAddOptions struct {
 	Repos []string `flag:"repo" help:"GitHub repo this directory backs (owner/repo); repeatable"`
 }
 
-func runProjectsAdd(opts ProjectsAddOptions) (ui.Project, error) {
+func runProjectsAdd(opts ProjectsAddOptions) (projects.Project, error) {
 	if len(opts.Args) < 2 {
-		return ui.Project{}, fmt.Errorf("usage: gavel projects add <name> <dir> [--repo owner/repo]")
+		return projects.Project{}, fmt.Errorf("usage: gavel projects add <name> <dir> [--repo owner/repo]")
 	}
-	p := ui.Project{Name: opts.Args[0], Dir: opts.Args[1], Repos: opts.Repos}
-	if err := ui.CreateProject(p); err != nil {
-		return ui.Project{}, err
+	ctx := context.Background()
+	catalog, err := projects.Shared(ctx)
+	if err != nil {
+		return projects.Project{}, err
 	}
-	return p, nil
+	return catalog.Create(ctx, projects.Project{Name: opts.Args[0], Dir: opts.Args[1], Repos: opts.Repos})
 }
 
 type ProjectsUpdateOptions struct {
@@ -109,14 +112,18 @@ type ProjectsUpdateOptions struct {
 	Repos []string `flag:"repo" help:"Replace the repo list (owner/repo); repeatable"`
 }
 
-func runProjectsUpdate(opts ProjectsUpdateOptions) (ui.Project, error) {
+func runProjectsUpdate(opts ProjectsUpdateOptions) (projects.Project, error) {
 	if len(opts.Args) < 1 {
-		return ui.Project{}, fmt.Errorf("usage: gavel projects update <name> [dir] [--repo owner/repo]")
+		return projects.Project{}, fmt.Errorf("usage: gavel projects update <name> [dir] [--repo owner/repo]")
 	}
-	name := opts.Args[0]
-	p, err := ui.GetProject(name)
+	name, ctx := opts.Args[0], context.Background()
+	catalog, err := projects.Shared(ctx)
 	if err != nil {
-		return ui.Project{}, err
+		return projects.Project{}, err
+	}
+	p, err := catalog.Get(ctx, name)
+	if err != nil {
+		return projects.Project{}, err
 	}
 	// Only the fields the caller supplied are changed; everything else keeps its
 	// stored value (dir is kept unless a second positional is given).
@@ -126,10 +133,7 @@ func runProjectsUpdate(opts ProjectsUpdateOptions) (ui.Project, error) {
 	if len(opts.Repos) > 0 {
 		p.Repos = opts.Repos
 	}
-	if err := ui.UpdateProject(name, p); err != nil {
-		return ui.Project{}, err
-	}
-	return p, nil
+	return catalog.Update(ctx, name, p)
 }
 
 type ProjectsDeleteOptions struct {
@@ -140,7 +144,12 @@ func runProjectsDelete(opts ProjectsDeleteOptions) (string, error) {
 	if len(opts.Args) < 1 {
 		return "", fmt.Errorf("usage: gavel projects delete <name>")
 	}
-	if err := ui.DeleteProject(opts.Args[0]); err != nil {
+	ctx := context.Background()
+	catalog, err := projects.Shared(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := catalog.Delete(ctx, opts.Args[0]); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("deleted project %q", opts.Args[0]), nil
@@ -157,11 +166,11 @@ func setProjectHidden(hidden bool) func(ProjectsHiddenOptions) (filters.Filter, 
 		if len(opts.Args) != 1 {
 			return filters.Filter{}, fmt.Errorf("expected exactly one project name, got %d", len(opts.Args))
 		}
-		p, err := ui.GetProject(opts.Args[0])
+		ctx := context.Background()
+		p, err := getProject(ctx, opts.Args[0])
 		if err != nil {
 			return filters.Filter{}, err
 		}
-		ctx := context.Background()
 		store, err := localFilterStore(ctx, "gavel projects hide")
 		if err != nil {
 			return filters.Filter{}, err
