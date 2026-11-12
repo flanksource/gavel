@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/internal/taskhistory"
 	"github.com/flanksource/gavel/procfile"
@@ -40,9 +42,7 @@ var _ = Describe("archived run cache", func() {
 			},
 		}
 
-		originalProjectsPath := projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		DeferCleanup(func() { projectsPath = originalProjectsPath })
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 
 		for range 3 {
 			runs, err := source.Runs(GinkgoT().Context(), clickytask.RunFilter{})
@@ -80,9 +80,7 @@ var _ = Describe("a supervisor that stops while the live set is cached", func() 
 			rootsCached: []string{stopped},
 			rootsAt:     time.Now(),
 		}
-		originalProjectsPath := projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		DeferCleanup(func() { projectsPath = originalProjectsPath })
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 
 		runs, err := source.Runs(GinkgoT().Context(), clickytask.RunFilter{})
 		Expect(err).NotTo(HaveOccurred())
@@ -109,13 +107,11 @@ var _ = Describe("task manager API", func() {
 		Expect(supervisor.Start()).To(Succeed())
 		DeferCleanup(supervisor.Shutdown)
 
-		originalProjectsPath := projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		Expect(SaveProjects([]Project{
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
+		Expect(seedProjects([]projects.Project{
 			{Name: "workspace", Dir: root},
 			{Name: "without-procfile", Dir: GinkgoT().TempDir()},
 		})).To(Succeed())
-		DeferCleanup(func() { projectsPath = originalProjectsPath })
 		archived := taskhistory.Record{
 			Run: clickytask.RunMeta{
 				ID: "archived-only", Name: "Archived task", Status: string(clickytask.StatusFailed),

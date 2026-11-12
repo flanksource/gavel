@@ -173,7 +173,7 @@ func (s *Server) putPromptDetail(w http.ResponseWriter, r *http.Request, desc pr
 			return
 		}
 		*ov = verify.PromptSpec{}
-		if err := verify.SaveGavelConfig(dir, cfg); err != nil {
+		if err := verify.SaveGavelConfig(filepath.Join(dir, verify.GavelConfigFileName), cfg); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

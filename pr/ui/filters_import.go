@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/tenant"
 )
@@ -18,7 +20,11 @@ import (
 // hidden-github-orgs filter, then rewrites each file without those fields. A file
 // without them is left untouched, so running it again changes nothing.
 func ImportFileFilters(ctx context.Context, store *filters.Store) error {
-	if err := importHiddenProjects(ctx, store); err != nil {
+	projectsPath, err := projects.FilePath()
+	if err != nil {
+		return err
+	}
+	if err := importHiddenProjects(ctx, store, projectsPath); err != nil {
 		return fmt.Errorf("import hidden projects from %s: %w", projectsPath, err)
 	}
 	if err := importIgnoredOrgs(ctx, store); err != nil {
@@ -27,7 +33,7 @@ func ImportFileFilters(ctx context.Context, store *filters.Store) error {
 	return nil
 }
 
-func importHiddenProjects(ctx context.Context, store *filters.Store) error {
+func importHiddenProjects(ctx context.Context, store *filters.Store, projectsPath string) error {
 	var entries []map[string]json.RawMessage
 	found, err := readJSONFile(projectsPath, &entries)
 	if !found || err != nil {
@@ -40,7 +46,7 @@ func importHiddenProjects(ctx context.Context, store *filters.Store) error {
 			continue
 		}
 		var hidden bool
-		var project Project
+		var project projects.Project
 		if err := errors.Join(json.Unmarshal(raw, &hidden), json.Unmarshal(entry["dir"], &project.Dir)); err != nil {
 			return fmt.Errorf("project %s: %w", entry["name"], err)
 		}
@@ -59,7 +65,7 @@ func importHiddenProjects(ctx context.Context, store *filters.Store) error {
 	if err != nil {
 		return err
 	}
-	return writeProjectsFile(data)
+	return os.WriteFile(projectsPath, data, 0o644)
 }
 
 func importIgnoredOrgs(ctx context.Context, store *filters.Store) error {

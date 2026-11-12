@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	cexec "github.com/flanksource/clicky/exec"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	clickytask "github.com/flanksource/clicky/task"
@@ -42,6 +44,9 @@ type projectActionRequest struct {
 	Worktree string `json:"worktree,omitempty"`
 	// Branch is the branch a hosted project's test or lint runs on.
 	Branch string `json:"branch,omitempty"`
+	// indexPatch replays a queued commit's staged snapshot on retry. It is
+	// never read from a request body.
+	indexPatch string
 }
 
 type ProjectActionSchema struct {
@@ -114,7 +119,7 @@ type projectLinkedDependency struct {
 }
 
 type projectStatusResponse struct {
-	Project      Project             `json:"project"`
+	Project      projects.Project    `json:"project"`
 	WorkDir      string              `json:"workDir"`
 	Branch       string              `json:"branch"`
 	Files        []projectFileStatus `json:"files"`
@@ -204,7 +209,7 @@ func (s *Server) projectActionFor(name string) projectActionStatus {
 	return registry.actions[name]
 }
 
-func (s *Server) startProjectAction(project Project, action projectAction, args []string) (projectActionStatus, error) {
+func (s *Server) startProjectAction(project projects.Project, action projectAction, args []string) (projectActionStatus, error) {
 	registry := s.projectActionRegistry()
 	registry.mu.Lock()
 	if current := registry.actions[project.Name]; current.Running {
@@ -313,7 +318,7 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		includeResults = parsed
 	}
 	stopFile := rpchttp.Track(r.Context(), "file")
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	stopFile()
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
@@ -410,7 +415,7 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 		s.startHostedProjectAction(w, r)
 		return
 	}
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
@@ -442,7 +447,7 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProjectActionSchema(w http.ResponseWriter, r *http.Request) {
-	if _, err := GetProject(r.PathValue("name")); err != nil {
+	if _, err := getProject(r.Context(), r.PathValue("name")); err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}

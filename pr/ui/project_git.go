@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/commons/logger"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/git/gitstate"
@@ -69,7 +71,7 @@ func (s *Server) handleProjectGit(w http.ResponseWriter, r *http.Request) {
 // never runs git itself. A directory whose git state cannot be read (not a git
 // work tree, or no tracker in this process) has no entry: the proc-status wire
 // field is omitted, which reads as "no git info" rather than zero changes.
-func gitChangeCounts(ctx gavelctx.Context, projects []Project) map[string]int {
+func gitChangeCounts(ctx gavelctx.Context, projects []projects.Project) map[string]int {
 	tracker, err := ctx.GitTracker()
 	if err != nil {
 		logger.Debugf("proc status git changes: %v", err)
@@ -101,7 +103,7 @@ func gitChangeCounts(ctx gavelctx.Context, projects []Project) map[string]int {
 // project's own directory, or the linked worktree the request names, looked
 // up in the stored git state. A path that is not one of the repository's live
 // worktrees is errUnknownWorktree.
-func projectWorkDir(ctx gavelctx.Context, project Project, worktree string) (string, error) {
+func projectWorkDir(ctx gavelctx.Context, project projects.Project, worktree string) (string, error) {
 	dir := project.ResolvedDir()
 	if strings.TrimSpace(worktree) == "" {
 		return dir, nil
@@ -138,7 +140,7 @@ func workDirErrorStatus(err error) int {
 
 // requestWorkDir resolves the ?worktree= of a project request, answering 400
 // for a path outside the project's worktrees.
-func (s *Server) requestWorkDir(w http.ResponseWriter, r *http.Request, project Project) (string, bool) {
+func (s *Server) requestWorkDir(w http.ResponseWriter, r *http.Request, project projects.Project) (string, bool) {
 	workDir, err := projectWorkDir(s.requestContext(r), project, r.URL.Query().Get("worktree"))
 	if err != nil {
 		respondError(w, workDirErrorStatus(err), err.Error())
@@ -149,7 +151,7 @@ func (s *Server) requestWorkDir(w http.ResponseWriter, r *http.Request, project 
 
 // storedWorktreeFiles is the worktree holding workDir, one of project's, and
 // the uncommitted files its last status scan recorded.
-func storedWorktreeFiles(ctx gavelctx.Context, project Project, workDir string) (gitstate.Worktree, []status.FileStatus, error) {
+func storedWorktreeFiles(ctx gavelctx.Context, project projects.Project, workDir string) (gitstate.Worktree, []status.FileStatus, error) {
 	tracker, err := ctx.GitTracker()
 	if err != nil {
 		return gitstate.Worktree{}, nil, err

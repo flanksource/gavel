@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/status"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -15,17 +17,14 @@ import (
 
 var _ = Describe("project ignore", func() {
 	var workDir string
-	var originalProjectsPath string
 
 	BeforeEach(func() {
-		originalProjectsPath = projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 		workDir = GinkgoT().TempDir()
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: workDir, Repos: []string{"acme/gavel"}}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: workDir, Repos: []string{"acme/gavel"}}})).To(Succeed())
 	})
 
 	AfterEach(func() {
-		projectsPath = originalProjectsPath
 	})
 
 	It("adds an untracked file to the repository gitignore", func() {
@@ -69,6 +68,39 @@ var _ = Describe("project ignore", func() {
 		_, err := os.Stat(filepath.Join(workDir, ".gitignore"))
 		Expect(os.IsNotExist(err)).To(BeTrue())
 	})
+
+	DescribeTable("adds an extension rule for the file the user acted on, tracked or not",
+		func(state status.FileState) {
+			stubProjectIgnoreStatus(workDir, []status.FileStatus{{Path: "logs/run.log", State: state}})
+
+			response := requestProjectIgnore(`{"path":"logs/run.log","extension":".log"}`)
+
+			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+			contents, err := os.ReadFile(filepath.Join(workDir, ".gitignore"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(contents)).To(Equal("*.log\n"))
+			var payload projectIgnoreResponse
+			Expect(json.Unmarshal(response.Body.Bytes(), &payload)).To(Succeed())
+			Expect(payload).To(Equal(projectIgnoreResponse{Path: "logs/run.log", Extension: ".log", Rule: "*.log", Added: true}))
+		},
+		Entry("untracked", status.StateUntracked),
+		Entry("tracked", status.StateUnstaged),
+	)
+
+	DescribeTable("rejects invalid extension requests",
+		func(body, message string) {
+			stubProjectIgnoreStatus(workDir, []status.FileStatus{{Path: "logs/run.log", State: status.StateUntracked}})
+
+			response := requestProjectIgnore(body)
+
+			Expect(response.Code).To(Equal(http.StatusBadRequest))
+			Expect(response.Body.String()).To(ContainSubstring(message))
+		},
+		Entry("missing leading dot", `{"path":"logs/run.log","extension":"log"}`, "extension"),
+		Entry("glob characters", `{"path":"logs/run.log","extension":".l*g"}`, "extension"),
+		Entry("together with directory", `{"path":"logs","directory":true,"extension":".log"}`, "mutually exclusive"),
+		Entry("path that is not a change", `{"path":"other.log","extension":".log"}`, "not a current project change"),
+	)
 
 	It("rejects paths outside the project", func() {
 		response := requestProjectIgnore(`{"path":"../outside","directory":false}`)

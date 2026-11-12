@@ -89,9 +89,7 @@ func TestPRUpdateBranchConflictSaysWhyAIRebaseCannotRun(t *testing.T) {
 	}))
 	t.Cleanup(gh.Close)
 	t.Setenv("GITHUB_API_URL", gh.URL)
-	original := projectsPath
-	projectsPath = filepath.Join(t.TempDir(), "projects.json")
-	t.Cleanup(func() { projectsPath = original })
+	useProjectsFileT(t, filepath.Join(t.TempDir(), "projects.json"))
 
 	s := &Server{refreshCh: make(chan struct{}, 1), ghOpts: github.Options{Token: "tok"}}
 	req := httptest.NewRequest("POST", "/api/prs/update-branch", bytes.NewBufferString(`{"repo":"acme/widget","number":7,"nodeId":"PR_node_7","headSha":"abc"}`))

@@ -41,7 +41,7 @@ type prLifecycleControl struct {
 var prLifecycleControls sync.Map
 
 func (s *Server) prLifecycleHost(r *http.Request) (prlifecycle.Host, error) {
-	project, err := GetProject(r.URL.Query().Get("project"))
+	project, err := getProject(r.Context(), r.URL.Query().Get("project"))
 	if err != nil {
 		return prlifecycle.Host{}, err
 	}

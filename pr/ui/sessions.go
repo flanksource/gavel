@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/flanksource/gavel/projects"
+
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/git/gitstate"
 	"github.com/flanksource/gavel/github"
@@ -154,7 +156,7 @@ func sessionLimit(raw string) (int, error) {
 // loadSessionProjectSources reads every project's stored git state in one
 // batch and each project's native todo provider concurrently. A project's
 // failure is recorded on its own entry and never fails the batch.
-func loadSessionProjectSources(ctx context.Context, tracker *gitstate.Tracker, projects []Project) []sessionProjectSources {
+func loadSessionProjectSources(ctx context.Context, tracker *gitstate.Tracker, projects []projects.Project) []sessionProjectSources {
 	dirs := make([]string, len(projects))
 	for i, project := range projects {
 		dirs[i] = project.ResolvedDir()

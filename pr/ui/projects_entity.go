@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/flanksource/gavel/projects"
+
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons/logger"
 	gavelctx "github.com/flanksource/gavel/context"
@@ -24,11 +26,11 @@ var projectsTodoCounts = countProjectsTodos
 // statusForProjectErr maps the shared CRUD sentinel errors onto HTTP codes.
 func statusForProjectErr(err error) int {
 	switch {
-	case errors.Is(err, ErrProjectNotFound):
+	case errors.Is(err, projects.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, ErrProjectExists):
+	case errors.Is(err, projects.ErrExists):
 		return http.StatusConflict
-	case errors.Is(err, ErrProjectInvalid):
+	case errors.Is(err, projects.ErrInvalid):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
@@ -39,7 +41,7 @@ func statusForProjectErr(err error) int {
 // projects entity: the directory is ~-expanded, hasProcfile reflects the
 // directory's current contents, and counts is the project's own entry from
 // loadProjectTodoCounts. A project the caller hides is marked and carries no counts.
-func newProjectInfo(ctx context.Context, p Project, counts todoCountsResult, hidden bool) (projectInfo, error) {
+func newProjectInfo(ctx context.Context, p projects.Project, counts todoCountsResult, hidden bool) (projectInfo, error) {
 	dir := p.ResolvedDir()
 	stopFile := rpchttp.Track(ctx, "file")
 	hasProcfile := dir != "" && procfile.Find(dir, "") != ""
@@ -69,8 +71,8 @@ func newProjectInfo(ctx context.Context, p Project, counts todoCountsResult, hid
 // result that cannot be matched to its project is reported on every project
 // rather than risk showing one project another's counts. Hidden projects are
 // not shown with counts, so they are not queried and get an empty result.
-func loadProjectTodoCounts(ctx context.Context, ps []Project, hidden workspaceSet) []todoCountsResult {
-	visible := slices.DeleteFunc(slices.Clone(ps), func(p Project) bool { return hidden.has(p.ResolvedDir()) })
+func loadProjectTodoCounts(ctx context.Context, ps []projects.Project, hidden workspaceSet) []todoCountsResult {
+	visible := slices.DeleteFunc(slices.Clone(ps), func(p projects.Project) bool { return hidden.has(p.ResolvedDir()) })
 	stopDB := rpchttp.Track(ctx, "db")
 	counts := projectsTodoCounts(ctx, visible)
 	stopDB()
@@ -98,7 +100,7 @@ func loadProjectTodoCounts(ctx context.Context, ps []Project, hidden workspaceSe
 // entry instead of failing the list: the projects payload also drives Processes
 // and PRs, so one unreachable workspace must not blank the whole dashboard. The
 // failure stays loud — logged, and visible in the response.
-func listProjectInfos(ctx context.Context, ps []Project, hidden workspaceSet) []projectInfo {
+func listProjectInfos(ctx context.Context, ps []projects.Project, hidden workspaceSet) []projectInfo {
 	counts := loadProjectTodoCounts(ctx, ps, hidden)
 	out := make([]projectInfo, len(ps))
 	for i, p := range ps {
@@ -144,11 +146,12 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := CreateProject(p); err != nil {
+		created, err := createProject(r.Context(), p)
+		if err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return
 		}
-		respondJSON(w, http.StatusCreated, p)
+		respondJSON(w, http.StatusCreated, created)
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -165,7 +168,7 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		stopFile := rpchttp.Track(r.Context(), "file")
-		p, err := GetProject(name)
+		p, err := getProject(r.Context(), name)
 		stopFile()
 		if err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
@@ -176,7 +179,7 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		counts := loadProjectTodoCounts(r.Context(), []Project{p}, hidden)[0]
+		counts := loadProjectTodoCounts(r.Context(), []projects.Project{p}, hidden)[0]
 		info, err := newProjectInfo(r.Context(), p, counts, hidden.has(p.ResolvedDir()))
 		if err != nil {
 			writeTodoError(w, http.StatusInternalServerError, fmt.Errorf("load project %q native TODOs: %w", p.Name, err))
@@ -193,14 +196,14 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := UpdateProject(name, p); err != nil {
+		updated, err := updateProject(r.Context(), name, p)
+		if err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return
 		}
-		p.Name = name // echo the entity id the path identified
-		respondJSON(w, http.StatusOK, p)
+		respondJSON(w, http.StatusOK, updated)
 	case http.MethodDelete:
-		if err := DeleteProject(name); err != nil {
+		if err := deleteProject(r.Context(), name); err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return
 		}
@@ -226,14 +229,12 @@ func (s *Server) untrackProjectGit(dir string) error {
 	return nil
 }
 
-func decodeProject(r *http.Request) (Project, error) {
-	var p Project
+func decodeProject(r *http.Request) (projects.Project, error) {
+	var p projects.Project
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		return Project{}, fmt.Errorf("invalid json: %w", err)
+		return projects.Project{}, fmt.Errorf("invalid json: %w", err)
 	}
-	// The create and update handlers echo the decoded project back, so it has to
-	// carry the same non-null repos list the collection endpoint serves.
-	return p.withRepos(), nil
+	return p, nil
 }
 
 func respondJSON(w http.ResponseWriter, status int, v any) {

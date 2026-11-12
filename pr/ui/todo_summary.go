@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
@@ -247,7 +249,7 @@ type todoCountsResult struct {
 // directory has no workspace and counts zero without touching the database. A
 // failure that prevents counting at all is reported on every project that
 // needed counting, so the list still renders.
-func countProjectsTodos(ctx context.Context, projects []Project) []todoCountsResult {
+func countProjectsTodos(ctx context.Context, projects []projects.Project) []todoCountsResult {
 	out := make([]todoCountsResult, len(projects))
 	var options []todoruntime.WorkspaceOptions
 	var indexes []int
@@ -287,7 +289,7 @@ func todoErrorStatus(fallback int, err error) int {
 	switch {
 	case errors.As(err, &configuration):
 		return http.StatusInternalServerError
-	case errors.Is(err, ErrProjectNotFound), errors.Is(err, errNoHostedWorkspaces):
+	case errors.Is(err, projects.ErrNotFound), errors.Is(err, errNoHostedWorkspaces):
 		return http.StatusNotFound
 	case errors.Is(err, database.ErrUnavailable):
 		return http.StatusServiceUnavailable

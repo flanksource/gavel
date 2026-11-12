@@ -8,8 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
+
+	"github.com/flanksource/gavel/projects"
 
 	cexec "github.com/flanksource/clicky/exec"
 	clickytask "github.com/flanksource/clicky/task"
@@ -63,7 +68,7 @@ func newFakeCommitRuns(files ...string) *fakeCommitRuns {
 	}
 	original := executeProjectAction
 	executeProjectAction = func(_ context.Context, _ string, args []string, _ io.Writer, group *clickytask.Group, opts ...clickytask.Option) clickytask.TypedTask[cexec.ExecResult] {
-		file := args[len(args)-1]
+		file := commitArgsFile(args)
 		task := clickytask.StartTask("fake commit "+file, func(ctx commonscontext.Context, _ *clickytask.Task) (cexec.ExecResult, error) {
 			runs.mu.Lock()
 			runs.started = append(runs.started, file)
@@ -91,6 +96,56 @@ func newFakeCommitRuns(files ...string) *fakeCommitRuns {
 	}
 	DeferCleanup(func() { executeProjectAction = original })
 	return runs
+}
+
+// commitArgsFile names the file a queued gavel commit lands: the first file of
+// its --index-patch snapshot, else (a push-only run) its last argument.
+func commitArgsFile(args []string) string {
+	at := slices.Index(args, "--index-patch")
+	if at < 0 {
+		return args[len(args)-1]
+	}
+	patch, err := os.ReadFile(args[at+1])
+	if err != nil {
+		return "unreadable snapshot: " + err.Error()
+	}
+	for _, line := range strings.Split(string(patch), "\n") {
+		if name, ok := strings.CutPrefix(line, "diff --git a/"); ok {
+			return strings.Fields(name)[0]
+		}
+	}
+	return "snapshot without files"
+}
+
+// withoutIndexPatches blanks each entry's snapshot path once it names a patch
+// file, so details compare by what was queued.
+func withoutIndexPatches(details any) any {
+	group, ok := details.(projectCommitGroupDetails)
+	if !ok {
+		return details
+	}
+	entries := slices.Clone(group.Entries)
+	for i := range entries {
+		if strings.HasSuffix(entries[i].IndexPatch, ".patch") {
+			entries[i].IndexPatch = ""
+		}
+	}
+	return projectCommitGroupDetails{Entries: entries}
+}
+
+// initStagedRepo makes dir a git repository whose index stages files as new
+// files on top of an initial commit.
+func initStagedRepo(dir string, files ...string) {
+	runDiffGit(dir, "init", "-q", "-b", "main")
+	runDiffGit(dir, "config", "user.email", "developer@example.com")
+	runDiffGit(dir, "config", "user.name", "Developer")
+	writeDiffFile(dir, "README.md", "# repository\n")
+	runDiffGit(dir, "add", "README.md")
+	runDiffGit(dir, "commit", "-qm", "initial")
+	for _, file := range files {
+		writeDiffFile(dir, file, "package main // "+file+"\n")
+	}
+	runDiffGit(dir, append([]string{"add", "--"}, files...)...)
 }
 
 func (r *fakeCommitRuns) failOn(file string) {
@@ -131,15 +186,15 @@ var commitQueueProjectFiles = []string{"one.go", "two.go", "three.go", "four.go"
 // as its changes and returns a server whose current commit generation is
 // cancelled and archived when the spec ends. Call it from a BeforeEach.
 func setupCommitQueueServer() *Server {
-	originalProjectsPath := projectsPath
-	projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-	Expect(SaveProjects([]Project{{Name: "gavel", Dir: GinkgoT().TempDir()}})).To(Succeed())
+	useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
+	dir := GinkgoT().TempDir()
+	initStagedRepo(dir, commitQueueProjectFiles...)
+	Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
 	originalGather := gatherProjectStatus
 	setCommitQueueProjectFiles(commitQueueProjectFiles...)
 	DeferCleanup(func() {
 		gatherProjectStatus = originalGather
-		projectsPath = originalProjectsPath
 	})
 
 	server := &Server{}
@@ -166,7 +221,7 @@ func setupCommitQueueServer() *Server {
 // gavelCommitQueue is the commit queue of the "gavel" project's own directory.
 func gavelCommitQueue(server *Server) *commitQueue {
 	GinkgoHelper()
-	project, err := GetProject("gavel")
+	project, err := getProject(context.Background(), "gavel")
 	Expect(err).NotTo(HaveOccurred())
 	return server.projectCommitQueue(project, project.ResolvedDir())
 }
@@ -175,7 +230,7 @@ func setCommitQueueProjectFiles(files ...string) {
 	gatherProjectStatus = func(string, status.Options) (*status.Result, error) {
 		result := &status.Result{}
 		for _, file := range files {
-			result.Files = append(result.Files, status.FileStatus{Path: file})
+			result.Files = append(result.Files, status.FileStatus{Path: file, State: status.StateStaged, StagedKind: status.KindAdded})
 		}
 		return result, nil
 	}
@@ -237,7 +292,7 @@ var _ = Describe("project commit task groups", func() {
 			g.Expect(snapshots).To(HaveLen(3))
 			g.Expect(snapshots[0].Kind).To(Equal("gavel-commit"))
 			g.Expect(snapshots[0].Labels).To(HaveKeyWithValue("project", "gavel"))
-			g.Expect(snapshots[0].Details).To(Equal(projectCommitGroupDetails{Entries: []projectCommitTaskDetails{
+			g.Expect(withoutIndexPatches(snapshots[0].Details)).To(Equal(projectCommitGroupDetails{Entries: []projectCommitTaskDetails{
 				{TaskID: snapshots[1].ID, Action: projectActionCommit, Files: []string{"one.go"}},
 				{TaskID: snapshots[2].ID, Action: projectActionCommit, Files: []string{"two.go"}},
 			}}))
@@ -311,6 +366,37 @@ var _ = Describe("project commit task groups", func() {
 
 		Expect(duplicate.Code).To(Equal(http.StatusConflict))
 		Expect(duplicate.Body.String()).To(ContainSubstring("one.go"))
+	})
+
+	It("moves a queued commit's staging out of the index into its snapshot", func() {
+		runs := newFakeCommitRuns("one.go")
+		run := decodeRun(queueCommit("one.go"))
+		Eventually(runs.commands).Should(Equal([]string{"one.go"}))
+
+		dir := gavelCommitQueue(server).workDir
+		Expect(gitText(dir, "diff", "--cached", "--name-only")).To(Equal("four.go\nthree.go\ntwo.go\n"))
+		entries := commitGroupSnapshot(run.RunID).Details.(projectCommitGroupDetails).Entries
+		Expect(entries).To(HaveLen(1))
+		Expect(entries[0].IndexPatch).To(BeAnExistingFile())
+		Expect(runs.arguments()).To(Equal([][]string{{"commit", "--work-dir", dir, "--index-patch", entries[0].IndexPatch}}))
+		runs.release("one.go")
+	})
+
+	It("rejects a file without staged changes before touching the index", func() {
+		newFakeCommitRuns()
+		setCommitQueueProjectFiles("two.go")
+		original := gatherProjectStatus
+		gatherProjectStatus = func(dir string, opts status.Options) (*status.Result, error) {
+			result, err := original(dir, opts)
+			result.Files = append(result.Files, status.FileStatus{Path: "one.go", State: status.StateUnstaged})
+			return result, err
+		}
+
+		recorder := queueCommit("one.go")
+
+		Expect(recorder.Code).To(Equal(http.StatusBadRequest))
+		Expect(recorder.Body.String()).To(ContainSubstring(`\"one.go\" has no staged changes`))
+		Expect(gitText(gavelCommitQueue(server).workDir, "diff", "--cached", "--name-only")).To(Equal("four.go\none.go\nthree.go\ntwo.go\n"))
 	})
 
 	It("rejects files that are not current project changes", func() {

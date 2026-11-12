@@ -8,11 +8,16 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/projects"
 	"github.com/fsnotify/fsnotify"
 )
 
 func (s *Server) startWorkspaceFiles(ctx context.Context) error {
 	d := s.workspaceData
+	projectsPath, err := projects.FilePath()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(projectsPath), 0o755); err != nil {
 		return err
 	}
@@ -65,6 +70,10 @@ func (s *Server) startWorkspaceFiles(ctx context.Context) error {
 
 func (s *Server) workspaceFileChanged(ctx context.Context, path, home string) error {
 	d := s.workspaceData
+	projectsPath, err := projects.FilePath()
+	if err != nil {
+		return err
+	}
 	if filepath.Clean(path) == filepath.Clean(projectsPath) {
 		if err := s.reloadWorkspaceData(ctx); err != nil {
 			return err
@@ -105,6 +114,10 @@ func (d *workspaceData) watchWorkspaceRoots(entries map[string]workspaceEntry) e
 		return nil
 	}
 	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	projectsPath, err := projects.FilePath()
 	if err != nil {
 		return err
 	}

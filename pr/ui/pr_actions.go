@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/pr/provider"
+	"github.com/flanksource/gavel/projects"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -186,11 +187,11 @@ func (s *Server) handlePRUpdateBranch(w http.ResponseWriter, r *http.Request) {
 // branch, so a PR from a fork — whose branch is not on the checkout's remote —
 // is refused rather than pushed somewhere else.
 func (s *Server) prRebaseRequest(ctx context.Context, repo string, number int) (*prRebaseRequest, error) {
-	projects, err := visibleProjects(ctx, s)
+	ps, err := visibleProjects(ctx, s)
 	if err != nil {
 		return nil, err
 	}
-	project, ok := ProjectForRepo(projects, repo)
+	project, ok := projects.ForRepo(ps, repo)
 	if !ok {
 		return nil, fmt.Errorf("no project has a local checkout of %s; add one to rebase it with AI", repo)
 	}

@@ -75,7 +75,7 @@ func resolveSettingsDir(r *http.Request) (scope, dir string, err error) {
 	if name == "" {
 		return "", "", errors.New("scope=global or project=<name> is required")
 	}
-	p, err := GetProject(name)
+	p, err := getProject(r.Context(), name)
 	if err != nil {
 		return "", "", err
 	}
@@ -145,7 +145,7 @@ func (s *Server) handleSettingsGavel(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if err := verify.SaveGavelConfig(dir, cfg); err != nil {
+		if err := verify.SaveGavelConfig(path, cfg); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

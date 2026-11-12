@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/clicky/sse"
 	"github.com/flanksource/commons/logger"
 	gavelctx "github.com/flanksource/gavel/context"
@@ -77,12 +79,12 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if name := r.URL.Query().Get("project"); name != "" {
-		p, ok := projectByName(ps, name)
+		p, ok := projects.ByName(ps, name)
 		if !ok {
 			http.Error(w, `{"error":"unknown project"}`, http.StatusNotFound)
 			return
 		}
-		changes := gitChangeCounts(s.requestContext(r), []Project{p})
+		changes := gitChangeCounts(s.requestContext(r), []projects.Project{p})
 		json.NewEncoder(w).Encode(projectStatus(p, changes)) //nolint:errcheck
 		return
 	}
@@ -96,7 +98,7 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 // the sidebar repo headers light up). Project names are bare and repos contain a
 // slash, so the keyspaces don't collide. Shared by handleProcStatus so the
 // single-shot poll carries the full wire shape (live cpu/mem + process tree).
-func procStatusByKey(ctx gavelctx.Context, projects []Project) map[string]procStatus {
+func procStatusByKey(ctx gavelctx.Context, projects []projects.Project) map[string]procStatus {
 	changes := gitChangeCounts(ctx, projects)
 	byKey := make(map[string]procStatus)
 	for _, p := range projects {
@@ -286,7 +288,7 @@ func (s *Server) handleProcFavicon(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid port", http.StatusBadRequest)
 		return
 	}
-	p, err := GetProject(project)
+	p, err := getProject(r.Context(), project)
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
@@ -349,7 +351,7 @@ func (s *Server) handleProcControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
-	p, err := GetProject(body.Project)
+	p, err := getProject(r.Context(), body.Project)
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
@@ -384,7 +386,7 @@ func (s *Server) handleProcControl(w http.ResponseWriter, r *http.Request) {
 	// live-root set is stale by definition — don't make the task streams wait
 	// out its TTL to notice.
 	s.taskSource.invalidateRoots()
-	changes := gitChangeCounts(s.requestContext(r), []Project{p})
+	changes := gitChangeCounts(s.requestContext(r), []projects.Project{p})
 	json.NewEncoder(w).Encode(projectStatus(p, changes)) //nolint:errcheck
 }
 
@@ -395,7 +397,7 @@ func (s *Server) handleProcLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	p, err := GetProject(r.URL.Query().Get("project"))
+	p, err := getProject(r.Context(), r.URL.Query().Get("project"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
@@ -432,7 +434,7 @@ func (s *Server) handleProcLogs(w http.ResponseWriter, r *http.Request) {
 // A directory without a Procfile is reported as hasProcfile=false (not an error)
 // so projects that aren't running anything render cleanly. gitChanges are the
 // uncommitted-file counts by directory (see gitChangeCounts).
-func projectStatus(p Project, gitChanges map[string]int) procStatus {
+func projectStatus(p projects.Project, gitChanges map[string]int) procStatus {
 	dir := p.ResolvedDir()
 
 	// Uncommitted-change count is a property of the workspace directory, not of

@@ -114,7 +114,7 @@ func (s *Server) reloadWorkspaceData(ctx context.Context) error {
 			return err
 		}
 	} else {
-		rows, err := LoadProjects()
+		rows, err := loadProjects(ctx)
 		if err != nil {
 			return err
 		}

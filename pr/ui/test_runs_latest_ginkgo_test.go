@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -23,12 +25,10 @@ var _ = Describe("project tree test runs", func() {
 	var workDir string
 
 	BeforeEach(func() {
-		originalProjectsPath := projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		DeferCleanup(func() { projectsPath = originalProjectsPath })
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 
 		workDir = GinkgoT().TempDir()
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: workDir}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: workDir}})).To(Succeed())
 
 		gavelDir := filepath.Join(workDir, snapshots.Dir)
 		Expect(os.MkdirAll(gavelDir, 0o755)).To(Succeed())

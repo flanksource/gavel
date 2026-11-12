@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/git/gitstate"
 	"github.com/flanksource/gavel/github"
@@ -21,13 +23,13 @@ import (
 
 func useTempProjectsCatalog() {
 	GinkgoHelper()
-	originalPath, originalCounts := projectsPath, projectsTodoCounts
-	projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-	projectsTodoCounts = func(_ context.Context, projects []Project) []todoCountsResult {
+	originalCounts := projectsTodoCounts
+	useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
+	projectsTodoCounts = func(_ context.Context, projects []projects.Project) []todoCountsResult {
 		return make([]todoCountsResult, len(projects))
 	}
 	DeferCleanup(func() {
-		projectsPath, projectsTodoCounts = originalPath, originalCounts
+		projectsTodoCounts = originalCounts
 	})
 }
 
@@ -38,7 +40,7 @@ var _ = Describe("hidden-projects filter", func() {
 	BeforeEach(func() {
 		f = newProjectGitFixture()
 		useTempProjectsCatalog()
-		Expect(SaveProjects([]Project{{Name: "acme", Dir: f.repo}, {Name: "beta", Dir: f.worktree}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "acme", Dir: f.repo}, {Name: "beta", Dir: f.worktree}})).To(Succeed())
 		tracked = newTrackedGitServer()
 	})
 

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/projects"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -26,10 +28,8 @@ const malformedPrompt = "---\nmodel: [broken\n---\nbody\n"
 func newProjectDir(name, repo string) string {
 	t := GinkgoT()
 	dir := t.TempDir()
-	orig := projectsPath
-	projectsPath = filepath.Join(t.TempDir(), "projects.json")
-	DeferCleanup(func() { projectsPath = orig })
-	Expect(SaveProjects([]Project{{Name: name, Dir: dir, Repos: []string{repo}}})).To(Succeed())
+	useProjectsFile(filepath.Join(t.TempDir(), "projects.json"))
+	Expect(seedProjects([]projects.Project{{Name: name, Dir: dir, Repos: []string{repo}}})).To(Succeed())
 	return dir
 }
 
@@ -37,7 +37,7 @@ func newProjectDir(name, repo string) string {
 func seedInlineOverride(dir string, spec api.Spec) {
 	cfg := verify.GavelConfig{}
 	cfg.Commit.Message = verify.PromptSpec{Spec: spec}
-	Expect(verify.SaveGavelConfig(dir, cfg)).To(Succeed())
+	Expect(verify.SaveGavelConfig(filepath.Join(dir, verify.GavelConfigFileName), cfg)).To(Succeed())
 }
 
 // seedFileOverride writes text to a .prompt file and points commit.message at it.
@@ -45,7 +45,7 @@ func seedFileOverride(dir, file, text string) {
 	Expect(os.WriteFile(filepath.Join(dir, file), []byte(text), 0o644)).To(Succeed())
 	cfg := verify.GavelConfig{}
 	cfg.Commit.Message = verify.PromptSpec{File: file}
-	Expect(verify.SaveGavelConfig(dir, cfg)).To(Succeed())
+	Expect(verify.SaveGavelConfig(filepath.Join(dir, verify.GavelConfigFileName), cfg)).To(Succeed())
 }
 
 func promptDetailCall(method, scope, body string) *httptest.ResponseRecorder {

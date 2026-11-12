@@ -249,7 +249,7 @@ func TestHandleSettingsPromptDetail_RoundTripPreservesUnmodeledKey(t *testing.T)
 	}
 	seeded := verify.GavelConfig{}
 	seeded.Commit.Message = verify.PromptSpec{File: "commit-message.prompt"}
-	if err := verify.SaveGavelConfig(dir, seeded); err != nil {
+	if err := verify.SaveGavelConfig(filepath.Join(dir, verify.GavelConfigFileName), seeded); err != nil {
 		t.Fatal(err)
 	}
 	body := putBody(t, promptDetailRequest{

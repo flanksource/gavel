@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/git/gitstate"
@@ -97,7 +99,7 @@ type sessionPR struct {
 // sessionProject is a configured project with its git state; Git is nil when
 // the repository could not be inspected (the error is reported separately).
 type sessionProject struct {
-	Project Project
+	Project projects.Project
 	Git     *gitstate.State
 }
 

@@ -135,7 +135,7 @@ func (s *Server) labelProjects(r *http.Request) ([]projectInfo, error) {
 	if s.hosted {
 		return nil, errNoHostedWorkspaces
 	}
-	projects, err := LoadProjects()
+	projects, err := loadProjects(r.Context())
 	if err != nil {
 		return nil, err
 	}

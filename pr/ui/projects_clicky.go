@@ -204,10 +204,12 @@ func projectActionSchemaResponseSchema() map[string]any {
 func projectDiffResponseSchema() map[string]any {
 	return map[string]any{
 		"type":     "object",
-		"required": []string{"path", "diff", "truncated", "binary"},
+		"required": []string{"path", "diff", "staged", "unstaged", "truncated", "binary"},
 		"properties": map[string]any{
 			"path":      map[string]any{"type": "string"},
 			"diff":      map[string]any{"type": "string"},
+			"staged":    map[string]any{"type": "string", "description": "For a single-file path, its HEAD→index patch; empty for folders"},
+			"unstaged":  map[string]any{"type": "string", "description": "For a single-file path, its index→worktree patch (the /dev/null diff for an untracked file); empty for folders"},
 			"truncated": map[string]any{"type": "boolean"},
 			"binary":    map[string]any{"type": "boolean"},
 		},
@@ -243,10 +245,11 @@ func projectCommitRunSchema() map[string]any {
 func projectIgnoreRequestSchema() map[string]any {
 	return map[string]any{
 		"type":     "object",
-		"required": []string{"path", "directory"},
+		"required": []string{"path"},
 		"properties": map[string]any{
 			"path":      map[string]any{"type": "string"},
 			"directory": map[string]any{"type": "boolean"},
+			"extension": map[string]any{"type": "string", "pattern": `^\.[A-Za-z0-9._-]+$`, "description": "Ignore every file with this extension (rule *<extension>); path is then the changed file acted on. Mutually exclusive with directory"},
 		},
 	}
 }
@@ -258,6 +261,7 @@ func projectIgnoreResponseSchema() map[string]any {
 		"properties": map[string]any{
 			"path":      map[string]any{"type": "string"},
 			"directory": map[string]any{"type": "boolean"},
+			"extension": map[string]any{"type": "string"},
 			"rule":      map[string]any{"type": "string"},
 			"added":     map[string]any{"type": "boolean"},
 		},
@@ -418,7 +422,7 @@ func projectsOpenAPI() map[string]any {
 					jsonRequestBody("ProjectIgnoreRequest"),
 					map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam())}),
 			},
-		}, projectGitOpenAPIPaths()),
+		}, withEntries(projectGitOpenAPIPaths(), projectIndexOpenAPIPaths())),
 		"components": map[string]any{"schemas": withEntries(map[string]any{
 			"Project":                   projectSchema(),
 			"ProjectFileStatus":         projectFileStatusSchema(),
@@ -431,7 +435,7 @@ func projectsOpenAPI() map[string]any {
 			"ProjectDiff":               projectDiffResponseSchema(),
 			"ProjectIgnoreRequest":      projectIgnoreRequestSchema(),
 			"ProjectIgnoreResponse":     projectIgnoreResponseSchema(),
-		}, projectGitOpenAPISchemas())},
+		}, withEntries(projectGitOpenAPISchemas(), projectIndexOpenAPISchemas()))},
 	}
 }
 

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/filters"
@@ -28,21 +30,19 @@ var _ = Describe("workspace startup and invalidation", func() {
 	It("bounds the flat todo list's reads independently of workspace count without writes", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		oldPath := projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		DeferCleanup(func() { projectsPath = oldPath })
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 		GinkgoT().Setenv(database.EnvDSN, dbtest.ForGinkgo(dbtest.Options{Name: "workspace_batch_reads"}).DSN())
 		opened, err := database.Open(ctx, database.WithMigrations())
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { Expect(opened.Close()).To(Succeed()) })
-		var projects []Project
+		var ps []projects.Project
 		var dirs []string
 		for _, name := range []string{"first", "second", "third", "fourth"} {
 			dir := GinkgoT().TempDir()
-			projects = append(projects, Project{Name: name, Dir: dir})
+			ps = append(ps, projects.Project{Name: name, Dir: dir})
 			dirs = append(dirs, dir)
 		}
-		Expect(SaveProjects(projects)).To(Succeed())
+		Expect(seedProjects(ps)).To(Succeed())
 		server := &Server{}
 		server.SetFilterStore(filters.NewStore(opened.Gorm()))
 		Expect(server.StartWorkspaceData(ctx, opened.Gorm())).To(Succeed())
@@ -96,31 +96,29 @@ var _ = Describe("workspace startup and invalidation", func() {
 			Expect(statement).To(MatchRegexp(`(?i)^\s*(SELECT|WITH)\b`))
 		}
 		added := GinkgoT().TempDir()
-		projects = append(projects, Project{Name: "added", Dir: added})
-		Expect(SaveProjects(projects)).To(Succeed())
+		ps = append(ps, projects.Project{Name: "added", Dir: added})
+		Expect(seedProjects(ps)).To(Succeed())
 		Eventually(func() int {
 			rows, err := server.catalogProjects()
 			Expect(err).NotTo(HaveOccurred())
 			return len(rows)
-		}, 5*time.Second).Should(Equal(len(projects)))
+		}, 5*time.Second).Should(Equal(len(ps)))
 		before := server.workspaceData.snapshotCopy().Workspaces[added].Config
 		Expect(os.WriteFile(filepath.Join(added, ".gavel.yaml"), []byte("ai:\n  model: example-model\n"), 0o600)).To(Succeed())
 		Eventually(func() uint64 { return server.workspaceData.snapshotCopy().Workspaces[added].Config }, 5*time.Second).Should(BeNumerically(">", before))
-		Expect(SaveProjects(nil)).To(Succeed())
+		Expect(seedProjects(nil)).To(Succeed())
 		Eventually(func() int { return len(server.workspaceData.snapshotCopy().Workspaces) }, 5*time.Second).Should(BeZero())
 	})
 	It("keeps reads immutable and publishes only changed workspaces after commit", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		oldPath := projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		DeferCleanup(func() { projectsPath = oldPath })
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 		GinkgoT().Setenv(database.EnvDSN, dbtest.ForGinkgo(dbtest.Options{Name: "workspace_startup"}).DSN())
 		opened, err := database.Open(ctx, database.WithMigrations())
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { Expect(opened.Close()).To(Succeed()) })
 		first, second := GinkgoT().TempDir(), GinkgoT().TempDir()
-		Expect(SaveProjects([]Project{{Name: "first", Dir: first}, {Name: "second", Dir: second}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "first", Dir: first}, {Name: "second", Dir: second}})).To(Succeed())
 		server := &Server{}
 		Expect(server.StartWorkspaceData(ctx, opened.Gorm())).To(Succeed())
 		DeferCleanup(func() { cancel(); server.workspaceData.workers.Wait() })

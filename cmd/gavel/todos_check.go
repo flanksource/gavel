@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/projects"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/query"
@@ -27,7 +28,7 @@ var loadTodoProjects = ui.LoadVisibleProjects
 // TODO commands. It is a variable solely so command tests can exercise routing
 // without requiring a process-owned PostgreSQL instance.
 var openRuntimeTodosProvider = func(ctx context.Context, workDir string) (todos.Provider, error) {
-	project, err := ui.ProjectForDir(workDir)
+	project, err := projectForDir(ctx, workDir)
 	if err != nil {
 		return nil, err
 	}
@@ -79,11 +80,11 @@ func runTodosList(opts TodosListOptions) (any, error) {
 func listTodos(ctx context.Context, workDir string, opts TodosListOptions, filters todos.DiscoveryFilters) (types.TODOS, error) {
 	parentRef := strings.TrimSpace(opts.Parent)
 	if opts.All && parentRef == "" {
-		projects, err := loadTodoProjects(ctx)
+		ps, err := loadTodoProjects(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return query.ListWorkspaces(ctx, ui.TodoWorkspaces(projects), openRuntimeTodosProvider, filters)
+		return query.ListWorkspaces(ctx, projects.TodoWorkspaces(ps), openRuntimeTodosProvider, filters)
 	}
 	provider, err := newTodosProvider(workDir)
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/flanksource/gavel/projects"
+
 	clickytask "github.com/flanksource/clicky/task"
 )
 
@@ -16,7 +18,7 @@ var errCommitRunNotFound = errors.New("not found")
 // retryableCommitRun is a finished commit queue run reduced to the requests
 // that failed or were canceled, in the order they were queued.
 type retryableCommitRun struct {
-	project  Project
+	project  projects.Project
 	requests []projectActionRequest
 }
 
@@ -65,7 +67,7 @@ func (s *Server) loadRetryableCommitRun(ctx context.Context, runID string) (retr
 	if name == "" {
 		return retryableCommitRun{}, fmt.Errorf("run %q has no project label", runID)
 	}
-	project, err := GetProject(name)
+	project, err := getProject(ctx, name)
 	if err != nil {
 		return retryableCommitRun{}, fmt.Errorf("run %q: %w", runID, err)
 	}
@@ -126,9 +128,9 @@ func retryCommitRequests(runID string, details projectCommitGroupDetails, status
 		if !commitRetryable(status) {
 			continue
 		}
-		request := projectActionRequest{Action: entry.Action, Files: entry.Files, Worktree: entry.Worktree}
+		request := projectActionRequest{Action: entry.Action, Files: entry.Files, Worktree: entry.Worktree, indexPatch: entry.IndexPatch}
 		if entry.Options != nil {
-			request = projectActionRequest{Action: entry.Action, Options: entry.Options, Worktree: entry.Worktree}
+			request = projectActionRequest{Action: entry.Action, Options: entry.Options, Worktree: entry.Worktree, indexPatch: entry.IndexPatch}
 		}
 		requests = append(requests, request)
 	}
@@ -163,7 +165,7 @@ func commitRetryable(status clickytask.Status) bool {
 }
 
 func (s *Server) handleCommitQueueRetry(w http.ResponseWriter, r *http.Request) {
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return

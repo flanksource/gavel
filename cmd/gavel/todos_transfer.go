@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/flanksource/clicky"
-	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
 	"github.com/spf13/cobra"
 )
@@ -31,7 +30,7 @@ func runTodosTransfer(opts TodosTransferOptions) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	target, err := ui.GetProject(opts.To)
+	target, err := getProject(context.Background(), opts.To)
 	if err != nil {
 		return err
 	}

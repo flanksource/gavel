@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/sandbox"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/google/uuid"
@@ -123,7 +125,7 @@ func (w HostedWorkspaces) repo(ctx context.Context, org uuid.UUID, ref string) (
 		return sandbox.Repo{}, err
 	}
 	if len(repos) == 0 {
-		return sandbox.Repo{}, fmt.Errorf("%w: todo workspace %q %w", ErrProjectNotFound, ref, errHostedWorkspace)
+		return sandbox.Repo{}, fmt.Errorf("%w: todo workspace %q %w", projects.ErrNotFound, ref, errHostedWorkspace)
 	}
 	return repos[0], nil
 }

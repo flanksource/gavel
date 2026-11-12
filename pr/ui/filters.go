@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/tenant"
@@ -68,8 +70,8 @@ var hiddenProjects = func(ctx context.Context, s *Server) (workspaceSet, error) 
 
 // visibleProjects is the project catalog without the projects the caller hides.
 // s is nil for a surface with no Server; it then reads the process database.
-func visibleProjects(ctx context.Context, s *Server) ([]Project, error) {
-	ps, err := LoadProjects()
+func visibleProjects(ctx context.Context, s *Server) ([]projects.Project, error) {
+	ps, err := loadProjects(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -77,26 +79,28 @@ func visibleProjects(ctx context.Context, s *Server) ([]Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(ps, func(p Project) bool { return hidden.has(p.ResolvedDir()) }), nil
+	return slices.DeleteFunc(ps, func(p projects.Project) bool { return hidden.has(p.ResolvedDir()) }), nil
 }
 
 // LoadVisibleProjects is the project catalog without the projects ctx's scope
 // (the local org outside a request) hides, read from the process database.
-func LoadVisibleProjects(ctx context.Context) ([]Project, error) { return visibleProjects(ctx, nil) }
+func LoadVisibleProjects(ctx context.Context) ([]projects.Project, error) {
+	return visibleProjects(ctx, nil)
+}
 
 // visibleProject is GetProject for the surfaces that would start tracking a
 // project's git state: a hidden project is reported as not found.
-func (s *Server) visibleProject(ctx context.Context, name string) (Project, error) {
-	project, err := GetProject(name)
+func (s *Server) visibleProject(ctx context.Context, name string) (projects.Project, error) {
+	project, err := getProject(ctx, name)
 	if err != nil {
-		return Project{}, err
+		return projects.Project{}, err
 	}
 	hidden, err := hiddenProjects(ctx, s)
 	if err != nil {
-		return Project{}, err
+		return projects.Project{}, err
 	}
 	if hidden.has(project.ResolvedDir()) {
-		return Project{}, fmt.Errorf("%w: %q is hidden by the %s filter", ErrProjectNotFound, name, filters.HiddenProjects)
+		return projects.Project{}, fmt.Errorf("%w: %q is hidden by the %s filter", projects.ErrNotFound, name, filters.HiddenProjects)
 	}
 	return project, nil
 }

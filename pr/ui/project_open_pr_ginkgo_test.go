@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/projects"
+
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/status"
 	. "github.com/onsi/ginkgo/v2"
@@ -15,24 +17,22 @@ import (
 
 var _ = Describe("project Open PR queue", func() {
 	var (
-		server               *Server
-		project              Project
-		originalProjectsPath string
+		server  *Server
+		project projects.Project
 	)
 
 	BeforeEach(func() {
-		originalProjectsPath = projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		project = Project{Name: "gavel", Dir: GinkgoT().TempDir()}
-		Expect(SaveProjects([]Project{project})).To(Succeed())
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
+		project = projects.Project{Name: "gavel", Dir: GinkgoT().TempDir()}
+		initStagedRepo(project.Dir, "one.go")
+		Expect(seedProjects([]projects.Project{project})).To(Succeed())
 
 		originalGather := gatherProjectStatus
 		gatherProjectStatus = func(string, status.Options) (*status.Result, error) {
-			return &status.Result{Files: []status.FileStatus{{Path: "one.go"}}}, nil
+			return &status.Result{Files: []status.FileStatus{{Path: "one.go", State: status.StateStaged}}}, nil
 		}
 		DeferCleanup(func() {
 			gatherProjectStatus = originalGather
-			projectsPath = originalProjectsPath
 		})
 		server = &Server{}
 	})
@@ -44,11 +44,14 @@ var _ = Describe("project Open PR queue", func() {
 		})
 
 		Expect(err).NotTo(HaveOccurred())
+		Expect(queued.indexPatch).To(HaveSuffix(".patch"))
 		Expect(queued).To(Equal(commitQueueRequest{
-			action:  projectActionOpenPR,
-			files:   []string{"one.go"},
-			args:    []string{"commit", "--work-dir", project.ResolvedDir(), "--push", "one.go"},
-			workDir: project.ResolvedDir(),
+			action:     projectActionOpenPR,
+			files:      []string{"one.go"},
+			args:       []string{"commit", "--work-dir", project.ResolvedDir(), "--index-patch", queued.indexPatch, "--push"},
+			workDir:    project.ResolvedDir(),
+			indexPatch: queued.indexPatch,
+			snapshot:   []string{"one.go"},
 		}))
 	})
 
@@ -134,7 +137,7 @@ var _ = Describe("project Open PR queue", func() {
 		snapshots := clickytask.SnapshotByID(run.RunID)
 		Expect(snapshots).To(HaveLen(2))
 		Expect(snapshots[1].Name).To(Equal("Open PR one.go"))
-		Expect(snapshots[0].Details).To(Equal(projectCommitGroupDetails{Entries: []projectCommitTaskDetails{
+		Expect(withoutIndexPatches(snapshots[0].Details)).To(Equal(projectCommitGroupDetails{Entries: []projectCommitTaskDetails{
 			{TaskID: snapshots[1].ID, Action: projectActionOpenPR, Files: []string{"one.go"}},
 		}}))
 		runs.release("one.go")

@@ -248,7 +248,8 @@ func (s *Server) resolveTodoDir(dir string) (string, error) {
 // same reason openTodoProvider is: package tests drive the handlers against
 // temp workspaces that no projects.json knows about.
 var authorizeTodoDir = func(dir string) (string, error) {
-	project, err := ProjectForDir(dir)
+	// resolveTodoDir serves the host's own workspaces: the local organization's catalog.
+	project, err := projectForDir(context.Background(), dir)
 	if err != nil {
 		return "", err
 	}
@@ -298,7 +299,7 @@ var openTodoProvider = func(ctx context.Context, dir string) (todos.Provider, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	project, err := ProjectForDir(dir)
+	project, err := projectForDir(ctx, dir)
 	if err != nil {
 		return nil, err
 	}

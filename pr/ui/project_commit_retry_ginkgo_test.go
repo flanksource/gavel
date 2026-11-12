@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"time"
+
+	"github.com/flanksource/gavel/projects"
 
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/internal/taskhistory"
@@ -168,9 +171,9 @@ var _ = Describe("project commit run retry", func() {
 	It("rejects a retry through another project's route", func() {
 		runs := newFakeCommitRuns(queued...)
 		oldRunID := failGeneration(runs, "one.go", []string{"failed", "canceled", "canceled"})
-		gavel, err := GetProject("gavel")
+		gavel, err := getProject(context.Background(), "gavel")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(SaveProjects([]Project{gavel, {Name: "other", Dir: GinkgoT().TempDir()}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{gavel, {Name: "other", Dir: GinkgoT().TempDir()}})).To(Succeed())
 
 		recorder := retryCommitQueue(server, "other", oldRunID)
 
@@ -225,17 +228,57 @@ var _ = Describe("project commit run retry", func() {
 		oldRunID := decodeCommitRun(recorder).RunID
 		runs.release("one.go")
 		Eventually(func() []string { return commitTaskStatuses(oldRunID) }).Should(Equal([]string{"failed"}))
-		Expect(commitGroupSnapshot(oldRunID).Details).To(Equal(projectCommitGroupDetails{Entries: []projectCommitTaskDetails{{
+		Expect(withoutIndexPatches(commitGroupSnapshot(oldRunID).Details)).To(Equal(projectCommitGroupDetails{Entries: []projectCommitTaskDetails{{
 			TaskID: commitTaskSnapshots(oldRunID)[0].ID, Action: projectActionCommit, Files: []string{"one.go"}, Options: options,
 		}}}))
 		runs.clearFailure("one.go")
 
 		Expect(clickytask.ControlRun(GinkgoT().Context(), oldRunID, clickytask.ControlRetry)).To(Succeed())
 
-		gavel, err := GetProject("gavel")
+		gavel, err := getProject(context.Background(), "gavel")
 		Expect(err).NotTo(HaveOccurred())
-		argv := []string{"commit", "--work-dir", gavel.ResolvedDir(), "--message=fix: one", "one.go"}
-		Eventually(runs.arguments).Should(Equal([][]string{argv, argv}))
+		patch := commitGroupSnapshot(oldRunID).Details.(projectCommitGroupDetails).Entries[0].IndexPatch
+		argv := []string{"commit", "--work-dir", gavel.ResolvedDir(), "--message=fix: one", "--index-patch", patch}
+		Eventually(runs.arguments).Should(Equal([][]string{argv, argv}), "the retry commits the same staged snapshot")
+	})
+
+	It("retries an open-pr whose commit landed but whose push failed as a push-only run", func() {
+		runs := newFakeCommitRuns("one.go")
+		runs.failOn("one.go")
+		recorder := postCommitQueue(server, map[string]any{"action": "open-pr", "files": []string{"one.go"}})
+		Expect(recorder.Code).To(Equal(http.StatusAccepted), recorder.Body.String())
+		oldRunID := decodeCommitRun(recorder).RunID
+		runs.release("one.go")
+		Eventually(func() []string { return commitTaskStatuses(oldRunID) }).Should(Equal([]string{"failed"}))
+		patch := commitGroupSnapshot(oldRunID).Details.(projectCommitGroupDetails).Entries[0].IndexPatch
+		Expect(os.Remove(patch)).To(Succeed(), "a landed commit deletes its snapshot before pushing")
+		runs.clearFailure("one.go")
+
+		Expect(clickytask.ControlRun(GinkgoT().Context(), oldRunID, clickytask.ControlRetry)).To(Succeed())
+
+		gavel, err := getProject(context.Background(), "gavel")
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(runs.arguments).Should(Equal([][]string{
+			{"commit", "--work-dir", gavel.ResolvedDir(), "--index-patch", patch, "--push"},
+			{"commit", "--work-dir", gavel.ResolvedDir(), "--stage=staged", "--push"},
+		}))
+	})
+
+	It("refuses to retry a commit whose snapshot already landed", func() {
+		runs := newFakeCommitRuns("one.go")
+		runs.failOn("one.go")
+		recorder := postCommitQueue(server, map[string]any{"action": "commit", "files": []string{"one.go"}})
+		Expect(recorder.Code).To(Equal(http.StatusAccepted), recorder.Body.String())
+		oldRunID := decodeCommitRun(recorder).RunID
+		runs.release("one.go")
+		Eventually(func() []string { return commitTaskStatuses(oldRunID) }).Should(Equal([]string{"failed"}))
+		patch := commitGroupSnapshot(oldRunID).Details.(projectCommitGroupDetails).Entries[0].IndexPatch
+		Expect(os.Remove(patch)).To(Succeed())
+
+		retry := retryCommitQueue(server, "gavel", oldRunID)
+
+		Expect(retry.Code).To(Equal(http.StatusBadRequest), retry.Body.String())
+		Expect(retry.Body.String()).To(ContainSubstring("already committed"))
 	})
 })
 

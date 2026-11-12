@@ -9,24 +9,23 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/projects"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("project working-tree diff", func() {
 	var (
-		originalProjectsPath string
-		server               *Server
+		server *Server
 	)
 
 	BeforeEach(func() {
-		originalProjectsPath = projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 		server = newTrackedGitServer().server
 	})
 
 	AfterEach(func() {
-		projectsPath = originalProjectsPath
 	})
 
 	It("returns staged, unstaged, and untracked patches for a selected folder", func() {
@@ -35,7 +34,7 @@ var _ = Describe("project working-tree diff", func() {
 		runDiffGit(dir, "add", "src/staged.go")
 		writeDiffFile(dir, "src/unstaged.go", "package src\n\nvar Unstaged = true\n")
 		writeDiffFile(dir, "src/new.go", "package src\n\nvar New = true\n")
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/diff?path=src", nil)
@@ -63,7 +62,7 @@ var _ = Describe("project working-tree diff", func() {
 		writeDiffFile(dir, "generated/private.env", "NESTED_PRIVATE=hidden\n")
 		writeDiffFile(dir, "generated/keep.env", "NESTED_PUBLIC=visible\n")
 		runDiffGit(dir, "add", "src/staged.env")
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
 		statusRecorder := httptest.NewRecorder()
 		statusRequest := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/status", nil)
@@ -89,13 +88,36 @@ var _ = Describe("project working-tree diff", func() {
 		Expect(generated.Diff).NotTo(ContainSubstring("NESTED_PRIVATE=hidden"))
 	})
 
+	It("splits a single file's diff into its staged and unstaged patches", func() {
+		dir := createDiffRepository()
+		writeDiffFile(dir, "src/staged.go", "package src\n\nvar Staged = true\n")
+		runDiffGit(dir, "add", "src/staged.go")
+		writeDiffFile(dir, "src/staged.go", "package src\n\nvar Staged = true\nvar Later = true\n")
+		writeDiffFile(dir, "src/new.go", "package src\n\nvar New = true\n")
+		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+
+		both := requestProjectDiff(server, "gavel", "src/staged.go")
+		Expect(changedLines(both.Staged)).To(Equal([]string{"-var Staged = false", "+var Staged = true"}))
+		Expect(changedLines(both.Unstaged)).To(Equal([]string{"+var Later = true"}))
+		Expect(both.Diff).To(ContainSubstring("var Later = true"))
+
+		untracked := requestProjectDiff(server, "gavel", "src/new.go")
+		Expect(untracked.Staged).To(BeEmpty())
+		Expect(untracked.Unstaged).To(ContainSubstring("--- /dev/null"))
+		Expect(changedLines(untracked.Unstaged)).To(Equal([]string{"+package src", "+", "+var New = true"}))
+
+		folder := requestProjectDiff(server, "gavel", "src")
+		Expect(folder.Staged).To(BeEmpty())
+		Expect(folder.Unstaged).To(BeEmpty())
+	})
+
 	It("expands a wholly untracked directory into a patch per file", func() {
 		dir := createDiffRepository()
 		writeDiffFile(dir, "src/devtools/.gitignore", "*.log\n")
 		writeDiffFile(dir, "src/devtools/panel.ts", "export const panel = true;\n")
 		writeDiffFile(dir, "src/devtools/nested/inspector.ts", "export const inspector = true;\n")
 		writeDiffFile(dir, "src/devtools/noise.log", "ignored output\n")
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
 		response := requestProjectDiff(server, "gavel", "src/devtools")
 
@@ -111,7 +133,7 @@ var _ = Describe("project working-tree diff", func() {
 		dir := createDiffRepository()
 		Expect(os.WriteFile(filepath.Join(dir, "src", "image.bin"), []byte{0, 1, 2, 3}, 0o600)).To(Succeed())
 		writeDiffFile(dir, "src/text.go", "package src\n\nvar Text = true\n")
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
 		fileResponse := requestProjectDiff(server, "gavel", "src/image.bin")
 		Expect(fileResponse.Binary).To(BeTrue())
@@ -125,7 +147,7 @@ var _ = Describe("project working-tree diff", func() {
 	It("caps large working-tree diffs at a complete line", func() {
 		dir := createDiffRepository()
 		writeDiffFile(dir, "src/large.txt", strings.Repeat("a changed line with enough content\n", 12_000))
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
 		response := requestProjectDiff(server, "gavel", "src/large.txt")
 
@@ -136,7 +158,7 @@ var _ = Describe("project working-tree diff", func() {
 
 	It("rejects paths outside the current project change tree", func() {
 		dir := createDiffRepository()
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 
 		for _, path := range []string{"../outside", "/absolute", "missing"} {
 			recorder := httptest.NewRecorder()

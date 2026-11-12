@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/captain/pkg/aiflags"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/git/branchmerge"
@@ -23,7 +25,7 @@ var (
 // projectBranchRef is a branch of a project's repository resolved against the
 // project's base branch.
 type projectBranchRef struct {
-	project Project
+	project projects.Project
 	dir     string
 	base    string
 	branch  string
@@ -33,7 +35,7 @@ type projectBranchRef struct {
 // resolveProjectBranch reads {name} and the branch, answering 404 for an
 // unknown project or branch.
 func resolveProjectBranch(w http.ResponseWriter, r *http.Request, branch string) (projectBranchRef, bool) {
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return projectBranchRef{}, false
@@ -99,7 +101,7 @@ func (s *Server) projectBranchRange(w http.ResponseWriter, r *http.Request) (pro
 // tip are the last ref scan's, and the file list is the range's cached one,
 // so only the first read of a range runs git.
 func (s *Server) handleProjectBranchFiles(w http.ResponseWriter, r *http.Request) {
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return

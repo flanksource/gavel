@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
@@ -135,7 +137,7 @@ var _ = Describe("TODO PR links over HTTP", Ordered, func() {
 		// the lookup must not depend on one.
 		previous := openTodoProvider
 		openTodoProvider = func(_ context.Context, dir string) (todos.Provider, error) {
-			return nil, fmt.Errorf("%w: project for directory %q was not found", ErrProjectNotFound, dir)
+			return nil, fmt.Errorf("%w: project for directory %q was not found", projects.ErrNotFound, dir)
 		}
 		DeferCleanup(func() { openTodoProvider = previous })
 
