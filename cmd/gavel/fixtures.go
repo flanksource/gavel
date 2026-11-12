@@ -436,7 +436,8 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  gavel fixtures --no-progress tests.md")).Add(dim("    # Disable progress display")).NewLine().
 		Add(code("  gavel fixtures outline tests.md")).Add(dim("          # Parse and outline without running fixtures")).NewLine().
 		Add(code("  gavel fixtures --schema")).Add(dim("                  # Print the fixture/test JSON schemas and exit")).NewLine().
-		Add(renderHelpFlagGroups(cmd))
+		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
+		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
 
 	return t
 }

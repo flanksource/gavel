@@ -23,12 +23,12 @@ type ConfigureOptions struct {
 	// Model is the compact selector written to ai.model — "api:haiku",
 	// "agent:claude-sonnet-5", or a bare catalog slug when ~/.captain.yaml
 	// already pins a mode for that provider.
-	Model string `json:"model,omitempty" flag:"model" help:"Model for every AI operation, as a compact selector (e.g. agent:claude-sonnet-5)" category:"Model selection"`
+	Model string `json:"model,omitempty" flag:"model" help:"Model for every AI operation, as a compact selector (e.g. agent:claude-sonnet-5)"`
 	// GroupModel writes commit.grouping.model. Grouping reasons over the whole
 	// change set, so it usually wants a more capable tier than message writing.
-	GroupModel string `json:"groupModel,omitempty" flag:"group-model" help:"Model for AI commit grouping (commit.grouping.model)" category:"Model selection"`
+	GroupModel string `json:"groupModel,omitempty" flag:"group-model" help:"Model for AI commit grouping (commit.grouping.model)"`
 	// VerifyModel writes todos.verify.model, the grader for a definition of done.
-	VerifyModel string `json:"verifyModel,omitempty" flag:"verify-model" help:"Model for the definition-of-done grader (todos.verify.model)" category:"Model selection"`
+	VerifyModel string `json:"verifyModel,omitempty" flag:"verify-model" help:"Model for the definition-of-done grader (todos.verify.model)"`
 	// Global writes ~/.gavel.yaml instead of the repo's, for defaults that should
 	// follow the user across checkouts.
 	Global bool `json:"global,omitempty" flag:"global" help:"Write ~/.gavel.yaml instead of the repository's .gavel.yaml"`
