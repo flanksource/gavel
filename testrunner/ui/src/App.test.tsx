@@ -189,7 +189,8 @@ describe('App', () => {
     }), { 'POST /api/lint/ignore': () => new Response('{}') });
     open('/lint/eslint');
 
-    fireEvent.click(await screen.findByRole('button', { name: /Disable eslint entirely/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Disable eslint entirely/ }));
 
     await waitFor(() => expect(screen.getByText('Ignore rule saved to .gavel.yaml')).toBeTruthy());
     expect(JSON.parse(calls.find(call => call.url === '/api/lint/ignore')!.init!.body as string)).toEqual({ source: 'eslint', work_dir: '/repo' });
