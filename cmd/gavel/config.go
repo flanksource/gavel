@@ -154,16 +154,9 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("  bundled from ", muted).Append("gavel.yaml.example", code).Append(" so the file and help stay in sync", muted).NewLine().
 		Add(clicky.CodeBlock("yaml", gaveldocs.GavelConfigExample)).
 		NewLine().
-		Add(renderHelpFlagGroups(cmd))
+		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
+		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
 
-	return t
-}
-
-func renderHelpFlagGroups(cmd *cobra.Command) api.Text {
-	t := clicky.Text("")
-	for _, group := range clicky.CommandFlagGroups(cmd) {
-		t = t.Add(renderHelpFlags(group.Title, group.Flags))
-	}
 	return t
 }
 

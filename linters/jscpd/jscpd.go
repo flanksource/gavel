@@ -163,7 +163,7 @@ func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) (violations [
 	if err != nil {
 		return nil, err
 	}
-	return linters.FilterViolationsByGitIgnore(violations, j.WorkDir, nil)
+	return linters.FilterViolationsByGitIgnore(violations, j.WorkDir)
 }
 
 func (j *JSCPD) buildExcludes() []string {

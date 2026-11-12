@@ -89,7 +89,8 @@ func todosCreateHelp(cmd *cobra.Command) api.Text {
 		Append("  ").Append(`gavel todos create "Fix parser" --verification @verification.md`, code).Append("  attach a definition of done", muted).NewLine().
 		Append("  ").Append(`gavel todos create "Fix parser" --github`, code).Append("  create it and open a linked GitHub issue", muted).NewLine().
 		Append("  ").Append(`gavel todos create "Fix lexer" --parent 6408dc66`, code).Append("  create a child of another TODO", muted).NewLine().NewLine().
-		Add(renderHelpFlagGroups(cmd))
+		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
+		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
 
 	return t
 }
