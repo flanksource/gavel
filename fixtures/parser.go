@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/goccy/go-yaml"
 )
 
 // ParseMarkdownFixtures parses markdown files containing test fixtures
@@ -210,9 +208,9 @@ func parseFrontMatter(file *os.File) (*FrontMatter, string, error) {
 
 	// Parse YAML front-matter
 	frontMatterYAML := strings.Join(frontMatterLines, "\n")
-	var frontMatter FrontMatter
-	if err := yaml.Unmarshal([]byte(frontMatterYAML), &frontMatter); err != nil {
-		return nil, "", fmt.Errorf("failed to parse YAML front-matter: %w", err)
+	frontMatter, err := unmarshalFrontMatter([]byte(frontMatterYAML))
+	if err != nil {
+		return nil, "", err
 	}
 
 	// Collect remaining content
@@ -226,12 +224,12 @@ func parseFrontMatter(file *os.File) (*FrontMatter, string, error) {
 	}
 
 	if len(contentLines) == 0 {
-		return &frontMatter, "", nil
+		return frontMatter, "", nil
 	}
 	// Blank lines stand in for the front matter so that line numbers in the
 	// content are the file's own.
 	padding := strings.Repeat("\n", len(frontMatterLines)+2)
-	return &frontMatter, padding + strings.Join(contentLines, "\n"), nil
+	return frontMatter, padding + strings.Join(contentLines, "\n"), nil
 }
 
 // parseMarkdownContentWithSourceDir parses markdown content with source directory context

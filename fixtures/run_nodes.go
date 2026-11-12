@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/task"
-	"github.com/goccy/go-yaml"
 )
 
 // RunNodes executes every test node in a fixture tree and returns one result per
@@ -198,9 +197,9 @@ func SplitFrontMatter(markdown string) (*FrontMatter, string, error) {
 		return nil, "", fmt.Errorf("unterminated YAML front matter: no closing --- delimiter")
 	}
 
-	var frontMatter FrontMatter
-	if err := yaml.Unmarshal([]byte(strings.Join(frontMatterLines, "\n")), &frontMatter); err != nil {
-		return nil, "", fmt.Errorf("failed to parse YAML front-matter: %w", err)
+	frontMatter, err := unmarshalFrontMatter([]byte(strings.Join(frontMatterLines, "\n")))
+	if err != nil {
+		return nil, "", err
 	}
 
 	var contentLines []string
@@ -210,7 +209,7 @@ func SplitFrontMatter(markdown string) (*FrontMatter, string, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, "", err
 	}
-	return &frontMatter, strings.Join(contentLines, "\n"), nil
+	return frontMatter, strings.Join(contentLines, "\n"), nil
 }
 
 // maxFrontMatterLineBytes bounds one scanned line. A fixture document can embed

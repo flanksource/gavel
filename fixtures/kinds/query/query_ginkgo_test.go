@@ -464,6 +464,37 @@ steps:
 		Expect(result.Status).To(Equal(task.StatusPASS), result.Error+result.CELTrace)
 	})
 
+	DescribeTable("runs a step that names no connection against the fixture's single default",
+		func(connections string, wantStatus task.Status, wantError string) {
+			dir, _ := fixtureDir()
+			warehouse := func(_ dbcontext.Context, reference string) (*cdbmodels.Connection, error) {
+				if reference != "warehouse" {
+					return nil, nil
+				}
+				return &cdbmodels.Connection{Name: "warehouse", Type: cdbmodels.ConnectionTypePostgres, URL: "postgres://db.example:5432/w"}, nil
+			}
+			result := runYAML(dir, "kind: Fixture\n"+connections+"steps:\n  - id: all\n    kind: query\n    query: SELECT guid FROM activities\n    cel: rowCount == 3\n",
+				fixtures.RunOptions{Connections: warehouse})
+			Expect(result.Status).To(Equal(wantStatus), result.Error+result.CELTrace)
+			Expect(result.Error).To(ContainSubstring(wantError))
+		},
+		Entry("one default", "connections: [lab]\n", task.StatusPASS, ""),
+		Entry("no defaults", "", task.StatusERR, "no default connection"),
+		Entry("a default per type", "connections: [lab, warehouse]\n", task.StatusERR, `2 default connections declared ("lab" (sqlite), "warehouse" (postgres))`),
+	)
+
+	It("runs a markdown Query row against the retired front-matter connection: key", func() {
+		dir, _ := fixtureDir()
+		node, err := fixtures.ParseMarkdownDocument("lint.md", "---\nconnection: lab\n---\n# Lint\n\n"+
+			"| Name | Query | CEL Validation |\n|------|-------|----------------|\n"+
+			"| all rows | SELECT guid FROM activities | rowCount == 3 |\n", dir)
+		Expect(err).NotTo(HaveOccurred())
+		results, _, err := fixtures.RunNodes(context.Background(), []*fixtures.FixtureNode{node}, fixtures.RunOptions{WorkDir: dir})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results).To(HaveLen(1))
+		Expect(results[0].Status).To(Equal(task.StatusPASS), results[0].Error)
+	})
+
 	It("runs a markdown Query row with its Connection, CEL Validation and Findings columns", func() {
 		dir, _ := fixtureDir()
 		node, err := fixtures.ParseMarkdownDocument("lint.md", "# Lint\n\n"+

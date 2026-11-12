@@ -12,10 +12,6 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
-
-	"github.com/flanksource/clicky/schemaform"
-
-	"github.com/flanksource/gavel/fixtures/kinds/form"
 )
 
 // Catalog is gavel's layered connection store as a fixture in workDir sees
@@ -119,34 +115,4 @@ func PickerLabel(connection *models.Connection) string {
 		return name
 	}
 	return name + " (" + connection.Type + ")"
-}
-
-// TerminalLookup resolves a terminal form's `format: connection` pickers over
-// Catalog(workDir), scoped by the types in each picker's lookup URL.
-func TerminalLookup(workDir string, opts Options) schemaform.Lookup {
-	return func(ctx context.Context, req schemaform.LookupRequest) (schemaform.LookupResult, error) {
-		if req.Spec.Filter != form.ConnectionLookupFilter {
-			return schemaform.LookupResult{}, fmt.Errorf("no terminal lookup for x-clicky-lookup filter %q", req.Spec.Filter)
-		}
-		types, err := LookupTypes(req.Spec.URL)
-		if err != nil {
-			return schemaform.LookupResult{}, err
-		}
-		service, err := Service(ctx, workDir, opts)
-		if err != nil {
-			return schemaform.LookupResult{}, err
-		}
-		matched, err := Lookup(service, LookupQuery{Types: types, Query: req.Query})
-		if err != nil {
-			return schemaform.LookupResult{}, err
-		}
-		if len(matched) == 0 && req.Query == "" {
-			return schemaform.LookupResult{}, fmt.Errorf("no %s connection in the gavel connection catalog (%s/.connections or `gavel connections`)", strings.Join(types, "/"), workDir)
-		}
-		result := schemaform.LookupResult{Total: len(matched)}
-		for _, connection := range matched {
-			result.Options = append(result.Options, schemaform.Option{Value: PickerValue(connection), Label: PickerLabel(connection)})
-		}
-		return result, nil
-	}
 }

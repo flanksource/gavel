@@ -163,14 +163,7 @@ func prepare(ctx context.Context, step *fixtures.StepContext) (*run, error) {
 	if err != nil {
 		return nil, err
 	}
-	ref := cfg.Connection
-	if ref == nil && profile.Provider.Connection != "" {
-		ref = profile.Provider.Connection
-	}
-	if ref == nil {
-		return nil, errors.New("no connection: set connection on the step (or a Connection column / frontmatter connection), or provider.connection on the profile")
-	}
-	resolved, err := dbconn.Resolve(ctx, step, ref, dbconn.Options{})
+	resolved, err := resolveConnection(ctx, step, cfg, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -182,9 +175,8 @@ func prepare(ctx context.Context, step *fixtures.StepContext) (*run, error) {
 		profile.Provider.Options[databaseOption] = cfg.Database
 	}
 	if profile.Provider.Type == "" {
-		if profile.Provider.Type = providerForConnection[resolved.Connection.Type]; profile.Provider.Type == "" {
-			return nil, fmt.Errorf("connection %q is a %s connection, which no query provider reads; set provider.type on the profile",
-				resolved.Connection.Name, resolved.Connection.Type)
+		if profile.Provider.Type, err = providerFor(resolved.Connection); err != nil {
+			return nil, err
 		}
 	}
 	target, err := sqlTarget(resolved.Connection, cfg.Database)
@@ -196,6 +188,26 @@ func prepare(ctx context.Context, step *fixtures.StepContext) (*run, error) {
 		autoDiagnose = time.Duration(*cfg.AutoDiagnose)
 	}
 	return &run{profile: profile, params: params, resolved: resolved, findings: findings, target: target, autoDiagnose: autoDiagnose}, nil
+}
+
+// resolveConnection is the step's connection, else the profile's
+// provider.connection, else the fixture's single default connection.
+func resolveConnection(ctx context.Context, step *fixtures.StepContext, cfg Config, profile cdbquery.Profile) (*dbconn.Resolved, error) {
+	conns, err := dbconn.StepConnections(ctx, step, dbconn.Options{})
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case cfg.Connection != nil:
+		return conns.Resolve(cfg.Connection)
+	case profile.Provider.Connection != "":
+		return conns.Resolve(profile.Provider.Connection)
+	}
+	resolved, err := conns.SingleDefault()
+	if err != nil {
+		return nil, fmt.Errorf("no connection on the step (or a Connection column) or provider.connection on the profile: %w", err)
+	}
+	return resolved, nil
 }
 
 // sqlTarget is the host, port, user and database a SQL connection opens —
@@ -216,7 +228,7 @@ func sqlTarget(c *cdbmodels.Connection, database string) (connection.SQLTarget, 
 }
 
 // loadConfig is a YAML step's config, or a markdown row's: its Query column,
-// a Connection column (else the frontmatter `connection`) and a Findings
+// a Connection column (else the fixture's default connection) and a Findings
 // column, which is the CEL form.
 func loadConfig(step *fixtures.StepContext) (Config, error) {
 	if step.Test.Step != nil {
@@ -231,9 +243,6 @@ func loadConfig(step *fixtures.StepContext) (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{Query: query, Connection: step.Test.Expected.Properties["connection"]}
-	if cfg.Connection == nil {
-		cfg.Connection = step.Test.Metadata["connection"]
-	}
 	if findings, ok := step.Test.Expected.Properties["findings"]; ok {
 		if cfg.Findings, err = json.Marshal(findings); err != nil {
 			return Config{}, err

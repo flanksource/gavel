@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/connection/store"
@@ -27,6 +29,65 @@ var providerForConnection = map[string]string{
 	models.ConnectionTypeMySQL:      "mysql",
 	models.ConnectionTypeSQLite:     "sqlite",
 	models.ConnectionTypeClickHouse: "clickhouse",
+}
+
+// providerFor is the SQL provider key connection is read through.
+func providerFor(connection *models.Connection) (string, error) {
+	if provider := providerForConnection[connection.Type]; provider != "" {
+		return provider, nil
+	}
+	return "", fmt.Errorf("connection %q is a %s connection, which no query provider reads; set provider.type on the profile",
+		connection.Name, connection.Type)
+}
+
+// LookupQuery is a lookup's SQL, the params it binds (`q`, the search text,
+// among them) and the most rows it reads.
+type LookupQuery struct {
+	SQL    string
+	Params map[string]any
+	Limit  int
+}
+
+// bareParam matches `@name`, a lookup's shorthand for `{{.params.name}}`,
+// not preceded by another `@` (a SQL Server `@@global`) or a word character.
+var bareParam = regexp.MustCompile(`(^|[^@\w])@([A-Za-z_]\w*)\b`)
+
+// LookupRows reads lookup.SQL on resolved through the same provider mapping
+// and param binding a query step uses, refusing a SQL program: a lookup is one
+// SELECT. `@name` is read as `{{.params.name}}` for each param supplied.
+// truncated says Limit stopped the read short of what the query had to give.
+func LookupRows(ctx context.Context, resolved *dbconn.Resolved, lookup LookupQuery) (rows []map[string]any, truncated bool, err error) {
+	if strings.TrimSpace(lookup.SQL) == "" {
+		return nil, false, errors.New("lookup sql is empty")
+	}
+	if lookup.Limit <= 0 {
+		return nil, false, fmt.Errorf("lookup limit must be positive, got %d", lookup.Limit)
+	}
+	provider, err := providerFor(resolved.Connection)
+	if err != nil {
+		return nil, false, err
+	}
+	sql := bareParam.ReplaceAllStringFunc(lookup.SQL, func(match string) string {
+		groups := bareParam.FindStringSubmatch(match)
+		if _, supplied := lookup.Params[groups[2]]; !supplied {
+			return match
+		}
+		return groups[1] + "{{.params." + groups[2] + "}}"
+	})
+	profile := cdbquery.Profile{Name: "lookup", Query: sql, Limits: &cdbquery.RowLimits{MaxExportRows: lookup.Limit}}
+	profile.Provider.Type = provider
+	profile.Provider.Connection = resolved.Ref
+	if err := declareParams(&profile, lookup.Params); err != nil {
+		return nil, false, err
+	}
+	result, err := cdbquery.Execute(resolved.Context.Wrap(ctx), profile, lookup.Params)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(result.Batches) > 0 {
+		return nil, false, errors.New("lookup sql ran as a SQL program: a lookup is a single SELECT")
+	}
+	return result.Rows, result.Truncated, nil
 }
 
 // buildProfile is the profile the step runs and the params it runs with: the

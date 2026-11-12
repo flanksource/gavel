@@ -1,8 +1,9 @@
 // Package dbconn resolves the database connection a fixture step names: a
-// catalog name or connection:// reference, answered by the host's resolver
-// (RunOptions.Connections) first and then by gavel's layered connection store
-// (the shared, gavel and fixture-directory `.connections` layers), or an inline
-// commons-db connection spec whose `valueFrom` references are hydrated.
+// catalog name or connection:// reference, answered by the fixture's named
+// `connections:` first, then the host's resolver (RunOptions.Connections) and
+// then gavel's layered connection store (the shared, gavel and
+// fixture-directory `.connections` layers), or an inline commons-db connection
+// spec whose `valueFrom` references are hydrated.
 package dbconn
 
 import (
@@ -46,45 +47,26 @@ type Resolved struct {
 	Context dbcontext.Context
 }
 
-// Resolve resolves ref — a string reference or an inline connection object.
+// Resolve resolves ref — a string reference or an inline connection object —
+// through the step's fixture connections (StepConnections).
 func Resolve(ctx context.Context, step *fixtures.StepContext, ref any, opts Options) (*Resolved, error) {
-	dbctx, err := catalogContext(ctx, step, opts)
+	conns, err := StepConnections(ctx, step, opts)
 	if err != nil {
 		return nil, err
 	}
-	var connection *models.Connection
-	switch value := ref.(type) {
-	case string:
-		connection, err = resolveReference(dbctx, value)
-	case map[string]any:
-		connection, err = inlineConnection(value)
-	case nil:
-		return nil, errors.New("no connection given: set a connection name, connection:// reference or inline connection")
-	default:
-		return nil, fmt.Errorf("connection must be a name, connection:// reference or object, got %T", ref)
-	}
-	if err != nil {
-		return nil, err
-	}
-	hydrated, err := dbcontext.HydrateConnection(dbctx, connection)
-	if err != nil {
-		return nil, fmt.Errorf("hydrate connection %q: %w", connection.Name, err)
-	}
-	return answering(dbctx, hydrated), nil
+	return conns.Resolve(ref)
 }
 
 // A params-reading `setup:` resolves its connection:// references through the
 // same catalog a step and a `format: connection` picker read.
 func init() {
-	fixtures.StepConnectionCatalog = func(ctx context.Context, workDir string, host dbcontext.ConnectionResolver) (dbcontext.Context, error) {
-		return AttachCatalog(ctx, workDir, host, Options{})
+	fixtures.StepConnectionCatalog = func(ctx context.Context, workDir string, host dbcontext.ConnectionResolver, set *fixtures.ConnectionSet) (dbcontext.Context, error) {
+		conns, err := OpenConnections(ctx, OpenOptions{WorkDir: workDir, Host: host, Set: set})
+		if err != nil {
+			return dbcontext.Context{}, err
+		}
+		return conns.Context(), nil
 	}
-}
-
-// catalogContext is a commons-db context resolving references through the
-// host resolver, then the layered gavel store.
-func catalogContext(ctx context.Context, step *fixtures.StepContext, opts Options) (dbcontext.Context, error) {
-	return AttachCatalog(ctx, step.WorkDir, step.Opts.Connections, opts)
 }
 
 // AttachCatalog is a commons-db context resolving references through host

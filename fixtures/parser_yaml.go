@@ -43,14 +43,16 @@ func ParseFixtureFile(path string) (*FixtureNode, error) {
 
 // fixtureDocument is one `kind: Fixture` document.
 type fixtureDocument struct {
-	Kind     string            `json:"kind"`
-	Name     string            `json:"name,omitempty"`
-	Defaults *StepDefaults     `json:"defaults,omitempty"`
-	Setup    *SetupSpec        `json:"setup,omitempty"`
-	Env      map[string]any    `json:"env,omitempty"`
-	Traces   *TraceSpecs       `json:"traces,omitempty"`
-	Params   json.RawMessage   `json:"params,omitempty"`
-	Steps    []json.RawMessage `json:"steps"`
+	Kind     string          `json:"kind"`
+	Name     string          `json:"name,omitempty"`
+	Defaults *StepDefaults   `json:"defaults,omitempty"`
+	Setup    *SetupSpec      `json:"setup,omitempty"`
+	Env      map[string]any  `json:"env,omitempty"`
+	Traces   *TraceSpecs     `json:"traces,omitempty"`
+	Params   json.RawMessage `json:"params,omitempty"`
+	// Connections is the document's `connections:` (ConnectionSet).
+	Connections *ConnectionSet    `json:"connections,omitempty"`
+	Steps       []json.RawMessage `json:"steps"`
 }
 
 // ParseFixtureDocuments parses a (multi-document) YAML or JSON fixture file
@@ -195,6 +197,7 @@ func addDocumentStep(doc fixtureDocument, parent *FixtureNode, spec *StepSpec, s
 	test := &FixtureTest{Name: name, SourceDir: sourceDir, Step: spec}
 	test.FrontMatter.Env = doc.Env
 	test.FrontMatter.Traces = doc.Traces
+	test.Connections = doc.Connections
 	test.Setup = doc.Setup
 	parent.AddChild(&FixtureNode{Name: name, Type: TestNode, Test: test, Origin: origin})
 }

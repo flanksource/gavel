@@ -502,6 +502,10 @@ type FrontMatter struct {
 	// `params` form step (ParamsStepID). File-level only.
 	Params map[string]any `yaml:"params,omitempty" json:"params,omitempty"`
 
+	// Connections declares the fixture's connections: a list of defaults (one
+	// per connection type) or a map of named connections. File-level only.
+	Connections *ConnectionSet `yaml:"connections,omitempty" json:"connections,omitempty"`
+
 	Metadata map[string]interface{} `yaml:",inline" json:"metadata,omitempty"`
 }
 
@@ -531,6 +535,7 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "verify")
 	delete(f.Metadata, "setup")
 	delete(f.Metadata, "params")
+	delete(f.Metadata, "connections")
 }
 
 // ShouldSkip returns a non-empty reason string if the fixture should be skipped

@@ -18,10 +18,11 @@ import (
 
 // StepConnectionCatalog is the connection catalog a step's `connection:` and a
 // `format: connection` picker read: host first (when set), then gavel's layered
-// store for workDir. kinds/dbconn registers it. A params-reading setup resolves
-// its references through it, so a picked connection resolves to the one the
+// store for workDir, under the fixture's declared `connections:` (set; nil for
+// none). kinds/dbconn registers it. A params-reading setup resolves its
+// references through it, so a picked connection resolves to the one the
 // picker offered.
-var StepConnectionCatalog func(ctx context.Context, workDir string, host dbcontext.ConnectionResolver) (dbcontext.Context, error)
+var StepConnectionCatalog func(ctx context.Context, workDir string, host dbcontext.ConnectionResolver, set *ConnectionSet) (dbcontext.Context, error)
 
 // paramsTemplate matches a Go template action reading the `params` root.
 var paramsTemplate = regexp.MustCompile(`\{\{[^}]*\.params\b`)
@@ -154,7 +155,7 @@ func decodeSetup(tree any) (shell.Setup, error) {
 // values — over the scope's step outputs (`params` among them) and prepares
 // the result, resolving its connection references through host first, then
 // the catalog.
-func prepareParamsSetup(ctx flanksourceContext.Context, mdPath string, deferred deferredSetup, scope *StepScope, host dbcontext.ConnectionResolver) (*PreparedSetup, error) {
+func prepareParamsSetup(ctx flanksourceContext.Context, mdPath string, deferred deferredSetup, scope *StepScope, host dbcontext.ConnectionResolver, set *ConnectionSet) (*PreparedSetup, error) {
 	tree, err := decodeOrderedJSON(deferred.spec.raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: setup: decode: %w", mdPath, err)
@@ -179,7 +180,7 @@ func prepareParamsSetup(ctx flanksourceContext.Context, mdPath string, deferred 
 		}
 		return prepareSetup(ctx, mdPath, deferred.sourceDir, &spec, nil)
 	}
-	catalog, err := StepConnectionCatalog(ctx, deferred.sourceDir, host)
+	catalog, err := StepConnectionCatalog(ctx, deferred.sourceDir, host, set)
 	if err != nil {
 		return nil, fmt.Errorf("%s: setup: open connection catalog: %w", mdPath, err)
 	}

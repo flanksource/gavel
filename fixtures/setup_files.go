@@ -156,7 +156,7 @@ func (s *fileSetups) afterParams(ctx flanksourceContext.Context, test FixtureTes
 	if !ok {
 		return result
 	}
-	prepared, err := prepareParamsSetup(ctx, file, deferred, scope, s.host)
+	prepared, err := prepareParamsSetup(ctx, file, deferred, scope, s.host, test.Connections)
 	if err == nil {
 		s.store(file, prepared)
 		err = exportSetupEnv(scope, prepared)

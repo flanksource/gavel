@@ -6,14 +6,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/flanksource/clicky/schemaform"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/gavel/fixtures"
-	"github.com/flanksource/gavel/fixtures/kinds/form"
 )
 
 func TestDBConn(t *testing.T) {
@@ -80,6 +78,76 @@ var _ = Describe("Resolve", func() {
 	})
 })
 
+var _ = Describe("fixture connections", func() {
+	var step *fixtures.StepContext
+	BeforeEach(func() {
+		GinkgoT().Setenv("XDG_CONFIG_HOME", GinkgoT().TempDir())
+		step = &fixtures.StepContext{WorkDir: GinkgoT().TempDir()}
+		writeConnection(step.WorkDir, "lab", "file:/data/lab.db")
+		writeConnection(step.WorkDir, "archive", "file:/data/archive.db")
+	})
+
+	It("resolves named connections ahead of the catalog: inline by name, string refs through the catalog", func() {
+		step.Test.Connections = &fixtures.ConnectionSet{Named: map[string]any{
+			"lab":     map[string]any{"type": "postgres", "url": "postgres://u:p@db.example:5432/lab"},
+			"history": "connection://archive",
+		}}
+		conns, err := StepConnections(context.Background(), step, Options{})
+		Expect(err).NotTo(HaveOccurred())
+		urls := map[string]string{}
+		for _, ref := range []string{"lab", "connection://lab", "history"} {
+			resolved, err := conns.Resolve(ref)
+			Expect(err).NotTo(HaveOccurred())
+			urls[ref] = resolved.Connection.Name + " " + resolved.Connection.URL
+		}
+		Expect(urls).To(Equal(map[string]string{
+			"lab":              "lab postgres://u:p@db.example:5432/lab",
+			"connection://lab": "lab postgres://u:p@db.example:5432/lab",
+			"history":          "archive file:/data/archive.db",
+		}))
+		named, err := conns.NamedOfTypes([]string{models.ConnectionTypeSQLite})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(named).To(HaveLen(1))
+		Expect([]string{named[0].Name, named[0].Ref, named[0].Connection.Type}).To(Equal([]string{"history", "connection://history", "sqlite"}))
+	})
+
+	It("keys list entries by their type, the one default a step without a connection uses", func() {
+		step.Test.Connections = &fixtures.ConnectionSet{Defaults: []string{"lab", "warehouse"}}
+		step.Opts.Connections = func(_ dbcontext.Context, reference string) (*models.Connection, error) {
+			if reference != "warehouse" {
+				return nil, nil
+			}
+			return &models.Connection{Name: "warehouse", Type: models.ConnectionTypePostgres, URL: "postgres://db.example/w"}, nil
+		}
+		conns, err := StepConnections(context.Background(), step, Options{})
+		Expect(err).NotTo(HaveOccurred())
+		sqlite, ok := conns.DefaultFor(models.ConnectionTypeSQLite)
+		Expect(ok).To(BeTrue())
+		Expect(sqlite.Ref).To(Equal("connection://lab"))
+		_, err = conns.SingleDefault()
+		Expect(err).To(MatchError(And(ContainSubstring(`"lab" (sqlite)`), ContainSubstring(`"warehouse" (postgres)`))))
+	})
+
+	DescribeTable("fails loudly on defaults that cannot each stand for one type",
+		func(defaults []string, want []string) {
+			step.Test.Connections = &fixtures.ConnectionSet{Defaults: defaults}
+			_, err := StepConnections(context.Background(), step, Options{})
+			for _, part := range want {
+				Expect(err).To(MatchError(ContainSubstring(part)))
+			}
+		},
+		Entry("two of one type", []string{"lab", "archive"}, []string{`"lab"`, `"archive"`, "both sqlite"}),
+		Entry("one that resolves nowhere", []string{"lab", "missing"}, []string{`connections[1] "missing"`, "connection not found"}),
+	)
+
+	It("has no single default when none is declared", func() {
+		conns, err := StepConnections(context.Background(), step, Options{})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = conns.SingleDefault()
+		Expect(err).To(MatchError(ContainSubstring("no default connection")))
+	})
+})
+
 var _ = Describe("connection pickers", func() {
 	var workDir string
 	BeforeEach(func() {
@@ -104,22 +172,6 @@ var _ = Describe("connection pickers", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(names(all)).To(Equal([]string{"archive", "lab", "warehouse"}))
 		Expect(all[2].Password).NotTo(ContainSubstring("s3cret"))
-	})
-
-	It("offers a terminal form the same connections, committing their connection:// reference", func() {
-		lookup := TerminalLookup(workDir, Options{})
-		result, err := lookup(context.Background(), schemaform.LookupRequest{Spec: schemaform.LookupSpec{
-			Filter: form.ConnectionLookupFilter, URL: form.ConnectionLookupURL + "?types=sql_server",
-		}})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Options).To(Equal([]schemaform.Option{{Value: "connection://warehouse", Label: "warehouse (sql_server)"}}))
-	})
-
-	It("fails a terminal picker loudly when no connection of its types exists", func() {
-		_, err := TerminalLookup(workDir, Options{})(context.Background(), schemaform.LookupRequest{Spec: schemaform.LookupSpec{
-			Filter: form.ConnectionLookupFilter, URL: form.ConnectionLookupURL + "?types=postgres",
-		}})
-		Expect(err).To(MatchError(ContainSubstring("no postgres connection")))
 	})
 })
 
