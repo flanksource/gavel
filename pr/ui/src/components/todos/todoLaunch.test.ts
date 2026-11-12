@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { todoMutationStream } from './todoLaunch';
 import { useTodoRun } from './run';
-import { queryTestWrapper } from './queryTestWrapper';
+import { queryToastTestWrapper } from './queryTestWrapper';
 import type { TodoRunResponse } from '../../types';
 
 function streamResponse(chunks: string[]) {
@@ -45,7 +45,7 @@ describe('todoMutationStream', () => {
       'event: admitted\ndata: {"status":"started","promptRunId":"run-new","sessionId":"session-new"}\n\n',
     ]));
     vi.stubGlobal('fetch', fetchMock);
-    const { result } = renderHook(() => useTodoRun('/workspace'), { wrapper: queryTestWrapper() });
+    const { result } = renderHook(() => useTodoRun('/workspace'), { wrapper: queryToastTestWrapper() });
 
     await act(async () => { await result.current.run('todo-1', { step: 'run', spec: {}, reuseBranch }); });
 
@@ -58,7 +58,7 @@ describe('todoMutationStream', () => {
       'event: admitted\ndata: {"status":"started","promptRunId":"run-new","sessionId":"session-new"}\n\n',
     ]));
     vi.stubGlobal('fetch', fetchMock);
-    const { result } = renderHook(() => useTodoRun('/workspace'), { wrapper: queryTestWrapper() });
+    const { result } = renderHook(() => useTodoRun('/workspace'), { wrapper: queryToastTestWrapper() });
 
     await act(async () => { await result.current.run('todo-1', { step: 'run', spec: {} }); });
 
@@ -77,7 +77,7 @@ describe('todoMutationStream', () => {
       ]));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
-    const { result } = renderHook(() => useTodoRun('/workspace'), { wrapper: queryTestWrapper() });
+    const { result } = renderHook(() => useTodoRun('/workspace'), { wrapper: queryToastTestWrapper() });
     let admitted: TodoRunResponse | null = null;
     await act(async () => { admitted = await result.current.run('todo-1', { step: 'run', spec: {} }); });
     expect(admitted).toMatchObject({ status: 'started', promptRunId: 'run-new' });

@@ -29,7 +29,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   const [draftTitle, setDraftTitle] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
-  const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir);
+  const { runBusy, runError, reset: resetRun, run } = useTodoRun(dir);
   const launch = useTodoLaunchProgress(dir, todo?.ref ?? '');
   const { context: runContext, error: runContextError } = useTodoRunContext({ dir, enabled: !!todo && !!dir.trim() });
   const updateTodo = useUpdateTodoMutation(dir, `Failed to update todo ${todo?.ref || ''}`.trim());
@@ -334,7 +334,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   return {
     advancedMode, setAdvancedMode, runSelections, setRunSelections, error: error || runContextError, tab, setTab,
     editingTitle, setEditingTitle, editingBody, setEditingBody, draftTitle, setDraftTitle,
-    draftBody, setDraftBody, copyState, runBusy, runMessage, runError, runContext,
+    draftBody, setDraftBody, copyState, runBusy, runError, runContext,
     busy, transferTargets, closed, body, events, verificationDetail, verificationError,
     verification, sessionAttemptCount, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
     tagIndex, tagCounts, viewSessionId, viewingHistoricalSession, sessionInProgress,
@@ -346,5 +346,5 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
 }
 
 function todoFullId(todo: TodoItem): string {
-  return todo.id ? `todo:${todo.id}` : todo.ref;
+  return todo.id || todo.ref;
 }

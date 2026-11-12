@@ -6,11 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openEventStream } from '../eventHub';
 import { queryKeys } from '../query';
 import { projectDiffQueryKey } from './projectMutations';
-import { projectStatusResponse as statusResponse } from './ProjectStatusView.fixture';
+import { projectStatusResponse as statusResponse, statusWithStates } from './ProjectStatusView.fixture';
 import { ProjectStatusView } from './ProjectStatusView';
 
-const { useTestRunMock } = vi.hoisted(() => ({ useTestRunMock: vi.fn() }));
+const { useTestRunMock, copyTextMock } = vi.hoisted(() => ({ useTestRunMock: vi.fn(), copyTextMock: vi.fn() }));
 let queryClient: QueryClient;
+
+vi.mock('../clipboard', () => ({ copyText: copyTextMock }));
 
 vi.mock('@flanksource/gavel/testrunner/hooks', () => ({
   useTestRun: useTestRunMock,
@@ -23,7 +25,7 @@ vi.mock('../useGitFocus', () => ({ useGitFocus: () => ({ error: '' }) }));
 /* oxlint-disable clicky-ui/prefer-clicky-components --
    Raw elements are the test doubles for clicky-ui's components: the real
    SplitButton and FilterBar mount floating-ui, which crashes under vitest. */
-vi.mock('@flanksource/clicky-ui/components', () => ({
+vi.mock('@flanksource/clicky-ui/components', async () => ({
   Button: ({ children, onClick, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
     <button onClick={onClick} {...props}>{children}</button>
   ),
@@ -47,6 +49,8 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   Modal: ({ open, title, children, footer }: { open: boolean; title?: ReactNode; children: ReactNode; footer?: ReactNode }) => open ? (
     <section aria-label={typeof title === 'string' ? title : undefined}>{children}{footer}</section>
   ) : null,
+  DropdownMenu: (await import('./projectTreeDoubles')).DropdownMenuDouble,
+  ConfirmDialog: (await import('./projectTreeDoubles')).ConfirmDialogDouble,
   JsonSchemaForm: ({ value, onChange }: { value: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void }) => (
     <div>
       <output data-testid="advanced-options">{JSON.stringify(value)}</output>
@@ -138,19 +142,18 @@ describe('ProjectStatusView', () => {
     expect(useTestRunMock).toHaveBeenCalledWith(expect.objectContaining({ runId: 'test-run-123' }));
   });
 
-  it('selects status files and queues a file-scoped gavel commit', async () => {
+  it('queues a file-scoped gavel commit of the staged files', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'POST') {
         return jsonResponse({ runId: 'commit-run-1' }, 202);
       }
-      return { ok: true, json: async () => statusResponse } as Response;
+      return { ok: true, json: async () => statusWithStates({ 'one.go': 'staged' }) } as Response;
     });
     vi.stubGlobal('fetch', fetchMock);
 
     renderStatus(<ProjectStatusView project={statusResponse.project} />);
 
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select one.go' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected (1)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit staged (1)' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/projects/gavel/commit-queue');
@@ -166,46 +169,125 @@ describe('ProjectStatusView', () => {
     expect(within(await screen.findByRole('region', { name: 'Commit tasks' })).getByText('commit-run-2')).toBeTruthy();
   });
 
-  it('keeps queueing enabled while a commit runs and locks its files out of the next group', async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === 'POST') {
-        return jsonResponse({ runId: 'commit-run-1' }, 202);
-      }
-      return { ok: true, json: async () => statusResponse } as Response;
-    });
+  it('commits staged and partly staged files, wherever the filter and tree show them', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (
+      init?.method === 'POST' ? jsonResponse({ runId: 'commit-run-1' }, 202) : jsonResponse(statusWithStates({ 'one.go': 'both', 'generated/output.log': 'staged', 'generated/cache/data.json': 'unstaged' }))
+    ));
     vi.stubGlobal('fetch', fetchMock);
 
     renderStatus(<ProjectStatusView project={statusResponse.project} />);
 
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select one.go' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected (1)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit staged (2)' }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
+    const call = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!;
+    expect(JSON.parse(String(call[1]?.body))).toEqual({ action: 'commit', files: ['generated/output.log', 'one.go'] });
+  });
+
+  it('keeps queueing enabled while a commit runs and locks its files out of the next group', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (
+      init?.method === 'POST' ? jsonResponse({ runId: 'commit-run-1' }, 202) : jsonResponse(statusWithStates({ 'one.go': 'staged', 'generated/output.log': 'staged' }))
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit staged (2)' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Report one.go locked' }));
 
     const lockedRow = screen.getByRole('treeitem', { name: 'one.go' });
     expect(within(lockedRow).getByText('queued in group 1')).toBeTruthy();
-    expect(within(lockedRow).getByRole('checkbox', { name: 'Select one.go' }).hasAttribute('disabled')).toBe(true);
+    expect(within(lockedRow).getByRole('checkbox', { name: 'Stage one.go' }).hasAttribute('disabled')).toBe(true);
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Select generated/output.log' }));
-    const commit = screen.getByRole('button', { name: 'Commit selected (1)' });
+    const commit = screen.getByRole('button', { name: 'Commit staged (1)' });
     expect(commit.hasAttribute('disabled')).toBe(false);
     fireEvent.click(commit);
 
     await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2));
+    const second = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')[1]!;
+    expect(JSON.parse(String(second[1]?.body))).toEqual({ action: 'commit', files: ['generated/output.log'] });
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
   });
 
-  it('keeps conflicted files out of the selectable lifecycle', async () => {
+  it('keeps conflicted files out of the stageable lifecycle', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => (
       { ok: true, json: async () => statusResponse }
     ) as Response));
 
     renderStatus(<ProjectStatusView project={statusResponse.project} />);
 
-    expect((await screen.findByRole('checkbox', { name: 'Select conflicted.go' })).hasAttribute('disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Commit selected (0)' }).hasAttribute('disabled')).toBe(true);
+    const conflicted = await screen.findByRole('checkbox', { name: 'Stage conflicted.go' });
+    expect(conflicted.hasAttribute('disabled')).toBe(true);
+    expect(conflicted.getAttribute('title')).toBe('Resolve conflicts before staging');
+    expect(screen.getByRole('button', { name: 'Commit staged (0)' }).hasAttribute('disabled')).toBe(true);
   });
 
-  describe('select all with a scope filter', () => {
+  describe('stage checkboxes use the git index', () => {
+    function stageFetch(response: () => Response = () => jsonResponse({ ok: true })) {
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (
+        init?.method === 'POST' ? response() : jsonResponse(statusResponse)
+      ));
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+    const posts = (fetchMock: ReturnType<typeof stageFetch>) => fetchMock.mock.calls
+      .filter(([, init]) => init?.method === 'POST')
+      .map(([url, init]) => [String(url), JSON.parse(String(init?.body))]);
+
+    it.each([
+      { name: 'a file', checkbox: 'Stage one.go', paths: ['one.go'] },
+      { name: 'a folder', checkbox: 'Stage directory generated', paths: ['generated/output.log', 'generated/cache/data.json'] },
+    ])('stages $name and refreshes status and diffs', async ({ checkbox, paths }) => {
+      const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries');
+      const fetchMock = stageFetch();
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click(await screen.findByRole('checkbox', { name: checkbox }));
+
+      await waitFor(() => expect(posts(fetchMock)).toHaveLength(1));
+      expect(posts(fetchMock)[0]).toEqual(['/api/projects/gavel/stage', { paths, unstage: false }]);
+      await waitFor(() => {
+        expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.projectStatusScope('gavel') });
+        expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: projectDiffQueryKey('gavel') });
+      });
+    });
+
+    it('unstages a fully staged file and scopes the request to the worktree', async () => {
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (
+        init?.method === 'POST' ? jsonResponse({ ok: true }) : jsonResponse(statusWithStates({ 'one.go': 'staged' }))
+      ));
+      vi.stubGlobal('fetch', fetchMock);
+      renderStatus(<ProjectStatusView project={statusResponse.project} worktree="/work/feature" />);
+
+      const box = await screen.findByRole('checkbox', { name: 'Stage one.go' }) as HTMLInputElement;
+      expect(box.checked).toBe(true);
+      fireEvent.click(box);
+
+      await waitFor(() => expect(posts(fetchMock as ReturnType<typeof stageFetch>)).toHaveLength(1));
+      expect(posts(fetchMock as ReturnType<typeof stageFetch>)[0]).toEqual(['/api/projects/gavel/stage?worktree=%2Fwork%2Ffeature', { paths: ['one.go'], unstage: true }]);
+    });
+
+    it('shows a failed stage inline instead of swallowing it', async () => {
+      stageFetch(() => jsonResponse({ error: 'index is locked' }, 500));
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Stage one.go' }));
+
+      expect((await screen.findByRole('alert')).textContent).toBe('Failed to stage one.go in gavel: index is locked');
+    });
+
+    it('stages every stageable file from the toolbar checkbox', async () => {
+      const fetchMock = stageFetch();
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click(await screen.findByRole('checkbox', { name: 'Stage all' }));
+
+      await waitFor(() => expect(posts(fetchMock)).toHaveLength(1));
+      expect(posts(fetchMock)[0]).toEqual(['/api/projects/gavel/stage', { paths: ['one.go', 'generated/output.log', 'generated/cache/data.json'], unstage: false }]);
+    });
+  });
+
+  describe('stage all with a scope filter', () => {
     const scoped = {
       ...statusResponse,
       files: statusResponse.files.map(file => ({
@@ -213,68 +295,178 @@ describe('ProjectStatusView', () => {
         scopes: file.path.startsWith('generated/') ? ['generated'] : ['app'],
       })),
     };
-    const generatedFiles = ['generated/output.log', 'generated/cache/data.json'];
 
-    beforeEach(() => {
-      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => scoped }) as Response));
-    });
-
-    it('selects only the files the scope filter shows', async () => {
+    it('stages only the files the scope filter shows', async () => {
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (
+        init?.method === 'POST' ? jsonResponse({ ok: true }) : jsonResponse(scoped)
+      ));
+      vi.stubGlobal('fetch', fetchMock);
       renderStatus(<ProjectStatusView project={statusResponse.project} />);
 
       fireEvent.click(await screen.findByRole('button', { name: 'Include scope generated (2)' }));
-      expect(screen.queryByRole('checkbox', { name: 'Select one.go' })).toBeNull();
-      expect(screen.getByText('Select 2 filtered files')).toBeTruthy();
+      expect(screen.queryByRole('checkbox', { name: 'Stage one.go' })).toBeNull();
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Stage all' }));
 
-      fireEvent.click(screen.getByRole('checkbox', { name: 'Select all files' }));
-
-      expect(screen.getByRole('button', { name: `Commit selected (${generatedFiles.length})` })).toBeTruthy();
-      for (const path of generatedFiles) {
-        expect((screen.getByRole('checkbox', { name: `Select ${path}` }) as HTMLInputElement).checked).toBe(true);
-      }
+      await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
+      const call = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!;
+      expect(JSON.parse(String(call[1]?.body))).toEqual({ paths: ['generated/output.log', 'generated/cache/data.json'], unstage: false });
     });
 
-    it('keeps hidden selections when select-all is toggled on and off', async () => {
+    it('counts staged files the filter hides in the commit button', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+        ...scoped,
+        files: scoped.files.map(file => file.path === 'one.go' ? { ...file, state: 'staged' } : file),
+      })));
       renderStatus(<ProjectStatusView project={statusResponse.project} />);
 
-      fireEvent.click(await screen.findByRole('checkbox', { name: 'Select one.go' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Include scope generated (2)' }));
-      const selectAll = screen.getByRole('checkbox', { name: 'Select all files' });
+      fireEvent.click(await screen.findByRole('button', { name: 'Include scope generated (2)' }));
 
-      fireEvent.click(selectAll);
-      expect(screen.getByRole('button', { name: `Commit selected (${generatedFiles.length + 1})` })).toBeTruthy();
-
-      fireEvent.click(selectAll);
-      expect(screen.getByRole('button', { name: 'Commit selected (1)' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Commit staged (1)' })).toBeTruthy();
     });
   });
 
-  it('renders changed paths as a file tree and ignores an untracked directory', async () => {
-    const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries');
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === 'POST') {
-        return jsonResponse({ path: 'generated', directory: true, rule: '/generated/', added: true });
-      }
-      return { ok: true, json: async () => statusResponse } as Response;
+  describe('row menu', () => {
+    function menuFetch({ editors = [{ id: 'vscode', label: 'VS Code' }], post = () => jsonResponse({ ok: true }) }: { editors?: unknown; post?: () => Response } = {}) {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'POST') return post();
+        return String(input) === '/api/editors' ? jsonResponse(editors) : jsonResponse(statusResponse);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+    const row = async (path: string) => within((await screen.findByRole('treeitem', { name: path })).firstElementChild as HTMLElement);
+    const postCalls = (fetchMock: ReturnType<typeof menuFetch>) => fetchMock.mock.calls
+      .filter(([, init]) => init?.method === 'POST')
+      .map(([url, init]) => [String(url), JSON.parse(String(init?.body))]);
+
+    it('loads the host editors only once a menu opens and opens the file in the chosen one', async () => {
+      const fetchMock = menuFetch({ editors: [{ id: 'vscode', label: 'VS Code' }, { id: 'zed', label: 'Zed' }] });
+      renderStatus(<ProjectStatusView project={statusResponse.project} worktree="/work/feature" />);
+      const oneGo = await row('one.go');
+      expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/editors')).toBe(false);
+      expect(oneGo.queryByRole('menuitem', { name: 'Open in Zed' })).toBeNull();
+
+      fireEvent.click(oneGo.getByRole('button', { name: 'Actions for one.go' }));
+      fireEvent.click(await oneGo.findByRole('menuitem', { name: 'Open in Zed' }));
+
+      await waitFor(() => expect(postCalls(fetchMock)).toHaveLength(1));
+      expect(postCalls(fetchMock)[0]).toEqual(['/api/projects/gavel/open?worktree=%2Fwork%2Ffeature', { path: 'one.go', editor: 'zed' }]);
+      expect(fetchMock.mock.calls.filter(([url]) => String(url) === '/api/editors')).toHaveLength(1);
     });
-    vi.stubGlobal('fetch', fetchMock);
 
-    renderStatus(<ProjectStatusView project={statusResponse.project} />);
+    it('hides Open in editor when the host has no editor', async () => {
+      const fetchMock = menuFetch({ editors: [] });
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+      const oneGo = await row('one.go');
 
-    expect(await screen.findByRole('tree', { name: 'Project files' })).toBeTruthy();
-    expect(screen.getByRole('treeitem', { name: 'generated' })).toBeTruthy();
-    expect(screen.getByRole('treeitem', { name: 'generated/cache' })).toBeTruthy();
-    expect(screen.getByRole('treeitem', { name: 'generated/cache/data.json' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Ignore directory generated' }));
+      fireEvent.click(oneGo.getByRole('button', { name: 'Actions for one.go' }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/projects/gavel/ignore');
-    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
-      path: 'generated',
-      directory: true,
+      await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/editors')).toBe(true));
+      expect(oneGo.queryByRole('menuitem', { name: /Open in/ })).toBeNull();
+      expect(oneGo.getByRole('menuitem', { name: 'Copy path' })).toBeTruthy();
     });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.projectStatusScope('gavel') });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: projectDiffQueryKey('gavel') });
+
+    it('reports a failed editor lookup instead of silently hiding the editors', async () => {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
+        String(input) === '/api/editors' ? jsonResponse({ error: 'detect failed' }, 500) : jsonResponse(statusResponse)
+      )));
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click((await row('one.go')).getByRole('button', { name: 'Actions for one.go' }));
+
+      expect((await screen.findByRole('alert')).textContent).toBe('Failed to load editors: detect failed');
+    });
+
+    it('copies the path through the clipboard helper', async () => {
+      menuFetch();
+      copyTextMock.mockResolvedValue(undefined);
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click((await (await row('generated/output.log')).findByRole('menuitem', { name: 'Copy path' })));
+
+      await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('generated/output.log'));
+    });
+
+    it('reports a failed copy inline', async () => {
+      menuFetch();
+      copyTextMock.mockRejectedValue(new Error('Browser rejected the copy request'));
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click((await (await row('one.go')).findByRole('menuitem', { name: 'Copy path' })));
+
+      expect((await screen.findByRole('alert')).textContent).toBe('Browser rejected the copy request');
+    });
+
+    it('discards a tracked file only after confirmation', async () => {
+      const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries');
+      const fetchMock = menuFetch();
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click((await (await row('one.go')).findByRole('menuitem', { name: 'Discard changes' })));
+      expect(postCalls(fetchMock)).toHaveLength(0);
+      const dialog = screen.getByRole('alertdialog', { name: 'Discard changes to one.go?' });
+      expect(within(dialog).getByText('This cannot be undone.')).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Discard changes' }));
+
+      await waitFor(() => expect(postCalls(fetchMock)).toHaveLength(1));
+      expect(postCalls(fetchMock)[0]).toEqual(['/api/projects/gavel/discard', { paths: ['one.go'] }]);
+      await waitFor(() => expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.projectStatusScope('gavel') }));
+    });
+
+    it('deletes an untracked file after confirmation', async () => {
+      const fetchMock = menuFetch();
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click((await (await row('generated/output.log')).findByRole('menuitem', { name: 'Delete' })));
+      fireEvent.click(within(screen.getByRole('alertdialog', { name: 'Delete generated/output.log?' })).getByRole('button', { name: 'Delete' }));
+
+      await waitFor(() => expect(postCalls(fetchMock)).toHaveLength(1));
+      expect(postCalls(fetchMock)[0]).toEqual(['/api/projects/gavel/discard', { paths: ['generated/output.log'] }]);
+    });
+
+    it('ignores an untracked directory, a file and an extension through the ignore endpoint', async () => {
+      const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries');
+      const fetchMock = menuFetch({ post: () => jsonResponse({ path: 'generated', directory: true, rule: '/generated/', added: true }) });
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      expect(await screen.findByRole('tree', { name: 'Project files' })).toBeTruthy();
+      expect(screen.getByRole('treeitem', { name: 'generated/cache' })).toBeTruthy();
+      expect(screen.getByRole('treeitem', { name: 'generated/cache/data.json' })).toBeTruthy();
+      fireEvent.click((await (await row('generated')).findByRole('menuitem', { name: 'Ignore generated/' })));
+      await waitFor(() => expect(postCalls(fetchMock)).toHaveLength(1));
+      fireEvent.click((await (await row('generated/output.log')).findByRole('menuitem', { name: 'Ignore all *.log files' })));
+      await waitFor(() => expect(postCalls(fetchMock)).toHaveLength(2));
+      fireEvent.click((await (await row('generated/output.log')).findByRole('menuitem', { name: 'Ignore output.log' })));
+      await waitFor(() => expect(postCalls(fetchMock)).toHaveLength(3));
+
+      expect(postCalls(fetchMock)).toEqual([
+        ['/api/projects/gavel/ignore', { path: 'generated', directory: true }],
+        ['/api/projects/gavel/ignore', { path: 'generated/output.log', extension: '.log' }],
+        ['/api/projects/gavel/ignore', { path: 'generated/output.log' }],
+      ]);
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.projectStatusScope('gavel') });
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: projectDiffQueryKey('gavel') });
+    });
+
+    it('keeps ignoring a tracked file disabled with the reason', async () => {
+      menuFetch();
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      const ignore = (await (await row('one.go')).findByRole('menuitem', { name: 'Ignore one.go' })) as HTMLButtonElement;
+
+      expect(ignore.disabled).toBe(true);
+      expect(ignore.title).toBe('.gitignore only hides untracked paths — tracked changes stay');
+    });
+
+    it('shows a failed discard inline', async () => {
+      menuFetch({ post: () => jsonResponse({ error: 'permission denied' }, 500) });
+      renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+      fireEvent.click((await (await row('one.go')).findByRole('menuitem', { name: 'Discard changes' })));
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Discard changes' }));
+
+      expect((await screen.findByRole('alert')).textContent).toBe('Failed to discard one.go in gavel: permission denied');
+    });
   });
 
   it('surfaces contextual project action errors', async () => {
@@ -306,15 +498,14 @@ describe('ProjectStatusView', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      return new Response(JSON.stringify(statusResponse), {
+      return new Response(JSON.stringify(statusWithStates({ 'one.go': 'staged' })), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     }));
 
     renderStatus(<ProjectStatusView project={statusResponse.project} />);
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select one.go' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected (1)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit staged (1)' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Complete commit tasks' }));
 
     await waitFor(() => {
@@ -393,13 +584,13 @@ describe('ProjectStatusView', () => {
       if (init?.method === 'POST') {
         return jsonResponse({ action: 'lint', runId: 'advanced-lint-run', running: false }, 202);
       }
-      return { ok: true, json: async () => statusResponse } as Response;
+      return { ok: true, json: async () => statusWithStates({ 'one.go': 'staged' }) } as Response;
     });
     vi.stubGlobal('fetch', fetchMock);
 
     renderStatus(<ProjectStatusView project={statusResponse.project} />);
 
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select one.go' }));
+    expect(await screen.findByRole('button', { name: 'Lint staged' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Lint options: advanced' }));
     expect(await screen.findByLabelText('Advanced lint options')).toBeTruthy();
     expect((await screen.findByTestId('advanced-options')).textContent).toContain('"files":["one.go"]');
@@ -422,7 +613,7 @@ describe('ProjectStatusView', () => {
     expect((await screen.findByTestId('advanced-options')).textContent).toContain('golangci-lint');
   });
 
-  it('opens schema-driven commit options with the current selection', async () => {
+  it('opens schema-driven commit options with the staged files', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/actions/schema?action=commit')) {
@@ -446,17 +637,17 @@ describe('ProjectStatusView', () => {
       if (init?.method === 'POST') {
         return jsonResponse({ runId: 'commit-run-1' }, 202);
       }
-      return { ok: true, json: async () => statusResponse } as Response;
+      return { ok: true, json: async () => statusWithStates({ 'one.go': 'staged' }) } as Response;
     });
     vi.stubGlobal('fetch', fetchMock);
 
     renderStatus(<ProjectStatusView project={statusResponse.project} />);
 
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select one.go' }));
+    expect(await screen.findByRole('button', { name: 'Commit staged (1)' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Commit options: advanced' }));
     expect(await screen.findByLabelText('Advanced commit options')).toBeTruthy();
     expect((await screen.findByTestId('advanced-options')).textContent).toContain('"files":["one.go"]');
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
     const actionCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
@@ -509,7 +700,7 @@ describe('ProjectStatusView', () => {
     expect(onDiffPathChange).toHaveBeenLastCalledWith('one.go');
 
     onDiffPathChange.mockClear();
-    fireEvent.click(within(fileRow).getByRole('checkbox', { name: 'Select one.go' }));
+    fireEvent.click(within(fileRow).getByRole('checkbox', { name: 'Stage one.go' }));
     expect(onDiffPathChange).not.toHaveBeenCalled();
 
     const folderRow = screen.getByRole('treeitem', { name: 'generated' });

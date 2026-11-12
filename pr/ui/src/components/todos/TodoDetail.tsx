@@ -25,6 +25,9 @@ import { TodoNavigationControls, type TodoNavigationControlsProps } from './Todo
 import { TodoTagField } from './TodoTag';
 import { TodoPRLink } from './TodoPRLink';
 import { TodoPRStatus } from './TodoPRStatus';
+import { TodoPRBadge } from './TodoPRBadge';
+import { selectAttempt } from './TodoSessionDetail';
+import { isCmuxMode } from './providers';
 import { TodoLinks } from './TodoLinks';
 import { useTodoDetail } from './useTodoDetail';
 import { EditPencil, ExternalIssueLink, PriorityMenu, StatusMenu, TodoSection } from './TodoDetailFields';
@@ -71,7 +74,7 @@ export function TodoDetail(props: TodoDetailProps) {
   const {
     advancedMode, setAdvancedMode, runSelections, setRunSelections, error, tab, setTab,
     editingTitle, setEditingTitle, editingBody, setEditingBody, draftTitle, setDraftTitle,
-    draftBody, setDraftBody, copyState, runBusy, runMessage, runError, runContext,
+    draftBody, setDraftBody, copyState, runBusy, runError, runContext,
     busy, transferTargets, closed, body, events, verificationDetail, verificationError,
     verification, sessionAttemptCount, verificationRun, sessionStop, stoppableAttempt, fullTodoId, visibleLabels,
     tagIndex, tagCounts, viewSessionId, viewingHistoricalSession, sessionInProgress,
@@ -126,6 +129,11 @@ export function TodoDetail(props: TodoDetailProps) {
   }
 
   const HeaderStatusIcon = statusIcon(todo.status);
+  // The actions menu offers cmux Focus/Resume only for a session that ran in cmux.
+  const viewedAttempt = selectAttempt(verificationDetail?.attempts ?? [], viewSessionId);
+  const cmuxSession = isCmuxMode(viewedAttempt?.runtimeMode) && viewedAttempt?.providerSessionId
+    ? { sessionId: viewedAttempt.providerSessionId, resumeDisabled: busy || runBusy || sessionInProgress || viewingHistoricalSession }
+    : undefined;
 
   return (
     <div className="flex h-full flex-col">
@@ -186,6 +194,7 @@ export function TodoDetail(props: TodoDetailProps) {
                     <h1 className="min-w-0 flex-1 truncate text-xl font-semibold leading-8 text-foreground">
                       {todo.title}
                     </h1>
+                    {todo.pr && <TodoPRBadge pr={todo.pr} link />}
                     <span className="hidden md:flex">
                       <EditPencil label="Edit title" onClick={startEditTitle} disabled={busy} />
                     </span>
@@ -228,6 +237,7 @@ export function TodoDetail(props: TodoDetailProps) {
               onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
               onArchive={archiveTodo}
               onPushToGithub={pushToGithub}
+              cmuxSession={cmuxSession}
             />}
 
             <div className="hidden min-w-0 flex-wrap items-center justify-end gap-1.5 md:flex">
@@ -296,6 +306,7 @@ export function TodoDetail(props: TodoDetailProps) {
                 onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
                 onArchive={archiveTodo}
                 onPushToGithub={pushToGithub}
+                cmuxSession={cmuxSession}
               />
             </div>
 
@@ -351,7 +362,6 @@ export function TodoDetail(props: TodoDetailProps) {
             </div>
           </div>
           {(error || runError) && <div className="mt-2 text-xs text-red-600">{error || runError}</div>}
-          {runMessage && !error && !runError && <div className="mt-2 text-xs text-emerald-600">{runMessage}</div>}
         </div>
       </div>
       <TodoRunAdvancedDialog
@@ -378,9 +388,6 @@ export function TodoDetail(props: TodoDetailProps) {
           onCancel={cancelArchive}
         />
       )}
-      {todo.pr && <div className="shrink-0 border-b border-border px-4 py-2">
-        <TodoPRStatus key={todo.pr.url} pr={todo.pr} disabled={busy || runBusy || sessionInProgress} />
-      </div>}
       <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} onLaunch={() => setTab('session')} />
       <TodoDetailTabs tab={tab} onSelect={setTab} verification={verification} sessionAttempts={sessionAttemptCount} />
       <div className="flex min-h-0 flex-1 flex-col bg-muted/30">
@@ -392,8 +399,6 @@ export function TodoDetail(props: TodoDetailProps) {
             todo={todo}
             onChanged={onChanged}
             onVerification={() => setTab('verification')}
-            onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
-            resumeDisabled={busy || runBusy || sessionInProgress || viewingHistoricalSession}
             onRun={runTodo}
             onAdvanced={setAdvancedMode}
             runOptions={runSelections.run}
@@ -466,6 +471,7 @@ export function TodoDetail(props: TodoDetailProps) {
                   <TodoChildren todo={todo} dir={dir} childTodos={childTodos} familyStatus={familyStatus} onOpenTodo={onOpenTodo} />
                 )}
                 <TodoPRLink key={todo.ref} pr={todo.pr} disabled={busy || sessionInProgress} onSave={patch} />
+                {todo.pr && <TodoPRStatus key={todo.pr.url} pr={todo.pr} disabled={busy || runBusy || sessionInProgress} />}
                 <TodoLinks key={`${todo.ref}:links`} todoRef={todo.ref} dir={dir} disabled={busy} onOpenTodo={onOpenTodo} />
                 <TodoRunBranch
                   dir={dir}

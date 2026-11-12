@@ -18,7 +18,7 @@ export type ProjectAction = ProjectActionName;
 interface Props {
   projectName: string;
   action: ProjectAction | null;
-  selectedFiles: string[];
+  stagedFiles: string[];
   onClose: () => void;
   onRun: (action: ProjectAction, options: Record<string, unknown>) => Promise<void>;
 }
@@ -50,7 +50,7 @@ const commitControls: PreExtension = field => {
 };
 const commitExtensions = [...formExtensions, commitControls];
 
-export function ProjectActionDialog({ projectName, action, selectedFiles, onClose, onRun }: Props) {
+export function ProjectActionDialog({ projectName, action, stagedFiles, onClose, onRun }: Props) {
   const [value, setValue] = useState<Record<string, unknown>>({});
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState('');
@@ -83,10 +83,10 @@ export function ProjectActionDialog({ projectName, action, selectedFiles, onClos
     setValue(current => {
       const next = { ...current };
       delete next.files;
-      if (selectedFiles.length > 0) next.files = [...selectedFiles].sort();
+      if (stagedFiles.length > 0) next.files = [...stagedFiles].sort();
       return next;
     });
-  }, [action, definition, projectName, selectedFiles]);
+  }, [action, definition, projectName, stagedFiles]);
 
   const run = async () => {
     if (!action || !definition) return;
@@ -145,7 +145,7 @@ export function ProjectActionDialog({ projectName, action, selectedFiles, onClos
 }
 
 function actionButtonLabel(action: ProjectAction | null) {
-  if (action === 'commit') return 'Commit selected';
+  if (action === 'commit') return 'Commit staged';
   if (action === 'test') return 'Run tests';
   return 'Run lint';
 }

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RebaseContext, RebaseOperation } from '../types/branchRebase';
 import { ProjectRebase } from './ProjectRebase';
@@ -13,6 +14,14 @@ vi.mock('./promptRun', () => ({
   },
 }));
 vi.mock('@flanksource/clicky-ui/ai', () => ({ SessionTail: () => null }));
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock('../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
+vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
+  ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
+  DropdownMenu: ({ trigger, items, menuLabel }: { trigger: ReactNode; items: { label: ReactNode; onSelect: () => void; disabled?: boolean }[]; menuLabel: string }) => (
+    <div>{trigger}<div role="menu" aria-label={menuLabel}>{items.map((item, index) => <button key={index} type="button" role="menuitem" disabled={item.disabled} onClick={item.onSelect}>{item.label}</button>)}</div></div>
+  ),
+}));
 
 const WORKTREE = '/src/acme/.worktrees/topic';
 const operation: RebaseOperation = { id: 'op-123', worktree: WORKTREE, branch: 'topic', target: 'refs/heads/main', targetSha: 'target', originalHead: 'before', stashSha: 'saved', phase: 'rebase', error: 'Conflicting rebase', conflicts: ['shared file.txt'], aborted: false };
@@ -30,11 +39,13 @@ function setup(value = context, fail = false) {
   });
   vi.stubGlobal('fetch', fetch);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><ProjectRebase projectName="acme" worktree={WORKTREE} branch={value.branch} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><ProjectRebase projectName="acme" worktree={WORKTREE} branch={value.branch}>
+    {({ trigger, status }) => <><div data-testid="bar">{trigger}</div><div data-testid="status">{status}</div></>}
+  </ProjectRebase></QueryClientProvider>);
   return { fetch, client, setContext: (next: RebaseContext) => { live = next; } };
 }
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+afterEach(() => { viewport.mobile = false; cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe('Project rebase', () => {
   it('previews the source and local edits and defaults to origin/main', async () => {
@@ -69,5 +80,74 @@ describe('Project rebase', () => {
     await client.invalidateQueries();
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Send to rebase prompt' })).toBeNull());
     expect((await screen.findByRole('status')).textContent).toBe('Rebase complete; saved edits restored.');
+  });
+
+  describe('restore conflict', () => {
+    const SHA = 'f7c4705b33f8be099dd1941750b5dc9c37311987';
+    const lines = [
+      `restore saved edits (stash ${SHA} retained): git stash apply --index ${SHA} in /repo: exit status 1`,
+      'Auto-merging cmd/query/go.mod',
+      'CONFLICT (content): Merge conflict in cmd/query/go.mod',
+      'Auto-merging go.mod',
+      'Index was not unstashed.',
+      'internal/x/ddl_test.go already exists, no checkout',
+      'error: could not restore untracked files from stash',
+      'On branch feat/x',
+    ];
+    const stderr = lines.join('\n');
+    const conflicted: RebaseOperation = { ...operation, phase: 'restore-conflict', stashSha: SHA, error: stderr, conflicts: ['cmd/query/go.mod', 'go.mod'] };
+
+    it('shows a one-line summary, a plain-language explanation and the conflicted paths instead of the raw git output', async () => {
+      setup({ ...context, operation: conflicted });
+      const status = await screen.findByTestId('status');
+      await within(status).findByRole('button', { name: 'Send to rebase prompt' });
+
+      const summary = within(status).getByTestId('rebase-error-summary');
+      expect(summary.textContent).toBe(lines[0]);
+      expect(summary.getAttribute('title')).toBe(lines[0]);
+      expect(within(status).getByText(`Your saved edits conflict with the rebased branch; stash ${SHA.slice(0, 8)} is kept`)).toBeTruthy();
+      expect(within(status).getAllByRole('listitem').map(item => item.textContent)).toEqual(['cmd/query/go.mod', 'go.mod']);
+      expect(within(status).queryByText(/could not restore untracked files/)).toBeNull();
+      expect(within(status).getByRole('button', { name: 'Abort and restore edits' })).toBeTruthy();
+    });
+
+    it('reveals the raw output in a bounded scrollable terminal panel behind a Details toggle', async () => {
+      setup({ ...context, operation: conflicted });
+      const status = await screen.findByTestId('status');
+      const toggle = await within(status).findByRole('button', { name: 'Details' });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+      fireEvent.click(toggle);
+
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      const panel = within(status).getByTestId('rebase-error-details');
+      expect(panel.textContent).toBe(stderr);
+      expect(panel.className).toContain('max-h-48');
+      expect(panel.className).toContain('overflow-auto');
+      expect(panel.className).toContain('bg-black');
+    });
+
+    it('keeps the status block out of the trigger bar', async () => {
+      setup({ ...context, operation: conflicted });
+      const status = await screen.findByTestId('status');
+      await within(status).findByRole('button', { name: 'Send to rebase prompt' });
+      expect(within(screen.getByTestId('bar')).queryByRole('alert')).toBeNull();
+      expect(within(status).getByRole('alert')).toBeTruthy();
+    });
+  });
+
+  describe('mobile', () => {
+    it('folds Rebase… into a compact overflow menu', async () => {
+      viewport.mobile = true;
+      const { fetch } = setup();
+      await waitFor(() => expect(fetch).toHaveBeenCalled());
+      const bar = screen.getByTestId('bar');
+      expect(within(bar).queryByRole('button', { name: 'Rebase…' })).toBeNull();
+      expect(within(bar).getByRole('button', { name: 'Rebase actions' })).toBeTruthy();
+
+      fireEvent.click(within(bar).getByRole('menuitem', { name: 'Rebase…' }));
+
+      expect(await screen.findByRole('combobox', { name: 'Rebase from' })).toBeTruthy();
+    });
   });
 });

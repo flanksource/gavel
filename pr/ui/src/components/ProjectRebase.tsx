@@ -1,16 +1,35 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SessionTail } from '@flanksource/clicky-ui/ai';
-import { Button, Combobox, Modal } from '@flanksource/clicky-ui/components';
+import { Button, Combobox, DropdownMenu, Modal } from '@flanksource/clicky-ui/components';
+import { AnsiHtml } from '@flanksource/clicky-ui/data';
+import { UiDotsVertical, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import { fetchJSON, HttpError, mutationJSON, queryKeys } from '../query';
 import type { RebaseContext, RebaseOperation } from '../types/branchRebase';
+import { useIsMobile } from '../useIsMobile';
 import { projectDiffQueryKey } from './projectMutations';
 import { usePromptRun } from './promptRun';
 
 export const BRANCH_REBASE_PROMPT = 'branch-rebase';
 
-export function ProjectRebase({ projectName, worktree, branch, generation }: { projectName: string; worktree?: string; branch?: string; generation?: number }) {
+interface RebaseParts {
+  // The Rebase… entry point, sized for the ref bar's picker line.
+  trigger: ReactNode;
+  // Notices, failures, recovery actions and the Rebase dialog; a block of its own.
+  status: ReactNode;
+}
+
+interface Props {
+  projectName: string;
+  worktree?: string;
+  branch?: string;
+  generation?: number;
+  children: (parts: RebaseParts) => ReactNode;
+}
+
+export function ProjectRebase({ projectName, worktree, branch, generation, children }: Props) {
   const client = useQueryClient();
+  const mobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [target, setTarget] = useState('refs/remotes/origin/main');
@@ -47,22 +66,35 @@ export function ProjectRebase({ projectName, worktree, branch, generation }: { p
     if (!operation || !context.data?.executable) return;
     void ai.start({ gavelExecutable: context.data.executable, worktree: operation.worktree, operation: operation.id, branch: operation.branch, target: operation.target, targetSha: operation.targetSha, phase: operation.phase, error: operation.error, conflicts: operation.conflicts, stashSha: operation.stashSha });
   };
+  const openDialog = () => { mutation.reset(); setOpen(true); void context.refetch(); };
+  const disabled = !!reason || busy || !!active;
 
-  return <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
-    <Button variant="outline" size="sm" disabled={!!reason || busy || !!active} title={reason || undefined} onClick={() => { mutation.reset(); setOpen(true); void context.refetch(); }}>Rebase…</Button>
-    {notice && !active && <span role="status">{notice}</span>}
-    {error && <span role="alert" className="max-w-xl whitespace-pre-wrap break-words text-destructive">{error}</span>}
-    {active && <>
-      <span>Rebase of {operation.branch}: {operation.phase}{operation.stashSha && ` · saved edits: ${operation.stashSha.slice(0, 8)}`}</span>
-      {operation.conflicts.length > 0 && <span className="max-w-full break-words font-mono">{operation.conflicts.join(', ')}</span>}
-      <Button variant="outline" size="sm" disabled={busy || !context.data?.executable} onClick={send}>Send to rebase prompt</Button>
-      <Button variant="outline" size="sm" disabled={busy || operation.phase.startsWith('restore')} onClick={() => mutation.mutate({ abort: true, operation })}>Abort and restore edits</Button>
-    </>}
-    {ai.active && <span className="flex min-w-0 flex-1 items-center gap-2">
-      {ai.state.status === 'running' && ai.state.sessionId ? <SessionTail src={`/api/captain/sessions/${encodeURIComponent(ai.state.sessionId)}`} className="min-w-0 flex-1" /> : 'Starting the rebase prompt…'}
-      {ai.state.status === 'running' && <Button variant="ghost" size="sm" onClick={() => { void ai.stop(); }}>Stop</Button>}
-    </span>}
-    {ai.state.status === 'failed' && <span role="alert" className="text-destructive">{ai.state.error}</span>}
+  const trigger = mobile
+    ? <DropdownMenu
+      align="right"
+      menuLabel="Rebase"
+      trigger={<Button variant="ghost" size="icon" className="size-8 shrink-0" aria-label="Rebase actions" title="Rebase actions"><UiDotsVertical /></Button>}
+      items={[{ label: 'Rebase…', title: reason || undefined, disabled, onSelect: openDialog }]}
+    />
+    : <Button variant="outline" size="sm" disabled={disabled} title={reason || undefined} onClick={openDialog}>Rebase…</Button>;
+
+  const showStatus = (notice && !active) || error || active || ai.active || ai.state.status === 'failed';
+  const status = <>
+    {showStatus && <div className="flex min-w-0 shrink-0 flex-col gap-1.5 border-b border-border px-3 py-1.5 text-xs md:px-4">
+      {notice && !active && <span role="status">{notice}</span>}
+      {error && <RebaseFailure error={error} operation={operation} />}
+      {active && <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+        <span className="min-w-0 break-words">Rebase of {operation.branch}: {operation.phase}{operation.stashSha && ` · saved edits: ${operation.stashSha.slice(0, 8)}`}</span>
+        {!error && <ConflictPaths paths={operation.conflicts} />}
+        <Button variant="outline" size="sm" disabled={busy || !context.data?.executable} onClick={send}>Send to rebase prompt</Button>
+        <Button variant="outline" size="sm" disabled={busy || operation.phase.startsWith('restore')} onClick={() => mutation.mutate({ abort: true, operation })}>Abort and restore edits</Button>
+      </div>}
+      {ai.active && <span className="flex min-w-0 flex-1 items-center gap-2">
+        {ai.state.status === 'running' && ai.state.sessionId ? <SessionTail src={`/api/captain/sessions/${encodeURIComponent(ai.state.sessionId)}`} className="min-w-0 flex-1" /> : 'Starting the rebase prompt…'}
+        {ai.state.status === 'running' && <Button variant="ghost" size="sm" onClick={() => { void ai.stop(); }}>Stop</Button>}
+      </span>}
+      {ai.state.status === 'failed' && <span role="alert" className="text-destructive">{ai.state.error}</span>}
+    </div>}
     <Modal open={open} onClose={() => { if (!mutation.isPending) setOpen(false); }} title="Rebase branch" size="md" footer={<>
       <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button>
       <Button disabled={busy || !context.data?.branch || context.isFetching || !!context.error} loading={mutation.isPending} onClick={() => { mutation.mutate({}, { onSettled: () => setOpen(false) }); }}>Rebase</Button>
@@ -77,5 +109,37 @@ export function ProjectRebase({ projectName, worktree, branch, generation }: { p
         {context.error && <p role="alert" className="text-destructive">{context.error.message}</p>}
       </div>
     </Modal>
-  </div>;
+  </>;
+
+  return <>{children({ trigger, status })}</>;
+}
+
+function ConflictPaths({ paths }: { paths: string[] }) {
+  if (paths.length === 0) return null;
+  return (
+    <ul className="flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 font-mono">
+      {paths.map(path => <li key={path} className="max-w-full truncate" title={path}>{path}</li>)}
+    </ul>
+  );
+}
+
+// Git's stderr runs to dozens of lines; the first names the failure and the
+// rest is evidence, so it sits behind a toggle in a bounded terminal panel.
+function RebaseFailure({ error, operation }: { error: string; operation?: RebaseOperation }) {
+  const [details, setDetails] = useState(false);
+  const summary = error.split('\n')[0];
+  return (
+    <div role="alert" className="flex min-w-0 flex-col gap-1 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1.5">
+      <div className="flex min-w-0 items-center gap-1.5 text-destructive">
+        <UiWarningTriangle className="shrink-0" />
+        <span data-testid="rebase-error-summary" className="min-w-0 flex-1 truncate" title={summary}>{summary}</span>
+        {error !== summary && <Button variant="ghost" size="sm" className="h-6 shrink-0 px-1.5 text-xs" aria-expanded={details} onClick={() => setDetails(open => !open)}>Details</Button>}
+      </div>
+      {operation?.phase === 'restore-conflict' && <p className="text-muted-foreground">Your saved edits conflict with the rebased branch; stash {operation.stashSha.slice(0, 8)} is kept</p>}
+      {operation && <ConflictPaths paths={operation.conflicts} />}
+      {details && <div data-testid="rebase-error-details" className="max-h-48 overflow-auto rounded bg-black">
+        <AnsiHtml text={error} className="whitespace-pre-wrap break-words px-2 py-1.5 text-[11px] leading-relaxed text-gray-100" />
+      </div>}
+    </div>
+  );
 }

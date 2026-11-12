@@ -20,7 +20,7 @@ vi.mock('./TodoRunAdvancedDialog', () => ({ TodoRunAdvancedDialog: () => null })
 vi.mock('./CreateTodoDialog', () => ({ CreateTodoDialog: () => null }));
 vi.mock('./tagQueries', () => ({ useTodoTagIndex: () => ({}), useTodoTagCounts: () => ({}) }));
 vi.mock('./TodoTag', () => ({ TodoTagField: () => null, TodoTagRow: () => null }));
-vi.mock('./TodoSessionDetail', () => ({ useTodoSessionDetail: () => ({ detail: undefined, error: '' }) }));
+vi.mock('./TodoSessionDetail', async importOriginal => ({ ...(await importOriginal<object>()), useTodoSessionDetail: () => ({ detail: undefined, error: '' }) }));
 vi.mock('./run', async importOriginal => ({
   ...(await importOriginal<object>()),
   useTodoRunContext: () => ({ context: undefined, loading: false, error: '' }),

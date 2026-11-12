@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { ComboboxOption } from '@flanksource/clicky-ui/components';
@@ -7,11 +8,21 @@ import type { BranchMergeResult, GitBranchInfo, GitWorktree, Project, ProjectGit
 import type { ProjectBranchChangesProps } from './ProjectBranchChanges';
 import { ProjectRefPane } from './ProjectRefPane';
 import { queryTestWrapper } from './todos/queryTestWrapper';
+import { useCommitStatusSlot } from './commitStatusSlot';
+
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock('../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
 
 vi.mock('./ProjectStatusView', () => ({
-  ProjectStatusView: ({ project, worktree, diffPath }: { project: Project; worktree?: string; diffPath?: string }) => (
-    <div>Status {project.name} in {worktree ?? 'main checkout'} diff={diffPath}</div>
-  ),
+  ProjectStatusView: function StatusView({ project, worktree, diffPath }: { project: Project; worktree?: string; diffPath?: string }) {
+    const slot = useCommitStatusSlot();
+    return (
+      <div>
+        Status {project.name} in {worktree ?? 'main checkout'} diff={diffPath}
+        {slot && createPortal(<button type="button" aria-label="Show commit details" />, slot)}
+      </div>
+    );
+  },
 }));
 
 /* oxlint-disable clicky-ui/prefer-clicky-components --
@@ -20,6 +31,7 @@ vi.mock('./ProjectStatusView', () => ({
    description and trailing node, and a button that selects it. */
 vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
   ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
+  DropdownMenu: ({ trigger }: { trigger: ReactNode }) => <div>{trigger}</div>,
   Combobox: ({ ariaLabel, value, options, onChange }: { ariaLabel: string; value: string; options: ComboboxOption[]; onChange: (value: string) => void }) => (
     <div role="listbox" aria-label={ariaLabel} data-value={value}>
       {options.map(option => (
@@ -378,5 +390,36 @@ describe('ProjectRefPane', () => {
     expect(status.textContent).toContain('2 commits');
     expect(status.textContent).toContain('worktree removed');
     expect(status.textContent).toContain('branch deleted');
+  });
+
+  describe('on a phone', () => {
+    beforeEach(() => { viewport.mobile = true; });
+    afterEach(() => { viewport.mobile = false; });
+
+    it('puts the picker and a compact overflow menu on one line, and the stats and age on a single small line below', async () => {
+      stubGit();
+      renderPane('wt:/work/gavel-feat');
+
+      const picker = await screen.findByRole('listbox', { name: 'Worktree or branch' });
+      const pickerRow = picker.closest('[data-slot="ref-bar-picker"]') as HTMLElement;
+      expect(within(pickerRow).getByRole('button', { name: 'Rebase actions' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Rebase…' })).toBeNull();
+
+      const summary = pickerRow.nextElementSibling as HTMLElement;
+      expect(summary.getAttribute('data-slot')).toBe('ref-bar-summary');
+      expect(summary.textContent).toMatch(/^2 commits2 uncommitted\+3−1.*git state 8s ago$/);
+      expect(summary.lastElementChild?.textContent).toBe('git state 8s ago');
+      expect(Array.from(summary.querySelectorAll('.hidden')).map(part => part.textContent)).toEqual(['3h', '5m']);
+      expect(within(pickerRow).queryByText(/git state/)).toBeNull();
+    });
+
+    it('hosts a finished commit run chip beside the picker', async () => {
+      stubGit();
+      renderPane('wt:/work/gavel-feat');
+
+      const picker = await screen.findByRole('listbox', { name: 'Worktree or branch' });
+      const pickerRow = picker.closest('[data-slot="ref-bar-picker"]') as HTMLElement;
+      expect(within(pickerRow).getByRole('button', { name: 'Show commit details' })).toBeTruthy();
+    });
   });
 });

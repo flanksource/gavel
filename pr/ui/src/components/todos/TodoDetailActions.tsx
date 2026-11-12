@@ -8,6 +8,7 @@ import type { TodoRunAction } from './run';
 import { TodoTagRow } from './TodoTag';
 import type { TagIndex } from './tagResolve';
 import { LinkPRDialog } from './LinkPRDialog';
+import { CmuxSessionSection } from './TodoSessionTimer';
 import { MoveSubmenu, SetParentSubmenu, UnlinkPRSubmenu } from './TodoActionSubmenus';
 import { currentAuthMode } from '../../query';
 import { runtimeChoiceVisible } from '../../hostedUI';
@@ -47,6 +48,7 @@ export function HeaderActionsMenu({
   onPushToGithub,
   onSetParent,
   onRemoveParent,
+  cmuxSession,
 }: {
   todo: TodoItem;
   /** The todo's workspace, which scopes its PR links. */
@@ -87,6 +89,8 @@ export function HeaderActionsMenu({
   onPushToGithub: () => void;
   onSetParent: (ref: string) => void;
   onRemoveParent: () => void;
+  /** The viewed session when it ran in cmux; absent hides the cmux section. */
+  cmuxSession?: { sessionId: string; resumeDisabled: boolean } | undefined;
 }) {
   // Owned here, not by the menu content: that unmounts the moment the menu closes.
   const [linkingPR, setLinkingPR] = useState(false);
@@ -188,6 +192,16 @@ export function HeaderActionsMenu({
                 />
               )}
             </MobileMenuSection>
+          )}
+
+          {cmuxSession && (
+            <CmuxSessionSection
+              dir={dir}
+              sessionId={cmuxSession.sessionId}
+              onResume={onResume}
+              resumeDisabled={cmuxSession.resumeDisabled}
+              close={close}
+            />
           )}
 
           {showStatusPriority && (

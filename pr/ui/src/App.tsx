@@ -47,7 +47,7 @@ import { useAppQueries } from './useAppQueries';
 import { useAppMutations } from './useAppMutations';
 import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiCheck, UiCog, UiCopy, UiDotsVertical, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiPlay, UiRobotAi, UiSearch, UiTerminal } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiArrowLeft, UiCheck, UiCog, UiCopy, UiDotsVertical, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiPlay, UiRobotAi, UiSearch, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
 import { MenubarView } from './components/mobile/MenubarView';
 import { MobilePRList } from './components/mobile/MobilePRList';
@@ -754,6 +754,10 @@ export function App() {
     sessions: { selected: selectedPath !== '', onBack: () => navigateSession(''), label: 'Back to sessions' },
   };
   const bodyBack = activeTab === 'todos' && todosFullWidth ? undefined : bodyBackByTab[activeTab];
+  // AppShell's own back bar is a row of its own; a phone puts the same action
+  // in the header, beside the brand, instead.
+  const headerBack = isMobile && bodyBack?.selected ? bodyBack : undefined;
+  const brand = <img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />;
   // The PR filters, count and exports describe the list, so a phone showing a
   // PR's detail page leaves them out.
   const prListChrome = activeTab === 'prs' && !(isMobile && selected);
@@ -774,7 +778,14 @@ export function App() {
   return (
     <>
       <AppShell
-        brand={<img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />}
+        brand={headerBack ? (
+          <>
+            <Button variant="ghost" size="icon" type="button" onClick={headerBack.onBack} aria-label={headerBack.label} title={headerBack.label} className="size-9 shrink-0">
+              <UiArrowLeft />
+            </Button>
+            {brand}
+          </>
+        ) : brand}
         {...(isMobile
           ? {
               navSections: [{ items: shownTabs().map(tab => ({
@@ -838,7 +849,7 @@ export function App() {
         bodySplit={bodySplitByTab[activeTab] ?? 38}
         // A narrow body pages between the list and the selected item instead
         // of stacking them; the back bar clears the selection.
-        {...(bodyBack ? { bodyPane: bodyBack.selected ? 'main' : 'sidebar', onBodyBack: bodyBack.onBack, bodyBackLabel: bodyBack.label } as const : {})}
+        {...(bodyBack ? { bodyPane: bodyBack.selected ? 'main' : 'sidebar', ...(headerBack ? {} : { onBodyBack: bodyBack.onBack, bodyBackLabel: bodyBack.label }) } as const : {})}
         // Only the full-width todos layout opts out of AppShell's default: the
         // table wants the whole viewport, but the detail wants the contained
         // measure so markdown and session logs stay readable. Every other tab

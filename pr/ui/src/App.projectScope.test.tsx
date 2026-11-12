@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatWindowManagerProvider } from '@flanksource/clicky-ui/ai';
 import type { AgentSession, Project } from './types';
@@ -119,7 +119,8 @@ vi.mock('./components/StatusIndicator', () => ({ StatusIndicator: () => null }))
 vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
   ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
   // Keep the shell slots under test while leaving layout to the browser checks.
-  AppShell: ({ navSections, mobileActions, toolbar, bodySidebar, bodyPane, onBodyBack, bodyBackLabel }: {
+  AppShell: ({ brand, navSections, mobileActions, toolbar, bodySidebar, bodyPane, onBodyBack, bodyBackLabel }: {
+    brand?: ReactNode;
     navSections?: { items: { key: string; label: string; to: string; active?: boolean }[] }[];
     mobileActions?: ReactNode;
     toolbar?: ReactNode;
@@ -128,8 +129,9 @@ vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
     onBodyBack?: () => void;
     bodyBackLabel?: string;
   }) => navSections ? (
-    <div data-testid="shell" data-body-pane={bodyPane}>
-      {bodyPane === 'main' && <button type="button" onClick={onBodyBack}>{bodyBackLabel}</button>}
+    <div data-testid="shell" data-body-pane={bodyPane} data-body-back-bar={String(bodyPane === 'main' && !!onBodyBack)}>
+      <header data-testid="brand">{brand}</header>
+      {bodyPane === 'main' && onBodyBack && <button type="button" onClick={onBodyBack}>{bodyBackLabel}</button>}
       <nav>
         {navSections.flatMap(section => section.items).map(item => (
           <a key={item.key} href={item.to} aria-current={item.active ? 'page' : undefined}>{item.label}</a>
@@ -349,15 +351,18 @@ describe('mobile shell', () => {
     ['/sessions/sess-1', 'Back to sessions', '/sessions'],
     ['/projects/gavel', 'Back to projects', '/projects'],
     ['/todos/abc', 'Back to todos', '/todos'],
-  ])('pages %s to the detail pane and returns to the list with %s', (deepLink, back, list) => {
+  ])('pages %s to the detail pane and returns to the list with the %s button in the header', (deepLink, back, list) => {
     window.history.replaceState({}, '', deepLink);
     renderApp();
-    expect(screen.getByTestId('shell').dataset.bodyPane).toBe('main');
+    const shell = screen.getByTestId('shell');
+    expect(shell.dataset.bodyPane).toBe('main');
+    expect(shell.dataset.bodyBackBar).toBe('false');
 
-    fireEvent.click(screen.getByRole('button', { name: back }));
+    fireEvent.click(within(screen.getByTestId('brand')).getByRole('button', { name: back }));
 
     expect(window.location.pathname).toBe(list);
-    expect(screen.getByTestId('shell').dataset.bodyPane).toBe('sidebar');
+    expect(shell.dataset.bodyPane).toBe('sidebar');
+    expect(within(screen.getByTestId('brand')).queryByRole('button')).toBeNull();
   });
 
   it('polls sessions only while the Sessions route is open', () => {

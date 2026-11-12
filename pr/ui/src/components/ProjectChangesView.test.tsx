@@ -9,38 +9,34 @@ const { mobile } = vi.hoisted(() => ({ mobile: vi.fn(() => true) }));
 vi.mock('../useIsMobile', () => ({ useIsMobile: mobile }));
 const files = projectStatusResponse.files as ProjectFileStatus[];
 
-function Review({ initialPath = '', locked = new Map<string, number>() }) {
+function Review({ initialPath = '', locked = new Map<string, number>(), onToggleStaged = vi.fn() }) {
   const [path, setPath] = useState(initialPath);
-  const [selected, setSelected] = useState(new Set<string>());
-  return <>
-    <ProjectChangesView
-      files={files}
-      selected={selected}
-      locked={locked}
-      disabled={false}
-      diffPath={path}
-      onDiffPathChange={setPath}
-      onToggleFile={file => setSelected(current => current.has(file) ? new Set([...current].filter(item => item !== file)) : new Set(current).add(file))}
-      fileList={<button onClick={() => setPath('one.go')}>Review one.go</button>}
-      diff={<div>Diff for {path}</div>}
-    />
-    <output aria-label="Selected files">{[...selected].join(',')}</output>
-  </>;
+  return <ProjectChangesView
+    files={files}
+    locked={locked}
+    disabled={false}
+    diffPath={path}
+    onDiffPathChange={setPath}
+    onToggleStaged={onToggleStaged}
+    fileList={<button onClick={() => setPath('one.go')}>Review one.go</button>}
+    diff={<div>Diff for {path}</div>}
+  />;
 }
 
 beforeEach(() => mobile.mockReturnValue(true));
 
 describe('mobile project change review', () => {
-  it('opens a diff, selects it for commit, and retains selection on returning to files', () => {
-    render(<Review />);
+  it('opens a diff and stages it from the review header, keeping the file list reachable', () => {
+    const onToggleStaged = vi.fn();
+    render(<Review onToggleStaged={onToggleStaged} />);
     expect(screen.queryByText('Diff for one.go')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Review one.go' }));
     expect(screen.queryByRole('button', { name: 'Review one.go' })).toBeNull();
     expect(screen.getByText('Diff for one.go')).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include one.go in commit' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Stage one.go' }));
+    expect(onToggleStaged).toHaveBeenCalledWith(files.find(file => file.path === 'one.go'));
     fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
     expect(screen.getByRole('button', { name: 'Review one.go' })).toBeTruthy();
-    expect(screen.getByLabelText('Selected files').textContent).toBe('one.go');
   });
 
   it('steps through changed files and stops at both ends', () => {
@@ -54,12 +50,24 @@ describe('mobile project change review', () => {
   });
 
   it.each([
-    { path: 'conflicted.go', locked: new Map<string, number>() },
-    { path: 'one.go', locked: new Map([['one.go', 1]]) },
-  ])('keeps $path reviewable while preventing invalid selection', ({ path, locked }) => {
+    { path: 'conflicted.go', locked: new Map<string, number>(), reason: 'Resolve conflicts before staging' },
+    { path: 'one.go', locked: new Map([['one.go', 1]]), reason: 'Queued in commit group 1' },
+  ])('keeps $path reviewable while preventing staging: $reason', ({ path, locked, reason }) => {
     render(<Review initialPath={path} locked={locked} />);
     expect(screen.getByText(`Diff for ${path}`)).toBeTruthy();
-    expect(screen.getByRole('checkbox', { name: `Include ${path} in commit` }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('checkbox', { name: `Stage ${path}` }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText(reason)).toBeTruthy();
+  });
+
+  it('shows the staged and partly staged states of the open file', () => {
+    const staged = { ...files[0]!, state: 'staged' as const };
+    const both = { ...files[0]!, state: 'both' as const };
+    for (const [file, checked, indeterminate] of [[staged, true, false], [both, false, true]] as const) {
+      const view = render(<ProjectChangesView files={[file]} locked={new Map()} disabled={false} diffPath={file.path} onDiffPathChange={vi.fn()} onToggleStaged={vi.fn()} fileList={null} diff={null} />);
+      const box = screen.getByRole('checkbox', { name: `Stage ${file.path}` }) as HTMLInputElement;
+      expect([box.checked, box.indeterminate]).toEqual([checked, indeterminate]);
+      view.unmount();
+    }
   });
 
   it('keeps the desktop split view without mobile navigation controls', () => {

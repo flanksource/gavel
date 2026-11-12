@@ -1,16 +1,39 @@
 import { useMemo, useState } from "react";
 import { PromptRunEditor, type AIPromptRunValue } from "@flanksource/clicky-ui/ai";
-import { Button, Field, Modal, Select, Switch } from "@flanksource/clicky-ui/components";
+import { Button, Field, InputField, Modal, Select, Switch } from "@flanksource/clicky-ui/components";
+import { Badge } from "@flanksource/clicky-ui/data";
 import { UiRobotAi } from "@flanksource/clicky-ui/icons";
 import { request } from "./api";
 import type { AgentSession } from "./agent-sessions";
 import { useRuntimeCatalogs } from "./NewAgentSessionDialog";
-import { agentLabel, originOf, routeBodyOf, runOf, type AgentScope, type CommentRoute, type PageAgent, type ViewerChoice } from "./page-agent";
+import {
+  DEFAULT_AGENT_PROMPT,
+  NEW_SNIPPET_CHOICE,
+  agentLabel,
+  effectiveFieldsOf,
+  existingAgentAt,
+  fileChoicesOf,
+  layerRefOf,
+  pageKeyOf,
+  positionName,
+  positionsNearestFirst,
+  runOf,
+  savedAgentOf,
+  snippetNameProblem,
+  type AgentField,
+  type CommentAgent,
+  type EffectiveField,
+  type FileSettings,
+  type LayerRef,
+  type SaveAgentBody,
+  type SettingsPosition,
+  type ViewerChoice,
+} from "./page-agent";
 import { buildRunRequest, findPrompt, promptLabel, variablesSchemaOf } from "./run-request";
 
 type DialogProps = {
   fileId: string;
-  agent: PageAgent;
+  agent: FileSettings;
   choice: ViewerChoice;
   sessions: readonly AgentSession[];
   onChoose: (choice: ViewerChoice) => void;
@@ -19,14 +42,15 @@ type DialogProps = {
 
 /**
  * The open page's agent: a toolbar button naming the captain prompt that works
- * new threads here, opening a dialog that saves it to the page's or folder's
- * .gavel.yaml, and the viewer's own choice of where manual hand-offs go.
+ * new threads here, opening a dialog that shows where each field comes from,
+ * saves the agent to a chosen settings layer, and holds the viewer's own choice
+ * of where manual hand-offs go.
  */
 export function PageAgentControl(props: DialogProps) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button size="sm" variant={props.agent.effective?.enabled ? "outline" : "ghost"} onClick={() => setOpen(true)} title={`Configured in ${props.agent.configPath}`}>
+      <Button size="sm" variant={props.agent.agent.agent.enabled ? "outline" : "ghost"} onClick={() => setOpen(true)} title={`Page agent for ${props.agent.target}`}>
         <UiRobotAi className="mr-1 size-4" />
         {agentLabel(props.agent)}
       </Button>
@@ -35,26 +59,92 @@ export function PageAgentControl(props: DialogProps) {
   );
 }
 
+/** The effective agent's configured fields, each badged with the settings layer entry that set it. */
+function EffectiveAgent({ settings }: { settings: FileSettings }) {
+  const fields = effectiveFieldsOf(settings);
+  if (fields.length === 0) return <p className="text-sm text-muted-foreground">No settings layer configures an agent for this page yet.</p>;
+  return (
+    <dl className="grid grid-cols-[auto_1fr_auto] items-center gap-x-3 gap-y-1 text-sm">
+      {fields.map(({ field, value, badge, title }) => (
+        <div key={field} className="col-span-3 grid grid-cols-subgrid items-center">
+          <dt className="text-muted-foreground">{field}</dt>
+          <dd className="min-w-0 truncate font-mono text-xs" title={value}>
+            {value || "—"}
+          </dd>
+          <dd>
+            <Badge tone="neutral" variant="soft" clickToCopy={false}>
+              <span title={title}>{badge}</span>
+            </Badge>
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** Where a form field's value comes from, that it was edited or will inherit, and the way to clear it from the layer's entry. */
+function FieldState({ field, source, state, onInherit }: { field: AgentField; source?: EffectiveField; state?: "edited" | "inherit"; onInherit?: (() => void) | undefined }) {
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      {state === "edited" && <Badge tone="warning" variant="soft" clickToCopy={false}>edited</Badge>}
+      {state === "inherit" && <Badge tone="info" variant="soft" clickToCopy={false}>inherits</Badge>}
+      {!state && source && (
+        <Badge tone="neutral" variant="soft" clickToCopy={false}>
+          <span title={source.title}>{source.badge}</span>
+        </Badge>
+      )}
+      {onInherit && (
+        <Button size="sm" variant="ghost" onClick={onInherit} title={`Remove ${field} from this entry so it inherits again`}>
+          Inherit
+        </Button>
+      )}
+    </span>
+  );
+}
+
 function PageAgentDialog({ onClose, ...props }: DialogProps & { onClose: () => void }) {
-  const { agent, choice, sessions, onChoose } = props;
-  const [scope, setScope] = useState<AgentScope>(originOf(agent) === "folder" ? "folder" : "page");
+  const { agent: settings, choice, sessions, onChoose } = props;
+  const positions = useMemo(() => positionsNearestFirst(settings.positions), [settings.positions]);
+  const [positionIndex, setPositionIndex] = useState(0);
+  const position: SettingsPosition | undefined = positions[positionIndex];
+  if (!position) throw new Error(`the settings of ${settings.target} list no layer positions`);
+  const choices = fileChoicesOf(position);
+  const [fileChoice, setFileChoice] = useState(choices[0]!.value);
+  const [snippet, setSnippet] = useState("");
+  const [page, setPage] = useState(true);
+
+  const snippetProblem = fileChoice === NEW_SNIPPET_CHOICE ? snippetNameProblem(snippet) : undefined;
+  const layer = snippetProblem ? undefined : layerRefOf({ position, choice: fileChoice, snippet });
+  const where = positionName(position, positionIndex === 0);
   return (
     <Modal open onClose={onClose} title="Page agent" size="2xl">
       <div className="flex flex-col gap-3">
-        <p className="text-sm text-muted-foreground">
-          Saved to {agent.configPath}.{originOf(agent) === "inherited" && " This page currently inherits an agent from a .gavel.yaml further up."}
-        </p>
-        <Field label="Applies to" htmlFor="page-agent-scope" helper={scope === "page" ? "Only this file." : "Every page in this folder without an agent of its own."}>
+        <EffectiveAgent settings={settings} />
+        <Field label="Applies to" htmlFor="page-agent-position" helper="Which settings layer of this page's chain the agent is saved to. Nearer layers override farther ones field by field.">
           <Select
-            id="page-agent-scope"
-            value={scope}
-            onChange={(event) => setScope(event.currentTarget.value as AgentScope)}
-            options={[
-              { value: "page", label: agent.page ? "This page (configured)" : "This page" },
-              { value: "folder", label: agent.folder ? "This folder (configured)" : "This folder" },
-            ]}
+            id="page-agent-position"
+            value={String(positionIndex)}
+            onChange={(event) => {
+              const next = Number(event.currentTarget.value);
+              setPositionIndex(next);
+              setFileChoice(fileChoicesOf(positions[next]!)[0]!.value);
+            }}
+            options={positions.map((entry, index) => ({ value: String(index), label: positionName(entry, index === 0) }))}
           />
         </Field>
+        <Field label="Save to" htmlFor="page-agent-file" helper={position.dir}>
+          <Select id="page-agent-file" value={fileChoice} onChange={(event) => setFileChoice(event.currentTarget.value)} options={choices} />
+        </Field>
+        {fileChoice === NEW_SNIPPET_CHOICE && (
+          <Field label="Snippet name" htmlFor="page-agent-snippet" required helper={snippetProblem ?? `Saved as .gavel.${snippet.trim()}.yaml`}>
+            <InputField id="page-agent-snippet" value={snippet} onChange={setSnippet} />
+          </Field>
+        )}
+        <Switch
+          checked={page}
+          onChange={setPage}
+          label={page ? "Only this page (an entry for this file)" : `The default for every page beneath ${where}`}
+        />
         <Field label="Your manual hand-offs" htmlFor="page-agent-viewer" helper="Where “Send to page agent” sends a thread for you. Kept in this browser only.">
           <Select
             id="page-agent-viewer"
@@ -66,21 +156,61 @@ function PageAgentDialog({ onClose, ...props }: DialogProps & { onClose: () => v
             options={[{ value: "", label: "A new run of this page agent" }, ...sessions.map((session) => ({ value: session.id, label: `Live session: ${session.title}` }))]}
           />
         </Field>
-        <AgentForm key={scope} {...props} scope={scope} onClose={onClose} />
+        <AgentForm
+          key={`${positionIndex}|${fileChoice}|${page}`}
+          {...props}
+          position={position}
+          page={page}
+          where={where}
+          {...(layer ? { layer } : {})}
+          {...(snippetProblem ? { layerProblem: snippetProblem } : {})}
+          onClose={onClose}
+        />
       </div>
     </Modal>
   );
 }
 
-/** The scope's own saved agent (or the inherited one, to start from), edited and saved to .gavel.yaml. */
-function AgentForm({ fileId, agent, scope, onSaved, onClose }: DialogProps & { scope: AgentScope; onClose: () => void }) {
+/** The layer entry's own saved agent (or the effective one, to start from), edited and saved to the chosen layer. */
+function AgentForm({
+  fileId,
+  agent: settings,
+  position,
+  layer,
+  layerProblem,
+  page,
+  where,
+  onSaved,
+  onClose,
+}: DialogProps & { position: SettingsPosition; layer?: LayerRef; layerProblem?: string; page: boolean; where: string; onClose: () => void }) {
   const { models, families, context } = useRuntimeCatalogs(fileId);
-  const existing: CommentRoute | null = scope === "page" ? agent.page : agent.folder;
-  const seed = existing ?? agent.effective;
-  const seedRun = seed ? runOf(seed) : {};
-  const [enabled, setEnabled] = useState(seed?.enabled ?? true);
-  const [assign, setAssign] = useState(seed?.assign ?? false);
+  const existing = layer && existingAgentAt(settings, { layer, page, position });
+  // The form shows what applies to the page: the entry's own fields over the effective agent.
+  const seed: CommentAgent = { ...settings.agent.agent, ...existing };
+  const seedRun = runOf(seed);
+  const [enabled, setEnabled] = useState(seed.enabled ?? !settings.agent.found);
+  const [assign, setAssign] = useState(seed.assign ?? false);
   const [promptId, setPromptId] = useState(seedRun.prompt);
+  // Only touched fields are written, so a field nobody set here keeps inheriting; a first agent is enabled.
+  const [touched, setTouched] = useState<ReadonlySet<AgentField>>(new Set(!existing && !settings.agent.found ? ["enabled"] : []));
+  const [cleared, setCleared] = useState<ReadonlySet<AgentField>>(new Set());
+  const touch = (...fields: AgentField[]) => {
+    setTouched((current) => new Set([...current, ...fields]));
+    setCleared((current) => new Set([...current].filter((field) => !fields.includes(field))));
+  };
+  const inherit = (field: AgentField) => {
+    setCleared((current) => new Set([...current, field]));
+    setTouched((current) => new Set([...current].filter((entry) => entry !== field)));
+  };
+  const effective = effectiveFieldsOf(settings);
+  const fieldState = (field: AgentField) => (
+    <FieldState
+      field={field}
+      source={effective.find((entry) => entry.field === field)}
+      state={touched.has(field) ? "edited" : cleared.has(field) ? "inherit" : undefined}
+      onInherit={existing?.[field] !== undefined && !cleared.has(field) ? () => inherit(field) : undefined}
+    />
+  );
   const [value, setValue] = useState<AIPromptRunValue>({
     ...(seedRun.spec ? { spec: seedRun.spec } : {}),
     ...(seedRun.presets ? { presets: seedRun.presets } : {}),
@@ -102,11 +232,11 @@ function AgentForm({ fileId, agent, scope, onSaved, onClose }: DialogProps & { s
     }
   }, [prompt, value, context.data]);
 
-  const act = async (change: () => Promise<unknown>) => {
+  const act = async (body: SaveAgentBody) => {
     setSaving(true);
     setError(undefined);
     try {
-      await change();
+      await request<FileSettings>(`/api/file/${fileId}/settings/agent`, body, "PUT");
       await onSaved();
     } catch (cause) {
       setError(String(cause));
@@ -114,43 +244,78 @@ function AgentForm({ fileId, agent, scope, onSaved, onClose }: DialogProps & { s
       setSaving(false);
     }
   };
-  const save = () => act(() => request<CommentRoute>("/api/v1/comments/routes", routeBodyOf({ agent, scope, enabled, assign, run: built.run! }), "PUT"));
-  const remove = () =>
-    act(async () => {
-      const response = await fetch(`/api/v1/comments/routes/${encodeURIComponent(existing!.id)}`, { method: "DELETE", headers: { "Content-Type": "application/json" } });
-      if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
-    });
+  const saved = built.run && savedAgentOf({ entry: existing, form: { enabled, assign, ...built.run }, touched, cleared });
+  const save = () => void act({ layer: layer!, page, agent: saved! });
+  const changeValue = (next: AIPromptRunValue) => {
+    touch(...(["presets", "spec", "variables"] as const).filter((field) => JSON.stringify(next[field] ?? null) !== JSON.stringify(value[field] ?? null)));
+    setValue(next);
+  };
+  const remove = () => void act({ layer: layer!, page, agent: null });
+  // The user's and parent directories cannot be searched for the page's entry, so removal there is left to the server.
+  const removable = !!layer && (!!existing || (page && pageKeyOf(settings.target, position) === undefined));
 
   const failure = models.error ?? families.error ?? context.error;
-  const problems = [failure?.message, built.failure, error].filter((problem): problem is string => !!problem);
+  const problems = [failure?.message, built.failure, layerProblem, error].filter((problem): problem is string => !!problem);
   return (
     <>
-      <Switch checked={enabled} onChange={setEnabled} label="Auto-assign new threads to this agent" />
-      <Switch checked={assign} onChange={setAssign} disabled={!enabled} label="Show the agent as the thread's assignee as soon as it is created" />
+      <div className="flex items-center justify-between gap-2">
+        <Switch
+          checked={enabled}
+          onChange={(next) => {
+            setEnabled(next);
+            touch("enabled");
+          }}
+          label="Auto-assign new threads to this agent"
+        />
+        {fieldState("enabled")}
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <Switch
+          checked={assign}
+          onChange={(next) => {
+            setAssign(next);
+            touch("assign");
+          }}
+          disabled={!enabled}
+          label="Show the agent as the thread's assignee as soon as it is created"
+        />
+        {fieldState("assign")}
+      </div>
       {!models.data || !families.data || !context.data || !prompt ? (
         !failure && <p className="text-sm text-muted-foreground">Loading prompts and AI options…</p>
       ) : (
         <>
-          <Field label="Prompt" htmlFor="page-agent-prompt" helper={prompt.description}>
-            <Select
-              id="page-agent-prompt"
-              value={prompt.id}
-              onChange={(event) => {
-                setPromptId(event.currentTarget.value);
-                setValue((current) => ({ ...current, variables: {} }));
-              }}
-              options={context.data.prompts.map((entry) => ({ value: entry.id, label: promptLabel(entry) }))}
-            />
+          <Field label="Prompt" htmlFor="page-agent-prompt" helper={prompt.description ?? `Unset runs ${DEFAULT_AGENT_PROMPT}.`}>
+            <div className="flex items-center gap-2">
+              <Select
+                id="page-agent-prompt"
+                value={prompt.id}
+                onChange={(event) => {
+                  setPromptId(event.currentTarget.value);
+                  touch("prompt");
+                  changeValue({ ...value, variables: {} });
+                }}
+                options={context.data.prompts.map((entry) => ({ value: entry.id, label: promptLabel(entry) }))}
+              />
+              {fieldState("prompt")}
+            </div>
           </Field>
           <PromptRunEditor
             key={prompt.id}
             value={value}
-            onChange={setValue}
+            onChange={changeValue}
             presets={context.data.presets}
             models={models.data}
             families={families.data}
             {...(built.schema ? { variablesSchema: built.schema } : {})}
           />
+          <div className="flex flex-col gap-1">
+            {(["presets", "spec", "variables", "instructions"] as const).map((field) => {
+              const state = fieldState(field);
+              const shown = existing?.[field] !== undefined || touched.has(field) || cleared.has(field);
+              return shown && <div key={field} className="flex items-center gap-2 text-sm"><span className="text-muted-foreground">{field}</span>{state}</div>;
+            })}
+          </div>
         </>
       )}
       {problems.map((problem) => (
@@ -159,15 +324,15 @@ function AgentForm({ fileId, agent, scope, onSaved, onClose }: DialogProps & { s
         </p>
       ))}
       <div className="flex justify-between gap-2 border-t border-border pt-3">
-        <Button variant="ghost" onClick={() => void remove()} disabled={saving || !existing} title={existing ? `Remove this ${scope}'s agent from ${agent.configPath}` : `This ${scope} has no agent of its own`}>
-          Remove {scope} agent
+        <Button variant="ghost" onClick={remove} disabled={saving || !removable} title={removable ? `Remove ${page ? "this page's entry" : "the default"} at ${where}` : `${where} has no such agent`}>
+          Remove {page ? "page entry" : "default"}
         </Button>
         <div className="flex gap-2">
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={() => void save()} disabled={saving || !built.run}>
-            {saving ? "Saving…" : "Save to .gavel.yaml"}
+          <Button onClick={save} disabled={saving || !saved || Object.keys(saved).length === 0 || !layer} title={saved && Object.keys(saved).length === 0 ? "Nothing to save: every field would inherit" : undefined}>
+            {saving ? "Saving…" : "Save"}
           </Button>
         </div>
       </div>

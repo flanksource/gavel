@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectStatusView } from './ProjectStatusView';
-import { projectStatusResponse } from './ProjectStatusView.fixture';
+import { projectStatusResponse, statusWithStates } from './ProjectStatusView.fixture';
 
 vi.mock('../useIsMobile', () => ({ useIsMobile: () => true }));
 vi.mock('../useGitFocus', () => ({ useGitFocus: () => ({ error: '' }) }));
@@ -17,7 +17,7 @@ function Review({ worktree }: { worktree?: string }) {
   return <ProjectStatusView project={projectStatusResponse.project} worktree={worktree} diffPath={path} onDiffPathChange={setPath} />;
 }
 
-describe('mobile project commit selection', () => {
+describe('mobile project commit staging', () => {
   it.each([undefined, '/work/feature'])('opens a PR from a clean checkout through the enabled action menu (%s)', async worktree => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => Response.json(
       init?.method === 'POST' ? { runId: 'open-pr-review' } : { ...projectStatusResponse, files: [] },
@@ -27,7 +27,7 @@ describe('mobile project commit selection', () => {
     render(<QueryClientProvider client={client}><Review worktree={worktree} /></QueryClientProvider>);
 
     await screen.findByText('Working tree clean');
-    expect((screen.getByRole('button', { name: 'Commit selected (0)' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Commit staged (0)' }) as HTMLButtonElement).disabled).toBe(true);
     const menu = screen.getByRole('button', { name: 'Commit options' });
     expect((menu as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(menu);
@@ -60,10 +60,16 @@ describe('mobile project commit selection', () => {
     expect(onDiffPathChange).toHaveBeenCalledWith('');
   });
 
-  it.each([undefined, '/work/feature'])('queues the reviewed selection in the correct checkout (%s)', async worktree => {
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => new Response(JSON.stringify(
-      init?.method === 'POST' ? { runId: 'commit-review' } : projectStatusResponse,
-    ), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  it.each([undefined, '/work/feature'])('stages the reviewed file and queues the commit in the correct checkout (%s)', async worktree => {
+    let staged = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST' && url.includes('/stage')) {
+        staged = true;
+        return Response.json({ ok: true });
+      }
+      if (init?.method === 'POST') return Response.json({ runId: 'commit-review' }, { status: 202 });
+      return Response.json(statusWithStates(staged ? { 'one.go': 'staged' } : {}));
+    });
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><Review worktree={worktree} /></QueryClientProvider>);
@@ -71,13 +77,17 @@ describe('mobile project commit selection', () => {
     const row = await screen.findByRole('treeitem', { name: 'one.go' });
     fireEvent.click(within(row).getByText('one.go'));
     expect(await screen.findByText('Reviewing one.go')).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include one.go in commit' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Stage one.go' }));
+    await waitFor(() => expect((screen.getByRole('checkbox', { name: 'Stage one.go' }) as HTMLInputElement).checked).toBe(true));
+    const stage = fetchMock.mock.calls.find(([url, init]) => init?.method === 'POST' && url.includes('/stage'))!;
+    expect(stage[0]).toBe(`/api/projects/gavel/stage${worktree ? `?worktree=${encodeURIComponent(worktree)}` : ''}`);
+    expect(JSON.parse(String(stage[1]?.body))).toEqual({ paths: ['one.go'], unstage: false });
     fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
-    expect((await screen.findByRole('checkbox', { name: 'Select one.go' }) as HTMLInputElement).checked).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected (1)' }));
+    expect((await screen.findByRole('checkbox', { name: 'Stage one.go' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged (1)' }));
 
-    await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1));
-    const request = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url, init]) => init?.method === 'POST' && url.includes('/commit-queue'))).toHaveLength(1));
+    const request = fetchMock.mock.calls.find(([url, init]) => init?.method === 'POST' && url.includes('/commit-queue'));
     expect(request?.[0]).toBe('/api/projects/gavel/commit-queue');
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({ action: 'commit', files: ['one.go'], ...(worktree ? { worktree } : {}) });
   });

@@ -31,10 +31,10 @@ function renderAction(action: ProjectAction, modelFailures = 0) {
   });
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const props = { projectName, selectedFiles: ['one.go'], onClose: vi.fn(), onRun: vi.fn().mockResolvedValue(undefined) };
+  const props = { projectName, stagedFiles: ['one.go'], onClose: vi.fn(), onRun: vi.fn().mockResolvedValue(undefined) };
   const view = render(<QueryClientProvider client={client}><ProjectActionDialog {...props} action={action} /></QueryClientProvider>);
-  return { ...props, fetchMock, refreshSelection: (selectedFiles: string[]) => {
-    view.rerender(<QueryClientProvider client={client}><ProjectActionDialog {...props} selectedFiles={selectedFiles} action={action} /></QueryClientProvider>);
+  return { ...props, fetchMock, refreshStaged: (stagedFiles: string[]) => {
+    view.rerender(<QueryClientProvider client={client}><ProjectActionDialog {...props} stagedFiles={stagedFiles} action={action} /></QueryClientProvider>);
   }, reopen: () => {
     view.rerender(<QueryClientProvider client={client}><ProjectActionDialog {...props} action={null} /></QueryClientProvider>);
     view.rerender(<QueryClientProvider client={client}><ProjectActionDialog {...props} action={action} /></QueryClientProvider>);
@@ -48,7 +48,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     expect(choices.getByRole('radio', { name: 'Inherit' }).getAttribute('aria-checked')).toBe('true');
     fireEvent.click(choices.getByRole('radio', { name: 'Fail' }));
     fireEvent.click(choices.getByRole('radio', { name: 'Inherit' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'] }));
   });
 
@@ -56,14 +56,14 @@ describe('ProjectActionDialog sparse v2 options', () => {
     const view = renderAction('commit');
     const choices = within(await screen.findByRole('radiogroup', { name: 'Precommit checks' }));
     fireEvent.click(choices.getByRole('radio', { name: 'Prompt' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], precommit: 'prompt' }));
     view.reopen();
     await waitFor(() => expect(within(screen.getByRole('radiogroup', { name: 'Precommit checks' })).getByRole('radio', { name: 'Prompt' }).getAttribute('aria-checked')).toBe('true'));
   });
 
   it.each([
-    { action: 'commit' as const, button: 'Commit selected', field: 'Commit message', expected: { files: ['one.go'] } },
+    { action: 'commit' as const, button: 'Commit staged', field: 'Commit message', expected: { files: ['one.go'] } },
     { action: 'lint' as const, button: 'Run lint', field: 'Files and directories', expected: { files: ['one.go'] } },
     { action: 'test' as const, button: 'Run tests', field: 'Package paths', expected: {} },
   ])('submits no untouched defaults for $action', async ({ action, button, field, expected }) => {
@@ -80,7 +80,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     }));
     const view = renderAction('commit');
     fireEvent.change(await screen.findByRole('textbox', { name: 'Commit message' }), { target: { value: 'fix: selected files' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], message: 'fix: selected files' }));
     expect(JSON.parse(localStorage.getItem(storageKey) ?? '{}')[projectName].commit.value).toEqual({ message: 'fix: selected files' });
   });
@@ -88,8 +88,8 @@ describe('ProjectActionDialog sparse v2 options', () => {
   it('retains authored options while project status refreshes the selected files', async () => {
     const view = renderAction('commit');
     fireEvent.change(await screen.findByRole('textbox', { name: 'Commit message' }), { target: { value: 'fix: selected files' } });
-    view.refreshSelection(['two.go']);
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    view.refreshStaged(['two.go']);
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['two.go'], message: 'fix: selected files' }));
   });
 
@@ -98,7 +98,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     const metadata = await screen.findByRole('checkbox', { name: 'Include session metadata' });
     expect((metadata as HTMLInputElement).checked).toBe(true);
     fireEvent.click(metadata);
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], 'add-metadata': false }));
     view.reopen();
     expect((await screen.findByRole('checkbox', { name: 'Include session metadata' }) as HTMLInputElement).checked).toBe(false);
@@ -117,7 +117,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     expect(screen.queryByRole('textbox', { name: 'Commit message' })).toBeNull();
     fireEvent.click(grouping);
     expect(screen.queryByText('Maximum logical commits', { exact: true })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], 'commit-all': false }));
   });
 
@@ -138,7 +138,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     fireEvent.change(limit, { target: { value: '4' } });
     fireEvent.click(repair.getByRole('radio', { name: 'Disabled' }));
     expect(screen.queryByRole('spinbutton', { name: 'Maximum repair iterations' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], 'ai-fix': 'false' }));
   });
 
@@ -149,7 +149,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     fireEvent.click(toggle.getByRole('radio', { name: 'Enabled' }));
     fireEvent.click(toggle.getByRole('radio', { name: 'Disabled' }));
     fireEvent.click(toggle.getByRole('radio', { name: 'Inherit' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'] }));
   });
 
@@ -167,7 +167,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['Effort']);
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Effort' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'High' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', {
       files: ['one.go'], message: 'fix: selected files', model: 'example-model', mode: 'api', effort: 'high',
     }));
@@ -178,7 +178,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     const bar = within(await screen.findByRole('group', { name: 'Commit AI runtime' }));
     fireEvent.click(bar.getByTitle('Runtime mode — API'));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Agent' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], mode: 'agent' }));
   });
 
@@ -188,7 +188,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     } } } }));
     const view = renderAction('commit');
     await screen.findByRole('group', { name: 'Commit AI runtime' });
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], 'add-metadata': false }));
     expect(JSON.parse(localStorage.getItem(storageKey) ?? '{}')[projectName].commit.value).toEqual({ 'add-metadata': false });
   });
@@ -199,12 +199,12 @@ describe('ProjectActionDialog sparse v2 options', () => {
     const view = renderAction('commit');
     const bar = within(await screen.findByRole('group', { name: 'Commit AI runtime' }));
     expect(bar.getByTitle('Reasoning effort').textContent).toContain('High');
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenLastCalledWith('commit', { ...saved, files: ['one.go'] }));
     view.reopen();
     fireEvent.click(within(await screen.findByRole('group', { name: 'Commit AI runtime' })).getByTitle('Reasoning effort'));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Low' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenLastCalledWith('commit', {
       files: ['one.go'], model: 'example-model', mode: 'api', effort: 'low', 'add-metadata': false,
     }));
@@ -220,7 +220,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     fireEvent.mouseDown(await screen.findByRole('option', { name: /^-/ }));
     fireEvent.click(bar.getByTitle('Reasoning effort'));
     fireEvent.click(await screen.findByRole('menuitem', { name: /^-/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], 'add-metadata': false }));
   });
 
@@ -239,7 +239,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Commit message' }), { target: { value: 'fix: retry catalog' } });
     fireEvent.click(screen.getByRole('button', { name: 'Retry AI catalogs' }));
     await screen.findByRole('group', { name: 'Commit AI runtime' });
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('commit', { files: ['one.go'], message: 'fix: retry catalog' }));
   });
 
@@ -259,7 +259,7 @@ describe('ProjectActionDialog sparse v2 options', () => {
     const view = renderAction('commit');
     view.onRun.mockRejectedValueOnce(new Error('Selected files changed'));
     await screen.findByRole('textbox', { name: 'Commit message' });
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commit staged' }));
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Selected files changed');
     expect(localStorage.getItem(storageKey)).toBeNull();
     expect(view.onClose).not.toHaveBeenCalled();

@@ -10,6 +10,7 @@ import { useIsMobile } from '../useIsMobile';
 import { ProjectBranchChanges } from './ProjectBranchChanges';
 import { ProjectStatusView } from './ProjectStatusView';
 import { ProjectRebase } from './ProjectRebase';
+import { CommitStatusSlotContext } from './commitStatusSlot';
 import { dirtyFileCount, gitStateAge, gitStateScannedAt, projectRefAges, projectRefEntries, type ProjectRefEntry } from './projectGitView';
 
 type WorktreeView = 'work' | 'branch';
@@ -43,6 +44,7 @@ export function ProjectRefPane({ project, projectRef, diffPath, showResults, onR
   const reviewing = useIsMobile() && diffPath !== '';
   const gitQuery = useProjectGit(project.name, { refetchIntervalMs: GIT_HOT_REFRESH_MS });
   const [landed, setLanded] = useState<Landed | null>(null);
+  const [commitSlot, setCommitSlot] = useState<HTMLElement | null>(null);
   const [viewChoice, setViewChoice] = useState<{ ref: string; view: WorktreeView } | null>(null);
   const ref = parseProjectRef(projectRef);
   const git = gitQuery.data;
@@ -84,19 +86,25 @@ export function ProjectRefPane({ project, projectRef, diffPath, showResults, onR
   }
 
   return (
+    <CommitStatusSlotContext.Provider value={commitSlot}>
     <div className="flex h-full min-h-0 flex-col">
       <div hidden={reviewing} className={reviewing ? 'hidden' : 'contents'}>
-      <RefBar projectName={project.name} git={git} scannedAt={git ? gitStateScannedAt(git.computedAt, shownWorktree) : ''} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} notices={notices} value={projectRef} onChange={onRefChange}
-        actions={<ProjectRebase key={`${project.name}:${shownWorktree?.path ?? projectRef}`} projectName={project.name} worktree={shownWorktree?.path} branch={shownWorktree?.branch} generation={git?.generation} />}
-      />
+      <ProjectRebase key={`${project.name}:${shownWorktree?.path ?? projectRef}`} projectName={project.name} worktree={shownWorktree?.path} branch={shownWorktree?.branch} generation={git?.generation}>
+        {({ trigger, status }) => <>
+          <RefBar projectName={project.name} git={git} scannedAt={git ? gitStateScannedAt(git.computedAt, shownWorktree) : ''} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} notices={notices} value={projectRef} onChange={onRefChange} actions={trigger} commitSlotRef={setCommitSlot} />
+          {status}
+        </>}
+      </ProjectRebase>
       {landed && <LandedBanner landed={landed} onDismiss={() => setLanded(null)} />}
       </div>
       <div className="min-h-0 flex-1">{body}</div>
     </div>
+    </CommitStatusSlotContext.Provider>
   );
 }
 
-function RefBar({ projectName, git, scannedAt, loading, error, notices, value, onChange, actions }: { projectName: string; git: ProjectGit | undefined; scannedAt: string; loading: boolean; error: string; notices: string[]; value: string; onChange: (ref: string) => void; actions: ReactNode }) {
+function RefBar({ projectName, git, scannedAt, loading, error, notices, value, onChange, actions, commitSlotRef }: { projectName: string; git: ProjectGit | undefined; scannedAt: string; loading: boolean; error: string; notices: string[]; value: string; onChange: (ref: string) => void; actions: ReactNode; commitSlotRef: (slot: HTMLElement | null) => void }) {
+  const mobile = useIsMobile();
   const entries = git ? projectRefEntries(git) : [];
   const selected = entries.find(entry => entry.value === value);
   const options: ComboboxOption[] = entries.map(entry => ({
@@ -109,22 +117,43 @@ function RefBar({ projectName, git, scannedAt, loading, error, notices, value, o
     layout: 'responsive',
     trailing: <RefSummary entry={entry} />,
   }));
+  const picker = error ? <span role="alert" className="flex min-w-0 items-center gap-1 text-xs text-destructive">
+    <UiWarningTriangle />Worktrees and branches unavailable: {error}
+  </span> : loading ? <span className="text-xs text-muted-foreground">Loading git state…</span> : entries.length > 1 ? <Combobox
+    ariaLabel="Worktree or branch"
+    value={optionValue(value)}
+    onChange={next => onChange(next === MAIN_OPTION ? '' : next)}
+    options={selected ? options : [...options, { value, label: 'Unavailable', disabled: true }]}
+    allowCustomValue={false}
+    required
+    placeholder="Worktree or branch"
+    menuWidth={720}
+    className="w-full min-w-0 @min-[48rem]/project-ref:max-w-[42rem] @min-[48rem]/project-ref:flex-1"
+  /> : <span className="font-semibold">{projectName}</span>;
+
+  if (mobile) {
+    return (
+      <div className="shrink-0 border-b border-border">
+        <div data-slot="ref-bar-picker" className="flex items-center gap-2 px-3 pt-1.5">
+          <div className="min-w-0 flex-1">{picker}</div>
+          <span ref={commitSlotRef} data-slot="commit-status" className="flex shrink-0 items-center empty:hidden" />
+          {actions}
+        </div>
+        {(selected || scannedAt) && (
+          <div data-slot="ref-bar-summary" className="flex items-center justify-between gap-2 px-3 py-1 text-xs">
+            {selected && <RefSummary entry={selected} compact />}
+            {scannedAt && <GitStateAge scannedAt={scannedAt} />}
+          </div>
+        )}
+        {notices.length > 0 && <div className="flex flex-col gap-0.5 px-3 pb-1"><GitNotices notices={notices} /></div>}
+      </div>
+    );
+  }
+
   return (
     <div className="@container/project-ref shrink-0 border-b border-border">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2 md:px-4">
-        {error ? <span role="alert" className="flex min-w-0 items-center gap-1 text-xs text-destructive">
-          <UiWarningTriangle />Worktrees and branches unavailable: {error}
-        </span> : loading ? <span className="text-xs text-muted-foreground">Loading git state…</span> : entries.length > 1 ? <Combobox
-          ariaLabel="Worktree or branch"
-          value={optionValue(value)}
-          onChange={next => onChange(next === MAIN_OPTION ? '' : next)}
-          options={selected ? options : [...options, { value, label: 'Unavailable', disabled: true }]}
-          allowCustomValue={false}
-          required
-          placeholder="Worktree or branch"
-          menuWidth={720}
-          className="w-full min-w-0 @min-[48rem]/project-ref:max-w-[42rem] @min-[48rem]/project-ref:flex-1"
-        /> : <span className="font-semibold">{projectName}</span>}
+        {picker}
         {selected && <RefSummary entry={selected} compact />}
         <GitNotices notices={notices} />
         {actions}
@@ -222,7 +251,7 @@ function WorktreeBody({ project, git, worktree, view, onViewChange, diffPath, sh
   return (
     <div className="flex h-full min-h-0 flex-col">
       {canReviewBranch && (
-        <div className="shrink-0 border-b border-border px-4 py-1.5">
+        <div className="shrink-0 border-b border-border px-3 py-1 md:px-4 md:py-1.5">
           <SegmentedControl<WorktreeView>
             aria-label="Worktree changes"
             size="sm"

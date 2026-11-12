@@ -1,6 +1,7 @@
 import { useCallback, type ComponentType } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { effortOptionsForModel, promptRuntimeValueToPayload, reconcileModelCapabilities, type AISpecRuntimeValue, type RuntimeBarValue } from "@flanksource/clicky-ui/ai";
+import { useToast } from "@flanksource/clicky-ui/components";
 import { UiListChecks, UiListDashes, UiPlay, type IconProps } from "@flanksource/clicky-ui/icons";
 import type { TodoRunDriver, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
 import { todoQuery } from "./format";
@@ -304,6 +305,7 @@ export function runRequestRuntime<T extends { presets?: string[]; spec?: object 
 // useTodoRun POSTs a run for one native TODO in a workspace.
 export function useTodoRun(dir: string) {
   const client = useQueryClient();
+  const { toast } = useToast();
   const mutation = useMutation({
     mutationKey: ["todos", "run", { dir: dir.trim() }],
     // The endpoint decodes strictly: only dir/ref/step/spec/resume/force are
@@ -336,6 +338,7 @@ export function useTodoRun(dir: string) {
     },
     onMutate: ({ ref, options }) => setTodoLaunchProgress(client, dir, ref, { status: 'preparing', step: requestStepFor(options), requestedSpec: options.spec }),
     onSuccess: (result, { ref }) => {
+      toast({ message: result.message || (result.status === "dry_run" ? "Todo run validated" : "Todo run started"), tone: 'success' });
       if (result.status === 'started') {
         updateTodoLaunchProgress(client, dir, ref, previous => ({ ...previous, status: 'admitted', promptRunId: result.promptRunId, sessionId: result.sessionId }));
       } else {
@@ -369,10 +372,8 @@ export function useTodoRun(dir: string) {
     [mutation],
   );
 
-  const result = mutation.data;
   return {
     runBusy: mutation.isPending,
-    runMessage: result?.message || (result?.status === "dry_run" ? "Todo run validated" : result ? "Todo run started" : ""),
     runError: mutation.error instanceof Error ? mutation.error.message : "",
     reset: mutation.reset,
     run,

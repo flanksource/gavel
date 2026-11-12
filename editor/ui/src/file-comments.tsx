@@ -8,7 +8,7 @@ import type { Autosave } from "./autosave";
 import { ApiError, request } from "./api";
 import { sendToItems, useAgentSessions, type AgentSession, type PageAgentHandOff } from "./agent-sessions";
 import { anchorOf, selectorOf, type Selector } from "./comment-anchors";
-import { runOf, usePageAgent, type PageAgent, type ViewerChoice } from "./page-agent";
+import { deliverTargetOf, usePageAgent, type FileSettings, type ViewerChoice } from "./page-agent";
 import { runTargetOf, type RunPreview, type RunRequest, type RunTarget } from "./run-request";
 
 type Author = { label?: string; id: string; kind: "user" | "agent" };
@@ -47,9 +47,9 @@ export type FileCommentsState = {
     start: (run: RunRequest) => Promise<void>;
     cancel: () => void;
   };
-  /** The page's configured agent, the viewer's hand-off choice and the live sessions it can pick from. */
+  /** The file's settings (its layers and page agent), the viewer's hand-off choice and the live sessions it can pick from. */
   pageAgent?: {
-    agent: PageAgent;
+    agent: FileSettings;
     choice: ViewerChoice;
     sessions: readonly AgentSession[];
     choose: (choice: ViewerChoice) => void;
@@ -210,18 +210,19 @@ export function useFileComments({
   };
   // "Send to page agent": the viewer's live session for the page, else a new run of its configured agent.
   const pageHandOff = (commentId: string): PageAgentHandOff | undefined => {
-    const effective = page.agent?.effective;
+    const effective = page.agent?.agent;
     if (page.choice.kind === "session") {
       const sessionId = page.choice.sessionId;
       const session = sessions.find((candidate) => candidate.id === sessionId);
       return { label: session?.title ?? sessionId, send: () => send(commentId, sessionId) };
     }
-    if (!effective) return undefined;
+    if (!effective?.found || !effective.agent.enabled) return undefined;
+    const target = deliverTargetOf(effective.agent);
     return {
-      label: effective.target.prompt,
+      label: target.prompt,
       send: async () => {
         try {
-          await deliver(commentId, runTargetOf(runOf(effective)));
+          await deliver(commentId, target);
         } catch (cause) {
           onError(String(cause));
         } finally {

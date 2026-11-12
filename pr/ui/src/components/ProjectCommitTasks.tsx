@@ -3,7 +3,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { TaskProgress, type TaskControlAction, type TaskSnapshot } from '@flanksource/clicky-ui/data';
 import { useTaskRun, useTaskRuns } from '@flanksource/clicky-ui/hooks';
 import { Button } from '@flanksource/clicky-ui/components';
+import { UiCheck } from '@flanksource/clicky-ui/icons';
+import { createPortal } from 'react-dom';
 import { useIsMobile } from '../useIsMobile';
+import { useCommitStatusSlot } from './commitStatusSlot';
 import { queryKeys } from '../query';
 import {
   projectCommitLockedFiles,
@@ -12,6 +15,8 @@ import {
   requestProjectCommitTaskControl,
   type ProjectCommitTaskControl,
 } from './project-commit-tasks';
+
+const COMMIT_CONFIRMATION_MS = 4000;
 
 interface Props {
   projectName: string;
@@ -36,6 +41,9 @@ export function ProjectCommitTasks({
 }: Props) {
   const mobile = useIsMobile();
   const [expandedRun, setExpandedRun] = useState('');
+  const [watchedRun, setWatchedRun] = useState('');
+  const [settledRun, setSettledRun] = useState('');
+  const slot = useCommitStatusSlot();
   const queryClient = useQueryClient();
   const labels = useMemo(() => ({ project: projectName, ...(worktree ? { worktree } : {}) }), [projectName, worktree]);
   const listed = useTaskRuns({
@@ -92,6 +100,16 @@ export function ProjectCommitTasks({
   const runError = runStatus.startsWith('connection lost') ? `Commit task stream ${runStatus}.` : '';
   const reportedError = ownership.error || controlError || runError || runsError;
 
+  const succeeded = isComplete && !reportedError && snapshots.find(snapshot => snapshot.type === 'group')?.status === 'success';
+  const confirming = mobile && succeeded && watchedRun === runId && settledRun !== runId;
+  useEffect(() => {
+    if (runId && !isComplete) setWatchedRun(runId);
+  }, [isComplete, runId]);
+  useEffect(() => {
+    if (!confirming) return;
+    const timer = setTimeout(() => setSettledRun(runId), COMMIT_CONFIRMATION_MS);
+    return () => clearTimeout(timer);
+  }, [confirming, runId]);
   useEffect(() => onLockedFilesChange(ownership.locked), [onLockedFilesChange, ownership.locked]);
   useEffect(() => onErrorChange(reportedError), [onErrorChange, reportedError]);
   useEffect(() => {
@@ -128,25 +146,35 @@ export function ProjectCommitTasks({
       </section>
     );
   }
-  const collapsedHistory = mobile && !preferredRunId && isComplete && !reportedError
-    && snapshots.find(snapshot => snapshot.type === 'group')?.status === 'success';
-  const expanded = !collapsedHistory || expandedRun === runId;
+  const collapsed = mobile && succeeded;
+  const expanded = !collapsed || expandedRun === runId;
+  const chip = collapsed && (
+    <Button variant="ghost" size="icon" type="button" className="size-8 shrink-0 text-green-700 dark:text-green-400" aria-expanded={expanded}
+      aria-label={expanded ? 'Hide commit details' : 'Show commit details'} title={expanded ? 'Hide commit details' : 'Commit complete · show details'}
+      onClick={() => setExpandedRun(expanded ? '' : runId)}>
+      <UiCheck />
+    </Button>
+  );
+  const chipOnly = collapsed && !confirming && !expanded && slot;
   return (
-    <section aria-label="Commit tasks" className={`shrink-0 border-b border-border bg-muted/30 ${collapsedHistory ? 'px-3' : 'px-4 py-3'}`}>
-      {collapsedHistory && <Button variant="ghost" type="button" aria-expanded={expanded} onClick={() => setExpandedRun(expanded ? '' : runId)} className="flex min-h-11 w-full items-center justify-between gap-2 px-0 text-xs">
-        <span className="font-medium text-green-700 dark:text-green-400">Commit complete</span>
-        <span className="text-muted-foreground">{expanded ? 'Hide details' : 'Show details'}</span>
-      </Button>}
-      {reportedError && <div role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{reportedError}</div>}
-      {!ownership.error && expanded && (
-        <TaskProgress
-          snapshots={snapshots}
-          compact
-          onControl={controlGroup}
-          onTaskControl={controlTask}
-          metricsBaseUrl="/api/v1/tasks/metrics/"
-        />
+    <>
+      {chip && slot && createPortal(chip, slot)}
+      {!chipOnly && (
+        <section aria-label="Commit tasks" className={`shrink-0 border-b border-border bg-muted/30 ${collapsed ? 'px-3 py-1' : 'px-4 py-3'}`}>
+          {confirming && <div role="status" className="flex items-center gap-1.5 text-xs font-medium text-green-700 dark:text-green-400"><UiCheck />Commit complete</div>}
+          {chip && !slot && !confirming && <div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">Commit complete</span>{chip}</div>}
+          {reportedError && <div role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{reportedError}</div>}
+          {!ownership.error && expanded && !confirming && (
+            <TaskProgress
+              snapshots={snapshots}
+              compact
+              onControl={controlGroup}
+              onTaskControl={controlTask}
+              metricsBaseUrl="/api/v1/tasks/metrics/"
+            />
+          )}
+        </section>
       )}
-    </section>
+    </>
   );
 }

@@ -36,7 +36,7 @@ vi.mock('./todoMutations', async importOriginal => ({
   useTodoVerificationRun: () => ({ isPending: false, mutateAsync: execution.verify }),
 }));
 vi.mock('./TodoSessionTimer', async importOriginal => ({ ...(await importOriginal<object>()), useSessionStats: () => ({ stats: null }) }));
-vi.mock('./TodoSessionDetail', () => ({ useTodoSessionDetail: () => ({ detail: session.detail, error: '' }) }));
+vi.mock('./TodoSessionDetail', async importOriginal => ({ ...(await importOriginal<object>()), useTodoSessionDetail: () => ({ detail: session.detail, error: '' }) }));
 vi.mock('./tagQueries', () => ({ useTodoTagIndex: () => ({}), useTodoTagCounts: () => ({}) }));
 vi.mock('./TodoTag', () => ({ TodoTagField: () => null, TodoTagRow: () => null }));
 vi.mock('./TodoTimeline', () => ({ TodoTimeline: () => null }));

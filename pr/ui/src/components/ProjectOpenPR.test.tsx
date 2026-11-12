@@ -38,13 +38,7 @@ vi.mock('./ProjectActionDialog', () => ({ ProjectActionDialog: () => null }));
 vi.mock('./ProjectActionRunDialog', () => ({ ProjectActionRunDialog: () => null }));
 vi.mock('./ProjectCommitTasks', () => ({ ProjectCommitTasks: () => null }));
 vi.mock('./ProjectDiffView', () => ({ ProjectDiffView: () => null }));
-vi.mock('./ProjectFileTree', () => ({
-  ProjectFileTree: ({ files, selected, onToggleFile }: {
-    files: { path: string }[];
-    selected: Set<string>;
-    onToggleFile: (path: string) => void;
-  }) => <>{files.map(file => <input key={file.path} type="checkbox" aria-label={`Select ${file.path}`} checked={selected.has(file.path)} onChange={() => onToggleFile(file.path)} />)}</>,
-}));
+vi.mock('./ProjectFileTree', () => ({ ProjectFileTree: () => null }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -54,14 +48,14 @@ afterEach(() => {
 const project = { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] };
 const changedFile = 'one.go';
 
-function renderProject() {
+function renderProject(state = 'unstaged') {
   const status = {
     project,
     workDir: project.dir,
     branch: 'feature/project-actions',
     files: [{
       path: changedFile,
-      state: 'unstaged',
+      state,
       adds: 1,
       dels: 0,
       testStatus: { passed: 1, failed: 0, skipped: 0 },
@@ -95,7 +89,7 @@ async function postedQueueRequest(fetchMock: ReturnType<typeof renderProject>) {
 }
 
 describe('Project Open PR action', () => {
-  it('queues a push-only Open PR from the standalone button when nothing is selected', async () => {
+  it('queues a push-only Open PR from the standalone button when nothing is staged', async () => {
     const fetchMock = renderProject();
     const openPR = await screen.findByRole('button', { name: 'Open PR' });
     expect(openPR.hasAttribute('disabled')).toBe(false);
@@ -108,16 +102,14 @@ describe('Project Open PR action', () => {
     });
   });
 
-  it('commits the selected files and opens a PR from the standalone button', async () => {
-    const fetchMock = renderProject();
-    fireEvent.click(await screen.findByRole('checkbox', { name: `Select ${changedFile}` }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit & open PR (1)' }));
+  it('commits the staged files and opens a PR from the standalone button', async () => {
+    const fetchMock = renderProject('staged');
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit & open PR (1)' }));
 
     expect(await postedQueueRequest(fetchMock)).toEqual({
       url: '/api/projects/gavel/commit-queue',
       body: { action: 'open-pr', files: [changedFile] },
     });
-    expect(await screen.findByRole('button', { name: 'Commit selected (0)' })).toBeTruthy();
   });
 
   it('no longer offers Open PR inside the Commit split button', async () => {

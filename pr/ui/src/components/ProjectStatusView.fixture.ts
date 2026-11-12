@@ -52,3 +52,12 @@ export const projectStatusResponse = {
   resultsStale: false,
   action: { running: false },
 };
+
+// statusWithStates is the fixture status with the named files moved to the
+// given git states, e.g. { 'one.go': 'staged' }.
+export function statusWithStates(states: Record<string, string>) {
+  return {
+    ...projectStatusResponse,
+    files: projectStatusResponse.files.map(file => ({ ...file, state: states[file.path] ?? file.state })),
+  };
+}
