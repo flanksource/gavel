@@ -1,5 +1,5 @@
 // Tests the platform dashboard's infrastructure panel: what Mission Control knows about
-// gavel's infrastructure, its health at a glance, and why it's missing when it is.
+// gavel's infrastructure, its health at a glance, and why it, or one of its lists, is missing.
 import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from '../todos/queryTestWrapper';
@@ -55,4 +55,21 @@ it('says why Mission Control couldn\'t be read', async () => {
   render(<InfrastructurePanel />, { wrapper: queryTestWrapper() });
 
   expect((await screen.findByRole('alert')).textContent).toContain('check GAVEL_MISSION_CONTROL_TOKEN');
+});
+
+it('says why one list is missing and shows the others', async () => {
+  const infrastructure: Infrastructure = {
+    missionControl: 'https://mc.example.com/api',
+    configs: [{ id: 'c1', agent: '', name: 'gavel', namespace: 'gavel', type: 'Kubernetes::Deployment', health: 'healthy' }],
+    checks: [],
+    checksError: 'read gavel\'s health checks from Mission Control at https://mc.example.com/api: server 500: canaries are down',
+    changes: [],
+  };
+  response = { status: 200, body: infrastructure };
+  render(<InfrastructurePanel />, { wrapper: queryTestWrapper() });
+
+  expect((await screen.findByRole('alert')).textContent).toContain('canaries are down');
+  expect(within(screen.getByRole('table', { name: 'Config items' })).getByText('Kubernetes::Deployment')).toBeTruthy();
+  expect(screen.queryByRole('table', { name: 'Health checks' })).toBeNull();
+  expect(screen.queryByText('No health checks match the search.'), 'a list that failed isn\'t called empty').toBeNull();
 });

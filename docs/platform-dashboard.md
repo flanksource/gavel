@@ -87,7 +87,10 @@ panel says which settings are missing. To set one up:
    ```
 
 2. Pick the Mission Control resource search that selects gavel's infrastructure, e.g.
-   `namespace=gavel`. It selects config items, health checks and config changes.
+   `namespace=gavel`. It selects config items and health checks; the changes shown are those of
+   the config items it selects, since Mission Control can't search changes by fields like
+   `namespace`. Each list is read on its own, so one that fails shows why and the others still
+   load.
 
 3. Start `gavel serve` with these settings:
 

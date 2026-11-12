@@ -18,11 +18,15 @@ export interface MissionControlResource {
   updated_at?: string;
 }
 
+// Infrastructure is each list Mission Control has for gavel, or why it couldn't be read.
 export interface Infrastructure {
   missionControl: string;
   configs: MissionControlResource[];
+  configsError?: string;
   checks: MissionControlResource[];
+  checksError?: string;
   changes: MissionControlResource[];
+  changesError?: string;
 }
 
 const healthClass: Record<string, string> = {
@@ -41,11 +45,15 @@ function healthSummary(resources: MissionControlResource[]): string {
   return [...counts].filter(([health, n]) => n > 0 || health === 'healthy' || health === 'unhealthy').map(([health, n]) => `${n} ${health}`).join(', ');
 }
 
+// unread stands in for a list's figures when Mission Control couldn't read it.
+const unread = 'couldn\'t be read';
+
 function when(at?: string): string {
   return at ? new Date(at).toLocaleString() : '—';
 }
 
-function ResourceTable({ label, headings, rows }: { label: string; headings: string[]; rows: { id: string; cells: { text: string; className?: string }[] }[] }) {
+function ResourceTable({ label, error, headings, rows }: { label: string; error?: string; headings: string[]; rows: { id: string; cells: { text: string; className?: string }[] }[] }) {
+  if (error) return <p role="alert" className="text-red-600">{error}</p>;
   if (rows.length === 0) return <p className="text-xs text-muted-foreground">No {label.toLowerCase()} match the search.</p>;
   return (
     <table aria-label={label} className="w-full border-collapse text-left text-xs">
@@ -86,13 +94,14 @@ export function InfrastructurePanel() {
         <>
           <StatStrip
             items={[
-              { label: 'Config items', value: healthSummary(data.configs) },
-              { label: 'Health checks', value: healthSummary(data.checks) },
-              { label: 'Changes', value: `${data.changes.length}` },
+              { label: 'Config items', value: data.configsError ? unread : healthSummary(data.configs) },
+              { label: 'Health checks', value: data.checksError ? unread : healthSummary(data.checks) },
+              { label: 'Changes', value: data.changesError ? unread : `${data.changes.length}` },
             ]}
           />
           <ResourceTable
             label="Config items"
+            error={data.configsError}
             headings={['Name', 'Type', 'Health', 'Status', 'Namespace', 'Updated']}
             rows={data.configs.map(config => ({
               id: config.id,
@@ -101,6 +110,7 @@ export function InfrastructurePanel() {
           />
           <ResourceTable
             label="Health checks"
+            error={data.checksError}
             headings={['Name', 'Type', 'Health', 'Status', 'Namespace']}
             rows={data.checks.map(check => ({
               id: check.id,
@@ -109,6 +119,7 @@ export function InfrastructurePanel() {
           />
           <ResourceTable
             label="Recent changes"
+            error={data.changesError}
             headings={['Config', 'Change', 'Severity', 'When']}
             rows={data.changes.map(change => ({
               id: change.id,
