@@ -45,10 +45,27 @@ gavel commit --force
 | `--group-model` | Override LLM model for AI grouping (`-A`) from `.gavel.yaml` `commit.grouping.model` (capable/sonnet-class); falls back to `--model` |
 | `--dry-run` | Print the generated message without committing |
 | `--force` | Skip pre-commit hooks |
+| `-p` / `--push[=branch]` | Push to a matching open PR or open a new one. `branch` includes every commit ahead of the default base, including commits already pushed |
+| `--target [remote/]base[:topic]` | With `--push`, choose the PR base, optional remote (default `origin`), and optional remote topic branch name. Without a topic override, use the current branch, or generate a topic when on a protected branch or the selected base |
 | `--no-cache` | Bypass the LLM response cache |
 | `--precommit` | How to handle gitignore + linked-dependency precommit checks: `prompt`, `fail`, `skip`, or `false` |
 | `--ai-fix[=true\|false]` | Override automatic AI repair for commit lint findings |
 | `--ai-fix-max-iterations` | Override the positive repair iteration limit, which defaults to three |
+
+## Choose a push target
+
+The base is the branch the PR merges into. The optional topic is the branch that receives your commits on the selected remote. For example:
+
+```bash
+gavel commit -p --target main
+gavel commit -p --target zim/main
+gavel commit -p --target main:feat/new-topic
+gavel commit -p --target zim/main:feat/new-topic
+```
+
+`zim` must be a configured Git remote. The last command pushes HEAD to `feat/new-topic` on `zim` and opens a PR against `main` in that remote's repository. Branch names containing slashes are supported; qualify a nested base with its remote, such as `origin/release/stable:fix/patch`.
+
+An explicit target counts commits from the selected base, so an already-pushed branch can still get a PR. Gavel fetches that base before committing, rebases before pushing, and only reuses PRs matching the requested base and any explicit topic. Omit the topic to keep the usual matching-PR behavior. Invalid refs and unknown remotes fail before staging or committing. `--dry-run` previews the push and PR without publishing; fetch the target base first if its tracking ref is missing locally.
 
 ## Projects advanced options
 

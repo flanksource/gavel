@@ -41,6 +41,7 @@ type CommitOptions struct {
 	DryRun             bool   `flag:"dry-run" help:"Print the generated message without committing"`
 	Force              bool   `flag:"force" help:"Skip pre-commit hooks"`
 	Push               string `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR: true (bare -p) pushes commits ahead of the branch's upstream; branch pushes the whole branch and seeds the PR from every commit ahead of the default branch, so an already-pushed branch can get its PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
+	Target             string `flag:"target" help:"With --push, select [remote/]base[:topic] for the PR and push. Remote defaults to origin; topic defaults to the current branch (generated on protected branches). Example: zim/main:feat/new-topic."`
 	AutoMerge          bool   `flag:"auto-merge" help:"With -p, when a new PR is opened, enable GitHub auto-merge so it merges once required checks pass."`
 	MergeType          string `flag:"merge-type" help:"Merge method for --auto-merge: rebase|squash|merge" default:"rebase"`
 	Fixup              string `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
@@ -146,6 +147,8 @@ the default branch rather than the branch's upstream, and every commit on the
 branch seeds the PR title/body. Use it to open a PR for a branch that is
 already pushed but has no PR yet.
 
+Use --target [remote/]base[:topic] with --push to choose the merge base, remote (default origin), and optionally the remote topic branch name. For example, --target zim/main:feat/new-topic pushes HEAD to feat/new-topic on zim and opens a PR against main in that remote's repository. Without a topic override, the current branch is used (generated on protected branches or the selected base). An explicit target seeds the PR from every commit ahead of the selected base. Only existing PRs matching the selected base and explicit topic are reused.
+
 Add --auto-merge to enable GitHub auto-merge on a PR that -p opens (so it
 merges once required checks pass). --merge-type sets the method
 (rebase|squash|merge; default rebase). Auto-merge only applies to PRs this
@@ -178,6 +181,8 @@ Examples:
   gavel commit -p                       # with nothing staged: skip commit, push HEAD, open PR
   gavel commit -p --auto-merge          # open PR and enable auto-merge (rebase) once checks pass
   gavel commit --push=branch --auto-merge  # open an auto-merge PR for an already-pushed branch
+  gavel commit -p --target main          # use origin and merge into main
+  gavel commit -p --target zim/main:feat/new-topic  # select remote, base and topic
   gavel commit -p --auto-merge --merge-type=squash  # auto-merge with a squash merge
   gavel commit --fixup=<hash>           # squash all staged files into <hash>, then autosquash
   gavel commit --fixup                  # auto-route each file by last-touching commit; leftovers fall through to a normal commit
@@ -230,6 +235,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		Message:         opts.Message,
 		Push:            opts.push,
 		PushMode:        opts.pushMode,
+		Target:          opts.Target,
 		AutoMerge:       opts.AutoMerge,
 		MergeType:       opts.MergeType,
 		Fixup:           opts.Fixup,

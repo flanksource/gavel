@@ -38,7 +38,7 @@ var _ = Describe("pipeline status", func() {
 			defer GinkgoRecover()
 			switch {
 			case strings.HasSuffix(r.URL.Path, "/pullrequests/27"):
-				fmt.Fprint(w, strings.TrimSuffix(fixturePR, "}")+`,"forkSource":{"repository":{"id":"fork-id","project":{"name":"fork-project"}}}}`)
+				fmt.Fprint(w, strings.TrimSuffix(fixturePR, "}")+`,"forkSource":{"repository":{"id":"fork-id","name":"fork-service","project":{"name":"fork-project"}}}}`)
 			case strings.HasSuffix(r.URL.Path, "/refs"):
 				Expect(r.URL.Path).To(Equal("/acme/fork-project/_apis/git/repositories/fork-id/refs"))
 				fmt.Fprint(w, `{"value":[{"name":"refs/heads/feature","objectId":"head-sha"}]}`)

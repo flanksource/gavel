@@ -34,7 +34,7 @@ func (c *Client) Status(ctx context.Context, number int, opts model.StatusOption
 	if pr.ID != number || !strings.HasPrefix(pr.Source, "refs/heads/") || !strings.HasPrefix(pr.Target, "refs/heads/") {
 		return nil, fmt.Errorf("azure PR response has invalid identity or branch refs")
 	}
-	info, err := c.prInfo(pr)
+	info, err := c.prInfo(ctx, pr)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (c *Client) Status(ctx context.Context, number int, opts model.StatusOption
 }
 
 func (c *Client) refreshHead(ctx context.Context, pr *pullRequest, info *model.PRInfo) error {
-	source, err := c.sourceRepository(*pr)
+	source, err := c.sourceRepository(ctx, *pr)
 	if err != nil {
 		return err
 	}
@@ -107,15 +107,33 @@ func (c *Client) refreshHead(ctx context.Context, pr *pullRequest, info *model.P
 	return nil
 }
 
-func (c *Client) sourceRepository(pr pullRequest) (repositoryInfo, error) {
+func (c *Client) sourceRepository(ctx context.Context, pr pullRequest) (repositoryInfo, error) {
 	if pr.ForkSource == nil {
 		return *c.info, nil
 	}
 	source := pr.ForkSource.Repository
-	if source.ID == "" || source.Project.Name == "" {
-		return repositoryInfo{}, fmt.Errorf("azure fork source repository is missing identity or project")
+	if source.ID == "" {
+		return repositoryInfo{}, fmt.Errorf("azure PR #%d fork source is missing repository ID", pr.ID)
 	}
-	return source, nil
+	if source.Name != "" && source.Project.Name != "" {
+		return source, nil
+	}
+	data, _, err := c.request(ctx, http.MethodGet, c.projectPath("", "git/repositories/"+url.PathEscape(source.ID)), nil, nil)
+	if err != nil {
+		return repositoryInfo{}, fmt.Errorf("resolve Azure PR #%d fork source repository %q: %w", pr.ID, source.ID, err)
+	}
+	var resolved repositoryInfo
+	if err := json.Unmarshal(data, &resolved); err != nil {
+		return repositoryInfo{}, fmt.Errorf("decode Azure fork source repository %q: %w", source.ID, err)
+	}
+	if !strings.EqualFold(resolved.ID, source.ID) {
+		return repositoryInfo{}, fmt.Errorf("azure fork source repository ID: expected %q, got %q", source.ID, resolved.ID)
+	}
+	if resolved.Name == "" || resolved.Project.Name == "" {
+		return repositoryInfo{}, fmt.Errorf("azure fork source repository %q is missing repository or project identity", source.ID)
+	}
+	pr.ForkSource.Repository = resolved
+	return resolved, nil
 }
 
 func (c *Client) refOID(ctx context.Context, path, branch string) (string, error) {
@@ -140,7 +158,7 @@ func (c *Client) refOID(ctx context.Context, path, branch string) (string, error
 
 func (c *Client) pipelineRuns(ctx context.Context, pr pullRequest, opts model.StatusOptions) (map[int64]*model.WorkflowRun, error) {
 	var builds []build
-	source, err := c.sourceRepository(pr)
+	source, err := c.sourceRepository(ctx, pr)
 	if err != nil {
 		return nil, err
 	}

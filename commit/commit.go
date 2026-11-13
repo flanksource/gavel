@@ -88,6 +88,9 @@ type Options struct {
 	Push       bool
 	// PushMode, with Push, selects which commits are published and seed the PR.
 	PushMode PushMode
+	// Target selects [remote/]base[:topic] for the push/PR flow.
+	Target string
+	target commitTarget
 	// PushBranch, with Push, pushes HEAD to this remote branch instead of
 	// searching for the PR to push to: the caller already knows which PR it is
 	// working on, and may be committing on a scratch branch no PR is open for.
@@ -208,9 +211,17 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.WorkDir = gitRoot
+	if err := opts.resolveTarget(); err != nil {
+		return nil, err
+	}
 	if opts.Push && (opts.PushBranch == "" || opts.AutoMerge) && pushDepsForTest == nil {
 		if err := validatePushProvider(ctx, opts); err != nil {
 			return nil, err
+		}
+	}
+	if opts.Target != "" && !opts.DryRun {
+		if err := runGitFetch(remoteRef{WorkDir: opts.WorkDir, Remote: opts.target.remoteName(), Ref: opts.target.base}); err != nil {
+			return nil, fmt.Errorf("fetch --target base: %w", err)
 		}
 	}
 	// --max-commits only has meaning for the grouping flow, so setting it implies

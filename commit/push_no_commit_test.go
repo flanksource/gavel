@@ -370,8 +370,11 @@ var _ = Describe("pushAfterCommit with PushModeBranch on an already-pushed branc
 // pushDeps directly. Keeps tests honest about the exported entry point
 // without exposing the deps in production code.
 func pushAfterCommitForTest(ctx context.Context, opts Options, result *Result, deps pushDeps) error {
+	if err := opts.resolveTarget(); err != nil {
+		return err
+	}
 	// Fill missing deps from defaults so the test only specifies what matters.
-	d := defaultPushDeps()
+	d := defaultPushDeps(opts)
 	if deps.searchPRs != nil {
 		d.searchPRs = deps.searchPRs
 	}

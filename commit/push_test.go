@@ -62,7 +62,7 @@ var _ = Describe("findAncestorPRs", func() {
 			{Number: 6, Source: "does-not-exist"},
 		}
 
-		out := findAncestorPRs(workDir, prs, gitIsAncestor)
+		out := findAncestorPRs(Options{WorkDir: workDir}, prs, gitIsAncestor)
 
 		var nums []int
 		for _, pr := range out {
@@ -126,7 +126,7 @@ var _ = Describe("decidePushTarget", func() {
 	otherOpenPR := github.PRListItem{Number: 17, Source: "feat/bar", Target: "main"}
 
 	newDeps := func(prs []github.PRListItem, ancestors map[string]bool) pushDeps {
-		d := defaultPushDeps()
+		d := defaultPushDeps(Options{})
 		d.searchPRs = func(_ github.Options, _ github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error) {
 			return prs, nil, nil
 		}
@@ -136,7 +136,7 @@ var _ = Describe("decidePushTarget", func() {
 
 	It("picks branch-match when an open PR's head equals current branch", func() {
 		deps := newDeps([]github.PRListItem{otherOpenPR, branchMatchPR}, nil)
-		tgt, cands, err := decidePushTarget(context.Background(), github.Options{}, "feat/foo", deps)
+		tgt, cands, err := decidePushTarget(Options{}, github.Options{}, "feat/foo", deps)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tgt.kind).To(Equal(pushTargetBranchMatch))
 		Expect(tgt.pr.Number).To(Equal(42))
@@ -145,7 +145,7 @@ var _ = Describe("decidePushTarget", func() {
 
 	It("returns newPR when no PR matches and none are ancestors", func() {
 		deps := newDeps([]github.PRListItem{otherOpenPR}, map[string]bool{})
-		tgt, cands, err := decidePushTarget(context.Background(), github.Options{}, "feat/new", deps)
+		tgt, cands, err := decidePushTarget(Options{}, github.Options{}, "feat/new", deps)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tgt.kind).To(Equal(pushTargetNewPR))
 		Expect(cands).To(BeEmpty())
@@ -153,7 +153,7 @@ var _ = Describe("decidePushTarget", func() {
 
 	It("returns ancestor-match with a single candidate when exactly one PR head is ancestor", func() {
 		deps := newDeps([]github.PRListItem{otherOpenPR}, map[string]bool{"origin/feat/bar": true})
-		tgt, cands, err := decidePushTarget(context.Background(), github.Options{}, "feat/new", deps)
+		tgt, cands, err := decidePushTarget(Options{}, github.Options{}, "feat/new", deps)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tgt.kind).To(Equal(pushTargetAncestorPR))
 		Expect(tgt.pr.Number).To(Equal(17))
@@ -166,7 +166,7 @@ var _ = Describe("decidePushTarget", func() {
 			"origin/feat/bar": true,
 			"origin/feat/baz": true,
 		})
-		tgt, cands, err := decidePushTarget(context.Background(), github.Options{}, "feat/new", deps)
+		tgt, cands, err := decidePushTarget(Options{}, github.Options{}, "feat/new", deps)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tgt.kind).To(Equal(pushTargetAncestorPR))
 		Expect(tgt.pr).To(BeNil(), "caller must prompt when >1 candidate")
@@ -174,11 +174,11 @@ var _ = Describe("decidePushTarget", func() {
 	})
 
 	It("surfaces search errors", func() {
-		deps := defaultPushDeps()
+		deps := defaultPushDeps(Options{})
 		deps.searchPRs = func(_ github.Options, _ github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error) {
 			return nil, nil, errors.New("boom")
 		}
-		_, _, err := decidePushTarget(context.Background(), github.Options{}, "feat/new", deps)
+		_, _, err := decidePushTarget(Options{}, github.Options{}, "feat/new", deps)
 		Expect(err).To(MatchError(ContainSubstring("boom")))
 	})
 })

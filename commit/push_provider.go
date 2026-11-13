@@ -9,7 +9,7 @@ import (
 )
 
 func validatePushProvider(ctx context.Context, opts Options) error {
-	client, err := provider.Resolve(provider.Options{WorkDir: opts.WorkDir})
+	client, err := provider.Resolve(provider.Options{WorkDir: opts.WorkDir, Repo: opts.target.repo})
 	if err != nil {
 		return err
 	}
@@ -23,11 +23,11 @@ func validatePushProvider(ctx context.Context, opts Options) error {
 }
 
 func providerPushDeps(ctx context.Context, opts Options) (pushDeps, error) {
-	deps := defaultPushDeps()
+	deps := defaultPushDeps(opts)
 	if opts.PushBranch != "" && !opts.AutoMerge {
 		return deps, nil
 	}
-	client, err := provider.Resolve(provider.Options{WorkDir: opts.WorkDir})
+	client, err := provider.Resolve(provider.Options{WorkDir: opts.WorkDir, Repo: opts.target.repo})
 	if err != nil {
 		return deps, err
 	}
