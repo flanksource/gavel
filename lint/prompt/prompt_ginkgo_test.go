@@ -126,6 +126,9 @@ var _ = Describe("Prompt lint results", func() {
 	Describe("change selection", func() {
 		var dir string
 		BeforeEach(func() {
+			for _, name := range []string{"GAVEL_CHANGED_BASE", "CI", "GITHUB_ACTIONS", "TF_BUILD", "GITLAB_CI"} {
+				GinkgoT().Setenv(name, "")
+			}
 			dir = GinkgoT().TempDir()
 			git := func(args ...string) {
 				cmd := exec.Command("git", args...)
