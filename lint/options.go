@@ -108,8 +108,8 @@ func (o Options) Pretty() api.Text {
 	return t
 }
 
-func (o Options) Help() string {
-	return `Run linters on the project.
+func (o Options) Help() api.Textable {
+	return clicky.Text(`Run linters on the project.
 
 Automatically detects which linters are available and runs them.
 Supports: golangci-lint, ruff, eslint, oxlint, react-doctor, pyright, tsc, markdownlint, vale, jscpd, betterleaks, uir, json.
@@ -131,5 +131,5 @@ Examples:
   gavel lint --triage
   gavel lint --pr 12                 # re-run the linters that flagged PR #12 in CI
   gavel lint -y                      # auto-AI-fix violations (implies --ai-fix)
-  gavel lint ./pkg/...`
+  gavel lint ./pkg/...`)
 }
