@@ -355,7 +355,7 @@ func resolveGoBatchPaths(workDir string, packages, importPaths []string, allowEx
 			if used[pkg] {
 				continue
 			}
-			if rel == "." && importPath == module || rel != "." && (importPath == module+"/"+rel || strings.HasSuffix(importPath, "/"+rel)) {
+			if rel == "." && importPath == module || rel != "." && (importPath == module+"/"+rel || module == "" && strings.HasSuffix(importPath, "/"+rel)) {
 				if len(rel) > longest {
 					matches = nil
 					longest = len(rel)
@@ -384,7 +384,7 @@ func resolveGoBatchPaths(workDir string, packages, importPaths []string, allowEx
 			remainingPackages = append(remainingPackages, pkg)
 		}
 	}
-	if len(remainingImports) == 1 && len(remainingPackages) == 1 {
+	if module == "" && len(remainingImports) == 1 && len(remainingPackages) == 1 {
 		paths[remainingImports[0]] = remainingPackages[0]
 		return paths, nil
 	}
