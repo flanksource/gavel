@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
 
@@ -31,7 +32,13 @@ type Members struct {
 
 	mu     sync.Mutex
 	synced map[uuid.UUID]time.Time
+	// reads shares one read of a user from Clerk among the requests that need it at once.
+	reads singleflight.Group
 }
+
+// clerkReadTimeout bounds a read of a user from Clerk, which carries on after the request that
+// started it has gone.
+const clerkReadTimeout = 30 * time.Second
 
 // NewMembers resolves users of the Clerk instance issuer, re-reading a user's profile
 // and memberships from clerk once gavel's copy is older than maxAge.
@@ -184,8 +191,28 @@ func (m *Members) stale(userID uuid.UUID) bool {
 	return !ok || time.Since(synced) > m.maxAge
 }
 
-// refresh copies clerkUserID's profile and memberships from Clerk into gavel.
+// refresh copies clerkUserID's profile and memberships from Clerk into gavel, in one read shared
+// by every request for the user meanwhile. The read carries on when ctx ends, so a request the
+// browser drops still leaves the user read for the next one; ctx ending only stops the wait.
 func (m *Members) refresh(ctx context.Context, clerkUserID string) (member, error) {
+	read := m.reads.DoChan(clerkUserID, func() (any, error) {
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), clerkReadTimeout)
+		defer cancel()
+		return m.read(readCtx, clerkUserID)
+	})
+	select {
+	case <-ctx.Done():
+		return member{}, ctx.Err()
+	case result := <-read:
+		if result.Err != nil {
+			return member{}, result.Err
+		}
+		return result.Val.(member), nil
+	}
+}
+
+// read copies clerkUserID's profile and memberships from Clerk into gavel.
+func (m *Members) read(ctx context.Context, clerkUserID string) (member, error) {
 	profile, err := m.clerk.User(ctx, clerkUserID)
 	if err != nil {
 		return member{}, fmt.Errorf("read the user from Clerk: %w", err)
