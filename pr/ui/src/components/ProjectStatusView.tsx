@@ -58,7 +58,7 @@ export interface ProjectFileStatus {
   linkedDependencies?: { name: string; target: string }[];
 }
 
-interface ProjectStatusResponse {
+export interface ProjectStatusResponse {
   project: Project;
   workDir: string;
   branch: string;
