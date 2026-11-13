@@ -370,6 +370,8 @@ That filter is correct for its one caller — cmux's `sessionTailer` uses it as 
 
 ## Embedded UI development servers
 
+The Chrome extension is `@flanksource/gavel-extension` in `extension/`, registered in the `pr/ui` pnpm workspace. It connects directly to Gavel and persists offline TODO captures and catalogs in IndexedDB. Run `pnpm --dir pr/ui install`, then `make extension`, and load `extension/dist` unpacked in Chrome. See [extension/README.md](extension/README.md) for settings, queue recovery, dependency release requirements and explicit sibling development builds. The extension has no playground backend and is built separately from the Go binary's embedded dashboards.
+
 The dashboard initializes its TODO workspace catalog before opening HTTP. Local project changes are written atomically and reloaded through directory watches; hosted organization servers refresh from committed repository changes and release their listeners on eviction. Routine TODO reads create request-local providers over prepared workspace identities, preserving per-user visibility without workspace initialization or answer reconciliation.
 
 `GET /api/todos/changes` publishes workspace IDs and separate TODO, label and configuration generations through the existing `/api/events` hub. PostgreSQL notifications arrive after commit. The service fingerprints displayed state, coalesces bursts and changes the epoch after a listener reconnect, allowing clients to catch up without a polling fallback. Stream failures are visible errors. The heartbeat reads only the in-memory generation snapshot.

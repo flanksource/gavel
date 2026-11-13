@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import {
   Modal,
   Field,
@@ -17,7 +17,8 @@ import { Avatar } from '../Avatar';
 import { AddProjectDialog } from '../AddProjectDialog';
 import { PRTodoWorkspaceField } from './PRTodoWorkspaceField';
 import { usePRTodoProjectWorkspace } from './usePRTodoProjectWorkspace';
-import { UiBeaker, UiComment, UiError, UiLinkExternal, UiPass, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
+import { useIsMobile } from '../../useIsMobile';
+import { UiArrowLeft, UiBeaker, UiComment, UiError, UiLinkExternal, UiPass, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { inputClass, priorities, statuses, statusLabel } from './format';
 import { useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
 import { RunAfterCreation, RunCreationRecovery, useRunAfterCreation } from './RunAfterCreation';
@@ -140,6 +141,29 @@ function DetailPane({ detail }: { detail?: PRTodoCandidateDetail }) {
   );
 }
 
+// SignalPanes lays the signal list beside its focused detail, or on a phone
+// pages between them: tapping a signal opens its detail, Back returns to the list.
+function SignalPanes({ mobile, showDetail, onBack, list, detail }: {
+  mobile: boolean;
+  showDetail: boolean;
+  onBack: () => void;
+  list: ReactNode;
+  detail: ReactNode;
+}) {
+  if (!mobile) return <SplitPane defaultSplit={42} minLeft={28} minRight={30} left={list} right={detail} />;
+  if (!showDetail) return <div className="h-full overflow-y-auto">{list}</div>;
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b border-border px-1 py-0.5">
+        <Button type="button" variant="ghost" aria-label="Back to signals" onClick={onBack} className="min-h-11 gap-1 px-2 text-xs">
+          <UiArrowLeft />Signals
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1">{detail}</div>
+    </div>
+  );
+}
+
 // CreateTodoFromPRDialog turns a PR's failing tests, lint violations, failed CI
 // checks, and review comments into a new todo. Tests/lint contribute body
 // details and acceptance criteria; selected comments add body context, while
@@ -199,6 +223,9 @@ export function CreateTodoFromPRDialog({
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [notes, setNotes] = useState('');
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  // A phone shows the signal list or one signal's detail, not both side by side.
+  const mobile = useIsMobile();
+  const [detailOpen, setDetailOpen] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<TodoItem | null>(null);
   const [runFailure, setRunFailure] = useState<CreateTodoResponse | null>(null);
@@ -316,8 +343,8 @@ export function CreateTodoFromPRDialog({
             <Button onClick={onClose}>Done</Button>
           </div>
         ) : (
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="min-w-0 text-xs text-muted-foreground">
               {selectedCriteriaCount} acceptance criteri{selectedCriteriaCount === 1 ? 'on' : 'a'}
               {selectedGateCount > 0 && ` · ${selectedGateCount} verification gate${selectedGateCount === 1 ? '' : 's'}`}
             </span>
@@ -417,11 +444,11 @@ export function CreateTodoFromPRDialog({
               </p>
             ) : (
               <div className="h-[55vh] overflow-hidden rounded-md border border-border">
-                <SplitPane
-                  defaultSplit={42}
-                  minLeft={28}
-                  minRight={30}
-                  left={
+                <SignalPanes
+                  mobile={mobile}
+                  showDetail={detailOpen && activeDetail !== undefined}
+                  onBack={() => setDetailOpen(false)}
+                  list={
                     <ListMenu selection={selection}>
                       {sections.map(sec => {
                         const allOn = sec.items.every(c => selection.isSelected(c.key));
@@ -452,7 +479,7 @@ export function CreateTodoFromPRDialog({
                                 itemKey={c.key}
                                 active={activeKey === c.key}
                                 className="px-2.5 py-1.5"
-                                onClick={() => setActiveKey(c.key)}
+                                onClick={() => { setActiveKey(c.key); setDetailOpen(true); }}
                               >
                                 {c.group === 'comments' ? (
                                   <Markdown inline text={c.primary} className="block truncate text-sm text-foreground" />
@@ -467,7 +494,7 @@ export function CreateTodoFromPRDialog({
                       })}
                     </ListMenu>
                   }
-                  right={
+                  detail={
                     <div className="h-full overflow-y-auto bg-muted/20">
                       <DetailPane detail={activeDetail} />
                     </div>

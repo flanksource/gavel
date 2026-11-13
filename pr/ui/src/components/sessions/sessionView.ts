@@ -42,6 +42,17 @@ export function sessionDirtyCount(session: AgentSession): number {
   return session.git ? dirtyFileCount(session.git.changes) : 0;
 }
 
+/** The work state in a few short parts, for the collapsed panel on narrow screens. */
+export function workStateSummary(session: AgentSession): string[] {
+  const { worktree, git, pr } = session;
+  const dirty = sessionDirtyCount(session);
+  return [
+    worktree ? worktree.branch || 'detached' : session.cwd || 'unknown directory',
+    ...(git ? [dirty > 0 ? `${dirty} uncommitted` : 'clean', git.ahead > 0 ? `${git.ahead} ahead` : 'nothing to merge'] : []),
+    pr ? `PR #${pr.number} ${pr.state}` : 'no PR',
+  ];
+}
+
 /** Why a session needs a person: input it waits on, or work it left in a bad state. */
 export function attentionReasons(session: AgentSession): string[] {
   const reasons: string[] = [];

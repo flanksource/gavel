@@ -88,15 +88,15 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
   const opened = land.data?.via === 'pr' ? land.data : null;
 
   return (
-    <span className="flex min-w-0 flex-col items-end gap-1">
-      <span className="flex flex-wrap items-center justify-end gap-1.5">
+    <span className="flex min-w-0 flex-col items-end gap-1 max-sm:items-stretch">
+      <span className="flex flex-wrap items-center justify-end gap-1.5 max-sm:justify-start">
         <InputField
           aria-label="Squash commit message"
           placeholder="Squash message (optional)"
           value={message}
           disabled={busy}
           onChange={setMessage}
-          className="h-8 w-56 text-xs"
+          className="h-8 w-56 text-xs max-sm:w-full"
         />
         <span className="inline-flex" title={reasons.merge || undefined}>
           <SplitButton
@@ -134,14 +134,14 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
           />
         </span>
       </span>
-      {reasons.merge && <span className="max-w-md text-right text-xs text-muted-foreground">{reasons.merge}</span>}
+      {reasons.merge && <span className="max-w-md text-right text-xs text-muted-foreground max-sm:text-left">{reasons.merge}</span>}
       {opened && (
         <span role="status" className="text-[11px] text-muted-foreground">
           Opened <a href={opened.url} target="_blank" rel="noreferrer" className="text-primary underline">#{opened.number}</a> from {opened.topicBranch}
         </span>
       )}
       {land.error && (
-        <span role="alert" className="max-w-md whitespace-pre-wrap text-right text-[11px] text-red-600">
+        <span role="alert" className="max-w-md whitespace-pre-wrap text-right text-[11px] text-red-600 max-sm:text-left">
           {land.error.message}
           {conflicts.length > 0 && <ul className="mt-0.5 list-none font-mono">{conflicts.map(path => <li key={path}>{path}</li>)}</ul>}
         </span>
@@ -164,7 +164,7 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
         </span>
       )}
       {ai.state.status === 'failed' && (
-        <span role="alert" className="max-w-md whitespace-pre-wrap text-right text-[11px] text-red-600">
+        <span role="alert" className="max-w-md whitespace-pre-wrap text-right text-[11px] text-red-600 max-sm:text-left">
           AI merge failed: {ai.state.error}
         </span>
       )}

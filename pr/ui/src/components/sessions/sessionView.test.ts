@@ -7,6 +7,7 @@ import {
   sessionFamilies,
   sessionState,
   visibleFamilies,
+  workStateSummary,
   type SessionFamily,
 } from './sessionView';
 
@@ -121,5 +122,28 @@ describe('contextUsedPercent', () => {
   it('is the complement of the free share, undefined without context data', () => {
     expect(contextUsedPercent(session('ctx', { context: { usedTokens: 162_000, windowTokens: 200_000, freePercent: 19 } }))).toBe(81);
     expect(contextUsedPercent(session('none'))).toBeUndefined();
+  });
+});
+
+describe('workStateSummary', () => {
+  const worktree = { path: '/w', branch: 'fix/pgproxy', base: 'main', primary: false };
+  it.each([
+    {
+      name: 'a dirty branch ahead of its base with an open PR',
+      overrides: { worktree, git: { changes: { ...CLEAN, unstaged: 1, untracked: 157 }, ahead: 2874, behind: 72, baseCheckedOut: true, worktreeLive: true }, pr: { number: 12, url: '', state: 'open', checkStatus: 'none' } },
+      expected: ['fix/pgproxy', '158 uncommitted', '2874 ahead', 'PR #12 open'],
+    },
+    {
+      name: 'a clean branch level with its base and no PR',
+      overrides: { worktree, git: { changes: CLEAN, ahead: 0, behind: 3, baseCheckedOut: true, worktreeLive: true } },
+      expected: ['fix/pgproxy', 'clean', 'nothing to merge', 'no PR'],
+    },
+    {
+      name: 'a session with no worktree or git state',
+      overrides: { cwd: '/repo' },
+      expected: ['/repo', 'no PR'],
+    },
+  ] satisfies { name: string; overrides: Partial<AgentSession>; expected: string[] }[])('summarises $name', ({ overrides, expected }) => {
+    expect(workStateSummary(session('s', overrides))).toEqual(expected);
   });
 });

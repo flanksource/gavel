@@ -54,7 +54,7 @@ function ProjectsTab({ configured, selectedName, selectedRunId, enabled = true, 
   resultsEnabled?: boolean;
   projectRef?: string;
 }) {
-  const catalog = useProjectCatalog({ configured, hiddenDirs: [], selectedName, enabled: enabled && historyEnabled });
+  const catalog = useProjectCatalog({ configured, hiddenDirs: [], selectedName, enabled, history: historyEnabled });
   return (
     <div>
       <ProjectsSidebar
@@ -87,7 +87,7 @@ function ProjectsTab({ configured, selectedName, selectedRunId, enabled = true, 
 }
 
 function CatalogProbe({ name, enabled = true }: { name: string; enabled?: boolean }) {
-  const catalog = useProjectCatalog({ configured: [project], hiddenDirs: [], selectedName: 'gavel', enabled });
+  const catalog = useProjectCatalog({ configured: [project], hiddenDirs: [], selectedName: 'gavel', enabled, history: true });
   return <div data-testid={name}>{catalog.runs.length}</div>;
 }
 

@@ -242,12 +242,16 @@ export function App() {
   const fileUrl = useCallback(
     (ref: FileRef) => {
       const entry = byRef.get(fileRefKey(ref));
-      if (entry) return `/api/file/${entry.id}/image`;
+      if (entry) {
+        // An svg's source is editable; its saved revision busts the cached preview.
+        const revision = queues.current.get(entry.id)?.state().revision;
+        return `/api/file/${entry.id}/image${revision ? `?revision=${revision}` : ""}`;
+      }
       if (!active || !activeRef)
         throw new Error(`${ref.file} is not an edited file and no document is open`);
       return `/api/file/${active.id}/image?path=${encodeURIComponent(relativeToFile(activeRef.file, ref.file))}`;
     },
-    [byRef, active?.id, activeRef?.file],
+    [byRef, active?.id, activeRef?.file, draft?.revision],
   );
 
   useEffect(() => {
@@ -255,7 +259,7 @@ export function App() {
     setSchemaError("");
   }, [active?.id]);
   useEffect(() => {
-    if (!active || !draft) return;
+    if (!active || !draft || active.kind !== "document") return;
     let cancelled = false;
     const timer = setTimeout(() => {
       try {

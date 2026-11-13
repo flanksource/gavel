@@ -7,6 +7,9 @@ import { CreateTodoFromPRDialog } from './CreateTodoFromPRDialog';
 import { queryTestWrapper } from './queryTestWrapper';
 import { CREATE_RUNTIME, CREATE_RUNTIME_CONTEXT } from './createRuntimeTestHelpers';
 
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock('../../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
+
 vi.mock('./run', async importOriginal => ({
   ...await importOriginal<typeof import('./run')>(),
   useTodoRunContext: () => ({ context: CREATE_RUNTIME_CONTEXT, loading: false, error: '' }),
@@ -110,6 +113,7 @@ vi.mock('./newTodoSteps', () => ({
 }));
 
 afterEach(() => {
+  viewport.mobile = false;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -512,5 +516,19 @@ describe('CreateTodoFromPRDialog', () => {
       { text: 'Test `storage › saves records` passes' },
       { text: 'Resolve golangci-lint (errcheck) violation at pkg/store/save.go:23' },
     ]);
+  });
+
+  it('pages a phone between the signal list and the tapped signal\'s detail', () => {
+    viewport.mobile = true;
+    render(<CreateTodoFromPRDialog open onClose={vi.fn()} pr={pr} detail={detail} workspaces={workspaces} />);
+    const signals = screen.getAllByRole('checkbox').length;
+    expect(signals).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /saves records/ }));
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(screen.getByText(/stderr: persistence failed/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to signals' }));
+    expect(screen.getAllByRole('checkbox')).toHaveLength(signals);
   });
 });

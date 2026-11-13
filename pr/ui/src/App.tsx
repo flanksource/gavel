@@ -595,7 +595,7 @@ export function App() {
   // pane) read one catalog, so it is loaded here rather than inside either one.
   // A hosted org's projects tab lists its repositories instead, so neither the
   // catalog nor the git summary loads there.
-  const projectCatalog = useProjectCatalog({ configured: scopedProjects, hiddenDirs, selectedName: selectedPath, enabled: hostControls && activeTab === 'projects' && projectHistory });
+  const projectCatalog = useProjectCatalog({ configured: scopedProjects, hiddenDirs, selectedName: selectedPath, enabled: hostControls && activeTab === 'projects', history: projectHistory });
   // The git work summary shown on every project row refreshes slowly and only
   // matters while the Projects tab is on screen.
   const projectGitSummary = useProjectGitSummary({ enabled: hostControls && activeTab === 'projects' && visible });

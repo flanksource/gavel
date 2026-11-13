@@ -2,6 +2,7 @@
 packages:
   - "."
   - "../../testrunner/ui"
+  - "../../extension"
 allowBuilds:
   "@parcel/watcher": true
   esbuild: true

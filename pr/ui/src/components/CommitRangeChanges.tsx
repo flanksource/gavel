@@ -1,8 +1,9 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, type QueryKey, type UseQueryResult } from '@tanstack/react-query';
-import { Select, SplitPane } from '@flanksource/clicky-ui/components';
+import { Button, Select, SplitPane } from '@flanksource/clicky-ui/components';
 import { GitDiffPanel, Tree, type DiffLineTarget, type DiffLineWidget, type GitDiffPayload } from '@flanksource/clicky-ui/data';
-import { UiDiff } from '@flanksource/clicky-ui/icons';
+import { UiArrowLeft, UiDiff } from '@flanksource/clicky-ui/icons';
+import { useIsMobile } from '../useIsMobile';
 import type { TodoCommitFile, TodoCommitFilesResponse } from '../types';
 import { DiffLineComment, DiffLineComposer } from './todos/DiffLineComment';
 import { matchesRange, type LineComment, type LineCommentAnchor } from './todos/lineComments';
@@ -94,14 +95,21 @@ function ChangeTree({ roots, selected, onSelect }: { roots: ChangeNode[]; select
   );
 }
 
-function ChangeDiff({ path, diff, lineActions }: {
+function ChangeDiff({ path, diff, lineActions, onBack }: {
   path: string;
   diff: UseQueryResult<GitDiffPayload>;
   lineActions?: { onLineAction: (target: DiffLineTarget) => void; lineWidgets: DiffLineWidget[] };
+  /** On a phone the diff replaces the file list; this returns to it. */
+  onBack?: () => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+        {onBack ? (
+          <Button type="button" variant="ghost" aria-label="Back to files" onClick={onBack} className="-ml-2 min-h-11 shrink-0 gap-1 px-2 text-xs">
+            <UiArrowLeft />Files
+          </Button>
+        ) : null}
         <UiDiff className="shrink-0 text-muted-foreground" />
         <h3 className="min-w-0 flex-1 truncate font-mono text-xs font-semibold" title={path}>{path}</h3>
       </div>
@@ -230,7 +238,9 @@ export function CommitRangeChanges({ options, filesRequest, diffRequest, summary
     staleTime: Infinity,
   });
   const roots = useMemo(() => buildFileTree(filesQuery.data ?? []), [filesQuery.data]);
-  const activePath = findFileTreeNode(roots, selectedPath)?.path ?? firstFilePath(roots);
+  // A phone pages between the list and one diff, so it diffs only what was picked.
+  const mobile = useIsMobile();
+  const activePath = findFileTreeNode(roots, selectedPath)?.path ?? (mobile ? '' : firstFilePath(roots));
   const diffQuery = useQuery({
     queryKey: activeId === undefined ? ['commit-range', 'none'] : diffRequest(activeId, activePath).queryKey,
     queryFn: ({ signal }) => {
@@ -299,6 +309,14 @@ export function CommitRangeChanges({ options, filesRequest, diffRequest, summary
         <div className="whitespace-pre-wrap px-3 py-3 text-xs text-red-600">{filesQuery.error.message}</div>
       ) : roots.length === 0 ? (
         <Notice>No file changes</Notice>
+      ) : mobile ? (
+        activePath ? (
+          <div className="flex h-[calc(100dvh-8rem)] min-h-[24rem] flex-col">
+            <ChangeDiff path={activePath} diff={diffQuery} lineActions={lineActions} onBack={() => setSelectedPath('')} />
+          </div>
+        ) : (
+          <ChangeTree roots={roots} selected={null} onSelect={setSelectedPath} />
+        )
       ) : (
         <SplitPane
           className="h-[32rem]"

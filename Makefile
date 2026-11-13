@@ -5,7 +5,10 @@ GOBIN := $(shell if command -v go >/dev/null 2>&1; then gobin=$$(go env GOBIN); 
 TASK := PATH="$(if $(GOBIN),$(GOBIN):)$(PATH)" task
 UI_DIRS := testrunner/ui pr/ui editor/ui
 
-.PHONY: build lint test install restart fmt tidy clean all ensure-task deps runner-image
+.PHONY: build lint test install restart fmt tidy clean all ensure-task deps runner-image extension
+
+extension:
+	$(MAKE) -C extension build
 
 ensure-task:
 	@if ! PATH="$(if $(GOBIN),$(GOBIN):)$(PATH)" command -v task >/dev/null 2>&1; then \

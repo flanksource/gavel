@@ -248,15 +248,19 @@ function SessionRows({ families, collapsed, onToggle, selectedId, onSelect, forc
                           {children.length}
                         </span>
                       ) : null}
-                      <span className="ml-auto shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground @min-[760px]:hidden" title={activityTitle}>
-                        {timeAgo(activity)} · {cost(session.costUsd)}
+                      <span className="ml-auto shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground @min-[760px]:hidden">
+                        {cost(session.costUsd)}
                       </span>
                     </span>
                     <span className="flex min-w-0 items-center gap-2">
-                      <span className="inline-flex shrink-0 @min-[760px]:hidden">
+                      <GitLocation session={session} {...parentProps} />
+                      <span
+                        className="ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs tabular-nums text-muted-foreground @min-[760px]:hidden"
+                        title={activityTitle}
+                      >
+                        {timeAgo(activity)}
                         <SessionStateBadge session={session} iconOnly />
                       </span>
-                      <GitLocation session={session} {...parentProps} />
                     </span>
                   </span>
                 </span>
