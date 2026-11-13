@@ -45,7 +45,7 @@ var _ = Describe("Vitest progress reporter", func() {
 
 		dir := GinkgoT().TempDir()
 		Expect(os.WriteFile(filepath.Join(dir, "progress.test.js"), []byte(vitestProgressSpec), 0o600)).To(Succeed())
-		run, err := NewVitest(dir).BuildCommand(".")
+		run, err := NewVitest(dir).BuildCommand(TestOptions{Cwd: dir, Packages: []string{"./."}})
 		Expect(err).NotTo(HaveOccurred())
 
 		// Run the built vitest arguments against the repo's vitest install,

@@ -47,24 +47,34 @@ func detectPlaywright(dir string, pkg *pkgJSON) bool {
 	return false
 }
 
-func (r *Playwright) Detect(workDir string) (bool, error) {
-	return anyNodePackage(workDir, detectPlaywright)
-}
+var playwrightFlags = nodeFlagSet{framework: "playwright", focus: "--grep", skip: "--grep-invert", parallel: "--workers", failFast: "--max-failures=1", suffixes: playwrightTestSuffixes}
 
-func (r *Playwright) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
-	if !recursive {
-		pkg, _ := readPackageJSON(workDir)
-		if detectPlaywright(workDir, pkg) {
-			return []string{"."}, nil
-		}
-		return nil, nil
+func (r *Playwright) Flags() []FlagSpec {
+	return []FlagSpec{
+		{Names: []string{"g", "grep"}, Kind: FocusFlag},
+		{Names: []string{"grep-invert"}, Kind: SkipFlag},
+		{Names: []string{"workers"}, Kind: ParallelFlag},
 	}
-	return walkNodePackages(workDir, detectPlaywright)
 }
 
-func (r *Playwright) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error) {
-	cwd := filepath.Join(r.workDir, packagePath)
-	reportPath := filepath.Join(r.workDir, ".playwright", fmt.Sprintf("playwright-report-%s-%d.json", sanitizePkgPath(packagePath), time.Now().UnixNano()))
+func (r *Playwright) Detect(cwd string, argv []string) (*TestOptions, error) {
+	return detect(r, cwd, argv, func(dir string) (bool, error) {
+		return anyNodePackage(dir, detectPlaywright)
+	}, nodeFileOwner(cwd, detectPlaywright, playwrightTestSuffixes))
+}
+
+func (r *Playwright) DiscoverPackages(opts TestOptions) ([]string, error) {
+	return discoverNodePackages(opts, detectPlaywright, playwrightTestSuffixes)
+}
+
+func (r *Playwright) BuildCommand(opts TestOptions) (*TestRun, error) {
+	packagePath := firstPackage(opts)
+	userArgs, err := nodeRunnerArgs(opts, packagePath, playwrightFlags)
+	if err != nil {
+		return nil, err
+	}
+	cwd := filepath.Join(opts.Cwd, packagePath)
+	reportPath := filepath.Join(opts.Cwd, ".playwright", fmt.Sprintf("playwright-report-%s-%d.json", sanitizePkgPath(packagePath), time.Now().UnixNano()))
 	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create playwright report dir: %w", err)
 	}
@@ -72,7 +82,7 @@ func (r *Playwright) BuildCommand(packagePath string, extraArgs ...string) (*Tes
 	cmd, pre := DetectPackageManager(cwd)
 	args := append([]string{}, pre...)
 	args = append(args, "playwright", "test", "--reporter=json")
-	args = append(args, extraArgs...)
+	args = append(args, userArgs...)
 
 	process := exec.NewExec(cmd, args...).WithCwd(cwd).WithProcessGroup().WithEnv(map[string]string{
 		"PLAYWRIGHT_JSON_OUTPUT_NAME": reportPath,

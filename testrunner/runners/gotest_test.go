@@ -10,6 +10,12 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
+// detected reports whether r detects its framework under dir with no arguments.
+func detected(r Runner, dir string) (bool, error) {
+	opts, err := r.Detect(dir, nil)
+	return opts != nil, err
+}
+
 func writeGoMod(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
@@ -23,7 +29,7 @@ func TestGoTestDetect(t *testing.T) {
 
 	// No test files yet
 	runner := NewGoTest(tmpDir)
-	found, err := runner.Detect(tmpDir)
+	found, err := detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,7 +43,7 @@ func TestGoTestDetect(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	found, err = runner.Detect(tmpDir)
+	found, err = detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -66,7 +72,7 @@ func TestGoTestDetectSkipsGitIgnoredFiles(t *testing.T) {
 	}
 
 	runner := NewGoTest(tmpDir)
-	found, err := runner.Detect(tmpDir)
+	found, err := detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +84,7 @@ func TestGoTestDetectSkipsGitIgnoredFiles(t *testing.T) {
 		t.Fatalf("failed to create visible test file: %v", err)
 	}
 
-	found, err = runner.Detect(tmpDir)
+	found, err = detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,7 +124,7 @@ func TestGoTestDetectSkipsNestedProjectRoots(t *testing.T) {
 	}
 
 	runner := NewGoTest(tmpDir)
-	found, err := runner.Detect(tmpDir)
+	found, err := detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -126,7 +132,7 @@ func TestGoTestDetectSkipsNestedProjectRoots(t *testing.T) {
 		t.Error("expected nested module and repo tests to be ignored from the parent root")
 	}
 
-	found, err = runner.Detect(nestedModule)
+	found, err = detected(runner, nestedModule)
 	if err != nil {
 		t.Fatalf("unexpected error detecting nested module directly: %v", err)
 	}
@@ -134,7 +140,7 @@ func TestGoTestDetectSkipsNestedProjectRoots(t *testing.T) {
 		t.Error("expected nested module tests to be detected when starting inside that module")
 	}
 
-	found, err = runner.Detect(nestedRepo)
+	found, err = detected(runner, nestedRepo)
 	if err != nil {
 		t.Fatalf("unexpected error detecting nested repo directly: %v", err)
 	}
@@ -154,7 +160,7 @@ func TestGoTestDetectsTestFilesWithoutGoMod(t *testing.T) {
 	}
 
 	runner := NewGoTest(tmpDir)
-	found, err := runner.Detect(tmpDir)
+	found, err := detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -162,7 +168,7 @@ func TestGoTestDetectsTestFilesWithoutGoMod(t *testing.T) {
 		t.Fatal("expected go test file to be detected even without a go.mod")
 	}
 
-	packages, err := runner.DiscoverPackages(tmpDir, true)
+	packages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error discovering packages: %v", err)
 	}
@@ -189,7 +195,7 @@ func TestGoTestDiscoverPackages(t *testing.T) {
 	}
 
 	runner := NewGoTest(tmpDir)
-	packages, err := runner.DiscoverPackages(tmpDir, true)
+	packages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -225,7 +231,7 @@ func TestGoTestDiscoverPackagesNonRecursive(t *testing.T) {
 	runner := NewGoTest(tmpDir)
 
 	// Non-recursive should only find root
-	packages, err := runner.DiscoverPackages(tmpDir, false)
+	packages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,7 +243,7 @@ func TestGoTestDiscoverPackagesNonRecursive(t *testing.T) {
 	}
 
 	// Recursive should find both
-	packages, err = runner.DiscoverPackages(tmpDir, true)
+	packages, err = runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -264,7 +270,7 @@ func TestSample(t *testing.T) {}
 		t.Fatalf("failed to create fixture test file: %v", err)
 	}
 
-	packages, err := NewGoTest(tmpDir).DiscoverPackages(tmpDir, true)
+	packages, err := NewGoTest(tmpDir).DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -313,7 +319,7 @@ func TestGoTestDiscoverPackagesSkipsNestedProjectRoots(t *testing.T) {
 
 	runner := NewGoTest(tmpDir)
 
-	packages, err := runner.DiscoverPackages(tmpDir, true)
+	packages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -321,7 +327,7 @@ func TestGoTestDiscoverPackagesSkipsNestedProjectRoots(t *testing.T) {
 		t.Fatalf("expected only root package, got %v", packages)
 	}
 
-	modulePackages, err := runner.DiscoverPackages(nestedModule, true)
+	modulePackages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Paths: []string{"./nested-module"}, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error discovering nested module directly: %v", err)
 	}
@@ -329,7 +335,7 @@ func TestGoTestDiscoverPackagesSkipsNestedProjectRoots(t *testing.T) {
 		t.Fatalf("expected nested module package when starting inside it, got %v", modulePackages)
 	}
 
-	repoPackages, err := runner.DiscoverPackages(nestedRepo, true)
+	repoPackages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Paths: []string{"./nested-repo"}, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error discovering nested repo directly: %v", err)
 	}
@@ -338,7 +344,7 @@ func TestGoTestDiscoverPackagesSkipsNestedProjectRoots(t *testing.T) {
 	}
 }
 
-func TestGoTestPackageHasTests(t *testing.T) {
+func TestGoTestDiscoverStartingPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	pkgDir := filepath.Join(tmpDir, "pkg")
 
@@ -347,27 +353,26 @@ func TestGoTestPackageHasTests(t *testing.T) {
 	}
 
 	runner := NewGoTest(tmpDir)
+	opts := TestOptions{Cwd: tmpDir, Paths: []string{"./pkg"}}
 
-	// Should not have tests yet
-	found, err := runner.PackageHasTests("./pkg")
+	packages, err := runner.DiscoverPackages(opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if found {
-		t.Error("expected no test files")
+	if len(packages) != 0 {
+		t.Errorf("expected no packages without test files, got %v", packages)
 	}
 
-	// Add a test file
 	if err := os.WriteFile(filepath.Join(pkgDir, "test_test.go"), []byte("package pkg\n"), 0644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	found, err = runner.PackageHasTests("./pkg")
+	packages, err = runner.DiscoverPackages(opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !found {
-		t.Error("expected test file to be found")
+	if !reflect.DeepEqual(packages, []string{"./pkg"}) {
+		t.Errorf("packages = %v, want [./pkg]", packages)
 	}
 }
 
@@ -411,12 +416,12 @@ var _ = Describe("Test", func() {
 	runner := NewGoTest(tmpDir)
 
 	// Ginkgo test files should not be considered GoTest
-	found, err := runner.PackageHasTests(".")
+	packages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if found {
-		t.Error("expected no GoTest files (only Ginkgo imports)")
+	if len(packages) != 0 {
+		t.Errorf("expected no GoTest packages (only Ginkgo imports), got %v", packages)
 	}
 
 	// Now add a regular GoTest file
@@ -436,12 +441,12 @@ func TestRegular(t *testing.T) {
 	}
 
 	// Now should find GoTest files
-	found, err = runner.PackageHasTests(".")
+	packages, err = runner.DiscoverPackages(TestOptions{Cwd: tmpDir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !found {
-		t.Error("expected to find GoTest files (mixed with Ginkgo)")
+	if !reflect.DeepEqual(packages, []string{"./."}) {
+		t.Errorf("expected the root GoTest package (mixed with Ginkgo), got %v", packages)
 	}
 }
 
@@ -482,7 +487,7 @@ func TestExample(t *testing.T) {}
 	}
 
 	runner := NewGoTest(tmpDir)
-	packages, err := runner.DiscoverPackages(tmpDir, true)
+	packages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -626,40 +631,4 @@ func BenchmarkCodec(b *testing.B) {}
 			t.Error("benchmarks alone are not runnable tests")
 		}
 	})
-}
-
-func TestGoTestBuildCommandHonoursTimeoutFlag(t *testing.T) {
-	tmpDir := t.TempDir()
-	writeGoMod(t, tmpDir)
-	runner := NewGoTest(tmpDir)
-
-	// Caller passes -timeout once at the front; a user-supplied override
-	// comes in as a later extraArg and must win via Go's last-flag-wins rule.
-	testRun, err := runner.BuildCommand("./pkg", "-timeout=4m30s", "-run", "TestFoo", "-timeout=1s")
-	if err != nil {
-		t.Fatalf("BuildCommand: %v", err)
-	}
-	args := testRun.Process.Args
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-timeout=4m30s") {
-		t.Errorf("expected -timeout=4m30s in args, got: %s", joined)
-	}
-	if !strings.Contains(joined, "-timeout=1s") {
-		t.Errorf("expected user-supplied -timeout=1s to survive, got: %s", joined)
-	}
-	firstIdx := strings.Index(joined, "-timeout=4m30s")
-	lastIdx := strings.Index(joined, "-timeout=1s")
-	if firstIdx < 0 || lastIdx < 0 || firstIdx > lastIdx {
-		t.Errorf("auto-timeout must come before user override, got: %s", joined)
-	}
-	if args[0] != "test" || args[1] != "-json" {
-		t.Errorf("expected `test -json` prefix, got: %v", args[:2])
-	}
-}
-
-func TestGoTestFocusArgs(t *testing.T) {
-	runner := NewGoTest(t.TempDir())
-	if got, want := runner.FocusArgs("TestFoo"), []string{"-run", "TestFoo"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("FocusArgs = %v, want %v", got, want)
-	}
 }

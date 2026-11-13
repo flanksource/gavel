@@ -55,24 +55,30 @@ func detectJest(dir string, pkg *pkgJSON) bool {
 	return false
 }
 
-func (r *Jest) Detect(workDir string) (bool, error) {
-	return anyNodePackage(workDir, detectJest)
+var jestFlags = nodeFlagSet{framework: "jest", focus: "-t", parallel: "--maxWorkers", failFast: "--bail", suffixes: jestTestSuffixes}
+
+func (r *Jest) Flags() []FlagSpec {
+	return []FlagSpec{{Names: []string{"maxWorkers"}, Kind: ParallelFlag}}
 }
 
-func (r *Jest) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
-	if !recursive {
-		pkg, _ := readPackageJSON(workDir)
-		if detectJest(workDir, pkg) {
-			return []string{"."}, nil
-		}
-		return nil, nil
+func (r *Jest) Detect(cwd string, argv []string) (*TestOptions, error) {
+	return detect(r, cwd, argv, func(dir string) (bool, error) {
+		return anyNodePackage(dir, detectJest)
+	}, nodeFileOwner(cwd, detectJest, jestTestSuffixes))
+}
+
+func (r *Jest) DiscoverPackages(opts TestOptions) ([]string, error) {
+	return discoverNodePackages(opts, detectJest, jestTestSuffixes)
+}
+
+func (r *Jest) BuildCommand(opts TestOptions) (*TestRun, error) {
+	packagePath := firstPackage(opts)
+	userArgs, err := nodeRunnerArgs(opts, packagePath, jestFlags)
+	if err != nil {
+		return nil, err
 	}
-	return walkNodePackages(workDir, detectJest)
-}
-
-func (r *Jest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error) {
-	cwd := filepath.Join(r.workDir, packagePath)
-	reportPath := filepath.Join(r.workDir, ".jest", fmt.Sprintf("jest-report-%s-%d.json", sanitizePkgPath(packagePath), time.Now().UnixNano()))
+	cwd := filepath.Join(opts.Cwd, packagePath)
+	reportPath := filepath.Join(opts.Cwd, ".jest", fmt.Sprintf("jest-report-%s-%d.json", sanitizePkgPath(packagePath), time.Now().UnixNano()))
 	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create jest report dir: %w", err)
 	}
@@ -80,7 +86,7 @@ func (r *Jest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, 
 	cmd, pre := DetectPackageManager(cwd)
 	args := append([]string{}, pre...)
 	args = append(args, "jest", "--json", "--outputFile="+reportPath)
-	args = append(args, extraArgs...)
+	args = append(args, userArgs...)
 
 	process := exec.NewExec(cmd, args...).WithCwd(cwd).WithProcessGroup()
 	process.SucceedOnNonZero = true

@@ -28,7 +28,7 @@ func TestJestDetect(t *testing.T) {
 			t.Fatalf("write config: %v", err)
 		}
 		r := NewJest(tmp)
-		got, err := r.Detect(tmp)
+		got, err := detected(r, tmp)
 		if err != nil || !got {
 			t.Fatalf("Detect = %v, %v; want true,nil", got, err)
 		}
@@ -37,7 +37,7 @@ func TestJestDetect(t *testing.T) {
 		tmp := t.TempDir()
 		writePackageJSON(t, tmp, `{"name":"x","jest":{}}`)
 		r := NewJest(tmp)
-		got, _ := r.Detect(tmp)
+		got, _ := detected(r, tmp)
 		if !got {
 			t.Fatal("expected detect=true when package.json has jest key")
 		}
@@ -49,7 +49,7 @@ func TestJestDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewJest(tmp)
-		if got, _ := r.Detect(tmp); !got {
+		if got, _ := detected(r, tmp); !got {
 			t.Fatal("expected detect=true when jest dep + test file present")
 		}
 	})
@@ -57,7 +57,7 @@ func TestJestDetect(t *testing.T) {
 		tmp := t.TempDir()
 		writePackageJSON(t, tmp, `{"name":"x","devDependencies":{"jest":"^29"}}`)
 		r := NewJest(tmp)
-		if got, _ := r.Detect(tmp); got {
+		if got, _ := detected(r, tmp); got {
 			t.Fatal("expected detect=false when jest is declared but no tests exist")
 		}
 	})
@@ -68,7 +68,7 @@ func TestJestDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewJest(tmp)
-		if got, _ := r.Detect(tmp); !got {
+		if got, _ := detected(r, tmp); !got {
 			t.Fatal("expected detect=true for bare .jestrc file")
 		}
 	})
@@ -79,7 +79,7 @@ func TestJestDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewJest(tmp)
-		if got, _ := r.Detect(tmp); !got {
+		if got, _ := detected(r, tmp); !got {
 			t.Fatal("expected detect=true for .jestrc.json")
 		}
 	})
@@ -87,7 +87,7 @@ func TestJestDetect(t *testing.T) {
 		tmp := t.TempDir()
 		writePackageJSON(t, tmp, `{"name":"x"}`)
 		r := NewJest(tmp)
-		got, _ := r.Detect(tmp)
+		got, _ := detected(r, tmp)
 		if got {
 			t.Fatal("expected detect=false without jest config")
 		}
@@ -105,7 +105,7 @@ func TestJestDiscoverPackages_Monorepo(t *testing.T) {
 	writePackageJSON(t, filepath.Join(tmp, "apps/mobile"), `{"name":"mobile"}`)
 
 	r := NewJest(tmp)
-	pkgs, err := r.DiscoverPackages(tmp, true)
+	pkgs, err := r.DiscoverPackages(TestOptions{Cwd: tmp, Recursive: true})
 	if err != nil {
 		t.Fatalf("DiscoverPackages: %v", err)
 	}
@@ -120,7 +120,11 @@ func TestJestBuildCommand(t *testing.T) {
 	tmp := t.TempDir()
 	writePackageJSON(t, tmp, `{"name":"x","jest":{}}`)
 	r := NewJest(tmp)
-	tr, err := r.BuildCommand(".", "--runInBand")
+	opts, err := ParseTestArgs(tmp, []string{"--", "--runInBand"}, r.Flags()...)
+	if err != nil {
+		t.Fatalf("ParseTestArgs: %v", err)
+	}
+	tr, err := r.BuildCommand(opts.ForPackages("./."))
 	if err != nil {
 		t.Fatalf("BuildCommand: %v", err)
 	}

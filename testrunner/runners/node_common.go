@@ -3,6 +3,7 @@ package runners
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -126,7 +127,7 @@ func DetectPackageManager(dir string) (string, []string) {
 
 // walkNodePackages finds every directory under root that (a) contains a
 // package.json and (b) satisfies detect(dir, pkgJSON). Returns gavel-style
-// relative paths ("./apps/web"). Skips node_modules/ + build-output dirs
+// package directories. Skips node_modules/ + build-output dirs
 // (nodeSkipDirs) defensively, and honors .gitignore.
 func walkNodePackages(root string, detect func(string, *pkgJSON) bool) ([]string, error) {
 	var out []string
@@ -152,11 +153,7 @@ func walkNodePackages(root string, detect func(string, *pkgJSON) bool) ([]string
 		seen[pkgDir] = true
 		pkg, _ := readPackageJSON(pkgDir)
 		if detect(pkgDir, pkg) {
-			rel, relErr := filepath.Rel(root, pkgDir)
-			if relErr != nil {
-				rel = pkgDir
-			}
-			out = append(out, "./"+filepath.ToSlash(rel))
+			out = append(out, pkgDir)
 		}
 		return nil
 	})
@@ -250,4 +247,116 @@ func hasTestFile(dir string, suffixes []string, deep bool) bool {
 		return nil
 	})
 	return found
+}
+
+// discoverNodePackages applies opts to a node runner's package detection.
+func discoverNodePackages(opts TestOptions, detect func(string, *pkgJSON) bool, suffixes []string) ([]string, error) {
+	walk := func(dir string, recursive bool) ([]string, error) {
+		if !recursive {
+			pkg, _ := readPackageJSON(dir)
+			if detect(dir, pkg) {
+				return []string{dir}, nil
+			}
+			return nil, nil
+		}
+		return walkNodePackages(dir, detect)
+	}
+	return discoverPackages(opts, walk, nodeFileOwner(opts.Cwd, detect, suffixes))
+}
+
+// nodeFileOwner finds the nearest package directory at or above a test file,
+// up to cwd, that the runner detects.
+func nodeFileOwner(cwd string, detect func(string, *pkgJSON) bool, suffixes []string) fileOwner {
+	return func(file string) (string, bool, error) {
+		if !hasTestSuffix(file, suffixes) {
+			return "", false, nil
+		}
+		root, err := filepath.Abs(cwd)
+		if err != nil {
+			return "", false, err
+		}
+		for dir := filepath.Dir(file); ; dir = filepath.Dir(dir) {
+			if pkg, ok := readPackageJSON(dir); ok {
+				return dir, detect(dir, pkg), nil
+			}
+			if dir == root || filepath.Dir(dir) == dir {
+				return "", false, nil
+			}
+		}
+	}
+}
+
+// nodeFlagSet names one node runner's spellings of the shared options.
+type nodeFlagSet struct {
+	framework string
+	focus     string   // flag taking the name pattern
+	skip      string   // flag excluding a name pattern; "" = unsupported
+	parallel  string   // flag taking the worker count
+	failFast  string   // flag (with value) stopping at the first failure
+	suffixes  []string // test file suffixes the runner runs
+}
+
+// nodeRunnerArgs renders opts for one node package: name filters, workers,
+// fail-fast, the package's selected test files, then the extra arguments.
+func nodeRunnerArgs(opts TestOptions, pkg string, flags nodeFlagSet) ([]string, error) {
+	if len(opts.Packages) != 1 {
+		return nil, fmt.Errorf("%s runs one package at a time, got %v", flags.framework, opts.Packages)
+	}
+	if opts.LabelFilter != "" {
+		return nil, UnsupportedOptionError{Framework: flags.framework, Option: "label filters"}
+	}
+	if opts.Bench != "" {
+		return nil, UnsupportedOptionError{Framework: flags.framework, Option: "benchmarks"}
+	}
+	var args []string
+	if !opts.Focus.Empty() {
+		focus, err := opts.Focus.Pattern()
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, flags.focus, focus)
+	}
+	if !opts.Skip.Empty() {
+		if flags.skip == "" {
+			return nil, UnsupportedOptionError{Framework: flags.framework, Option: "skipping tests by name"}
+		}
+		skip, err := opts.Skip.Pattern()
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, flags.skip, skip)
+	}
+	if opts.Parallel > 0 {
+		args = append(args, fmt.Sprintf("%s=%d", flags.parallel, opts.Parallel))
+	}
+	if opts.FailFast {
+		args = append(args, flags.failFast)
+	}
+	files, err := opts.PackageFiles(pkg, true)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range files {
+		if hasTestSuffix(file, flags.suffixes) {
+			args = append(args, file)
+		}
+	}
+	return append(args, opts.ExtraArgs...), nil
+}
+
+func firstPackage(opts TestOptions) string {
+	if len(opts.Packages) == 0 {
+		return ""
+	}
+	return opts.Packages[0]
+}
+
+func hasTestSuffix(file string, suffixes []string) bool {
+	lower := strings.ToLower(file)
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
 }
