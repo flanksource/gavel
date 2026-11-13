@@ -1,7 +1,6 @@
 package lifecycle
 
 import (
-	"context"
 	"fmt"
 	"slices"
 
@@ -16,14 +15,7 @@ func (h Host) record(snapshot Snapshot, action Action, runs []captaindb.PromptRu
 	return &promptrun.Recording{
 		DB: h.DB, PromptRunID: uuid.New(), Origin: "gavel.pr.lifecycle", SpecProfile: action.Step.Name,
 		Placement: promptrun.Placement{Sessions: []captaindb.CreateSessionInput{{ID: session, Source: "gavel.pr.lifecycle", Title: snapshot.PR.Title, CWD: h.Dir, Project: h.Repo.FullName(), Metadata: map[string]any{"prURL": snapshot.PR.URL}}}},
-		Link: func(ctx context.Context, tx *captaindb.DB, run *captaindb.PromptRun) error {
-			metadata := map[string]any{"lifecycle": h.Definition, "context": action.Event, "subject": snapshot.Subject(), "headSHA": snapshot.PR.HeadSHA}
-			updated, err := tx.UpdatePromptRun(ctx, captaindb.UpdatePromptRunInput{ID: run.ID, ExpectedVersion: run.Version, Metadata: &metadata})
-			if err == nil {
-				*run = *updated
-			}
-			return err
-		},
+		Metadata:  map[string]any{"lifecycle": h.Definition, "context": action.Event, "subject": snapshot.Subject(), "headSHA": snapshot.PR.HeadSHA},
 		Outcome: func(result promptrun.Result, runErr error, stopped bool) (promptrun.Outcome, error) {
 			out, err := promptrun.DefaultOutcome(result, runErr, stopped)
 			if err != nil || runErr != nil || stopped {
