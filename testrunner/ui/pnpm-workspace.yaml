@@ -96,3 +96,14 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - '@flanksource/clicky-ui@0.3.62'
+
+# The global virtual store links each package in isolation, so undeclared
+# imports no longer resolve through hoisting. country-flag-icons/react/* (used
+# by clicky-ui) imports react but declares no dependency on it.
+packageExtensions:
+  country-flag-icons:
+    peerDependencies:
+      react: "*"
+    peerDependenciesMeta:
+      react:
+        optional: true

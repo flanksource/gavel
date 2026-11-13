@@ -31,6 +31,8 @@ catalogs:
       specifier: ^5.0.5
       version: 5.0.5
 
+packageExtensionsChecksum: sha256-TDNSQ0tVyMBnnhnXR4DRvdrlXlYQJ2cnAjkU0PvTgrE=
+
 importers:
 
   .:
@@ -1968,6 +1970,11 @@ packages:
 
   country-flag-icons@1.6.20:
     resolution: {integrity: sha512-py8JiEKzjhYw6HPJ0L7SxLgCYim36UPRTZX43/kqGueUCZLSvnrqAiwW8HtQibur7mdkFQUkjOgdK+o/9FBtaw==}
+    peerDependencies:
+      react: '*'
+    peerDependenciesMeta:
+      react:
+        optional: true
 
   crelt@1.0.7:
     resolution: {integrity: sha512-aK6BbWfhf4U/wCcLHKPJl/xa6VkVstRaPywWtMKGwuOLc/wZTyQYuoxgvZnNsBvv7Kg3YTBQYYBCggcviQczuA==}
@@ -4252,7 +4259,7 @@ snapshots:
       '@tanstack/react-virtual': 3.14.10(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       class-variance-authority: 0.7.1
       clsx: 2.1.1
-      country-flag-icons: 1.6.20
+      country-flag-icons: 1.6.20(react@19.3.1)
       dom-accessibility-api: 0.6.3
       dompurify: 3.4.12
       jotai: 2.20.1(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@types/react@19.3.0)(react@19.3.1)
@@ -5909,7 +5916,9 @@ snapshots:
       layout-base: 2.0.1
     optional: true
 
-  country-flag-icons@1.6.20: {}
+  country-flag-icons@1.6.20(react@19.3.1):
+    optionalDependencies:
+      react: 19.3.1
 
   crelt@1.0.7: {}
 
