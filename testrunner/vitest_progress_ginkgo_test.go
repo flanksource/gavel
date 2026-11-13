@@ -49,11 +49,11 @@ test("slow", async () => {
 
 		streamer := NewTestStreamer(updates)
 		o := &TestOrchestrator{
-			RunOptions: RunOptions{WorkDir: dir, Recursive: true},
+			RunOptions: RunOptions{WorkDir: dir, Recursive: true, Frameworks: []string{"vitest"}},
 			registry:   DefaultRegistry(dir),
 			streamer:   streamer,
 		}
-		results, err := o.detectAndRun([]Framework{parsers.Vitest}, nil, nil)
+		results, err := o.Run()
 		streamer.Done()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(results.All().Sum().Passed).To(Equal(2), "results: %+v", results)

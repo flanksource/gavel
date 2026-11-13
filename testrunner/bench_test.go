@@ -3,186 +3,70 @@ package testrunner
 import (
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
-	"testing"
 
 	"github.com/flanksource/gavel/testrunner/runners"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestAugmentBenchArgs(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	benchOnly := filepath.Join(tmpDir, "benchonly")
-	if err := os.MkdirAll(benchOnly, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(benchOnly, "main_test.go"), []byte(`package benchonly
-
-import "testing"
-
-func TestMain(m *testing.M) { m.Run() }
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(benchOnly, "bench_test.go"), []byte(`package benchonly
-
-import "testing"
-
-func BenchmarkFoo(b *testing.B) {}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	mixed := filepath.Join(tmpDir, "mixed")
-	if err := os.MkdirAll(mixed, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(mixed, "x_test.go"), []byte(`package mixed
-
-import "testing"
-
-func TestX(t *testing.T) {}
-func BenchmarkY(b *testing.B) {}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	noTests := filepath.Join(tmpDir, "empty")
-	if err := os.MkdirAll(noTests, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(noTests, "x_test.go"), []byte(`package empty
-
-import "testing"
-
-func TestX(t *testing.T) {}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
+var benchPackages = map[string]map[string]string{
+	"benchonly": {
+		"main_test.go":  "package benchonly\n\nimport \"testing\"\n\nfunc TestMain(m *testing.M) { m.Run() }\n",
+		"bench_test.go": "package benchonly\n\nimport \"testing\"\n\nfunc BenchmarkFoo(b *testing.B) {}\n",
+	},
+	"mixed": {
+		"x_test.go": "package mixed\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\nfunc BenchmarkY(b *testing.B) {}\n",
+	},
+	"empty": {
+		"x_test.go": "package empty\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n",
+	},
 	// A Ginkgo suite beside a plain-testing benchmark: the suite's bootstrap is
 	// the package's runnable test, so benchmarks are opt-in and never displace it.
-	ginkgoSuite := filepath.Join(tmpDir, "ginkgosuite")
-	if err := os.MkdirAll(ginkgoSuite, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ginkgoSuite, "suite_test.go"), []byte(`package ginkgosuite_test
+	"ginkgosuite": {
+		"suite_test.go": "package ginkgosuite_test\n\nimport (\n\t\"testing\"\n\n\t. \"github.com/onsi/ginkgo/v2\"\n)\n\nfunc TestSuite(t *testing.T) { RunSpecs(t, \"suite\") }\n",
+		"bench_test.go": "package ginkgosuite_test\n\nimport \"testing\"\n\nfunc BenchmarkZ(b *testing.B) {}\n",
+	},
+}
 
-import (
-	"testing"
-
-	. "github.com/onsi/ginkgo/v2"
-)
-
-func TestSuite(t *testing.T) { RunSpecs(t, "suite") }
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ginkgoSuite, "bench_test.go"), []byte(`package ginkgosuite_test
-
-import "testing"
-
-func BenchmarkZ(b *testing.B) {}
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	runner := runners.NewGoTest(tmpDir)
-	newOrchestrator := func(bench string) *TestOrchestrator {
-		return &TestOrchestrator{
-			RunOptions: RunOptions{WorkDir: tmpDir, Bench: bench},
-		}
-	}
-
-	tests := []struct {
-		name      string
-		bench     string
-		pkg       string
-		extraArgs []string
-		want      []string
-	}{
-		{
-			name:  "bench-only package auto-enables bench with -run=^$",
-			bench: "",
-			pkg:   "./benchonly",
-			want:  []string{"-bench=.", "-run=^$"},
-		},
-		{
-			name:  "package with tests only is untouched when bench flag off",
-			bench: "",
-			pkg:   "./empty",
-			want:  nil,
-		},
-		{
-			name:  "package with tests only runs benches when flag explicitly enabled",
-			bench: ".",
-			pkg:   "./empty",
-			want:  nil, // no benchmarks in this package; nothing to add
-		},
-		{
-			name:  "mixed package with bench=true runs bench without -run=^$",
-			bench: "true",
-			pkg:   "./mixed",
-			want:  []string{"-bench=."},
-		},
-		{
-			name:  "mixed package with custom pattern",
-			bench: "BenchmarkY",
-			pkg:   "./mixed",
-			want:  []string{"-bench=BenchmarkY"},
-		},
-		{
-			name:  "Ginkgo suite with benchmarks keeps its specs runnable under an explicit pattern",
-			bench: "^$",
-			pkg:   "./ginkgosuite",
-			want:  []string{"-bench=^$"},
-		},
-		{
-			name:  "Ginkgo suite with benchmarks is not treated as bench-only",
-			bench: "",
-			pkg:   "./ginkgosuite",
-			want:  nil,
-		},
-		{
-			name:  "Ginkgo suite with bench=true runs the benchmark beside its specs",
-			bench: "true",
-			pkg:   "./ginkgosuite",
-			want:  []string{"-bench=."},
-		},
-		{
-			name:      "user-supplied -bench in extraArgs is preserved as-is",
-			bench:     "",
-			pkg:       "./benchonly",
-			extraArgs: []string{"-bench=Custom"},
-			want:      []string{"-bench=Custom"},
-		},
-		{
-			name:      "user-supplied -run prevents injection of -run=^$",
-			bench:     ".",
-			pkg:       "./benchonly",
-			extraArgs: []string{"-run=^TestMain$"},
-			want:      []string{"-run=^TestMain$", "-bench=."},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			o := newOrchestrator(tt.bench)
-			got := o.augmentBenchArgs(runner, tt.pkg, tt.extraArgs)
-			if !slices.Equal(got, tt.want) {
-				t.Errorf("augmentBenchArgs(%q, bench=%q, extra=%v) = %v, want %v",
-					tt.pkg, tt.bench, tt.extraArgs, got, tt.want)
+var _ = Describe("benchOptions", func() {
+	var workDir string
+	BeforeEach(func() {
+		workDir = GinkgoT().TempDir()
+		for pkg, files := range benchPackages {
+			Expect(os.MkdirAll(filepath.Join(workDir, pkg), 0o755)).To(Succeed())
+			for name, content := range files {
+				Expect(os.WriteFile(filepath.Join(workDir, pkg, name), []byte(content), 0o644)).To(Succeed())
 			}
-		})
-	}
-
-	t.Run("bench-only package produces args compatible with go test", func(t *testing.T) {
-		o := newOrchestrator("")
-		got := o.augmentBenchArgs(runner, "./benchonly", nil)
-		joined := strings.Join(got, " ")
-		if !strings.Contains(joined, "-bench=") {
-			t.Errorf("expected -bench= in args, got %q", joined)
 		}
 	})
-}
+
+	DescribeTable("decides the benchmark pattern and keeps the empty test pass quiet",
+		func(bench, pkg string, given, want runners.TestOptions) {
+			o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir, Bench: bench}}
+			Expect(o.benchOptions(pkg, given)).To(Equal(want))
+		},
+		Entry("bench-only package auto-enables bench with -run=^$", "", "./benchonly",
+			runners.TestOptions{}, runners.TestOptions{Bench: ".", Focus: runners.FileSelection{Regex: []string{"^$"}}}),
+		Entry("--bench=false keeps a bench-only package's benchmarks off", "false", "./benchonly",
+			runners.TestOptions{}, runners.TestOptions{}),
+		Entry("package with tests only is untouched when --bench is unset", "", "./empty",
+			runners.TestOptions{}, runners.TestOptions{}),
+		Entry("package without benchmarks is untouched under an explicit pattern", ".", "./empty",
+			runners.TestOptions{}, runners.TestOptions{}),
+		Entry("mixed package with --bench=true runs benchmarks beside its tests", "true", "./mixed",
+			runners.TestOptions{}, runners.TestOptions{Bench: "."}),
+		Entry("mixed package with a custom pattern", "BenchmarkY", "./mixed",
+			runners.TestOptions{}, runners.TestOptions{Bench: "BenchmarkY"}),
+		Entry("Ginkgo suite keeps its specs runnable under an explicit pattern", "^$", "./ginkgosuite",
+			runners.TestOptions{}, runners.TestOptions{Bench: "^$"}),
+		Entry("Ginkgo suite with benchmarks is not treated as bench-only", "", "./ginkgosuite",
+			runners.TestOptions{}, runners.TestOptions{}),
+		Entry("Ginkgo suite with --bench=true runs the benchmark beside its specs", "true", "./ginkgosuite",
+			runners.TestOptions{}, runners.TestOptions{Bench: "."}),
+		Entry("a -bench given after -- wins", "", "./benchonly",
+			runners.TestOptions{Bench: "Custom"}, runners.TestOptions{Bench: "Custom"}),
+		Entry("a focus given after -- prevents the -run=^$ injection", ".", "./benchonly",
+			runners.TestOptions{Focus: runners.FileSelection{Regex: []string{"^TestMain$"}}},
+			runners.TestOptions{Bench: ".", Focus: runners.FileSelection{Regex: []string{"^TestMain$"}}}),
+	)
+})

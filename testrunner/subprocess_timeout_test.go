@@ -1,10 +1,16 @@
 package testrunner
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/testrunner/runners"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 func TestSubprocessTimeoutFor(t *testing.T) {
@@ -36,50 +42,35 @@ func TestSubprocessTimeoutFor(t *testing.T) {
 	}
 }
 
-func TestSubprocessTimeoutArgsGoTest(t *testing.T) {
-	args := subprocessTimeoutArgs(parsers.GoTest, 4*time.Minute+30*time.Second)
-	if len(args) != 1 {
-		t.Fatalf("want 1 arg, got %v", args)
-	}
-	if args[0] != "-timeout=4m30s" {
-		t.Errorf("want -timeout=4m30s, got %q", args[0])
-	}
-}
-
-func TestSubprocessTimeoutArgsGinkgo(t *testing.T) {
-	args := subprocessTimeoutArgs(parsers.Ginkgo, 4*time.Minute+30*time.Second)
-	want := []string{"--timeout=4m30s", "--poll-progress-after=4m20s"}
-	if len(args) != len(want) {
-		t.Fatalf("want %d args, got %v", len(want), args)
-	}
-	for i, w := range want {
-		if args[i] != w {
-			t.Errorf("arg %d: want %q, got %q", i, w, args[i])
-		}
-	}
-}
-
-func TestSubprocessTimeoutArgsGinkgoShortBudget(t *testing.T) {
-	// When subTimeout - 10s would go non-positive, poll-after falls back
-	// to half the budget so we still arm a progress report.
-	args := subprocessTimeoutArgs(parsers.Ginkgo, 8*time.Second)
-	if len(args) != 2 {
-		t.Fatalf("want 2 args, got %v", args)
-	}
-	if args[0] != "--timeout=8s" {
-		t.Errorf("want --timeout=8s, got %q", args[0])
-	}
-	if args[1] != "--poll-progress-after=4s" {
-		t.Errorf("expected half-budget fallback --poll-progress-after=4s, got %q", args[1])
-	}
-}
-
-func TestSubprocessTimeoutArgsUnknownFramework(t *testing.T) {
-	// Playwright, Jest, Vitest etc. don't use go/ginkgo timeout flags.
-	if got := subprocessTimeoutArgs(parsers.Playwright, time.Minute); got != nil {
-		t.Errorf("want nil for non-go frameworks, got %v", got)
-	}
-}
+var _ = Describe("subprocess timeout argument", func() {
+	DescribeTable("arms the in-process deadline only on go test commands",
+		func(framework parsers.Framework, budget string, want []string) {
+			workDir := GinkgoT().TempDir()
+			GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+			Expect(os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte("runtime: {timeout: "+budget+"}\n"), 0o600)).To(Succeed())
+			if framework == parsers.Ginkgo {
+				code := "package sample\nimport \"github.com/onsi/ginkgo/v2\"\nvar _ = ginkgo.Describe(\"timeout\", func() {})\n"
+				Expect(os.WriteFile(filepath.Join(workDir, "sample_test.go"), []byte(code), 0o600)).To(Succeed())
+			}
+			runner, ok := DefaultRegistry(workDir).Get(framework)
+			Expect(ok).To(BeTrue())
+			o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir}}
+			run, err := o.buildCommand(runner, ".", runners.TestOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			var timeouts []string
+			for _, arg := range run.Process.Args {
+				if strings.Contains(arg, "timeout") {
+					timeouts = append(timeouts, arg)
+				}
+			}
+			Expect(timeouts).To(Equal(want))
+		},
+		Entry("go test, 5m budget", parsers.GoTest, "5m", []string{"-timeout=4m30s"}),
+		Entry("Ginkgo, 5m budget", parsers.Ginkgo, "5m", []string{"-timeout=4m30s"}),
+		Entry("go test, budget too short for a margin", parsers.GoTest, "20s", nil),
+		Entry("Playwright has no go test deadline", parsers.Playwright, "5m", nil),
+	)
+})
 
 func TestMarkSubtreeTimedOutFlagsNonTerminalLeaves(t *testing.T) {
 	// Subtree: one already-failed leaf, one that was still running when the

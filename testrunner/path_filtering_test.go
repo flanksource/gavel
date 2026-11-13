@@ -1,89 +1,39 @@
 package testrunner
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
-	"testing"
 
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestPathFiltering(t *testing.T) {
-	wd, _ := os.Getwd()
-	projectRoot := filepath.Join(wd, "..")
-
-	tests := []struct {
-		name          string
-		startingPaths []string
-		expectedPkgs  []string
-		unexpectedPkg string
-	}{
-		{
-			name:          "Filter to parsers directory only",
-			startingPaths: []string{"./testrunner/parsers"},
-			expectedPkgs:  []string{"./testrunner/parsers"},
-			unexpectedPkg: "./claudehistory",
-		},
-		{
-			name:          "Filter to claudehistory directory only",
-			startingPaths: []string{"./claudehistory"},
-			expectedPkgs:  []string{"./claudehistory"},
-			unexpectedPkg: "./testrunner/parsers",
-		},
-		{
-			name:          "Multiple starting paths",
-			startingPaths: []string{"./testrunner/parsers", "./claudehistory"},
-			expectedPkgs:  []string{"./testrunner/parsers", "./claudehistory"},
-			unexpectedPkg: "./todos",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+var _ = Describe("starting path filtering", func() {
+	DescribeTable("discovers go test packages only under the starting paths",
+		func(startingPaths, expectedPrefixes []string, unexpectedPrefix string) {
+			projectRoot, err := filepath.Abs("..")
+			Expect(err).NotTo(HaveOccurred())
 			registry := NewRegistry(projectRoot)
-			goTestRunner := runners.NewGoTest(projectRoot)
-			registry.Register(goTestRunner)
-
-			orchestrator := &TestOrchestrator{
-				RunOptions: RunOptions{
-					WorkDir:       projectRoot,
-					StartingPaths: tt.startingPaths,
-				},
-				registry: registry,
+			registry.Register(runners.NewGoTest(projectRoot))
+			detected, err := registry.DetectAll(projectRoot, startingPaths)
+			Expect(err).NotTo(HaveOccurred())
+			opts := detected[parsers.GoTest]
+			Expect(opts).NotTo(BeNil())
+			Expect(opts.Paths).To(Equal(startingPaths))
+			runner, _ := registry.Get(parsers.GoTest)
+			packages, err := runner.DiscoverPackages(*opts)
+			Expect(err).NotTo(HaveOccurred())
+			for _, prefix := range expectedPrefixes {
+				Expect(packages).To(ContainElement(HavePrefix(prefix)), "packages: %v", packages)
 			}
-
-			runner, ok := registry.Get(parsers.GoTest)
-			if !ok {
-				t.Fatalf("Failed to get GoTest runner from registry")
-			}
-
-			packages, err := orchestrator.discoverPackagesInPaths(runner, tt.startingPaths)
-			if err != nil {
-				t.Fatalf("discoverPackagesInPaths failed: %v", err)
-			}
-
-			for _, expectedPkg := range tt.expectedPkgs {
-				found := false
-				for _, pkg := range packages {
-					if strings.HasPrefix(pkg, expectedPkg) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Errorf("Expected package prefix %q not found in discovered packages: %v", expectedPkg, packages)
-				}
-			}
-
 			for _, pkg := range packages {
-				if strings.HasPrefix(pkg, tt.unexpectedPkg) {
-					t.Errorf("Unexpected package %q found in filtered results: %v", pkg, packages)
-				}
+				Expect(strings.HasPrefix(pkg, unexpectedPrefix)).To(BeFalse(), "packages: %v", packages)
 			}
-
-			t.Logf("Discovered packages: %v", packages)
-		})
-	}
-}
+		},
+		Entry("parsers directory only", []string{"./testrunner/parsers"}, []string{"./testrunner/parsers"}, "./claudehistory"),
+		Entry("claudehistory directory only", []string{"./claudehistory"}, []string{"./claudehistory"}, "./testrunner/parsers"),
+		Entry("multiple starting paths", []string{"./testrunner/parsers", "./claudehistory"}, []string{"./testrunner/parsers", "./claudehistory"}, "./todos"),
+	)
+})

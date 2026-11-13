@@ -20,7 +20,7 @@ type playwrightListEnvelope struct {
 }
 
 func collectPlaywrightTests(ctx context.Context, workDir string, filters []string) ([]*Entry, error) {
-	packages, err := runners.NewPlaywright(workDir).DiscoverPackages(workDir, true)
+	packages, err := runners.NewPlaywright(workDir).DiscoverPackages(runners.TestOptions{Cwd: workDir, Recursive: true})
 	if err != nil {
 		return nil, fmt.Errorf("discover playwright packages: %w", err)
 	}

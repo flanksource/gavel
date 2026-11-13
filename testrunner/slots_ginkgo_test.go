@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/flanksource/gavel/slots"
@@ -40,19 +42,21 @@ var _ = Describe("Test runner slots", func() {
 	})
 	DescribeTable("runs a batch with -p set to the granted slots",
 		func(args []string, wantParallel, granted int, expectedP string) {
-			plan := goBatchPlan{framework: parsers.GoTest, packages: []string{"./a", "./b", "./c"}, targets: []string{"./..."}, args: args}
-			Expect(goBatchParallelism(plan)).To(Equal(wantParallel))
 			o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: root}}
+			opts, err := o.configuredTestOptions(parsers.GoTest, args)
+			Expect(err).NotTo(HaveOccurred())
+			plan := goBatchPlan{framework: parsers.GoTest, packages: []string{"./a", "./b", "./c"}, targets: []string{"./..."}, opts: opts}
+			Expect(goBatchParallelism(plan)).To(Equal(wantParallel))
 			process, err := o.buildGoBatchCommand(plan, granted)
 			Expect(err).NotTo(HaveOccurred())
 			var parallelism []string
-			for i, arg := range process.Args {
-				if arg == "-p" || len(arg) > 3 && arg[:3] == "-p=" {
-					parallelism = append(parallelism, process.Args[i])
+			for _, arg := range process.Args {
+				if arg == "-p" || strings.HasPrefix(arg, "-p=") {
+					parallelism = append(parallelism, arg)
 				}
 			}
 			Expect(parallelism).To(Equal([]string{expectedP}))
-			Expect(process.Args[len(process.Args)-1]).To(Equal("./..."))
+			Expect(slices.Index(process.Args, "./...")).To(BeNumerically(">", slices.Index(process.Args, expectedP)), "packages follow go test's own flags: %v", process.Args)
 		},
 		Entry("go's default -p", nil, runtime.GOMAXPROCS(0), runtime.GOMAXPROCS(0), fmt.Sprintf("-p=%d", runtime.GOMAXPROCS(0))),
 		Entry("downgraded to free slots", nil, runtime.GOMAXPROCS(0), 1, "-p=1"),
@@ -60,8 +64,9 @@ var _ = Describe("Test runner slots", func() {
 		Entry("user -p N replaced", []string{"-p", "6", "-race"}, 6, 4, "-p=4"),
 	)
 	It("rejects a non-numeric -p", func() {
-		_, err := goBatchParallelism(goBatchPlan{args: []string{"-p=many"}})
-		Expect(err).To(MatchError(ContainSubstring(`got "many"`)))
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: root}}
+		_, err := o.configuredTestOptions(parsers.GoTest, []string{"-p=many"})
+		Expect(err).To(MatchError(ContainSubstring("-p=many: expected a positive number")))
 	})
 	It("waits before arming the Go package's timeout", func() {
 		Expect(os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/slots\n\ngo 1.22\n"), 0o600)).To(Succeed())

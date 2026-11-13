@@ -368,13 +368,13 @@ func TestPass(t *testing.T) {
 
 	runner := &TestOrchestrator{
 		RunOptions: RunOptions{
-			WorkDir: tmpDir,
+			WorkDir:    tmpDir,
+			Frameworks: []string{"go"},
 		},
 		registry: DefaultRegistry(tmpDir),
 	}
-	frameworks := []Framework{GoTest}
 
-	results, err := runner.detectAndRun(frameworks, nil, nil)
+	results, err := runner.Run()
 
 	if err != nil {
 		t.Logf("Got expected result (may have failures or errors): %v", err)
