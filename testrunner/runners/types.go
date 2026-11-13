@@ -1,6 +1,8 @@
 package runners
 
 import (
+	"path/filepath"
+
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/exec"
@@ -16,30 +18,57 @@ type Runner interface {
 	// Parser returns the result parser for this runner.
 	Parser() parsers.ResultParser
 
-	// Detect checks if this framework is used in the given working directory.
-	Detect(workDir string) (bool, error)
+	// Flags lists the runner's own flag spellings, parsed after SharedFlags.
+	Flags() []FlagSpec
 
-	// DiscoverPackages returns packages with tests for this framework.
-	// When recursive is true, it walks subdirectories; otherwise only the given directory.
-	DiscoverPackages(workDir string, recursive bool) ([]string, error)
+	// Detect parses argv (starting paths, then -- and runner arguments)
+	// against cwd and reports whether the framework is present under cwd or
+	// the starting paths. A nil result means it is not.
+	Detect(cwd string, argv []string) (*TestOptions, error)
 
-	// BuildCommand builds the command to run tests for a package.
-	// extraArgs are additional arguments passed to the test runner.
-	BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error)
+	// DiscoverPackages returns the Cwd-relative packages opts selects.
+	DiscoverPackages(opts TestOptions) ([]string, error)
+
+	// BuildCommand builds the command that runs opts.Packages.
+	BuildCommand(opts TestOptions) (*TestRun, error)
 }
 
-// FocusMapper is an optional runner capability for translating a common test
-// focus pattern into framework-native command-line arguments. Runners that do
-// not implement it are excluded from top-level focused runs.
-type FocusMapper interface {
-	FocusArgs(pattern string) []string
-}
-
-// BuildTagsMapper applies Go build tags during discovery and translates them
-// into framework-native command-line arguments.
-type BuildTagsMapper interface {
-	BuildTagsArgs(tags []string) []string
-	SetBuildTags(tags []string)
+// detect is the shared Detect: parse argv, then run present under cwd or
+// under the starting paths, or owns one of the test files.
+func detect(r Runner, cwd string, argv []string, present func(dir string) (bool, error), owner fileOwner) (*TestOptions, error) {
+	opts, err := ParseTestArgs(cwd, argv, r.Flags()...)
+	if err != nil {
+		return nil, err
+	}
+	files, err := opts.selectedFiles()
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range files {
+		if _, ok, err := owner(filepath.Join(cwd, file)); err != nil || ok {
+			if err != nil {
+				return nil, err
+			}
+			return opts, nil
+		}
+	}
+	dirs := []string{cwd}
+	if len(opts.Paths) > 0 || len(files) > 0 {
+		dirs = nil
+		for _, path := range opts.Paths {
+			dirs = append(dirs, filepath.Join(cwd, path))
+		}
+	}
+	for _, dir := range dirs {
+		found, err := present(dir)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			return opts, nil
+		}
+	}
+	return nil, nil
 }
 
 type Package string

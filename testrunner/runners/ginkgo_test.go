@@ -23,7 +23,7 @@ func TestGinkgoDetect(t *testing.T) {
 
 	// No ginkgo tests yet
 	runner := NewGinkgo(tmpDir)
-	found, err := runner.Detect(tmpDir)
+	found, err := detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -50,7 +50,7 @@ var _ = Describe("Suite", func() {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	found, err = runner.Detect(tmpDir)
+	found, err = detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +77,7 @@ import (
 	}
 
 	runner := NewGinkgo(tmpDir)
-	found, err := runner.Detect(tmpDir)
+	found, err := detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,7 +123,7 @@ import . "github.com/onsi/ginkgo/v2"
 	}
 
 	runner := NewGinkgo(tmpDir)
-	found, err := runner.Detect(tmpDir)
+	found, err := detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,7 +131,7 @@ import . "github.com/onsi/ginkgo/v2"
 		t.Error("expected nested module and repo ginkgo tests to be ignored from the parent root")
 	}
 
-	found, err = runner.Detect(nestedModule)
+	found, err = detected(runner, nestedModule)
 	if err != nil {
 		t.Fatalf("unexpected error detecting nested module directly: %v", err)
 	}
@@ -139,7 +139,7 @@ import . "github.com/onsi/ginkgo/v2"
 		t.Error("expected nested module ginkgo tests to be detected when starting inside that module")
 	}
 
-	found, err = runner.Detect(nestedRepo)
+	found, err = detected(runner, nestedRepo)
 	if err != nil {
 		t.Fatalf("unexpected error detecting nested repo directly: %v", err)
 	}
@@ -161,7 +161,7 @@ import . "github.com/onsi/ginkgo/v2"
 	}
 
 	runner := NewGinkgo(tmpDir)
-	found, err := runner.Detect(tmpDir)
+	found, err := detected(runner, tmpDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -169,7 +169,7 @@ import . "github.com/onsi/ginkgo/v2"
 		t.Fatal("expected ginkgo tests to be detected even without a go.mod")
 	}
 
-	packages, err := runner.DiscoverPackages(tmpDir, true)
+	packages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error discovering packages: %v", err)
 	}
@@ -198,7 +198,7 @@ import . "github.com/onsi/ginkgo/v2"
 	}
 
 	runner := NewGinkgo(tmpDir)
-	packages, err := runner.DiscoverPackages(tmpDir, true)
+	packages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,7 +231,7 @@ import . "github.com/onsi/ginkgo/v2"
 		t.Fatalf("failed to create fixture test file: %v", err)
 	}
 
-	packages, err := NewGinkgo(tmpDir).DiscoverPackages(tmpDir, true)
+	packages, err := NewGinkgo(tmpDir).DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -289,7 +289,7 @@ import . "github.com/onsi/ginkgo/v2"
 
 	runner := NewGinkgo(tmpDir)
 
-	packages, err := runner.DiscoverPackages(tmpDir, true)
+	packages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -297,7 +297,7 @@ import . "github.com/onsi/ginkgo/v2"
 		t.Fatalf("expected only root package, got %v", packages)
 	}
 
-	modulePackages, err := runner.DiscoverPackages(nestedModule, true)
+	modulePackages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Paths: []string{"./nested-module"}, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error discovering nested module directly: %v", err)
 	}
@@ -305,7 +305,7 @@ import . "github.com/onsi/ginkgo/v2"
 		t.Fatalf("expected nested module package when starting inside it, got %v", modulePackages)
 	}
 
-	repoPackages, err := runner.DiscoverPackages(nestedRepo, true)
+	repoPackages, err := runner.DiscoverPackages(TestOptions{Cwd: tmpDir, Paths: []string{"./nested-repo"}, Recursive: true})
 	if err != nil {
 		t.Fatalf("unexpected error discovering nested repo directly: %v", err)
 	}
@@ -314,7 +314,7 @@ import . "github.com/onsi/ginkgo/v2"
 	}
 }
 
-func TestGinkgoPackageHasTests(t *testing.T) {
+func TestGinkgoDiscoverStartingPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	pkgDir := filepath.Join(tmpDir, "pkg")
 
@@ -323,14 +323,14 @@ func TestGinkgoPackageHasTests(t *testing.T) {
 	}
 
 	runner := NewGinkgo(tmpDir)
+	opts := TestOptions{Cwd: tmpDir, Paths: []string{"./pkg"}}
 
-	// Should not have ginkgo tests yet
-	found, err := runner.PackageHasTests("./pkg")
+	packages, err := runner.DiscoverPackages(opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if found {
-		t.Error("expected no ginkgo tests")
+	if len(packages) != 0 {
+		t.Errorf("expected no ginkgo packages, got %v", packages)
 	}
 
 	// Add a ginkgo test file
@@ -342,12 +342,12 @@ import . "github.com/onsi/ginkgo/v2"
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	found, err = runner.PackageHasTests("./pkg")
+	packages, err = runner.DiscoverPackages(opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !found {
-		t.Error("expected ginkgo test file to be found")
+	if !reflect.DeepEqual(packages, []string{"./pkg"}) {
+		t.Errorf("packages = %v, want [./pkg]", packages)
 	}
 }
 
@@ -478,34 +478,5 @@ import "github.com/onsi/gomega"
 					tc.name, got, tc.expected, tc.content)
 			}
 		})
-	}
-}
-
-func TestGinkgoBuildCommandArgs(t *testing.T) {
-	workDir, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner := NewGinkgo(workDir)
-
-	testRun, err := runner.BuildCommand("./testrunner/runners/testdata/overlayfixture", "--focus", "reports metadata", "--label-filter=leaf")
-	if err != nil {
-		t.Fatalf("BuildCommand: %v", err)
-	}
-	args := strings.Join(testRun.Process.Args, " ")
-	for _, want := range []string{"test -json -v", "-overlay=", "-ginkgo.focus=reports metadata", "-ginkgo.label-filter=leaf", "./testrunner/runners/testdata/overlayfixture"} {
-		if !strings.Contains(args, want) {
-			t.Errorf("expected args to contain %q, got: %s", want, args)
-		}
-	}
-	if strings.Contains(args, "--json-report") || testRun.ReportPath != "" {
-		t.Errorf("file-based report unexpectedly configured: %s", args)
-	}
-}
-
-func TestGinkgoFocusArgs(t *testing.T) {
-	runner := NewGinkgo(t.TempDir())
-	if got, want := runner.FocusArgs("does work"), []string{"--focus", "does work"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("FocusArgs = %v, want %v", got, want)
 	}
 }
