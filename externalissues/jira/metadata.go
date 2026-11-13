@@ -23,7 +23,7 @@ func (c *Client) Catalog(ctx context.Context, options CatalogOptions) (map[strin
 				return nil, err
 			}
 			if identity.ID == "" {
-				return nil, fmt.Errorf("Jira myself response has no account ID")
+				return nil, fmt.Errorf("jira myself response has no account ID")
 			}
 			c.account = identity.ID
 		}
@@ -35,7 +35,7 @@ func (c *Client) Catalog(ctx context.Context, options CatalogOptions) (map[strin
 				return nil, err
 			}
 			if fields == nil {
-				return nil, fmt.Errorf("Jira field response requires an array")
+				return nil, fmt.Errorf("jira field response requires an array")
 			}
 			return fields, nil
 		})

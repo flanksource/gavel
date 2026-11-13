@@ -166,7 +166,7 @@ func discoverCredentials(ctx context.Context, options ClientOptions) (Credential
 func exportTWGCredentials(ctx context.Context, options ClientOptions) (map[string]string, error) {
 	binary, err := exec.LookPath("twg")
 	if err != nil {
-		return nil, fmt.Errorf("Jira credentials not configured: set JIRA_API_TOKEN and JIRA_EMAIL, or install and authenticate twg: %w", err)
+		return nil, fmt.Errorf("jira credentials not configured: set JIRA_API_TOKEN and JIRA_EMAIL, or install and authenticate twg: %w", err)
 	}
 	args := []string{"env"}
 	if options.Site != "" {

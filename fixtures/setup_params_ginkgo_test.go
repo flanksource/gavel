@@ -149,7 +149,7 @@ setup:
   envVars: [{name: GREETING, value: "{{.params.greeting}}"}]
 steps:
   - { id: use, kind: form }
-`, "declares no params:"),
+`, "declares no params step"),
 		Entry("when it would relocate the run", `
 kind: Fixture
 params: {type: object, properties: {dir: {type: string}}}
@@ -157,7 +157,7 @@ setup:
   cwd: "{{.params.dir}}"
 steps:
   - { id: use, kind: form }
-`, "cannot declare checkout: or cwd:"),
+`, "cannot declare checkout or cwd"),
 		Entry("when a $cel value would relocate the run", `
 kind: Fixture
 params: {type: object, properties: {dir: {type: string}}}
@@ -165,6 +165,6 @@ setup:
   cwd: {$cel: "params.dir"}
 steps:
   - { id: use, kind: form }
-`, "cannot declare checkout: or cwd:"),
+`, "cannot declare checkout or cwd"),
 	)
 })

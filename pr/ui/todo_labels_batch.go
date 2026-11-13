@@ -119,7 +119,7 @@ func (s *Server) handleTodoLabelsBatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(struct {
+	_ = json.NewEncoder(w).Encode(struct {
 		Results []todoLabelBatchResult `json:"results"`
 		Palette []string               `json:"palette"`
 	}{results, labels.PaletteStrings()}) //nolint:errcheck
