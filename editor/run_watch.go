@@ -117,6 +117,9 @@ func (s *Server) followRun(cache string, pid int, followed map[int]bool) {
 }
 
 func (s *Server) setActive(run ActiveRun) {
+	if run.Groups == nil {
+		run.Groups = []status.Group{}
+	}
 	s.mu.Lock()
 	if i := slices.IndexFunc(s.run.Active, func(active ActiveRun) bool { return active.PID == run.PID }); i >= 0 {
 		s.run.Active[i] = run
