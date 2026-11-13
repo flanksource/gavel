@@ -86,11 +86,11 @@ describe('App', () => {
     serve(snapshot());
     open('/');
 
-    expect(await screen.findByText(/> TestParse/)).toBeTruthy();
+    expect(await screen.findByText('Parse')).toBeTruthy();
     expect(screen.queryByRole('tab', { name: /Lint/ })).toBeNull();
     expect(screen.queryByRole('tab', { name: /Bench/ })).toBeNull();
     expect(screen.queryByRole('tab', { name: /Processes/ })).toBeNull();
-    expect(await screen.findByText(/TestOk/)).toBeTruthy();
+    expect(await screen.findByText('Ok')).toBeTruthy();
   });
 
   it('adds a Lint tab for a run that linted, and switches to it with the URL', async () => {
@@ -110,15 +110,15 @@ describe('App', () => {
 
   it('opens the node a deep link names, with its error', async () => {
     serve(snapshot());
-    open('/tests/pkg-testparse');
+    open('/tests/pkg/testparse');
 
     await waitFor(() => expect(screen.getAllByText('expected 3 but got 5').length).toBeGreaterThan(0));
-    expect(window.location.pathname).toBe('/tests/pkg-testparse');
+    expect(window.location.pathname).toBe('/tests/pkg/testparse');
   });
 
   it('reruns the selected test\'s package and says when another rerun is already running', async () => {
     const calls = serve(snapshot(), { 'POST /api/rerun': () => new Response('rerun already in progress', { status: 409 }) });
-    open('/tests/pkg-testparse');
+    open('/tests/pkg/testparse');
 
     fireEvent.click(within(await detailHeader()).getByRole('button', { name: /Rerun/ }));
 
@@ -168,10 +168,10 @@ describe('App', () => {
     const written: string[] = [];
     vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text); } } });
     const calls = serve(snapshot(), {
-      // The server names the node by its uncollapsed ancestry and display label, not the view's "pkg-testparse".
+      // The export uses display labels rather than the view's test-name slugs.
       'GET /tests/pkg/parse.md?status=failed%2Ctimedout':() => new Response('# TestParse\nexpected 3 but got 5'),
     });
-    open('/tests/pkg-testparse');
+    open('/tests/pkg/testparse');
 
     fireEvent.click(within(await detailHeader()).getByRole('button', { name: /Copy AI Prompt/ }));
 
@@ -319,7 +319,8 @@ describe('App', () => {
 
       fireEvent.click(await screen.findByRole('button', { name: /Expand all/ }));
       fireEvent.click(await screen.findByText(/a\.ts/));
-      fireEvent.click(await screen.findByRole('button', { name: /Open in Files/ }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Problem actions' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Open in Files' }));
 
       await waitFor(() => expect(window.location.pathname).toBe('/files/src/a.ts'));
       expect(window.location.search).toBe('?dir=%2Frepo&line=4');
@@ -352,7 +353,7 @@ describe('App', () => {
       serve(snapshot(), { 'GET /api/runs': () => new Response('404 page not found', { status: 404 }) });
       open('/');
 
-      expect(await screen.findByText(/> TestParse/)).toBeTruthy();
+      expect(await screen.findByText('Parse')).toBeTruthy();
       expect(screen.queryByRole('tab', { name: /History/ })).toBeNull();
       expect(document.querySelector('[data-run-switcher]')).toBeNull();
     });
