@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@flanksource/clicky-ui": "workspace:*",
+    "@flanksource/clicky-ui": "catalog:",
     "@mdxeditor/editor": "catalog:",
     "@tanstack/react-query": "catalog:",
     "monaco-editor": "catalog:",

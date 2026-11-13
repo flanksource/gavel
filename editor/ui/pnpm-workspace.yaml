@@ -1,7 +1,7 @@
-# The editor builds against the local Clicky UI package and its declarations.
+# @flanksource/clicky-ui always installs from the registry, as in testrunner/ui:
+# vite.clicky.ts aliases it to the sibling checkout's source when one is present.
 packages:
   - "."
-  - "../../../clicky-ui/packages/ui"
 allowBuilds:
   "@parcel/watcher": true
   esbuild: true
@@ -14,6 +14,7 @@ catalog:
   "@codemirror/language": ^6.12.4
   "@codemirror/state": ^6.7.0
   "@codemirror/view": ^6.43.4
+  "@flanksource/clicky-ui": ^0.3.61
   "@flanksource/icons": 1.0.65
   "@floating-ui/react": ^0.27.19
   '@iconify-icons/codicon': ^1.2.30
@@ -101,10 +102,10 @@ catalog:
   '@vitejs/plugin-react': ^6.1.2
 catalogMode: prefer
 
-linkWorkspacePackages: true
-preferWorkspacePackages: true
-# Share the global virtual store with the sibling Clicky UI workspace.
 enableGlobalVirtualStore: true
+
+minimumReleaseAgeExclude:
+  - '@flanksource/clicky-ui@0.3.61'
 
 # Keep shared peer types on React 19; the test-runner workspace uses React 18.
 overrides:

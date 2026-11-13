@@ -7,8 +7,8 @@ settings:
 catalogs:
   default:
     '@flanksource/clicky-ui':
-      specifier: ^0.3.60
-      version: 0.3.60
+      specifier: ^0.3.61
+      version: 0.3.61
     '@tailwindcss/vite':
       specifier: ^4.3.3
       version: 4.3.3
@@ -41,7 +41,7 @@ importers:
     devDependencies:
       '@flanksource/clicky-ui':
         specifier: 'catalog:'
-        version: 0.3.60(@ai-sdk/react@3.0.209(react@19.3.1)(zod@4.4.3))(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@mdxeditor/editor@4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@8.1.1)(yjs@13.6.31))(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@tanstack/react-query@5.101.0(react@19.3.1))(@types/react@19.3.0)(ai@6.0.207(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@19.3.1(react@19.3.1))(react-rnd@10.5.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)(recharts@3.8.1(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@17.0.2)(react@19.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@8.1.1))(tailwindcss@4.3.3)
+        version: 0.3.61(@ai-sdk/react@3.0.209(react@19.3.1)(zod@4.4.3))(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@mdxeditor/editor@4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@8.1.1)(yjs@13.6.31))(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@tanstack/react-query@5.101.0(react@19.3.1))(@types/react@19.3.0)(ai@6.0.207(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@19.3.1(react@19.3.1))(react-rnd@10.5.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)(recharts@3.8.1(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@17.0.2)(react@19.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@8.1.1))(tailwindcss@4.3.3)(yjs@13.6.31)
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.3(vite@8.3.5(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -469,8 +469,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@flanksource/clicky-ui@0.3.60':
-    resolution: {integrity: sha512-lumoi4tjEvvhmpLLmc7PiKCxcBuF2PV1lJStdrKAVKZkGeIkX1FHyMxQKzdCjg5sypWokLVJSyuhR7/ZpNMQFw==}
+  '@flanksource/clicky-ui@0.3.61':
+    resolution: {integrity: sha512-oFYVauKfs16p63/6Gw7PWGFceQ3V5qudCOrA308xcxJYrP/a01S/DWIzhnhjiDuLGtypyNUvkaTnNxJuAd3E1w==}
     peerDependencies:
       '@ai-sdk/react': ^3.0.0
       '@mdxeditor/editor': ^4.0.4
@@ -696,6 +696,9 @@ packages:
     peerDependencies:
       react: '>= 18 || >= 19'
       react-dom: '>= 18 || >= 19'
+
+  '@medv/finder@4.0.2':
+    resolution: {integrity: sha512-RraNY9SCcx4KZV0Dh6BEW6XEW2swkqYca74pkFFRw6hHItSHiy+O/xMnpbofjYbzXj0tSpBGthUF1hHTsr3vIQ==}
 
   '@mermaid-js/parser@1.1.1':
     resolution: {integrity: sha512-VuHdsYMK1bT6X2JbcAaWAhugTRvRBRyuZgd+c22swUeI9g/ntaxF7CY7dYarhZovofCbUNO0G7JesfmNtjYOCw==}
@@ -2186,6 +2189,9 @@ packages:
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
 
+  dom-accessibility-api@0.6.3:
+    resolution: {integrity: sha512-7ZgogeTnjuHbo+ct10G9Ffp0mif17idi0IyWNVA/wcwcm7NPOD/WEHVP3n7n3MhXqxoIYm8d6MuZohYWIZ4T3w==}
+
   dompurify@3.4.12:
     resolution: {integrity: sha512-zQvGet8Z2sWbQhCmfFz/T5QWH2oBmjnqK3qvOjaqaNLrLEF912WamU+ohnTp0TCep/MFVHpdJuCZEdFOdTnEFg==}
 
@@ -2945,6 +2951,9 @@ packages:
 
   mlly@1.8.2:
     resolution: {integrity: sha512-d+ObxMQFmbt10sretNDytwt85VrbkhhUA/JBGm1MPaWJ65Cl4wOgLaB1NYvJSZ0Ef03MMEU/0xpPMXUIQ29UfA==}
+
+  modern-screenshot@4.7.0:
+    resolution: {integrity: sha512-9YxN+ddPSMMlhylOv25VHzXrl9u67QRxoh7+SEewGtgUw7t6hHTrjptSDJUSne9oG4Xk/h2cwG15nIt4Hc9ujg==}
 
   monaco-editor@0.48.0:
     resolution: {integrity: sha512-goSDElNqFfw7iDHMg8WDATkfcyeLTNpBHQpO8incK6p5qZt5G/1j41X0xdGzpIkGojGXM+QiRQyLjnfDVvrpwA==}
@@ -4217,7 +4226,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@flanksource/clicky-ui@0.3.60(@ai-sdk/react@3.0.209(react@19.3.1)(zod@4.4.3))(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@mdxeditor/editor@4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@8.1.1)(yjs@13.6.31))(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@tanstack/react-query@5.101.0(react@19.3.1))(@types/react@19.3.0)(ai@6.0.207(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@19.3.1(react@19.3.1))(react-rnd@10.5.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)(recharts@3.8.1(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@17.0.2)(react@19.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@8.1.1))(tailwindcss@4.3.3)':
+  '@flanksource/clicky-ui@0.3.61(@ai-sdk/react@3.0.209(react@19.3.1)(zod@4.4.3))(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@mdxeditor/editor@4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@8.1.1)(yjs@13.6.31))(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@tanstack/react-query@5.101.0(react@19.3.1))(@types/react@19.3.0)(ai@6.0.207(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@19.3.1(react@19.3.1))(react-rnd@10.5.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)(recharts@3.8.1(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@17.0.2)(react@19.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@8.1.1))(tailwindcss@4.3.3)(yjs@13.6.31)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.4
@@ -4228,6 +4237,8 @@ snapshots:
       '@codemirror/view': 6.43.4
       '@flanksource/icons': 1.0.65(react@19.3.1)
       '@floating-ui/react': 0.27.19(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@lexical/react': 0.35.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(yjs@13.6.31)
+      '@medv/finder': 4.0.2
       '@monaco-editor/react': 4.7.0(monaco-editor@0.48.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@radix-ui/react-compose-refs': 1.1.3(@types/react@19.3.0)(react@19.3.1)
       '@radix-ui/react-slot': 1.3.0(@types/react@19.3.0)(react@19.3.1)
@@ -4236,9 +4247,12 @@ snapshots:
       class-variance-authority: 0.7.1
       clsx: 2.1.1
       country-flag-icons: 1.6.20
+      dom-accessibility-api: 0.6.3
       dompurify: 3.4.12
       jotai: 2.20.1(@babel/core@7.29.7(supports-color@8.1.1))(@babel/template@7.29.7)(@types/react@19.3.0)(react@19.3.1)
       jsonc-parser: 3.3.1
+      lexical: 0.35.0
+      modern-screenshot: 4.7.0
       monaco-editor: 0.48.0
       monaco-yaml: 5.1.1(monaco-editor@0.48.0)
       react: 19.3.1
@@ -4262,6 +4276,7 @@ snapshots:
       - '@babel/core'
       - '@babel/template'
       - '@types/react'
+      - yjs
 
   '@flanksource/icons@1.0.65(react@19.3.1)':
     dependencies:
@@ -4328,14 +4343,12 @@ snapshots:
       '@lexical/selection': 0.35.0
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/code@0.35.0':
     dependencies:
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
       prismjs: 1.30.0
-    optional: true
 
   '@lexical/devtools-core@0.35.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
@@ -4347,50 +4360,42 @@ snapshots:
       lexical: 0.35.0
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
-    optional: true
 
   '@lexical/dragon@0.35.0':
     dependencies:
       lexical: 0.35.0
-    optional: true
 
   '@lexical/hashtag@0.35.0':
     dependencies:
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/history@0.35.0':
     dependencies:
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/html@0.35.0':
     dependencies:
       '@lexical/selection': 0.35.0
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/link@0.35.0':
     dependencies:
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/list@0.35.0':
     dependencies:
       '@lexical/selection': 0.35.0
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/mark@0.35.0':
     dependencies:
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/markdown@0.35.0':
     dependencies:
@@ -4401,17 +4406,14 @@ snapshots:
       '@lexical/text': 0.35.0
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/offset@0.35.0':
     dependencies:
       lexical: 0.35.0
-    optional: true
 
   '@lexical/overflow@0.35.0':
     dependencies:
       lexical: 0.35.0
-    optional: true
 
   '@lexical/plain-text@0.35.0':
     dependencies:
@@ -4419,7 +4421,6 @@ snapshots:
       '@lexical/selection': 0.35.0
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/react@0.35.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(yjs@13.6.31)':
     dependencies:
@@ -4445,7 +4446,6 @@ snapshots:
       react-error-boundary: 3.1.4(react@19.3.1)
     transitivePeerDependencies:
       - yjs
-    optional: true
 
   '@lexical/rich-text@0.35.0':
     dependencies:
@@ -4453,24 +4453,20 @@ snapshots:
       '@lexical/selection': 0.35.0
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/selection@0.35.0':
     dependencies:
       lexical: 0.35.0
-    optional: true
 
   '@lexical/table@0.35.0':
     dependencies:
       '@lexical/clipboard': 0.35.0
       '@lexical/utils': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/text@0.35.0':
     dependencies:
       lexical: 0.35.0
-    optional: true
 
   '@lexical/utils@0.35.0':
     dependencies:
@@ -4478,7 +4474,6 @@ snapshots:
       '@lexical/selection': 0.35.0
       '@lexical/table': 0.35.0
       lexical: 0.35.0
-    optional: true
 
   '@lexical/yjs@0.35.0(yjs@13.6.31)':
     dependencies:
@@ -4486,7 +4481,6 @@ snapshots:
       '@lexical/selection': 0.35.0
       lexical: 0.35.0
       yjs: 13.6.31
-    optional: true
 
   '@lezer/common@1.5.2': {}
 
@@ -4669,6 +4663,8 @@ snapshots:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
     optional: true
+
+  '@medv/finder@4.0.2': {}
 
   '@mermaid-js/parser@1.1.1':
     dependencies:
@@ -6180,6 +6176,8 @@ snapshots:
 
   dom-accessibility-api@0.5.16: {}
 
+  dom-accessibility-api@0.6.3: {}
+
   dompurify@3.4.12:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
@@ -6548,8 +6546,7 @@ snapshots:
 
   is-potential-custom-element-name@1.0.1: {}
 
-  isomorphic.js@0.2.5:
-    optional: true
+  isomorphic.js@0.2.5: {}
 
   jiti@2.7.0: {}
 
@@ -6635,13 +6632,11 @@ snapshots:
   layout-base@2.0.1:
     optional: true
 
-  lexical@0.35.0:
-    optional: true
+  lexical@0.35.0: {}
 
   lib0@0.2.117:
     dependencies:
       isomorphic.js: 0.2.5
-    optional: true
 
   lightningcss-android-arm64@1.32.0:
     optional: true
@@ -7374,6 +7369,8 @@ snapshots:
       pkg-types: 1.3.1
       ufo: 1.6.4
 
+  modern-screenshot@4.7.0: {}
+
   monaco-editor@0.48.0: {}
 
   monaco-languageserver-types@0.3.4:
@@ -7500,8 +7497,7 @@ snapshots:
       ansi-styles: 5.2.0
       react-is: 17.0.2
 
-  prismjs@1.30.0:
-    optional: true
+  prismjs@1.30.0: {}
 
   prop-types@15.8.1:
     dependencies:
@@ -7540,7 +7536,6 @@ snapshots:
     dependencies:
       '@babel/runtime': 7.29.7
       react: 19.3.1
-    optional: true
 
   react-hook-form@7.80.0(react@19.3.1):
     dependencies:
@@ -8183,7 +8178,6 @@ snapshots:
   yjs@13.6.31:
     dependencies:
       lib0: 0.2.117
-    optional: true
 
   zod@4.4.3:
     optional: true
