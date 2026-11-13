@@ -16,12 +16,17 @@ import (
 // snapshot must surface them so the lint tab can show what is running.
 func TestSnapshotSurfacesLivePromptLintTasks(t *testing.T) {
 	clicky.ClearGlobalTasks()
-	t.Cleanup(clicky.ClearGlobalTasks)
 	const review = "messaging-review:report.mdx"
 
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
 	group := clicky.StartGroup[string](testui.PromptLintTaskGroupName, clickytask.WithConcurrency(1))
+	// Release the task and wait for its group to finish before clearing, so no
+	// running "lint prompt" group leaks into the next test's snapshot.
+	t.Cleanup(func() {
+		close(release)
+		group.WaitFor()
+		clicky.ClearGlobalTasks()
+	})
 	group.Add(review, func(_ commonsContext.Context, task *clickytask.Task) (string, error) {
 		<-release
 		task.Success()
