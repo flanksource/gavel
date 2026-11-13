@@ -16,6 +16,19 @@ var _ = Describe("Go test batch metadata", func() {
 		Expect(filtered.Context).To(Equal(original.Context))
 	})
 
+	It("names the package's own output when it fails without test events", func() {
+		const pkg = "example.com/flags"
+		const cause = "flag provided but not defined: -ginkgo.focus"
+		input := `{"Action":"output","Package":"` + pkg + `","Output":"` + cause + `\n"}` + "\n" +
+			`{"Action":"fail","Package":"` + pkg + `"}` + "\n"
+		results, err := ParseGoTestBatch(strings.NewReader(input), "", nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results[pkg].All()).To(ContainElement(And(
+			HaveField("Name", "Package failed"),
+			HaveField("Message", ContainSubstring(cause)),
+		)))
+	})
+
 	DescribeTable("files test-binary build events under the package they test", func(variant string) {
 		const pkg = "example.com/store/models"
 		lines := []goTestEvent{

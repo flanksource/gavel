@@ -26,6 +26,20 @@ type goPackageStream struct {
 	tested      bool
 	buildOutput strings.Builder
 	failedBuild string
+	// packageOutput holds output events with no Test: the only place go test
+	// reports why a package failed without running tests (e.g. bad flags).
+	packageOutput []string
+}
+
+const packageOutputLimit = 20
+
+func (s *goPackageStream) packageFailureMessage() string {
+	const prefix = "go test reported package failure"
+	output := strings.TrimSpace(strings.Join(s.packageOutput, ""))
+	if output == "" {
+		return prefix
+	}
+	return prefix + ":\n" + output
 }
 
 // ParseGoTestBatch separates interleaved go test -json events by package and
@@ -65,6 +79,9 @@ func ParseGoTestBatch(output io.Reader, workDir string, ginkgoPackages map[strin
 			}
 			if event.Package != "" {
 				stream.tested = true
+			}
+			if event.Action == "output" && event.Test == "" && len(stream.packageOutput) < packageOutputLimit && !strings.HasPrefix(strings.TrimSpace(event.Output), ginkgoMetadataPrefix) {
+				stream.packageOutput = append(stream.packageOutput, event.Output)
 			}
 			if event.Action == "build-output" {
 				stream.buildOutput.WriteString(event.Output)
@@ -110,7 +127,7 @@ func ParseGoTestBatch(output io.Reader, workDir string, ginkgoPackages map[strin
 			failedTests++
 		}
 		if stream.failed && failedTests == 0 {
-			suites = append(suites, TestResults{Framework: GoTest, Tests: Tests{{Name: "Package failed", Package: pkg, Failed: true, Message: "go test reported package failure"}}})
+			suites = append(suites, TestResults{Framework: GoTest, Tests: Tests{{Name: "Package failed", Package: pkg, Failed: true, Message: stream.packageFailureMessage()}}})
 		}
 		if !stream.finished {
 			suites = append(suites, TestResults{Framework: GoTest, Tests: Tests{{Name: "Package incomplete", Package: pkg, Failed: true, Message: "go test did not emit a terminal package event"}}})
