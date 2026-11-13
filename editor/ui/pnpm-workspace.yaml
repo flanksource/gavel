@@ -91,6 +91,8 @@ catalog:
   tailwind-merge: ^3.6.0
   tailwindcss: ^4.3.3
   typescript: ^5.7.2
+  tsdown: ^0.23.5
+  bippy: 0.6.1
   vite: ^8.3.5
   vite-plugin-dts: ^4.5.4
   vitest: ^5.0.5

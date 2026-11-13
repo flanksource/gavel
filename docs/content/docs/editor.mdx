@@ -1,6 +1,6 @@
 ---
 title: Browser editor
-description: Edit local Markdown, MDX, JSON and YAML files with schema forms and manual lint.
+description: Edit local Markdown, MDX, TSX, JSX, JSON and YAML files with live browser previews, schema forms and manual lint.
 ---
 
 Run `gavel edit` with one or more existing files or folders. Gavel starts a local server, prints its URL, and opens the browser. Stop it with Ctrl+C.
@@ -11,7 +11,15 @@ gavel edit configs --schema ./schemas/settings.json
 gavel edit README.md --port 9095 --no-open
 ```
 
-Folders are searched recursively for `.md`, `.mdx`, `.json`, `.yaml`, and `.yml` files, respecting Git ignores. Explicitly named files are included even when ignored. Cmd+K or Ctrl+K searches names and paths. The selected file is kept in the URL.
+Folders are searched recursively for `.md`, `.mdx`, `.tsx`, `.jsx`, `.json`, `.yaml`, and `.yml` files, respecting Git ignores. Explicitly named files are included even when ignored. Cmd+K or Ctrl+K searches names and paths. The selected file is kept in the URL.
+
+MDX, TSX and JSX offer a Facet **Preview** using the browser page runtime. Source changes render after 300 milliseconds, independently of autosave. The preview stays mounted when switching tabs and retains its last successful output while compiling. Import relative components and CSS from the page's package directory; supporting modules are readable by the runtime, while only selected files can be edited. Node-only imports cannot render in the browser.
+
+Choose a **Facet runtime** version in Preview. The project dependency is the default, and Facet's peer dependency selects a compatible Clicky UI version. The choice is saved per file and in the URL without changing package manifests. Runtime-equipped npm packages are downloaded without installation scripts, checked against npm integrity metadata, and cached under Gavel's cache directory. Cached metadata and packages remain usable offline; uncached packages require network access. Releases without `dist/runtime/importmap.json` and `barrels.json` report an error.
+
+**Download HTML** creates a standalone document. **Save PDF** opens the browser's native print dialog; choose Save as PDF there. Printing uses one continuous page and does not provide multipage pagination or a headless PDF download service.
+
+For local runtime development, run `gavel edit --dev editor/testdata/page-preview` from the Gavel checkout. This uses the editor Vite server and sibling Facet and Clicky UI runtime builds. Build those libraries and `@flanksource/page-runtime` first. Gavel snapshots the library runtimes when it starts; restart the editor after rebuilding a library. Missing or stale local runtime builds fail explicitly; dev mode does not substitute npm versions. Production rendering requires neither Node nor an installed Facet CLI.
 
 Source edits autosave after 600 milliseconds, including incomplete syntax. Save status and errors stay visible. Conflicting disk edits stop autosave until you reload or explicitly replace the disk content with your draft. Closing the page with pending or failed saves prompts before leaving.
 

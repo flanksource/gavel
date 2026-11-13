@@ -19,6 +19,7 @@ import (
 	commentapi "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/editor"
 	editorui "github.com/flanksource/gavel/editor/ui"
+	"github.com/flanksource/gavel/internal/vitedev"
 	jsonlint "github.com/flanksource/gavel/linters/json"
 	"github.com/flanksource/gavel/sdk/status"
 )
@@ -33,7 +34,7 @@ type EditOptions struct {
 
 func init() {
 	cmd := clicky.AddNamedCommandWithContext("edit", rootCmd, EditOptions{}, runEdit)
-	cmd.Short = "Edit Markdown, MDX, JSON and YAML files, and preview images, in a local browser"
+	cmd.Short = "Edit Markdown, MDX, TSX, JSX, JSON and YAML files in a local browser"
 }
 func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 	defer keepTasksOffTerminal()()
@@ -80,6 +81,22 @@ func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 		_ = listener.Close()
 		return nil, err
 	}
+	if opts.Dev {
+		sourceDir, err := vitedev.ResolveDir(editorDev, "")
+		if err != nil {
+			_ = listener.Close()
+			return nil, err
+		}
+		siblings := filepath.Clean(filepath.Join(sourceDir, "../../.."))
+		editorServer.PreviewLocal = map[string]string{"@flanksource/facet": filepath.Join(siblings, "facet"), "@flanksource/clicky-ui": filepath.Join(siblings, "clicky-ui/packages/ui")}
+		editorServer.PreviewAssets = os.DirFS(filepath.Join(siblings, "clicky-ui/packages/page-runtime/dist/static"))
+	}
+	closePreview, err := editorServer.StartPreview(ctx, "http://"+listener.Addr().String(), cache)
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+	defer closePreview()
 	if opts.Dev {
 		if editorServer.DevProxy, err = devProxy(editorDev, ""); err != nil {
 			_ = listener.Close()

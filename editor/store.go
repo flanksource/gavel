@@ -23,7 +23,7 @@ const (
 	KindImage    = "image"
 )
 
-var documentExtensions = []string{".md", ".mdx", ".json", ".yaml", ".yml"}
+var documentExtensions = []string{".md", ".mdx", ".tsx", ".jsx", ".json", ".yaml", ".yml"}
 
 type File struct {
 	ID   string `json:"id"`

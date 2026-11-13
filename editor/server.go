@@ -19,6 +19,7 @@ import (
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/comments"
 	"github.com/flanksource/gavel/comments/agents"
+	"github.com/flanksource/gavel/editor/preview"
 	"github.com/flanksource/gavel/internal/fileread"
 	"github.com/flanksource/gavel/linters"
 	jsonlint "github.com/flanksource/gavel/linters/json"
@@ -46,6 +47,10 @@ type LintRun struct {
 	Active []ActiveRun `json:"active"`
 }
 type Server struct {
+	PreviewOrigin  string
+	PreviewCache   *preview.Cache
+	PreviewAssets  fs.FS
+	PreviewLocal   map[string]string
 	Comments       http.Handler
 	CommentService func(context.Context) (*comments.Service, error)
 	Store          *Store
@@ -70,6 +75,8 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/files", func(w http.ResponseWriter, r *http.Request) { respond(w, s.Store.Files(), nil) })
+	mux.HandleFunc("GET /api/file/{id}/preview", s.previewContext)
+	mux.HandleFunc("GET /api/preview/runtimes", s.previewCatalog)
 	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/file/{id}/comments", s.listComments)
 	mux.HandleFunc("POST /api/file/{id}/comments/read", s.markFileCommentsRead)

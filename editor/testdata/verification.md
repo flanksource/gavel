@@ -11,6 +11,8 @@ timeout: 300s
 | Required input | .bin/gavel edit | 1 | (stdout + stderr).contains("at least one") |
 | Backend contracts | .bin/gavel test ./editor ./linters/json -- --focus 'Editor' | 0 | (stdout + stderr).contains("passed") |
 | Store boundaries | .bin/gavel test ./editor -- --focus 'File store' | 0 | (stdout + stderr).contains("passed") |
+| Browser source boundaries | .bin/gavel test ./editor -- --focus 'Preview project sources' | 0 | (stdout + stderr).contains("passed") |
+| Package extraction | .bin/gavel test ./editor/preview -- --focus 'Npm extraction' | 0 | (stdout + stderr).contains("passed") |
 | Autosave ordering | pnpm --dir editor/ui test | 0 | (stdout + stderr).contains("passed") |
 | Frontend types | pnpm --dir editor/ui run check | 0 | exitCode == 0 |
 | Patch anchors | .bin/gavel test ./comments --recursive=false -- --focus 'Patch anchors' | 0 | (stdout + stderr).contains("passed") |

@@ -51,6 +51,7 @@ import { CreateProjectDialog } from "./CreateProjectDialog";
 import { CurrentUser } from "./CurrentUser";
 import { NewAgentSessionDialog } from "./NewAgentSessionDialog";
 import { PageAgentControl } from "./PageAgentControl";
+import { FacetPreview } from "./FacetPreview";
 
 // The problems shown for the edited files: recorded lint violations and failed tests
 // (GET /api/lint, streamed from /api/lint/stream), and gavel runs in progress.
@@ -116,6 +117,8 @@ function routeHref(route: Route): string {
   const comments = url.searchParams.get("comments");
   url.search = "";
   if (comments) url.searchParams.set("comments", comments);
+  const facet = route.selection?.kind === "file" && new URLSearchParams(location.search).get("file") === route.selection.ref.file ? new URLSearchParams(location.search).get("facet") : null;
+  if (facet) url.searchParams.set("facet", facet);
   if (route.tasks !== undefined) url.searchParams.set("tasks", route.tasks);
   if (route.selection) url.searchParams.set(route.selection.kind, route.selection.ref.file);
   url.searchParams.set("view", route.view);
@@ -259,7 +262,7 @@ export function App() {
     setSchemaError("");
   }, [active?.id]);
   useEffect(() => {
-    if (!active || !draft || active.kind !== "document") return;
+    if (!active || !draft || active.kind !== "document" || /\.[jt]sx$/i.test(active.path)) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       try {
@@ -652,6 +655,9 @@ export function App() {
         onSourceChange={(ref, source) => queues.current.get(entryOf(ref).id)?.edit(source)}
         fileToolbar={fileToolbar}
         fileTabs={fileTabs}
+        filePreview={(ref) => /\.(tsx|jsx|mdx)$/i.test(ref.file)
+          ? (ctx) => <FacetPreview key={entryOf(ref).id} id={entryOf(ref).id} review={ctx} />
+          : undefined}
         getFindingActions={findingActions}
         getFileActions={(ref) => {
           const entry = byRef.get(fileRefKey(ref));

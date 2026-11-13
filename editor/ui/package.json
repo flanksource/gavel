@@ -10,6 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@flanksource/facet": "^0.1.74",
+    "@flanksource/page-runtime": "^0.1.0",
     "@flanksource/clicky-ui": "workspace:*",
     "@mdxeditor/editor": "catalog:",
     "@tanstack/react-query": "catalog:",

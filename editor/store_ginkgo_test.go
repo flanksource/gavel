@@ -12,6 +12,21 @@ import (
 func TestEditor(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Editor") }
 
 var _ = Describe("File store", func() {
+	DescribeTable("accepts browser templates as editable documents", func(extension string) {
+		name := filepath.Join(GinkgoT().TempDir(), "page"+extension)
+		Expect(os.WriteFile(name, []byte("export default () => <h1>Hello</h1>"), 0600)).To(Succeed())
+		for _, input := range []string{name, filepath.Dir(name)} {
+			store, err := NewStore([]string{input})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(store.Files()).To(HaveLen(1))
+			doc, err := store.Read(store.Files()[0].ID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(doc.Kind).To(Equal(KindDocument))
+			doc.Source = "export default () => <h1>Updated</h1>"
+			_, err = store.Write(doc)
+			Expect(err).NotTo(HaveOccurred())
+		}
+	}, Entry("TSX", ".tsx"), Entry("JSX", ".jsx"), Entry("MDX", ".mdx"))
 	It("keeps the caller's repository path when a selected directory is a symlink", func() {
 		real := GinkgoT().TempDir()
 		parent := GinkgoT().TempDir()
