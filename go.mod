@@ -19,13 +19,13 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
 	github.com/flanksource/captain v0.0.82-0.20261113122120-f56e4a91f2c9
-	github.com/flanksource/clicky v1.21.95-0.20261112060413-ae2c0bb79614
-	github.com/flanksource/clicky/aichat v1.21.95-0.20261112060413-ae2c0bb79614
-	github.com/flanksource/commons v1.64.1
-	github.com/flanksource/commons-db v0.1.72
-	github.com/flanksource/commons-db/cmd/query v0.1.72
-	github.com/flanksource/commons-db/recordstore v0.1.72
-	github.com/flanksource/commons-db/tracing v0.1.72
+	github.com/flanksource/clicky v1.21.95
+	github.com/flanksource/clicky/aichat v1.21.95
+	github.com/flanksource/commons v1.64.2
+	github.com/flanksource/commons-db v0.1.73
+	github.com/flanksource/commons-db/cmd/query v0.1.73
+	github.com/flanksource/commons-db/recordstore v0.1.73
+	github.com/flanksource/commons-db/tracing v0.1.73
 	github.com/flanksource/deps v1.0.51
 	github.com/flanksource/deps/start v0.0.0-20261103114210-92d640aba10a
 	github.com/flanksource/gavel/sdk v0.0.0-20261112084248-03d7d7223e26
@@ -214,7 +214,7 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.13.1 // indirect
 	github.com/flanksource/clicky/valkey v1.21.94 // indirect
-	github.com/flanksource/gomplate/v4 v4.0.0-20261111091247-6aab4d0463bd // indirect
+	github.com/flanksource/gomplate/v4 v4.0.2 // indirect
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
