@@ -29,3 +29,28 @@ export function buildFixtureReferenceTree(schema: Schema): SchemaViewerNode[] {
     ? { ...node, children: [...(node.children ?? []), ...shortcuts], count: shortcuts.length }
     : node);
 }
+
+function orderFields(fields: SchemaViewerNode[], order: string[]): SchemaViewerNode[] {
+  const positions = new Map(order.map((name, index) => [name, index]));
+  return fields.sort((a, b) => (positions.get(a.label) ?? order.length) - (positions.get(b.label) ?? order.length));
+}
+
+export function buildFixtureKindReferenceTree(schema: Schema, kind: string): SchemaViewerNode[] {
+  const fields = buildFixtureReferenceTree(schema);
+  return [
+    {
+      key: "global",
+      label: "Global fields",
+      badge: "group",
+      description: "Shared step fields and available Clicky/commons CLI options. Format shortcuts are nested under format.",
+      children: orderFields(fields.filter(field => isGlobalReferenceField(field, schema)), GLOBAL_REFERENCE_ORDER),
+    },
+    {
+      key: "kind",
+      label: `${kind} fields`,
+      badge: "group",
+      description: "Configuration for this step kind.",
+      children: orderFields(fields.filter(field => !isGlobalReferenceField(field, schema)), ["kind", ...(schema.required ?? [])]),
+    },
+  ];
+}

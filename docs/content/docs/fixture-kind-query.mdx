@@ -7,13 +7,10 @@ order: 11
 
 import FixtureKindReference from "../../src/components/site/FixtureKindReference";
 import Prerequisites from "../../src/components/site/Prerequisites";
-import FixtureExample from "../../src/components/site/FixtureExample";
 
 Use the `query` step to run a commons-db query against a connection. Its rows become step outputs, and its `findings:` turn rows into lint violations that render in the same lint UI and JSON as `gavel lint`.
 
 ## Example
-
-<FixtureExample>
 
 ```yaml
 kind: Fixture
@@ -41,8 +38,6 @@ steps:
     params: {min: 1}
     cel: row.n == 2 && inspect.findings.size() == 2
 ```
-
-</FixtureExample>
 
 Save it as `query.fixture.yaml` and run `gavel fixtures query.fixture.yaml`, or `gavel fixtures query.fixture.yaml --param minSize=30` to report only `a3`. `inspect` warns with two findings, and `report` still runs: a warned step records its outputs and exports and evaluates its `cel:`.
 
