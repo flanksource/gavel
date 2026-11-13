@@ -15,7 +15,7 @@ BEGIN
     SELECT i.workspace_id INTO workspace FROM todo_issue_prompt_runs l JOIN todo_issues i ON i.id=l.issue_id WHERE l.prompt_run_id=(row_data->>'prompt_run_id')::uuid LIMIT 1;
   END IF;
   PERFORM pg_notify('gavel_workspace_change', json_build_object(
-    'catalog', TG_TABLE_NAME IN ('todo_workspaces', 'repos'),
+    'catalog', TG_TABLE_NAME IN ('todo_workspaces', 'repos', 'projects'),
     'workspaceId', workspace
   )::text);
   RETURN NULL;
@@ -25,7 +25,7 @@ $$;
 DO $$
 DECLARE target text;
 BEGIN
-  FOREACH target IN ARRAY ARRAY['todo_issues','todo_issue_events','todo_issue_aliases','todo_issue_prompt_runs','todo_issue_plans','todo_run_landings','todo_labels','todo_workspaces','repos'] LOOP
+  FOREACH target IN ARRAY ARRAY['todo_issues','todo_issue_events','todo_issue_aliases','todo_issue_prompt_runs','todo_issue_plans','todo_run_landings','todo_labels','todo_workspaces','repos','projects'] LOOP
     IF to_regclass('public.' || target) IS NOT NULL THEN
       EXECUTE format('DROP TRIGGER IF EXISTS gavel_workspace_change ON public.%I', target);
       EXECUTE format('CREATE TRIGGER gavel_workspace_change AFTER INSERT OR UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.gavel_notify_workspace_change()', target);

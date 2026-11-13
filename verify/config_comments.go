@@ -46,6 +46,9 @@ type CommentAgent struct {
 	Variables map[string]any `yaml:"variables,omitempty" json:"variables,omitempty"`
 	// Instructions are appended to the thread the session is given.
 	Instructions string `yaml:"instructions,omitempty" json:"instructions,omitempty"`
+	// Group is the delivery group key: the threads delivered in one group
+	// reuse the live session recorded for it, instead of each starting a run.
+	Group string `yaml:"group,omitempty" json:"group,omitempty"`
 }
 
 // PromptOrDefault is the prompt the agent's run starts.
@@ -182,6 +185,7 @@ func commentsSchema(specSchema map[string]any) map[string]any {
 		"spec":         specNodeSchema(specSchema, "Runtime spec layered over the prompt frontmatter's.", "", "Model the run uses; the prompt's when unset."),
 		"variables":    mapObject("Prompt template variables, below the ones the host sets.", map[string]any{}),
 		"instructions": stringProp("Instructions appended to the thread the session is given."),
+		"group":        stringProp("Delivery group: threads delivered in the same group reuse the group's live session instead of each starting a new run."),
 	})
 	return object("Comment thread settings for the files beneath this .gavel.yaml's directory.", map[string]any{
 		"agents": object("Which agent works new comment threads. The nearest .gavel.yaml wins, and a page entry wins over its directory's default.", map[string]any{

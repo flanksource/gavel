@@ -28,7 +28,8 @@ var documentExtensions = []string{".md", ".mdx", ".json", ".yaml", ".yml"}
 type File struct {
 	ID   string `json:"id"`
 	Path string `json:"path"`
-	// Kind is KindDocument for editable source or KindImage for a preview-only image.
+	// Kind is KindDocument for editable source or KindImage for an image; an svg
+	// image also has an editable text source.
 	Kind string `json:"kind"`
 }
 type Document struct {
@@ -198,7 +199,8 @@ func (s *Store) read(id string) (Document, error) {
 	if err != nil {
 		return Document{}, err
 	}
-	if e.Kind == KindImage {
+	// An svg is an image with a text source; every other image is preview-only.
+	if e.Kind == KindImage && !strings.EqualFold(filepath.Ext(e.name), ".svg") {
 		return Document{}, fmt.Errorf("%s is an image; it has no editable source", e.Path)
 	}
 	root, err := os.OpenRoot(e.root)

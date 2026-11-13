@@ -2048,6 +2048,10 @@
                   "description": "Hand new human threads on these pages to the agent. false opts the pages out of an agent inherited from a .gavel.yaml further up.",
                   "type": "boolean"
                 },
+                "group": {
+                  "description": "Delivery group: threads delivered in the same group reuse the group's live session instead of each starting a new run.",
+                  "type": "string"
+                },
                 "instructions": {
                   "description": "Instructions appended to the thread the session is given.",
                   "type": "string"
@@ -2206,6 +2210,10 @@
                   "enabled": {
                     "description": "Hand new human threads on these pages to the agent. false opts the pages out of an agent inherited from a .gavel.yaml further up.",
                     "type": "boolean"
+                  },
+                  "group": {
+                    "description": "Delivery group: threads delivered in the same group reuse the group's live session instead of each starting a new run.",
+                    "type": "string"
                   },
                   "instructions": {
                     "description": "Instructions appended to the thread the session is given.",

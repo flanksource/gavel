@@ -47,7 +47,7 @@ comments:
         instructions: Check every claim against the security controls.
 ```
 
-Layers merge field by field, ancestors first, and within a layer its `default` then its page entry. `enabled: false` opts a folder or file out of an agent set further up. With `assign: true` the thread is assigned to the agent as soon as it is created.
+Layers merge field by field, ancestors first, and within a layer its `default` then its page entry. `enabled: false` opts a folder or file out of an agent set further up. With `assign: true` the thread is assigned to the agent as soon as it is created. With `group: <key>` every thread the agent receives is delivered in that delivery group, so later threads go to the group's session while it is still live instead of each starting a new run.
 
 A delivery never gets in the way of the comment's author: attaching a screenshot right after creating the comment, with the version the create returned, succeeds while the agent picks the thread up.
 
@@ -69,7 +69,11 @@ Every host that serves `/api/v1/comments` also serves:
 | `GET /api/v1/comments/agent-sessions[?scope=][&all=1]` | | Live sessions: `{id, source, title, model, cwd, status, inCmux}` |
 | `POST /api/v1/comments/{id}/deliver` | `{expectedVersion, requestId, target}` | The updated comment; 409 on a stale version, 502 when delivery failed |
 | `POST /api/v1/comments/{id}/deliver/preview` | `{target}` | The resolved run and its tools, without starting it |
+| `GET /api/v1/comments/agent?scope=&uri=` | | The target's comment agent: `{settings, agent}` |
+| `PUT /api/v1/comments/agent` | `{target: {scopeUri, uri}, layer, page, agent}` | Saves the agent at a layer (a null `agent` removes the entry) and answers `{settings, agent}`; only a person can save one |
 
 A target is `{kind: "session", sessionId}` or `{kind: "run", prompt, runOptions?, groupKey?, fresh?}`; `fresh` on a session target answers 400. Retrying a hand-off is another `deliver` with the thread's latest version and a new `requestId`. With `scope`, the session listing shows only sessions working in that scope's project directory; `all=1` lists every live session.
+
+In the comment agent answer, `settings` is the target's layers and the positions of its chain (what can be saved where), and `agent` is the resolved agent, `{agent, provenance, found}`, with each field traced to the layer that set it. `layer` is `{kind: "user"|"parent"|"project"|"path", path?, file?}`; without `file` it saves the database layer. A host without settings-based comment agents answers 501, and a target its settings do not cover answers 400. On a project scope, both its files (`<scope>/files/<path>`) and its dashboard pages (`<scope>/pages/<page key>`) have comment agents; a page's agents live in the project's database layers (a page entry keyed `pages/<page key>` at the project layer), not in its `.gavel.yaml` files.
 
 `gavel edit` also serves a file's comment agent settings: `GET /api/file/{id}/settings` answers its layers and the resolved agent with each field's layer, and `PUT /api/file/{id}/settings/agent` with `{layer, page, agent}` saves an agent at a layer (a null `agent` removes the entry) and answers the updated settings. Only a person can save one.

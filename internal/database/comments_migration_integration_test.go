@@ -96,6 +96,33 @@ func TestCommentsMigrateIntoGavelSchemaAndDropEditorTenant(t *testing.T) {
 	}, tenantRows(t, db))
 }
 
+// comment_agent_sessions keyed by delivery group is rekeyed per session, its
+// rows still naming their group's session but not listed as managed sessions,
+// which they recorded nothing to resume with.
+func TestCommentAgentSessionsRekeyPerSession(t *testing.T) {
+	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_comment_agent_sessions"}).DSN()
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, database.Migrate(t.Context(), dsn))
+	db, err := commonsdb.NewGorm(dsn, commonsdb.DefaultGormConfig())
+	require.NoError(t, err)
+	const scope = "gavel://project/demo"
+	require.NoError(t, db.Exec(`DROP TABLE comment_agent_sessions`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE comment_agent_sessions (tenant_id text NOT NULL, scope_uri text NOT NULL, group_key text NOT NULL,
+		session_id text NOT NULL, recorded_at timestamptz NOT NULL, PRIMARY KEY (tenant_id, scope_uri, group_key))`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO comment_agent_sessions VALUES (?, ?, 'page:a', 'session-a', now()), (?, ?, 'page:b', 'session-b', now())`, localTenant, scope, localTenant, scope).Error)
+
+	require.NoError(t, database.Migrate(t.Context(), dsn))
+	store, err := commentpostgres.New(db)
+	require.NoError(t, err)
+	group, err := store.GroupSession(t.Context(), localTenant, scope, "page:b")
+	require.NoError(t, err)
+	managed, err := store.ManagedSessions(t.Context(), localTenant, scope)
+	require.NoError(t, err)
+	require.Equal(t, []any{"session-b", 0}, []any{group, len(managed)})
+	require.NoError(t, store.RecordSession(t.Context(), localTenant, comments.ManagedSession{ID: "session-a", ScopeURI: scope, GroupKey: "page:c", Prompt: "editor-comments"}),
+		"recording upserts on the per-session primary key the migration rebuilt")
+}
+
 // A fresh database gets the comment tables from gavel's own migration.
 func TestCommentsTablesComeFromGavelMigration(t *testing.T) {
 	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_comments_fresh"}).DSN()

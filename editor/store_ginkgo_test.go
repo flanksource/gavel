@@ -5,6 +5,7 @@ import (
 	. "github.com/onsi/gomega"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +85,21 @@ var _ = Describe("File store", func() {
 		}
 		_, err = s.Read(id)
 		Expect(err).To(MatchError(image + " is an image; it has no editable source"))
+	})
+	It("lists an svg as kind image and reads and writes its text source", func() {
+		const svg = `<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>`
+		image := filepath.Join(dir, "logo.svg")
+		Expect(os.WriteFile(image, []byte(svg), 0o600)).To(Succeed())
+		s, err := NewStore([]string{image})
+		Expect(err).NotTo(HaveOccurred())
+		file := s.Files()[0]
+		doc, err := s.Read(file.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]string{doc.Kind, doc.Source}).To(Equal([]string{"image", svg}))
+		edited := strings.Replace(svg, `width="4"`, `width="8"`, 1)
+		_, err = s.Write(Document{File: file, Source: edited, Revision: doc.Revision})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(os.ReadFile(image)).To(Equal([]byte(edited)))
 	})
 	It("rejects missing and unsupported inputs", func() {
 		_, err := NewStore(nil)

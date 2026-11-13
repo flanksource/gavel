@@ -124,7 +124,10 @@ func (d *DB) sync(ctx context.Context, target Target, positions []Position, file
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		heads := map[string]string{}
 		for _, position := range positions {
-			if position.Kind == KindParent {
+			// A web target's project and path positions hold no files: the
+			// file rows there are a disk project's own (its pages are web
+			// targets too), so they are never this target's to drop.
+			if position.Kind == KindParent || target.web() && position.Kind != KindUser {
 				continue
 			}
 			projectID, path, err := identity(target, position)

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -108,6 +109,41 @@ var _ = Describe("workspace startup and invalidation", func() {
 		Eventually(func() uint64 { return server.workspaceData.snapshotCopy().Workspaces[added].Config }, 5*time.Second).Should(BeNumerically(">", before))
 		Expect(seedProjects(nil)).To(Succeed())
 		Eventually(func() int { return len(server.workspaceData.snapshotCopy().Workspaces) }, 5*time.Second).Should(BeZero())
+	})
+	It("lists a project added to the projects table while it is running", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		GinkgoT().Setenv(database.EnvDSN, dbtest.ForGinkgo(dbtest.Options{Name: "workspace_catalog_table"}).DSN())
+		opened, err := database.Open(ctx, database.WithMigrations())
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(opened.Close()).To(Succeed()) })
+		catalog := projects.NewDB(opened.Gorm(), filepath.Join(GinkgoT().TempDir(), "projects.json"))
+		DeferCleanup(projects.UseForTest(catalog, filepath.Join(GinkgoT().TempDir(), "projects.json")))
+		first, added := GinkgoT().TempDir(), GinkgoT().TempDir()
+		_, err = catalog.Create(ctx, projects.Project{Name: "first", Dir: first})
+		Expect(err).NotTo(HaveOccurred())
+		server := &Server{}
+		Expect(server.StartWorkspaceData(ctx, opened.Gorm())).To(Succeed())
+		DeferCleanup(func() { cancel(); server.workspaceData.workers.Wait() })
+		// Start-up registers each project's todo workspace, whose notifications
+		// reload the catalog once more; the add must reload it on its own.
+		names := func() ([]string, error) {
+			rows, err := server.catalogProjects()
+			var names []string
+			for _, row := range rows {
+				names = append(names, row.Name)
+			}
+			return names, err
+		}
+		Consistently(names, time.Second).Should(Equal([]string{"first"}))
+
+		body, err := json.Marshal(projects.Project{Name: "added", Dir: added})
+		Expect(err).NotTo(HaveOccurred())
+		created := httptest.NewRecorder()
+		server.handleProjects(created, httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(body)))
+		Expect(created.Code).To(Equal(http.StatusCreated), created.Body.String())
+
+		Eventually(names, 5*time.Second).Should(Equal([]string{"added", "first"}))
 	})
 	It("keeps reads immutable and publishes only changed workspaces after commit", func() {
 		ctx, cancel := context.WithCancel(context.Background())

@@ -74,10 +74,16 @@ func Shared(ctx context.Context) (Service, error) {
 // UseFileForTest makes Shared the file-only catalog at path, for another
 // package's tests, and returns the restore.
 func UseFileForTest(path string) (restore func()) {
+	return UseForTest(NewFile(path), path)
+}
+
+// UseForTest makes Shared service, importing or reading path, for another
+// package's tests, and returns the restore.
+func UseForTest(service Service, path string) (restore func()) {
 	process.Lock()
 	defer process.Unlock()
 	previousService, previousPath := process.service, process.testPath
-	process.service, process.testPath = NewFile(path), path
+	process.service, process.testPath = service, path
 	return func() {
 		process.Lock()
 		defer process.Unlock()
