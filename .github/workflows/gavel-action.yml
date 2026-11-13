@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=v2.11.4
+          version=v2.15.0
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           curl -fsSL "https://github.com/golangci/golangci-lint/releases/download/${version}/golangci-lint-${version#v}-linux-amd64.tar.gz" -o "$tmp/golangci-lint.tar.gz"
