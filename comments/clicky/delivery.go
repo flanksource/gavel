@@ -13,9 +13,13 @@ import (
 // RegisterDeliveryRoutes mounts agent delivery beside the generated comments
 // operations. A host without comments.Options.Delivery answers them 501.
 // Automatic delivery is configured in the host's settings (comments.agents),
-// not through this API.
+// read and saved per target through /api/v1/comments/agent; a host whose routes
+// do not implement comments.CommentAgents answers it 501.
 func RegisterDeliveryRoutes(router *route.Router, resolve Resolver) {
 	router.Raw("GET /api/v1/comments/agent-sessions", serve(resolve, agentSessions), route.Meta{Entity: "comments", Verb: "agent-sessions", ReadOnly: true})
+	router.Raw("GET /api/v1/comments/agent", serve(resolve, commentAgent), route.Meta{Entity: "comments", Verb: "agent", ReadOnly: true})
+	router.Raw("PUT /api/v1/comments/agent", serve(resolve, saveCommentAgent), route.Meta{Entity: "comments", Verb: "save-agent"})
+	router.Raw("POST /api/v1/comments/deliver", serve(resolve, deliverBatch), route.Meta{Entity: "comments", Verb: "deliver-batch"})
 	router.Raw("POST /api/v1/comments/{id}/deliver", serve(resolve, deliver), route.Meta{Entity: "comments", Verb: "deliver", IDParam: "id"})
 	router.Raw("POST /api/v1/comments/{id}/deliver/preview", serve(resolve, previewDelivery), route.Meta{Entity: "comments", Verb: "deliver-preview", IDParam: "id", ReadOnly: true})
 }
@@ -52,6 +56,19 @@ func agentSessions(ctx context.Context, service *comments.Service, r *http.Reque
 	return service.AgentSessions(ctx, comments.SessionQuery{ScopeURI: q.Get("scope"), All: q.Get("all") == "1"})
 }
 
+func commentAgent(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {
+	q := r.URL.Query()
+	return service.CommentAgent(ctx, comments.Target{ScopeURI: q.Get("scope"), URI: q.Get("uri")})
+}
+
+func saveCommentAgent(ctx context.Context, service *comments.Service, _ *http.Request) (any, error) {
+	var req comments.SaveCommentAgentRequest
+	if err := decode(ctx, nil, &req); err != nil {
+		return nil, err
+	}
+	return service.SaveCommentAgent(ctx, req)
+}
+
 func deliver(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {
 	var req comments.DeliverRequest
 	if err := decode(ctx, nil, &req); err != nil {
@@ -59,6 +76,14 @@ func deliver(ctx context.Context, service *comments.Service, r *http.Request) (a
 	}
 	req.CommentID = r.PathValue("id")
 	return service.Deliver(ctx, req)
+}
+
+func deliverBatch(ctx context.Context, service *comments.Service, _ *http.Request) (any, error) {
+	var req comments.DeliverBatchRequest
+	if err := decode(ctx, nil, &req); err != nil {
+		return nil, err
+	}
+	return service.DeliverBatch(ctx, req)
 }
 
 func previewDelivery(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {

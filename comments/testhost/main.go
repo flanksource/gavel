@@ -1,8 +1,11 @@
 // Command testhost serves the comments API over an isolated test database for
 // browser and backend tests. Each request is scoped by X-Gavel-Comment-Scope
 // (tenant and scope) and may assert X-Gavel-Comment-Actor. Agent delivery runs
-// against an in-memory Captain bridge with one live session, "fake-session".
-// Each scope is a web project whose comment agents PUT /settings/agent configures.
+// against an in-memory Captain bridge with one live session, "fake-session";
+// each run delivery launches a live "managed-<n>", which POST
+// /fixtures/sessions/{id}/end ends so a later delivery to it resumes it.
+// Each scope is a web project whose comment agents the shared
+// /api/v1/comments/agent route reads and saves (its scope must be the header's).
 package main
 
 import (
@@ -28,7 +31,6 @@ import (
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/projects"
 	"github.com/flanksource/gavel/settings"
-	"github.com/flanksource/gavel/verify"
 	"gorm.io/gorm"
 )
 
@@ -89,10 +91,12 @@ func run() (result error) {
 	return serve(ctx, listener, baseURL, mux)
 }
 
-// newHandler serves the comments API plus POST /fixtures over db, delivering
-// threads through bridge with managed sessions running in dir and attachment
-// links made absolute against baseURL.
-func newHandler(db *gorm.DB, bridge agents.Bridge, dir, baseURL string) (http.Handler, error) {
+// newHandler serves the comments API plus POST /fixtures and POST
+// /fixtures/sessions/{id}/end over db, delivering threads through bridge with
+// managed sessions running in dir and attachment links made absolute against
+// baseURL. Ending a session makes it no longer live, as when a managed run
+// exits; delivering to an ended managed session then resumes it.
+func newHandler(db *gorm.DB, bridge *agentstest.Bridge, dir, baseURL string) (http.Handler, error) {
 	store, err := postgres.New(db)
 	if err != nil {
 		return nil, err
@@ -129,50 +133,17 @@ func newHandler(db *gorm.DB, bridge agents.Bridge, dir, baseURL string) (http.Ha
 	handler := api.Handler(resolve)
 	mux := http.NewServeMux()
 	mux.Handle("POST /fixtures", fixtures(db))
-	mux.Handle("PUT /settings/agent", saveAgent(catalog, configured))
+	mux.Handle("POST /fixtures/sessions/{id}/end", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := bridge.End(r.PathValue("id")); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestKey{}, r)))
 	}))
 	return mux, nil
-}
-
-// saveAgent configures the comment agent of a page of the request scope's web
-// project: PUT {uri, layer, page, agent} saves agent (null removes it) at
-// layer of uri's settings chain and answers the agent uri now resolves to.
-func saveAgent(catalog projects.Service, configured settings.Service) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var input struct {
-			URI   string               `json:"uri"`
-			Layer settings.Ref         `json:"layer"`
-			Page  bool                 `json:"page"`
-			Agent *verify.CommentAgent `json:"agent"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		target, err := agents.WebTarget(r.Context(), catalog, r.Header.Get("X-Gavel-Comment-Scope"), input.URI)
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		if err := settings.SaveCommentAgent(r.Context(), configured, target, input.Layer, input.Page, input.Agent); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		resolved, err := configured.Resolve(r.Context(), target)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		agent, err := resolved.CommentAgent(target)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(agent)
-	})
 }
 
 // fixtures replaces the scope's comments with the posted ones.

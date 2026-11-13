@@ -220,6 +220,97 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		Expect([]any{run.State, run.Error, run.SessionID}).To(Equal([]any{"sent", "", fmt.Sprintf("managed-%d", len(launched))}))
 	})
 
+	It("lists a managed session after it ends as resumable, and resumes it with its recorded prompt when a thread is delivered to it", func(ctx SpecContext) {
+		target := comments.DeliverTarget{Kind: "run", Prompt: "editor-comments", RunOptions: json.RawMessage(`{"instructions":"Keep it terse"}`)}
+		first := create(ctx, "changelog", "Write the changelog\nfor the release")
+		_, err := svc.Deliver(ctx, comments.DeliverRequest{CommentID: first.ID, ExpectedVersion: first.Version, RequestID: "run-changelog", Target: target})
+		Expect(err).NotTo(HaveOccurred())
+		session := contentOf(get(ctx, first.ID)).AgentRun.SessionID
+		managedOf := func() comments.AgentSession {
+			GinkgoHelper()
+			sessions, err := svc.AgentSessions(ctx, comments.SessionQuery{ScopeURI: scope})
+			Expect(err).NotTo(HaveOccurred())
+			found := []comments.AgentSession{}
+			for _, s := range sessions {
+				if s.ID == session {
+					found = append(found, s)
+				}
+			}
+			Expect(found).To(HaveLen(1), "session %s is listed once", session)
+			return found[0]
+		}
+		Expect([]any{managedOf().Managed, managedOf().Resumable}).To(Equal([]any{true, false}))
+		Expect(bridge.End(session)).To(Succeed())
+		Expect(managedOf()).To(Equal(comments.AgentSession{ID: session, Title: "Write the changelog", CWD: dir, Status: "ended", Managed: true, Resumable: true}))
+
+		second := create(ctx, "changelog", "Mention the fix")
+		_, err = svc.Deliver(ctx, comments.DeliverRequest{CommentID: second.ID, ExpectedVersion: second.Version, RequestID: "resume-changelog", Target: comments.DeliverTarget{Kind: "session", SessionID: session}})
+		Expect(err).NotTo(HaveOccurred())
+		_, launched := bridge.Snapshot()
+		resumed := launched[len(launched)-1]
+		var vars map[string]string
+		Expect(json.Unmarshal([]byte(resumed.Options.Vars), &vars)).To(Succeed())
+		run := contentOf(get(ctx, second.ID)).AgentRun
+		Expect([]any{resumed.Options.Resume, resumed.Reference, run.SessionID, run.State, run.Target.Label}).To(Equal([]any{session, "editor-comments", session, "sent", "Write the changelog"}))
+		Expect(vars["message"]).To(And(ContainSubstring("Mention the fix"), ContainSubstring("## Additional instructions\n\nKeep it terse")))
+		Expect([]any{managedOf().Status, managedOf().Resumable}).To(Equal([]any{"", false}))
+	})
+
+	It("refuses delivery to an ended session gavel did not launch", func(ctx SpecContext) {
+		c := create(ctx, "legal", "Fix the footer")
+		_, err := svc.Deliver(ctx, comments.DeliverRequest{CommentID: c.ID, ExpectedVersion: c.Version, RequestID: "send-legal", Target: comments.DeliverTarget{Kind: "session", SessionID: "ended-elsewhere"}})
+		Expect(err).To(MatchError(comments.ErrDelivery))
+		Expect(err.Error()).To(ContainSubstring("agent session ended-elsewhere is no longer live"))
+	})
+
+	It("resumes a group's ended managed session instead of launching a fresh one", func(ctx SpecContext) {
+		target := comments.DeliverTarget{Kind: "run", Prompt: "editor-comments", GroupKey: "page:roadmap"}
+		first := create(ctx, "roadmap", "Reorder the milestones")
+		_, err := svc.Deliver(ctx, comments.DeliverRequest{CommentID: first.ID, ExpectedVersion: first.Version, RequestID: "run-roadmap-1", Target: target})
+		Expect(err).NotTo(HaveOccurred())
+		session := contentOf(get(ctx, first.ID)).AgentRun.SessionID
+		Expect(bridge.End(session)).To(Succeed())
+
+		second := create(ctx, "roadmap", "Date the next milestone")
+		_, err = svc.Deliver(ctx, comments.DeliverRequest{CommentID: second.ID, ExpectedVersion: second.Version, RequestID: "run-roadmap-2", Target: target})
+		Expect(err).NotTo(HaveOccurred())
+		_, launched := bridge.Snapshot()
+		recorded, err := store.GroupSession(ctx, "tenant-agents", scope, "page:roadmap")
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]string{launched[len(launched)-1].Options.Resume, contentOf(get(ctx, second.ID)).AgentRun.SessionID, recorded}).To(Equal([]string{session, session, session}))
+	})
+
+	It("delivers a batch in one launch that every thread records, and a stale thread fails the batch before anything is sent", func(ctx SpecContext) {
+		target := comments.DeliverTarget{Kind: "run", Prompt: "editor-comments"}
+		a, b := create(ctx, "batch", "Fix the logo"), create(ctx, "batch", "Fix the footer")
+		_, before := bridge.Snapshot()
+		delivered, err := svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "batch-1", Target: target, Threads: []comments.DeliverThread{{ID: a.ID, ExpectedVersion: a.Version}, {ID: b.ID, ExpectedVersion: b.Version}}})
+		Expect(err).NotTo(HaveOccurred())
+		_, launched := bridge.Snapshot()
+		Expect(launched).To(HaveLen(len(before) + 1))
+		var vars map[string]string
+		Expect(json.Unmarshal([]byte(launched[len(launched)-1].Options.Vars), &vars)).To(Succeed())
+		Expect(vars["message"]).To(And(ContainSubstring("# Thread "+a.ID), ContainSubstring("Fix the logo"), ContainSubstring("# Thread "+b.ID), ContainSubstring("Fix the footer")))
+		session := fmt.Sprintf("managed-%d", len(launched))
+		runs := []any{}
+		for _, c := range delivered {
+			run := contentOf(get(ctx, c.ID)).AgentRun
+			runs = append(runs, []string{c.ID, run.SessionID, run.State})
+		}
+		Expect(runs).To(Equal([]any{[]string{a.ID, session, "sent"}, []string{b.ID, session, "sent"}}))
+
+		replayed, err := svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "batch-1", Target: target, Threads: []comments.DeliverThread{{ID: a.ID, ExpectedVersion: a.Version}, {ID: b.ID, ExpectedVersion: b.Version}}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(replayed).To(HaveLen(2))
+		c, stale := create(ctx, "batch", "Fix the header"), get(ctx, a.ID)
+		_, err = svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "batch-stale", Target: target, Threads: []comments.DeliverThread{{ID: c.ID, ExpectedVersion: c.Version}, {ID: a.ID, ExpectedVersion: stale.Version - 1}}})
+		Expect(err).To(MatchError(comments.ErrConflict))
+		_, after := bridge.Snapshot()
+		Expect([]any{len(after), contentOf(get(ctx, c.ID)).AgentRun.State}).To(Equal([]any{len(launched), ""}))
+		_, err = svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "batch-empty", Target: target})
+		Expect(err).To(MatchError(comments.ErrInvalid))
+	})
+
 	It("rejects fresh on a session target", func() {
 		Expect(comments.DeliverTarget{Kind: "session", SessionID: "live-1", Fresh: true}.Validate()).To(MatchError(comments.ErrInvalid))
 	})

@@ -13,10 +13,16 @@ import (
 )
 
 // threadTools are the caller tools every managed session gets, whatever prompt
-// it runs: they read, reply to and resolve the threads on the session's target
-// in-process, as the session's agent, so the workflow's human-only actions stay refused.
-func threadTools(service *comments.Service, target comments.Target, agent comments.Actor) []api.ToolDefinition {
-	threads := threadToolset{service: service, target: target, agent: agent}
+// it runs: they read, reply to and resolve the threads on the targets of the
+// threads it was given, in-process, as the session's agent, so the workflow's
+// human-only actions stay refused.
+func threadTools(service *comments.Service, given []comments.Comment, agent comments.Actor) []api.ToolDefinition {
+	threads := threadToolset{service: service, agent: agent}
+	for _, thread := range given {
+		if !slices.ContainsFunc(threads.targets, func(t comments.Target) bool { return t.URI == thread.Target.URI }) {
+			threads.targets = append(threads.targets, thread.Target)
+		}
+	}
 	readOnly := true
 	return []api.ToolDefinition{
 		{
@@ -54,12 +60,20 @@ func stringsSchema(properties map[string]string) map[string]any {
 
 type threadToolset struct {
 	service *comments.Service
-	target  comments.Target
+	targets []comments.Target
 	agent   comments.Actor
 }
 
 func (t threadToolset) list(ctx context.Context, _ map[string]any) (any, error) {
-	return t.service.List(commentapi.WithActor(ctx, t.agent), comments.Filter{ScopeURI: t.target.ScopeURI, TargetURI: t.target.URI, Limit: 200})
+	all := []comments.Comment{}
+	for _, target := range t.targets {
+		threads, err := t.service.List(commentapi.WithActor(ctx, t.agent), comments.Filter{ScopeURI: target.ScopeURI, TargetURI: target.URI, Limit: 200})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, threads...)
+	}
+	return all, nil
 }
 
 func (t threadToolset) reply(ctx context.Context, input map[string]any) (any, error) {
@@ -79,7 +93,7 @@ func (t threadToolset) resolve(ctx context.Context, input map[string]any) (any, 
 }
 
 // act applies req to the thread input names, at its current version, refusing
-// a thread on any other target than the session's.
+// a thread on a target other than those of the threads the session was given.
 func (t threadToolset) act(ctx context.Context, input map[string]any, req comments.ActionRequest) (comments.Comment, error) {
 	id, err := requiredString(input, "id")
 	if err != nil {
@@ -90,8 +104,8 @@ func (t threadToolset) act(ctx context.Context, input map[string]any, req commen
 	if err != nil {
 		return comments.Comment{}, fmt.Errorf("read thread %s: %w", id, err)
 	}
-	if thread.Target.URI != t.target.URI {
-		return comments.Comment{}, fmt.Errorf("thread %s is on %s, not this session's target %s", id, thread.Target.URI, t.target.URI)
+	if !slices.ContainsFunc(t.targets, func(target comments.Target) bool { return target.URI == thread.Target.URI }) {
+		return comments.Comment{}, fmt.Errorf("thread %s is on %s, not one of this session's targets", id, thread.Target.URI)
 	}
 	req.ID, req.ExpectedVersion = id, thread.Version
 	updated, err := t.service.Act(ctx, req)

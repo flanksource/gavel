@@ -74,11 +74,56 @@ func deliveryPaths(id map[string]any, parameter func(name, kind string, required
 	deliverResponses := ok("Delivered; the comment with its agentRun")
 	deliverResponses["409"] = map[string]any{"description": "Stale expectedVersion, or a delivery is already active"}
 	deliverResponses["502"] = map[string]any{"description": "Delivery ran and failed; the failure is recorded in the comment's agentRun"}
+	agentResponses := map[string]any{
+		"200": map[string]any{"description": "{settings, agent}: the target's settings layers and positions, and its resolved comment agent with each field traced to the layer that set it"},
+		"400": map[string]any{"description": "The target is not one the host's settings cover"},
+		"501": map[string]any{"description": "Comment agent settings are not enabled on this host"},
+	}
+	saveResponses := map[string]any{"403": map[string]any{"description": "Only a person configures comment agents"}}
+	for status, response := range agentResponses {
+		saveResponses[status] = response
+	}
+	saveBody := map[string]any{"type": "object", "required": []string{"target", "layer", "agent"}, "properties": map[string]any{
+		"target": map[string]any{"type": "object", "required": []string{"scopeUri", "uri"}, "properties": map[string]any{"scopeUri": str, "uri": str}},
+		"layer":  map[string]any{"type": "object", "required": []string{"kind"}, "description": "The settings layer to save at: {kind: user|parent|project|path, path?, file?} (no file saves the database layer)", "properties": map[string]any{"kind": str, "path": str, "file": str}},
+		"page":   map[string]any{"type": "boolean", "description": "Save the layer's entry for the target instead of its default"},
+		"agent":  map[string]any{"type": []string{"object", "null"}, "description": "The comments.agents entry to save; null removes it"},
+	}}
+	batchBody := map[string]any{"type": "object", "required": []string{"requestId", "target", "threads"}, "properties": map[string]any{
+		"requestId": str, "target": target,
+		"threads": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "object", "required": []string{"id", "expectedVersion"}, "properties": map[string]any{"id": str, "expectedVersion": map[string]string{"type": "integer", "format": "int64"}}}},
+	}}
+	batchResponses := ok("Delivered; the threads' comments in request order, each with the same agentRun")
+	batchResponses["400"] = map[string]any{"description": "No threads, a thread twice, a closed thread, or threads of different scopes; nothing is delivered"}
+	batchResponses["409"] = map[string]any{"description": "A thread's expectedVersion is stale, or a delivery is already active; nothing is delivered"}
+	batchResponses["502"] = deliverResponses["502"]
 	return map[string]any{
-		"/comments/agent-sessions":       map[string]any{"get": map[string]any{"operationId": "comments-agent-sessions", "summary": "List live agent sessions a thread can be delivered to", "parameters": []any{parameter("scope", "string", false), parameter("all", "string", false)}, "responses": ok("Live agent sessions")}},
+		"/comments/agent": map[string]any{
+			"get": map[string]any{"operationId": "comments-agent", "summary": "Read the comment agent a target's settings configure", "parameters": []any{parameter("scope", "string", true), parameter("uri", "string", true)}, "responses": agentResponses},
+			"put": map[string]any{"operationId": "comments-save-agent", "summary": "Save or remove the comment agent at one settings layer of a target", "requestBody": body(saveBody), "responses": saveResponses},
+		},
+		"/comments/agent-sessions":       map[string]any{"get": map[string]any{"operationId": "comments-agent-sessions", "summary": "List the agent sessions a thread can be delivered to: live ones, and with a scope its managed sessions, ended ones included", "parameters": []any{parameter("scope", "string", false), parameter("all", "string", false)}, "responses": sessionsResponses(ok)}},
+		"/comments/deliver":              map[string]any{"post": map[string]any{"operationId": "comments-deliver-batch", "summary": "Deliver several threads of one scope to one target in a single message", "requestBody": body(batchBody), "responses": batchResponses}},
 		"/comments/{id}/deliver":         map[string]any{"post": map[string]any{"operationId": "comments-deliver", "summary": "Deliver a thread to a live agent session or a new managed run", "parameters": []any{id}, "requestBody": body(map[string]any{"type": "object", "required": []string{"expectedVersion", "requestId", "target"}, "properties": map[string]any{"expectedVersion": map[string]string{"type": "integer", "format": "int64"}, "requestId": str, "target": target}}), "responses": deliverResponses}},
 		"/comments/{id}/deliver/preview": map[string]any{"post": map[string]any{"operationId": "comments-deliver-preview", "summary": "Render what a run target would start for a thread", "parameters": []any{id}, "requestBody": body(map[string]any{"type": "object", "required": []string{"target"}, "properties": map[string]any{"target": target}}), "responses": ok("Rendered run preview")}},
 	}
+}
+
+// sessionsResponses describe GET /comments/agent-sessions: comments.AgentSession items.
+func sessionsResponses(ok func(string) map[string]any) map[string]any {
+	str, flag := map[string]string{"type": "string"}, func(description string) map[string]string {
+		return map[string]string{"type": "boolean", "description": description}
+	}
+	session := map[string]any{"type": "object", "required": []string{"id", "source", "title", "inCmux"}, "properties": map[string]any{
+		"id": str, "source": str, "title": str, "model": str, "cwd": str, "inCmux": map[string]string{"type": "boolean"},
+		"status":    map[string]string{"type": "string", "description": `The live session's status, or "ended" for a managed session that is no longer live`},
+		"managed":   flag("A session the host launched for the scope's threads"),
+		"resumable": flag("An ended managed session: delivering to it resumes it with its recorded prompt and run options"),
+		"context":   map[string]any{"type": "object", "properties": map[string]any{"usedTokens": map[string]string{"type": "integer"}, "windowTokens": map[string]string{"type": "integer"}}},
+	}}
+	responses := ok("Agent sessions")
+	responses["200"] = map[string]any{"description": "Agent sessions", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "array", "items": session}}}}
+	return responses
 }
 
 type documentResponse struct {

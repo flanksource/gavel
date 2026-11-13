@@ -2,6 +2,7 @@ package comments
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -36,6 +37,66 @@ type RouteResolver interface {
 	// RouteFor is the route new root c is delivered through; ok is false when
 	// none applies to its target (unconfigured, or opted out).
 	RouteFor(ctx context.Context, c Comment) (r Route, ok bool, err error)
+}
+
+// CommentAgents is a RouteResolver whose routes come from configuration the
+// host can also read and save per target: the comment agent a target's threads
+// are handed to. Payloads are the host's own and opaque here.
+type CommentAgents interface {
+	// CommentAgent is the agent configuration of t; ErrInvalid when the host's
+	// configuration does not cover t.
+	CommentAgent(ctx context.Context, t Target) (any, error)
+	// SaveCommentAgent saves req and answers t's agent configuration as CommentAgent does.
+	SaveCommentAgent(ctx context.Context, req SaveCommentAgentRequest) (any, error)
+}
+
+// SaveCommentAgentRequest makes Agent the comment agent at Layer of Target's
+// configuration: the layer's default, or with Page its entry for the target.
+// A JSON null Agent removes that entry.
+type SaveCommentAgentRequest struct {
+	Target Target          `json:"target"`
+	Layer  json.RawMessage `json:"layer"`
+	Page   bool            `json:"page"`
+	Agent  json.RawMessage `json:"agent"`
+}
+
+func (s *Service) commentAgents(ctx context.Context, action string, t Target) (CommentAgents, Principal, error) {
+	agents, ok := s.routes.(CommentAgents)
+	if !ok {
+		return nil, Principal{}, fmt.Errorf("%w: comment agent settings are not enabled on this comments host", ErrUnsupported)
+	}
+	if t.ScopeURI == "" || t.URI == "" {
+		return nil, Principal{}, fmt.Errorf("%w: a comment agent target needs scopeUri and uri", ErrInvalid)
+	}
+	p, err := s.principal(ctx)
+	if err != nil {
+		return nil, p, err
+	}
+	return agents, p, s.access.Authorize(ctx, p, action, Target{ScopeURI: t.ScopeURI, URI: t.URI})
+}
+
+// CommentAgent is the comment agent configuration of t, as the host's routes resolve it.
+func (s *Service) CommentAgent(ctx context.Context, t Target) (any, error) {
+	agents, _, err := s.commentAgents(ctx, "comment-agent", t)
+	if err != nil {
+		return nil, err
+	}
+	return agents.CommentAgent(ctx, t)
+}
+
+// SaveCommentAgent saves the comment agent req names; only a person configures one.
+func (s *Service) SaveCommentAgent(ctx context.Context, req SaveCommentAgentRequest) (any, error) {
+	agents, p, err := s.commentAgents(ctx, "save-comment-agent", req.Target)
+	if err != nil {
+		return nil, err
+	}
+	if p.Actor.Kind != "user" {
+		return nil, fmt.Errorf("%w: only a person configures comment agents", ErrForbidden)
+	}
+	if len(req.Layer) == 0 || len(req.Agent) == 0 {
+		return nil, fmt.Errorf("%w: a comment agent save needs layer and agent (null removes the entry)", ErrInvalid)
+	}
+	return agents.SaveCommentAgent(ctx, req)
 }
 
 // routeCreated delivers a new human-authored root through its route in the

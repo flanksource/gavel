@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -50,7 +51,9 @@ func (t DeliverTarget) Validate() error {
 	return fmt.Errorf("%w: target must be {kind:\"session\", sessionId} or {kind:\"run\", prompt, runOptions?, groupKey?, fresh?}", ErrInvalid)
 }
 
-// AgentSession is a live Claude or Codex session a thread can be delivered to.
+// AgentSession is a Claude or Codex session a thread can be delivered to: a
+// live one, or a managed session the host started for the scope that has ended
+// (Status "ended") and is resumed by delivering to it.
 type AgentSession struct {
 	ID     string `json:"id"`
 	Source string `json:"source"`
@@ -59,8 +62,30 @@ type AgentSession struct {
 	CWD    string `json:"cwd,omitempty"`
 	Status string `json:"status,omitempty"`
 	InCmux bool   `json:"inCmux"`
+	// Managed is a session the host launched for the scope's threads.
+	Managed bool `json:"managed,omitempty"`
+	// Resumable is an ended managed session a delivery resumes with its recorded prompt.
+	Resumable bool `json:"resumable,omitempty"`
 
 	Context *AgentSessionContext `json:"context,omitempty"`
+}
+
+// ManagedSession is a session a host's Delivery launched for a scope's threads,
+// recorded with what it runs so it is listed after it ends and resumed with the
+// same prompt and run options.
+type ManagedSession struct {
+	ID         string          `json:"id"`
+	ScopeURI   string          `json:"scopeUri"`
+	GroupKey   string          `json:"groupKey,omitempty"`
+	Prompt     string          `json:"prompt"`
+	RunOptions json.RawMessage `json:"runOptions,omitempty"`
+	// Label titles the session once it has ended: the first line of the thread it started for.
+	Label           string    `json:"label"`
+	CWD             string    `json:"cwd"`
+	Source          string    `json:"source,omitempty"`
+	Model           string    `json:"model,omitempty"`
+	StartedAt       time.Time `json:"startedAt"`
+	LastDeliveredAt time.Time `json:"lastDeliveredAt"`
 }
 
 // AgentSessionContext is how much of the model's context window the session currently fills.
@@ -69,8 +94,11 @@ type AgentSessionContext struct {
 	WindowTokens int `json:"windowTokens"`
 }
 
-// SessionQuery narrows live sessions to those working in ScopeURI's directory, unless All.
+// SessionQuery narrows live sessions to those working in ScopeURI's directory,
+// unless All; with a ScopeURI the scope's managed sessions are listed too.
+// TenantID is the requesting principal's, set by Service.AgentSessions.
 type SessionQuery struct {
+	TenantID string
 	ScopeURI string
 	All      bool
 }
@@ -95,6 +123,27 @@ type DeliverRequest struct {
 	Target          DeliverTarget `json:"target"`
 }
 
+// DeliverBatchRequest hands several threads of one scope to Target in one
+// delivery: one message, one session.
+type DeliverBatchRequest struct {
+	RequestID string          `json:"requestId"`
+	Target    DeliverTarget   `json:"target"`
+	Threads   []DeliverThread `json:"threads"`
+}
+
+// DeliverThread is one thread of a batch at the version the caller last read.
+type DeliverThread struct {
+	ID              string `json:"id"`
+	ExpectedVersion int64  `json:"expectedVersion"`
+}
+
+// DeliverOperation is a deliver-agent operation's payload: its target and, for
+// a batch, every thread delivered with it, the operation's own first.
+type DeliverOperation struct {
+	DeliverTarget
+	Threads []string `json:"threads,omitempty"`
+}
+
 func (s *Service) requireDelivery() error {
 	if s.delivery == nil {
 		return fmt.Errorf("%w: agent delivery is not enabled on this comments host", ErrUnsupported)
@@ -115,9 +164,6 @@ func (s *Service) checkTarget(t DeliverTarget) error {
 // Deliver queues deliver-agent for one thread and processes exactly that
 // operation inline. A failed delivery returns the updated comment with ErrDelivery.
 func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (Comment, error) {
-	if err := s.requireDelivery(); err != nil {
-		return Comment{}, err
-	}
 	if err := s.checkTarget(req.Target); err != nil {
 		return Comment{}, err
 	}
@@ -125,23 +171,113 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (Comment, err
 	if err != nil {
 		return Comment{}, err
 	}
-	op, err := s.Queue(ctx, QueueRequest{CommentID: req.CommentID, ExpectedVersion: req.ExpectedVersion, Kind: DeliverAgent, RequestID: req.RequestID, Payload: payload})
-	if err != nil {
+	delivered, err := s.runDelivery(ctx, QueueRequest{CommentID: req.CommentID, ExpectedVersion: req.ExpectedVersion, Kind: DeliverAgent, RequestID: req.RequestID, Payload: payload}, []string{req.CommentID})
+	if len(delivered) == 0 {
 		return Comment{}, err
+	}
+	return delivered[0], err
+}
+
+// DeliverBatch hands req's threads, all of one scope, to req.Target in one
+// delivery: one message into one session, recorded as every thread's
+// agentRun. Every thread is checked before anything is queued, so one stale
+// (ErrConflict) or closed thread fails the whole batch. It is one deliver-agent
+// operation on the first thread, idempotent by RequestID as Deliver is.
+func (s *Service) DeliverBatch(ctx context.Context, req DeliverBatchRequest) ([]Comment, error) {
+	if err := s.checkTarget(req.Target); err != nil {
+		return nil, err
+	}
+	ids, err := s.checkBatch(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(DeliverOperation{DeliverTarget: req.Target, Threads: ids})
+	if err != nil {
+		return nil, err
+	}
+	return s.runDelivery(ctx, QueueRequest{CommentID: ids[0], ExpectedVersion: req.Threads[0].ExpectedVersion, Kind: DeliverAgent, RequestID: req.RequestID, Payload: payload}, ids)
+}
+
+// runDelivery queues a deliver-agent operation, processes exactly it inline
+// unless a replay finds it already run, and answers the delivered threads as
+// they now are; a failed delivery answers them with ErrDelivery.
+func (s *Service) runDelivery(ctx context.Context, queue QueueRequest, threads []string) ([]Comment, error) {
+	op, err := s.Queue(ctx, queue)
+	if err != nil {
+		return nil, err
 	}
 	if op.State == "pending" {
 		if op, err = s.Process(ctx, ProcessRequest{Executor: s.delivery, Lease: deliveryLease, OperationID: op.ID}); err != nil {
-			return Comment{}, fmt.Errorf("process delivery %s: %w", op.ID, err)
+			return nil, fmt.Errorf("process delivery %s: %w", op.ID, err)
 		}
 	}
-	comment, err := s.Get(ctx, req.CommentID)
-	if err != nil {
-		return Comment{}, err
+	delivered := make([]Comment, 0, len(threads))
+	for _, id := range threads {
+		c, err := s.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		delivered = append(delivered, c)
 	}
 	if op.State != "done" {
-		return comment, fmt.Errorf("%w: %s", ErrDelivery, op.Error)
+		return delivered, fmt.Errorf("%w: %s", ErrDelivery, op.Error)
 	}
-	return comment, nil
+	return delivered, nil
+}
+
+// checkBatch answers the batch's thread ids once each is an active thread of
+// one scope the principal may deliver, at its expected version. A replayed
+// request, whose operation is already queued, is left to Queue to match.
+func (s *Service) checkBatch(ctx context.Context, req DeliverBatchRequest) ([]string, error) {
+	if len(req.Threads) == 0 || req.RequestID == "" {
+		return nil, fmt.Errorf("%w: a batch delivery needs a requestId and at least one thread", ErrInvalid)
+	}
+	ids := make([]string, 0, len(req.Threads))
+	for _, t := range req.Threads {
+		if slices.Contains(ids, t.ID) {
+			return nil, fmt.Errorf("%w: thread %s is in the batch twice", ErrInvalid, t.ID)
+		}
+		ids = append(ids, t.ID)
+	}
+	store, ok := s.store.(OperationStore)
+	if !ok {
+		return nil, fmt.Errorf("comment store does not support operations")
+	}
+	p, err := s.principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = store.OperationByRequest(ctx, p.TenantID, req.RequestID); !errors.Is(err, ErrNotFound) {
+		return ids, err
+	}
+	scope := ""
+	for _, t := range req.Threads {
+		if scope, err = s.checkBatchThread(ctx, p, t, scope); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
+}
+
+// checkBatchThread checks one thread of a batch, answering its scope, which
+// must be scope unless scope is empty.
+func (s *Service) checkBatchThread(ctx context.Context, p Principal, t DeliverThread, scope string) (string, error) {
+	c, err := s.Get(ctx, t.ID)
+	if err != nil {
+		return "", fmt.Errorf("thread %s: %w", t.ID, err)
+	}
+	if err = s.access.Authorize(ctx, p, DeliverAgent, c.Target); err != nil {
+		return "", fmt.Errorf("thread %s: %w", t.ID, err)
+	}
+	switch {
+	case c.Version != t.ExpectedVersion:
+		return "", fmt.Errorf("%w: thread %s is at version %d, not %d", ErrConflict, t.ID, c.Version, t.ExpectedVersion)
+	case c.Phase != Active:
+		return "", fmt.Errorf("%w: thread %s is %s; assigning requires a human and active comment", ErrInvalid, t.ID, c.Status)
+	case scope != "" && c.Target.ScopeURI != scope:
+		return "", fmt.Errorf("%w: thread %s is in %s, not the batch's scope %s", ErrInvalid, t.ID, c.Target.ScopeURI, scope)
+	}
+	return c.Target.ScopeURI, nil
 }
 
 // AgentSessions lists the live agent sessions a principal can deliver threads to.
@@ -158,6 +294,7 @@ func (s *Service) AgentSessions(ctx context.Context, q SessionQuery) ([]AgentSes
 			return nil, err
 		}
 	}
+	q.TenantID = p.TenantID
 	return s.delivery.Sessions(ctx, q)
 }
 

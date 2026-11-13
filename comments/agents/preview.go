@@ -42,7 +42,7 @@ func (d delivery) Preview(ctx context.Context, comment comments.Comment, target 
 	if err != nil {
 		return nil, err
 	}
-	invocation, err := d.invocation(sessionRequest{Comment: comment, Dir: dir, Agent: previewAgent, Prompt: target.Prompt, Options: options})
+	invocation, err := d.invocation(sessionRequest{Threads: []comments.Comment{comment}, Dir: dir, Agent: previewAgent, Prompt: target.Prompt, Options: options})
 	if err != nil {
 		return nil, err
 	}

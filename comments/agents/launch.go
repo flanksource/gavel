@@ -49,46 +49,60 @@ func decodeRunOptions(raw json.RawMessage) (RunOptions, error) {
 	return options, nil
 }
 
-// sessionRequest is one thread's managed session: what it runs, as which agent, where.
+// sessionRequest is a managed session for threads (one scope's, the first
+// leading): what it runs, as which agent, where.
 type sessionRequest struct {
-	Comment comments.Comment
+	Threads []comments.Comment
 	Dir     string
 	Agent   comments.Actor
 	Prompt  string
 	Options RunOptions
 }
 
-// launch starts a managed session for the thread, recording the session it reports.
-func (d delivery) launch(ctx context.Context, comment comments.Comment, target comments.DeliverTarget) (AgentRun, error) {
+// launch starts a new managed session for the threads.
+func (d delivery) launch(ctx context.Context, threads []comments.Comment, target comments.DeliverTarget) (AgentRun, error) {
 	run := AgentRun{RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: targetLabel(target)}}
-	options, err := decodeRunOptions(target.RunOptions)
+	session := comments.ManagedSession{ScopeURI: threads[0].Target.ScopeURI, GroupKey: target.GroupKey, Prompt: target.Prompt, RunOptions: target.RunOptions, Label: firstLine(threads[0].Body)}
+	return d.start(ctx, threads, session, run)
+}
+
+// resume restarts an ended managed session with its recorded prompt and run
+// options, resuming its conversation with the threads.
+func (d delivery) resume(ctx context.Context, threads []comments.Comment, session comments.ManagedSession) (AgentRun, error) {
+	run := AgentRun{SessionID: session.ID, RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: session.Label}}
+	return d.start(ctx, threads, session, run)
+}
+
+// start claims the threads for a new gavel agent and launches session's prompt
+// for them, resuming session.ID when set, recording the session it reports.
+func (d delivery) start(ctx context.Context, threads []comments.Comment, session comments.ManagedSession, run AgentRun) (AgentRun, error) {
+	options, err := decodeRunOptions(session.RunOptions)
 	if err != nil {
 		return run, err
 	}
-	dir, err := d.Workdir(ctx, comment.Target)
+	dir, err := d.Workdir(ctx, threads[0].Target)
 	if err != nil {
 		return run, err
 	}
 	agent := comments.Actor{Kind: "agent", ID: "gavel:" + uuid.NewString(), Label: "Gavel agent"}
-	if _, err = claimForAgent(ctx, d.service, comment.ID, agent); err != nil {
+	if threads, err = d.claim(ctx, threads, agent, run); err != nil {
 		return run, err
 	}
-	if comment, err = setAgentRun(ctx, d.service, comment.ID, run); err != nil {
-		return run, err
-	}
-	invocation, err := d.invocation(sessionRequest{Comment: comment, Dir: dir, Agent: agent, Prompt: target.Prompt, Options: options})
+	invocation, err := d.invocation(sessionRequest{Threads: threads, Dir: dir, Agent: agent, Prompt: session.Prompt, Options: options})
 	if err != nil {
 		return run, err
 	}
+	invocation.Options.Resume = session.ID
 	// The session outlives this request; it keeps the request's values (the
 	// host's database, principal and prompt sources) but not its cancellation.
 	background, err := promptRunContext(context.WithoutCancel(ctx), dir)
 	if err != nil {
 		return run, err
 	}
-	invocation.OnEvent = d.recordSession(background, comment, run, target.GroupKey)
+	session.CWD = dir
+	invocation.OnEvent = d.recordSession(background, threads, run, session)
 	if _, err = d.Bridge.Launch(background, invocation); err != nil {
-		return run, fmt.Errorf("starting an agent session for thread %s: %w", comment.ID, err)
+		return run, fmt.Errorf("starting an agent session for %s: %w", threadIDs(threads), err)
 	}
 	return run, nil
 }
@@ -101,7 +115,7 @@ func (d delivery) invocation(session sessionRequest) (captaincli.PromptInvocatio
 	if err != nil {
 		return captaincli.PromptInvocation{}, fmt.Errorf("locate the gavel executable for the session: %w", err)
 	}
-	message, err := sessionMessage(session.Comment, session.Options.Instructions, d.BaseURL)
+	message, err := sessionMessage(session.Threads, session.Options.Instructions, d.BaseURL)
 	if err != nil {
 		return captaincli.PromptInvocation{}, err
 	}
@@ -109,8 +123,9 @@ func (d delivery) invocation(session sessionRequest) (captaincli.PromptInvocatio
 	if vars == nil {
 		vars = map[string]any{}
 	}
+	lead := session.Threads[0].Target
 	maps.Copy(vars, map[string]any{
-		"dir": session.Dir, "scope": session.Comment.Target.ScopeURI, "target": session.Comment.Target.URI,
+		"dir": session.Dir, "scope": lead.ScopeURI, "target": lead.URI,
 		"actor": commentapi.EncodeActor(session.Agent), "gavelExecutable": gavel, "message": message,
 	})
 	encoded, err := json.Marshal(vars)
@@ -126,7 +141,7 @@ func (d delivery) invocation(session sessionRequest) (captaincli.PromptInvocatio
 		Reference: prompt, Name: prompt, Options: options,
 		// The session's input is its variables; the host's own stdin is never the prompt's.
 		Stdin: strings.NewReader(""),
-		Tools: threadTools(d.service, session.Comment.Target, session.Agent),
+		Tools: threadTools(d.service, session.Threads, session.Agent),
 	}, nil
 }
 
@@ -140,9 +155,11 @@ func promptRunContext(ctx context.Context, dir string) (context.Context, error) 
 	return ctx, nil
 }
 
-// recordSession stores the session the run reports first as the thread's
-// agentRun (sent), and as its group's session, so later threads reuse it.
-func (d delivery) recordSession(ctx context.Context, comment comments.Comment, run AgentRun, group string) func(int, api.Event) {
+// recordSession stores the session the run reports first as every thread's
+// agentRun (sent), and as a managed session of their scope (its group's when
+// session has a GroupKey), so it is listed after it ends and later threads
+// reuse or resume it.
+func (d delivery) recordSession(ctx context.Context, threads []comments.Comment, run AgentRun, session comments.ManagedSession) func(int, api.Event) {
 	var once sync.Once
 	return func(_ int, event api.Event) {
 		if event.Kind != api.EventSystem || event.SessionID == "" {
@@ -150,14 +167,32 @@ func (d delivery) recordSession(ctx context.Context, comment comments.Comment, r
 		}
 		once.Do(func() {
 			run.SessionID, run.State = event.SessionID, "sent"
-			_, err := setAgentRun(ctx, d.service, comment.ID, run)
-			if err == nil && group != "" {
-				err = d.Groups.RecordGroupSession(ctx, comment.TenantID, comment.Target.ScopeURI, group, event.SessionID)
+			now := time.Now().UTC()
+			session.ID, session.Model, session.StartedAt, session.LastDeliveredAt = event.SessionID, event.Model, now, now
+			err := d.setRuns(ctx, threads, run)
+			if err == nil {
+				err = d.Groups.RecordSession(ctx, threads[0].TenantID, session)
 			}
 			if err != nil {
 				// No request is left to answer: the run reports its session after the launch returned.
-				logger.Errorf("recording session %s on comment thread %s: %v", event.SessionID, comment.ID, err)
+				logger.Errorf("recording session %s on %s: %v", event.SessionID, threadIDs(threads), err)
 			}
 		})
 	}
+}
+
+// threadIDs names the threads in a message: "thread <id>" or "threads <id>, <id>".
+func threadIDs(threads []comments.Comment) string {
+	ids := make([]string, 0, len(threads))
+	for _, thread := range threads {
+		ids = append(ids, thread.ID)
+	}
+	if len(ids) == 1 {
+		return "thread " + ids[0]
+	}
+	return "threads " + strings.Join(ids, ", ")
+}
+
+func firstLine(text string) string {
+	return strings.TrimSpace(strings.SplitN(strings.TrimSpace(text), "\n", 2)[0])
 }

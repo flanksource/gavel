@@ -74,15 +74,11 @@ func decodeOptional(raw json.RawMessage, out any) error {
 	return json.Unmarshal(raw, out)
 }
 
-// threadMessage is what a live session receives for a thread: what to do, the
-// `gavel comments` commands that reply and resolve as the agent it was
-// acknowledged as (GAVEL_COMMENT_ACTOR), and the thread itself.
-func threadMessage(comment comments.Comment, agent comments.Actor, baseURL string) (string, error) {
-	tc, err := readContext(comment)
-	if err != nil {
-		return "", err
-	}
-	thread, err := threadMarkdown(comment, baseURL)
+// threadMessage is what a live session receives for threads (one scope's):
+// what to do, the `gavel comments` commands that reply and resolve as the
+// agent they were acknowledged as (GAVEL_COMMENT_ACTOR), and the threads.
+func threadMessage(threads []comments.Comment, agent comments.Actor, baseURL string) (string, error) {
+	body, err := threadsMarkdown(threads, baseURL)
 	if err != nil {
 		return "", err
 	}
@@ -90,7 +86,17 @@ func threadMessage(comment comments.Comment, agent comments.Actor, baseURL strin
 	if err != nil {
 		return "", err
 	}
-	id := comment.ID
+	const tail = "using the gavel comments CLI (the same commands are `gavel mcp` tools). Each write needs the thread's current version, so read it first:"
+	id := "<thread id>"
+	intro := fmt.Sprintf("Gavel comment %s in %s, sent to this session by gavel. They are already acknowledged for you as %s: do not acknowledge them again. For each thread, implement the scoped change it asks for and verify it, then reply with what you changed and how you verified it, and resolve the thread, %s", threadIDs(threads), threads[0].Target.ScopeURI, identity, tail)
+	if len(threads) == 1 {
+		tc, err := readContext(threads[0])
+		if err != nil {
+			return "", err
+		}
+		id = threads[0].ID
+		intro = fmt.Sprintf("Gavel comment thread %s on %s, sent to this session by gavel. It is already acknowledged for you as %s: do not acknowledge it again. Implement the scoped change it asks for and verify it, then reply with what you changed and how you verified it, and resolve the thread, %s", id, location(threads[0], tc), identity, tail)
+	}
 	commands := strings.Join([]string{
 		"```sh",
 		fmt.Sprintf("export %s=%s", commentapi.ActorEnv, commentapi.EncodeActor(agent)),
@@ -99,16 +105,12 @@ func threadMessage(comment comments.Comment, agent comments.Actor, baseURL strin
 		fmt.Sprintf("gavel comments resolve %s --expectedVersion <version> --summary '<one-line summary>'", id),
 		"```",
 	}, "\n")
-	return strings.Join([]string{
-		fmt.Sprintf("Gavel comment thread %s on %s, sent to this session by gavel. It is already acknowledged for you as %s: do not acknowledge it again. Implement the scoped change it asks for and verify it, then reply with what you changed and how you verified it, and resolve the thread, using the gavel comments CLI (the same commands are `gavel mcp` tools). Each write needs the thread's current version, so read it first:", id, location(comment, tc), identity),
-		commands,
-		thread,
-	}, "\n\n"), nil
+	return strings.Join([]string{intro, commands, body}, "\n\n"), nil
 }
 
-// sessionMessage is the first message of a managed session: the thread plus the run's extra instructions.
-func sessionMessage(comment comments.Comment, instructions, baseURL string) (string, error) {
-	message, err := threadMarkdown(comment, baseURL)
+// sessionMessage is what a managed session is given: the threads plus the run's extra instructions.
+func sessionMessage(threads []comments.Comment, instructions, baseURL string) (string, error) {
+	message, err := threadsMarkdown(threads, baseURL)
 	if err != nil {
 		return "", err
 	}
@@ -134,6 +136,23 @@ func location(comment comments.Comment, tc threadContext) string {
 	default:
 		return t.URI
 	}
+}
+
+// threadsMarkdown renders one thread as threadMarkdown does, and several each
+// under a "# Thread <id>" heading.
+func threadsMarkdown(threads []comments.Comment, baseURL string) (string, error) {
+	if len(threads) == 1 {
+		return threadMarkdown(threads[0], baseURL)
+	}
+	sections := make([]string, 0, len(threads))
+	for _, thread := range threads {
+		markdown, err := threadMarkdown(thread, baseURL)
+		if err != nil {
+			return "", err
+		}
+		sections = append(sections, "# Thread "+thread.ID+"\n\n"+markdown)
+	}
+	return strings.Join(sections, "\n\n"), nil
 }
 
 // threadMarkdown renders the thread: where it is anchored, the element it is

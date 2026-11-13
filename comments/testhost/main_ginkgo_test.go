@@ -127,6 +127,25 @@ var _ = Describe("Agent delivery and configured comment agents over HTTP", Order
 		Expect([]string{run.State, run.Error, run.SessionID}).To(Equal([]string{"sent", "", "managed-1"}))
 	})
 
+	It("ends a managed session through the fixture hook, lists it as resumable and resumes it on delivery", func() {
+		c := create("resume")
+		w := call("POST", "/api/v1/comments/"+c.ID+"/deliver", map[string]any{"expectedVersion": c.Version, "requestId": "deliver-resume", "target": map[string]any{"kind": "run", "prompt": "editor-comments", "fresh": true}})
+		Expect(w.Code).To(Equal(200), w.Body.String())
+		session := agentRunOf(c.ID).SessionID
+		Expect(call("POST", "/fixtures/sessions/"+session+"/end", nil).Code).To(Equal(http.StatusNoContent))
+		Expect(call("POST", "/fixtures/sessions/no-such-session/end", nil).Code).To(Equal(http.StatusNotFound))
+		w = call("GET", "/api/v1/comments/agent-sessions?scope="+scope, nil)
+		var sessions []comments.AgentSession
+		decode(w, &sessions)
+		Expect(sessions).To(ContainElement(comments.AgentSession{ID: session, Title: "Fix resume", CWD: bridge.Dir, Status: "ended", Managed: true, Resumable: true}))
+
+		next := create("resume-next")
+		w = call("POST", "/api/v1/comments/"+next.ID+"/deliver", map[string]any{"expectedVersion": next.Version, "requestId": "deliver-resume-next", "target": map[string]any{"kind": "session", "sessionId": session}})
+		Expect(w.Code).To(Equal(200), w.Body.String())
+		_, launched := bridge.Snapshot()
+		Expect([]string{launched[len(launched)-1].Options.Resume, agentRunOf(next.ID).SessionID}).To(Equal([]string{session, session}))
+	})
+
 	It("answers fresh on a session target 400 naming the fresh option", func() {
 		c := create("fresh-session")
 		w := call("POST", "/api/v1/comments/"+c.ID+"/deliver", map[string]any{"expectedVersion": c.Version, "requestId": "deliver-fresh-session", "target": map[string]any{"kind": "session", "sessionId": "fake-session", "fresh": true}})
@@ -136,11 +155,13 @@ var _ = Describe("Agent delivery and configured comment agents over HTTP", Order
 
 	It("delivers a new root to the agent its page's settings configure without delaying its create, and not once the page opts out", func() {
 		configure := func(page string, layer settings.Ref, entry bool, agent *verify.CommentAgent) verify.ResolvedCommentAgent {
-			w := call("PUT", "/settings/agent", map[string]any{"uri": scope + "/pages/" + page, "layer": layer, "page": entry, "agent": agent})
+			w := call("PUT", "/api/v1/comments/agent", map[string]any{"target": comments.Target{ScopeURI: scope, URI: scope + "/pages/" + page}, "layer": layer, "page": entry, "agent": agent})
 			Expect(w.Code).To(Equal(200), w.Body.String())
-			var resolved verify.ResolvedCommentAgent
+			var resolved struct {
+				Agent verify.ResolvedCommentAgent `json:"agent"`
+			}
 			decode(w, &resolved)
-			return resolved
+			return resolved.Agent
 		}
 		pages := settings.Ref{Kind: settings.KindPath, Path: "pages"}
 		enabled, disabled := true, false

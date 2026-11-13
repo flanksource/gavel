@@ -15,8 +15,9 @@ import (
 // Delivery is one message delivered into a session.
 type Delivery struct{ SessionID, Text string }
 
-// Bridge serves Sessions as live, records deliveries and launches, and makes
-// every launch report a new live session "managed-<n>" in Dir.
+// Bridge serves Sessions (those with a Live record are live), records
+// deliveries and launches, and makes every launch report a live session in
+// Dir: a new "managed-<n>", or the session it resumes. End ends one.
 type Bridge struct {
 	mu       sync.Mutex
 	Sessions []captaincli.SessionRecord
@@ -65,16 +66,48 @@ func (b *Bridge) Deliver(_ context.Context, sessionID, text string) (deliver.Res
 	return deliver.Result{Channel: deliver.ChannelClaudeSocket, Status: deliver.StatusSent}, nil
 }
 
+// Launch records the invocation (its Options.Resume is the session it resumes)
+// and makes the session live: a resumed session is live again under its own
+// id, any other launch reports a new session "managed-<n>".
 func (b *Bridge) Launch(_ context.Context, invocation captaincli.PromptInvocation) (captaincli.PromptRunResult, error) {
 	b.mu.Lock()
 	b.Launched = append(b.Launched, invocation)
-	id := fmt.Sprintf("managed-%d", len(b.Launched))
-	b.Sessions = append(b.Sessions, captaincli.SessionRecord{ID: id, Source: "claude", Slug: id, Live: &captaincli.SessionLiveWire{CWD: b.Dir}})
+	id := invocation.Options.Resume
+	if id == "" {
+		id = fmt.Sprintf("managed-%d", len(b.Launched))
+	}
+	live := &captaincli.SessionLiveWire{CWD: b.Dir}
+	if i := b.index(id); i >= 0 {
+		b.Sessions[i].Live = live
+	} else {
+		b.Sessions = append(b.Sessions, captaincli.SessionRecord{ID: id, Source: "claude", Slug: id, Live: live})
+	}
 	b.mu.Unlock()
 	if invocation.OnEvent != nil {
 		invocation.OnEvent(0, api.Event{Kind: api.EventSystem, SessionID: id})
 	}
 	return captaincli.PromptRunResult{RunID: "run-" + id}, nil
+}
+
+// End makes session id no longer live, as when its run exits; an unknown id is an error.
+func (b *Bridge) End(id string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	i := b.index(id)
+	if i < 0 {
+		return fmt.Errorf("no agent session %s to end", id)
+	}
+	b.Sessions[i].Live = nil
+	return nil
+}
+
+func (b *Bridge) index(id string) int {
+	for i, session := range b.Sessions {
+		if session.ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 // Render resolves the prompt with captain, without the process database the in-process bridge opens first.
