@@ -5,6 +5,7 @@ package api_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -202,4 +203,86 @@ func TestSyncMembershipsConcurrently(t *testing.T) {
 	var count int64
 	require.NoError(t, f.db.Raw(`SELECT count(*) FROM org_memberships WHERE user_id = ?`, id).Scan(&count).Error)
 	assert.Equal(t, int64(2), count)
+}
+
+// clerkGate holds every request to the fake Clerk until it is opened, telling started when the
+// first arrives.
+type clerkGate struct {
+	base    http.RoundTripper
+	started chan struct{}
+	open    chan struct{}
+}
+
+func newClerkGate(f membersFixture) (*clerkGate, *api.Members) {
+	gate := &clerkGate{base: f.clerk.BackendClient().Transport, started: make(chan struct{}, 1), open: make(chan struct{})}
+	client := *f.clerk.BackendClient()
+	client.Transport = gate
+	backend := api.ClerkOrganizations{SecretKey: clerktest.SecretKey, HTTPClient: &client}
+	return gate, api.NewMembers(f.db, backend, f.clerk.URL, time.Minute)
+}
+
+func (g *clerkGate) RoundTrip(r *http.Request) (*http.Response, error) {
+	select {
+	case g.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-g.open:
+	case <-r.Context().Done():
+		return nil, r.Context().Err()
+	}
+	return g.base.RoundTrip(r)
+}
+
+var adaInAlpha = api.SessionClaims{UserID: "user_ada", OrgID: "org_a", OrgSlug: "alpha", OrgRole: "org:admin"}
+
+// A page opens with several requests at once; a user gavel hasn't read from Clerk yet is read once
+// for all of them, not once each.
+func TestMembersReadClerkOnceForRequestsArrivingTogether(t *testing.T) {
+	f := newMembersFixture(t, time.Minute)
+	gate, members := newClerkGate(f)
+
+	errs := make(chan error, 8)
+	for range 8 {
+		go func() {
+			_, err := members.ForSession(context.Background(), adaInAlpha)
+			errs <- err
+		}()
+	}
+	<-gate.started
+	// The other requests reach Clerk, or wait for the first one's read, while Clerk holds it.
+	time.Sleep(100 * time.Millisecond)
+	close(gate.open)
+	for range 8 {
+		require.NoError(t, <-errs)
+	}
+	assert.Len(t, f.clerk.BackendRequests(), 2, "one read of the user and their organizations serves every request: %v", f.clerk.BackendRequests())
+}
+
+// A browser dropping a request mid-read gets its answer at once, and the read carries on, so the
+// next request finds the user already read.
+func TestMembersFinishReadingClerkForARequestThatLeft(t *testing.T) {
+	f := newMembersFixture(t, time.Minute)
+	gate, members := newClerkGate(f)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func() {
+		_, err := members.ForSession(ctx, adaInAlpha)
+		errs <- err
+	}()
+	<-gate.started
+	cancel()
+	require.ErrorIs(t, <-errs, context.Canceled, "the request that left is answered at once")
+
+	close(gate.open)
+	require.Eventually(t, func() bool {
+		var count int64
+		require.NoError(t, f.db.Raw(`SELECT count(*) FROM org_memberships m JOIN users u ON u.id = m.user_id WHERE u.clerk_user_id = 'user_ada'`).Scan(&count).Error)
+		return count == 2
+	}, 5*time.Second, 20*time.Millisecond, "the read records the user's organizations without the request that started it")
+	requests := len(f.clerk.BackendRequests())
+	_, err := members.ForSession(context.Background(), adaInAlpha)
+	require.NoError(t, err)
+	assert.Len(t, f.clerk.BackendRequests(), requests, "the next request uses the read the dropped one started")
 }
