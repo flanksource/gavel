@@ -12,6 +12,8 @@
     "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": {
+      "@flanksource/clicky-ui": ["./node_modules/@flanksource/clicky-ui/dist/index.d.ts"],
+      "@flanksource/clicky-ui/*": ["./node_modules/@flanksource/clicky-ui/dist/*"],
       "@flanksource/gavel/testrunner/hooks": ["../../testrunner/ui/src/hooks.ts"],
       "@flanksource/gavel/testrunner": ["../../testrunner/ui/src/testrunner.ts"]
     }

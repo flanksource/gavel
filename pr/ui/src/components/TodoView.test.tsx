@@ -61,6 +61,8 @@ describe.each(['desktop', 'compact'])('%s TODO list virtualization', variant => 
     });
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(64);
     vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(400);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400);
     const todos = listProps(defaultTodoFilters());
     const items = Array.from({ length: 200 }, (_, index) => ({ ...todo(`item-${index}`), sessionId: `session-${index}` }));
     todos.workspaces = [gavel];

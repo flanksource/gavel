@@ -45,15 +45,16 @@ describe('Clicky UI dependency resolution', () => {
     ]));
   });
 
-  it('keeps production builds on the published package even with a sibling checkout', async () => {
-    expect(await aliases('build')).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ replacement: expect.stringContaining('clicky-ui/packages/ui') }),
-    ]));
+  it('uses the same local exports for production builds and the dev UI', async () => {
+    expect(await aliases('build')).toEqual(await aliases('serve'));
   });
 
   it('serves the published package when the sibling checkout is absent', async () => {
     vi.mocked(existsSync).mockReturnValue(false);
     expect(await aliases('serve')).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ replacement: expect.stringContaining('clicky-ui/packages/ui') }),
+    ]));
+    expect(await aliases('build')).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ replacement: expect.stringContaining('clicky-ui/packages/ui') }),
     ]));
   });

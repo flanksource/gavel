@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 function fetchLaunch(payload: unknown) {
-  const fetchMock = vi.fn().mockResolvedValue(new Response(
+  const fetchMock = vi.fn().mockImplementation(async () => new Response(
     `event: resolved\ndata: ${JSON.stringify({ spec: {}, specYaml: '{}\n', step: 'run' })}\n\nevent: admitted\ndata: ${JSON.stringify({ ...payload as object, promptRunId: 'run-1', run: { promptRunId: 'run-1' } })}\n\n`,
     { headers: { 'Content-Type': 'text/event-stream' } },
   ));
