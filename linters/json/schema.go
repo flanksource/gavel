@@ -2,6 +2,7 @@ package jsonlint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -60,11 +61,31 @@ func (v *validator) compile(reference, directory string) (*jsonschema.Schema, er
 	}
 	schema, err := v.compiler.Compile(location)
 	if err != nil {
+		var invalid *jsonschema.SchemaValidationError
+		var regex *jsonschema.InvalidRegexError
+		if errors.As(err, &invalid) || errors.As(err, &regex) {
+			return nil, &uncompilableSchemaError{location: location, err: err}
+		}
 		return nil, fmt.Errorf("load schema %s: %w", location, err)
 	}
 	v.schemas[location] = schema
 	return schema, nil
 }
+
+// uncompilableSchemaError is a schema that loaded but is itself invalid: it
+// fails its own metaschema or uses a pattern Go's regexp cannot compile (e.g.
+// the published Vercel schema's ECMA lookaheads). A file declaring one cannot be
+// validated, which lintFile reports as a warning on that file.
+type uncompilableSchemaError struct {
+	location string
+	err      error
+}
+
+func (e *uncompilableSchemaError) Error() string {
+	return fmt.Sprintf("load schema %s: %v", e.location, e.err)
+}
+
+func (e *uncompilableSchemaError) Unwrap() error { return e.err }
 
 type schemaLoader struct{ ctx context.Context }
 

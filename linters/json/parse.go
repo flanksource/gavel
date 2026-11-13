@@ -36,6 +36,19 @@ var yamlLine = regexp.MustCompile(`line (\d+)`)
 var modelineSchema = regexp.MustCompile(`\$schema\s*=\s*("[^"]+"|'[^']+'|\S+)`)
 
 func (v *validator) lintFile(input fileInput) ([]models.Violation, error) {
+	violations, err := v.lintFileContents(input)
+	var uncompilable *uncompilableSchemaError
+	if !errors.As(err, &uncompilable) {
+		return violations, err
+	}
+	cause := strings.SplitN(uncompilable.err.Error(), "\n", 2)[0]
+	warning := violation(input.path, 1, 1, "schema",
+		fmt.Sprintf("schema %s cannot be compiled, so this file is not validated: %s", uncompilable.location, cause))
+	warning.Severity = models.SeverityWarning
+	return append(violations, warning), nil
+}
+
+func (v *validator) lintFileContents(input fileInput) ([]models.Violation, error) {
 	if input.schema != "" {
 		location, err := ResolveSchema(input.schema, input.workDir)
 		if err != nil {

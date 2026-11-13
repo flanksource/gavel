@@ -132,6 +132,31 @@ var _ = Describe("JSON linter", func() {
 		Expect(err.Error()).To(ContainSubstring("schema.json"))
 	}, Entry("malformed", `{`), Entry("invalid", `{"type":"unknown"}`), Entry("missing reference", `{"$ref":"missing.json"}`))
 
+	DescribeTable("warns once and skips validation when a declared schema cannot be compiled", func(name, schema, contents string) {
+		write("nested/schema.json", schema)
+		violations, err := run(name, contents)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(violations).To(HaveExactElements(And(
+			HaveField("Severity", models.SeverityWarning),
+			HaveField("Rule.Method", "schema"),
+			HaveField("Line", 1),
+		)))
+		Expect(*violations[0].Message).To(And(ContainSubstring("schema.json"), ContainSubstring("not validated")))
+	},
+		Entry("fails its metaschema", "nested/data.json",
+			`{"$schema":"http://json-schema.org/draft-04/schema#","properties":{"retry":{"exclusiveMinimum":0}}}`,
+			`{"$schema":"schema.json","retry":5}`),
+		Entry("uses a regex Go cannot compile", "nested/data.json",
+			`{"properties":{"path":{"pattern":"^/(?!/).*$"}}}`,
+			`{"$schema":"schema.json","path":"/x"}`),
+		Entry("YAML header", "nested/data.yaml",
+			`{"properties":{"path":{"pattern":"^/(?!/).*$"}}}`,
+			"# yaml-language-server: $schema=./schema.json\npath: /x\n---\npath: /y\n"),
+		Entry("every NDJSON record", "nested/data.ndjson",
+			`{"properties":{"path":{"pattern":"^/(?!/).*$"}}}`,
+			"{\"$schema\":\"schema.json\",\"path\":\"/x\"}\n{\"$schema\":\"schema.json\",\"path\":\"/y\"}\n"),
+	)
+
 	It("fails on a missing declared schema", func() {
 		_, err := run("data.yaml", "# yaml-language-server: $schema=missing.json\nname: value\n")
 		Expect(err).To(MatchError(ContainSubstring("missing.json")))
