@@ -3,6 +3,7 @@ package database_test
 import (
 	"context"
 	"os"
+	"slices"
 	"testing"
 
 	commonsdb "github.com/flanksource/commons-db/db"
@@ -71,7 +72,7 @@ func tenantRows(t *testing.T, db *gorm.DB) map[string]int64 {
 }
 
 // A database provisioned by the retired standalone comments module (Atlas name
-// gavel-comments) migrates onto gavel's schema without changing the comment
+// gavel-comments) preserves the existing comment columns while adding delivery
 // tables, and the pre-project editor tenant is dropped while project threads stay.
 func TestCommentsMigrateIntoGavelSchemaAndDropEditorTenant(t *testing.T) {
 	dsn := dbtest.ForT(t, dbtest.Options{Name: "gavel_comments_migrate"}).DSN()
@@ -86,7 +87,20 @@ func TestCommentsMigrateIntoGavelSchemaAndDropEditorTenant(t *testing.T) {
 	require.NoError(t, database.Migrate(t.Context(), dsn))
 	require.NoError(t, database.Migrate(t.Context(), dsn), "migrating twice is a no-op")
 
-	require.Equal(t, before, commentColumns(t, db))
+	expected := append(before,
+		"comment_agent_sessions.group_key:text:NO",
+		"comment_agent_sessions.recorded_at:timestamp with time zone:NO",
+		"comment_agent_sessions.scope_uri:text:NO",
+		"comment_agent_sessions.session_id:text:NO",
+		"comment_agent_sessions.tenant_id:text:NO",
+		"comment_routes.id:text:NO",
+		"comment_routes.payload:jsonb:NO",
+		"comment_routes.scope_uri:text:NO",
+		"comment_routes.target_prefix:text:NO",
+		"comment_routes.tenant_id:text:NO",
+	)
+	slices.Sort(expected)
+	require.Equal(t, expected, commentColumns(t, db))
 	require.Equal(t, map[string]int64{
 		"comments editor": 0, "comments local": 1,
 		"comment_messages editor": 0, "comment_messages local": 1,

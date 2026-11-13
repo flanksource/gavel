@@ -19,6 +19,7 @@ import (
 	commentapi "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/comments/postgres"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/internal/safefs"
 	ui "github.com/flanksource/gavel/pr/ui"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -163,7 +164,7 @@ var _ = Describe("Delivering an editor comment thread through the shared comment
 		dir := mustTarget(doc).Dir
 		prompts := filepath.Join(dir, ".captain", "prompts")
 		Expect(os.MkdirAll(prompts, 0o755)).To(Succeed())
-		DeferCleanup(os.RemoveAll, filepath.Join(dir, ".captain"))
+		DeferCleanup(safefs.SafeRemove, filepath.Join(dir, ".captain"), safefs.RemoveContext{AllowedRoot: dir})
 		Expect(os.WriteFile(filepath.Join(prompts, "x-review.prompt"), []byte("---\nname: x-review\ndescription: Review the thread\nmodel: claude\nmode: agent\n---\n{{{message}}}\n"), 0o600)).To(Succeed())
 
 		response := call("GET", "/api/file/"+doc.ID+"/agent-run/context", "", nil)

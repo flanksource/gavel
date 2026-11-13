@@ -636,7 +636,15 @@ func TestExecuteRunsNestedOxlintWithWorkspaceLocalBinary(t *testing.T) {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
-	t.Setenv("PATH", t.TempDir())
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(git, filepath.Join(bin, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
 	t.Setenv("HOME", t.TempDir())
 
 	results, err := Execute(Options{WorkDir: repo, Timeout: "5s"})

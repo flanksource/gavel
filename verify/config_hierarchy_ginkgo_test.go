@@ -41,6 +41,7 @@ var _ = Describe("Hierarchical configuration", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 	It("persists checked directories and reuses decoded layers after clearing memory", func() {
+		GinkgoT().Setenv("XDG_CACHE_HOME", GinkgoT().TempDir())
 		write(parent, "runtime: {env: {PARENT: parent}}\n")
 		first, err := LoadGavelConfig(target)
 		Expect(err).NotTo(HaveOccurred())
