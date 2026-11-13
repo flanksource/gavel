@@ -26,9 +26,16 @@ gavel test ginkgo --dry-run .
 gavel test ginkgo .
 gavel test ginkgo ./pkg/parser -- --focus Parser
 gavel test ginkgo ./pkg/parser -- --label-filter=unit
+gavel test ./pkg/parser -- -race --ginkgo.focus "Parser|Lexer"
+gavel test ./pkg/parser/parser_specs_test.go
 ```
 
-Replace example paths, labels, and test names with your project. Arguments after `--` go to the selected framework. Gavel maps `--focus` and `--label-filter` to the corresponding Ginkgo test-binary flags. These filters cause a fresh Go test execution. Ginkgo `--nodes > 1` is unsupported by the unified runner.
+Replace example paths, labels, and test names with your project.
+- **Focus and skip:** Gavel accepts `--focus`, `-focus` and `--ginkgo.focus` (and vitest-style `-t`), plus the matching skip spellings, anywhere after `--`. They become Ginkgo's `-ginkgo.focus`/`-ginkgo.skip` filters, placed after the packages so `go test` passes them to the test binary.
+- **Other flags:** `--label-filter` and `--fail-fast` map the same way. Go flags such as `-race` reach the same `go test` command.
+- **Spec files:** a spec file as a starting path runs only its specs (`-ginkgo.focus-file`).
+- **Fresh runs:** these filters cause a fresh Go test execution.
+- **Nodes:** Ginkgo `--nodes > 1` is unsupported by the unified runner.
 
 ## Configure the adapter
 

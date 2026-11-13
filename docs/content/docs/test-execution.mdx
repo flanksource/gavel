@@ -37,6 +37,34 @@ gavel test outline ./pkg/parser
 gavel test history ./pkg/parser
 ```
 
+## Focus tests and files
+
+`--focus` takes a regexp and runs only the tests whose name matches, in every framework that runs: `-run` for go test, `--focus` for Ginkgo, `-t` for Vitest and Jest, `--grep` for Playwright.
+
+After `--`, every runner parses the arguments into the same options. These spellings mean the same thing anywhere after `--`, whichever framework runs:
+
+| Option | Spellings |
+|---|---|
+| Focus | `-run`, `--focus`, `--ginkgo.focus`, `-t`, `--testNamePattern` |
+| Skip | `-skip`, `--ginkgo.skip` |
+| Fail fast | `-failfast`, `--fail-fast`, `--ginkgo.fail-fast`, `--bail` |
+
+go test and Ginkgo count as one framework, so Go flags such as `-race` and `-count` reach both. A Ginkgo-only flag such as `--ginkgo.v` is dropped for plain go test packages, whose test binaries don't register it. Arguments that no runner recognises need a single framework family.
+
+A starting path can be a test file. Each path runs from its project root: the git root, or the nearest `go.mod`.
+- A Go test file runs the `Test` functions it declares.
+- A Ginkgo spec file runs its specs, through the suite's bootstrap test.
+- A Vitest, Jest or Playwright file runs in the nearest `package.json` package that has that runner.
+- A non-test `.go` file runs its whole package.
+
+```bash
+gavel test --focus "Parser" ./pkg
+gavel test ./pkg -- -race --ginkgo.focus "parses|rejects"
+gavel test ./web -- -t "renders the header"
+gavel test ./pkg/parser/parser_test.go
+gavel test web/src/header.test.tsx
+```
+
 ## Changed and failed runs
 
 ```bash
@@ -145,7 +173,8 @@ The server prints its URL. A detached UI continues in a child process and stops 
 | `--fixtures` | Discover and run fixture files (also enabled via `.gavel.yaml`) |
 | `--fixture-files` | Globs for fixture discovery (default: `**/*.fixture.md`) |
 | `-p` / `--nodes` | Number of parallel Ginkgo nodes (0 = default, -1 = auto) |
-| `-r` / `--recursive` | Recursive test discovery (default: true) |
+| `--recursive` | Discover packages below each starting path (default: true; `--recursive=false` tests only the named directories) |
+| `--focus` | Run only tests whose name matches this regexp, in every framework |
 | `--show-passed` | Show passed tests in output |
 | `--show-stdout` | When to show stdout: `Never`, `OnFailure` (default), `Always` |
 | `--show-stderr` | When to show stderr: `Never`, `OnFailure` (default), `Always` |

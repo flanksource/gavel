@@ -59,12 +59,13 @@ gavel lint eslint ./web
 gavel lint --linters golangci-lint,ruff
 ```
 
-Arguments after `--` are runner arguments. Select one framework when using its native options so flags cannot be interpreted by another engine. Go-style name focus is translated where the selected engine supports it:
+Arguments after `--` are runner arguments. Every runner parses them: focus, skip and fail-fast flags are recognised in go test, Ginkgo or Vitest spelling, anywhere after `--`, and apply to every framework that runs. go test and Ginkgo count as one framework. Arguments that no runner recognises need a single framework family. `--focus` focuses every framework without `--`, and a starting path can be a test file (see [test execution](/docs/test-execution#focus-tests-and-files)):
 
 ```bash
-gavel test go ./pkg/parser -- -run TestParser -count=1
-gavel test ginkgo ./pkg/parser -- --focus Parser
+gavel test --focus Parser ./pkg/parser
+gavel test ./pkg/parser -- -race -count=1 --ginkgo.focus Parser
 gavel test vitest ./web -- --testNamePattern parser
+gavel test ./pkg/parser/parser_test.go
 ```
 
 ## Global output options
