@@ -1,0 +1,21 @@
+@config "../tailwind.config.ts";
+@import "tailwindcss";
+
+/* Include the popup, panel, injected host and agent controls. */
+@source "./";
+@source "../host";
+@source "../agents";
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+/* The popup is a fixed-width column that grows with its content; wide enough for the runtime bar's model name (Chrome caps popups at 800px). */
+body[data-popup],
+body[data-popup] #app {
+  width: 460px;
+  height: auto;
+}
