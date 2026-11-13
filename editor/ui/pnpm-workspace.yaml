@@ -14,7 +14,7 @@ catalog:
   "@codemirror/language": ^6.12.4
   "@codemirror/state": ^6.7.0
   "@codemirror/view": ^6.43.4
-  "@flanksource/clicky-ui": ^0.3.61
+  "@flanksource/clicky-ui": ^0.3.62
   "@flanksource/icons": 1.0.65
   "@floating-ui/react": ^0.27.19
   '@iconify-icons/codicon': ^1.2.30
@@ -105,7 +105,7 @@ catalogMode: prefer
 enableGlobalVirtualStore: true
 
 minimumReleaseAgeExclude:
-  - '@flanksource/clicky-ui@0.3.61'
+  - '@flanksource/clicky-ui@0.3.62'
 
 # Keep shared peer types on React 19; the test-runner workspace uses React 18.
 overrides:
