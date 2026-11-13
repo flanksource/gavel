@@ -3,7 +3,7 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.77
+	github.com/flanksource/captain v0.0.80
 	github.com/flanksource/clicky v1.21.89-0.20261028120101-94d2bf481c97
 	github.com/flanksource/commons v1.63.0
 	github.com/flanksource/commons-db v0.1.67
@@ -449,5 +449,3 @@ require (
 )
 
 replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite v0.0.0-20240426202654-00ed082c0311
-
-replace github.com/flanksource/captain => /home/yash/Work/captain-substrate-inventory
