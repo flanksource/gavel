@@ -210,7 +210,13 @@ func walkGitIgnored(root string, fn fs.WalkDirFunc, stop walkStopFn, allowList .
 		allowed[name] = true
 	}
 
-	var patterns []gitignore.Pattern
+	globalExcludes, err := GitGlobalExcludesFile(gitRoot)
+	if err != nil {
+		return err
+	}
+	// Git's precedence, lowest first: the global excludes file, then
+	// .git/info/exclude, then .gitignore files; later patterns win.
+	patterns := LoadIgnorePatterns(globalExcludes, nil)
 	patterns = append(patterns, LoadIgnorePatterns(filepath.Join(gitRoot, ".git", "info", "exclude"), nil)...)
 	rel, _ := filepath.Rel(gitRoot, root)
 	patterns = append(patterns, LoadIgnorePatterns(filepath.Join(gitRoot, ".gitignore"), nil)...)
