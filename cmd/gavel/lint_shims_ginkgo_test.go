@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flanksource/gavel/lint/shims"
+	"github.com/flanksource/gavel/slots"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -26,6 +27,8 @@ var _ = Describe("lint shim-exec", func() {
 	}
 
 	BeforeEach(func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("XDG_CACHE_HOME", GinkgoT().TempDir())
 		binDir = GinkgoT().TempDir()
 		GinkgoT().Setenv("PATH", binDir+string(os.PathListSeparator)+"/usr/bin"+string(os.PathListSeparator)+"/bin")
 		GinkgoT().Setenv("GOMEMLIMIT", "")
@@ -35,6 +38,23 @@ var _ = Describe("lint shim-exec", func() {
 		GinkgoT().Setenv(shims.EnvCPU, "200")
 		GinkgoT().Setenv(shims.EnvMem, "2GB")
 		GinkgoT().Setenv(shims.EnvNice, "0")
+	})
+
+	It("waits for a machine slot before spending the shim timeout", func() {
+		Expect(os.WriteFile(filepath.Join(os.Getenv("HOME"), ".gavel.yaml"), []byte("slots: {global: 1}\n"), 0o600)).To(Succeed())
+		GinkgoT().Setenv(shims.EnvTimeout, "150ms")
+		fake("eslint", "printf admitted")
+		lease, err := slots.Acquire(context.Background(), slots.Request{Limits: slots.Limits{Global: 1}, Command: "blocker"})
+		Expect(err).NotTo(HaveOccurred())
+		defer lease.Close()
+		released := make(chan error, 1)
+		time.AfterFunc(350*time.Millisecond, func() { released <- lease.Close() })
+		started := time.Now()
+		code, stdout, stderr := run("eslint")
+		Expect(<-released).To(Succeed())
+		Expect(time.Since(started)).To(BeNumerically(">=", 350*time.Millisecond))
+		Expect(code).To(Equal(0), stderr)
+		Expect(stdout).To(Equal("admitted"))
 	})
 
 	It("runs golangci-lint fast-only with capped parallelism and memory, and propagates its exit code", func() {

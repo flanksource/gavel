@@ -1,0 +1,27 @@
+---
+title: Reuse saved connections
+description: Borrow an existing database connection or provision a fixture service when it is absent.
+parent: fixture-kind-services
+---
+
+Add `connection` to a `deps` service to look up an existing commons-db connection before provisioning:
+
+```yaml
+kind: Fixture
+steps:
+  - id: database
+    kind: services
+    services:
+      sqlserver:
+        connection: {ref: connection://lab, app: sqlglot-go}
+        deps: mssql
+        version: '2022'
+        runtime: docker
+        export: {FIXTURE_DSN: '{{.outputs.url}}'}
+```
+
+`ref` is the named connection reference. `app` selects its application layer and defaults to `gavel`. Lookup uses commons-db's shared, application, and fixture working-directory layers in that order. Existing PostgreSQL URL and SQL Server URL or keyword DSNs are supported; the connection type must match the deps catalog service.
+
+Only an absent record provisions. Invalid records, unresolved secrets, authentication failures, and unavailable saved endpoints fail explicitly. Omit `connection` to always provision. Docker provisioning honors the calling process's `DOCKER_CONTEXT`.
+
+Both paths export the same URL, host, port and readiness fields. The `source` output is `existing` or `provisioned`. Fixture cleanup closes borrowed database clients without stopping the upstream server; provisioned services retain normal fixture-owned cleanup.

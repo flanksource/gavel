@@ -64,18 +64,16 @@ describe('useTodoSessionDetail', () => {
     unmount();
   });
 
-  it('keeps the loaded attempts when only the poll period changes', async () => {
+  it('reuses loaded attempts across rerenders', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ attempts: [attempt(1, { step: 'verify' })] })));
 
-    // Opening the Verification tab drops the badge's slow poll to a fast one; the
-    // already-listed attempts must survive that switch.
     const { result, rerender, unmount } = renderHook(
-      ({ intervalMs }: { intervalMs: number }) => useTodoSessionDetail('/repo', 'todo-1', true, { intervalMs }),
-      { initialProps: { intervalMs: 15000 }, wrapper: queryTestWrapper() }
+      () => useTodoSessionDetail('/repo', 'todo-1', true),
+      { wrapper: queryTestWrapper() }
     );
     await waitFor(() => expect(result.current.detail?.attempts).toHaveLength(1));
 
-    rerender({ intervalMs: 1500 });
+    rerender();
     expect(result.current.detail?.attempts).toHaveLength(1);
     unmount();
   });

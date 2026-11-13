@@ -6,11 +6,12 @@ import (
 	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
 
-func (h *Host) finalizeVerification(ctx context.Context, todo *types.TODO, lc Context, class types.RunMode, spec *api.Spec) error {
+func (h *Host) finalizeVerification(ctx context.Context, todo *types.TODO, lc lifecycle.Context, class types.RunMode, spec *api.Spec) error {
 	verification, ok := lc.Subject["verification"].(map[string]any)
 	if !ok {
 		return fmt.Errorf("lifecycle subject: verification must be an object")

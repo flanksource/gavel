@@ -118,6 +118,53 @@ var _ = Describe("WalkGitIgnored", func() {
 		Expect(paths).NotTo(ContainElement("secret/key.pem"))
 	})
 
+	Context("global excludes", func() {
+		var xdgConfig string
+
+		// Points Git's user-level config at empty temp dirs so the host's own
+		// ~/.gitconfig and ~/.config/git/ignore cannot leak into the spec.
+		BeforeEach(func() {
+			home := GinkgoT().TempDir()
+			xdgConfig = filepath.Join(home, ".config")
+			GinkgoT().Setenv("HOME", home)
+			GinkgoT().Setenv("XDG_CONFIG_HOME", xdgConfig)
+			GinkgoT().Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			Expect(os.MkdirAll(filepath.Join(xdgConfig, "git"), 0o755)).To(Succeed())
+			setupGitRepo(root)
+			Expect(os.WriteFile(filepath.Join(root, "main.go"), nil, 0o644)).To(Succeed())
+		})
+
+		It("skips a nested module under a directory ignored by the default XDG excludes file", func() {
+			Expect(os.WriteFile(filepath.Join(xdgConfig, "git", "ignore"), []byte(".shell/\n"), 0o644)).To(Succeed())
+			nested := filepath.Join(root, ".shell", "worktrees", "copy")
+			Expect(os.MkdirAll(nested, 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(nested, "go.mod"), []byte("module example.com/copy\n"), 0o644)).To(Succeed())
+
+			paths, err := collectBoundedPaths(root)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(paths).To(ContainElement("main.go"))
+			Expect(paths).NotTo(ContainElement(HavePrefix(".shell")))
+		})
+
+		It("uses core.excludesFile instead of the XDG default when it is configured", func() {
+			Expect(os.WriteFile(filepath.Join(xdgConfig, "git", "ignore"), []byte("xdg-only/\n"), 0o644)).To(Succeed())
+			custom := filepath.Join(GinkgoT().TempDir(), "excludes")
+			Expect(os.WriteFile(custom, []byte("scratch/\n"), 0o644)).To(Succeed())
+			cmd := exec.Command("git", "config", "core.excludesFile", custom)
+			cmd.Dir = root
+			Expect(cmd.Run()).To(Succeed())
+			for _, dir := range []string{"scratch", "xdg-only"} {
+				Expect(os.MkdirAll(filepath.Join(root, dir), 0o755)).To(Succeed())
+				Expect(os.WriteFile(filepath.Join(root, dir, "file.go"), nil, 0o644)).To(Succeed())
+			}
+
+			paths, err := collectPaths(root)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(paths).NotTo(ContainElement(HavePrefix("scratch")))
+			Expect(paths).To(ContainElement("xdg-only/file.go"))
+		})
+	})
+
 	It("allowList overrides gitignore", func() {
 		setupGitRepo(root)
 		os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".todos/\n.codex/\n"), 0644)
@@ -368,6 +415,28 @@ var _ = Describe("FindAllProjectRoots", func() {
 	BeforeEach(func() {
 		root = GinkgoT().TempDir()
 		setupGitRepo(root)
+	})
+
+	DescribeTable("excludes fixture projects while keeping ordinary nested projects", func(marker string) {
+		for _, directory := range []string{".", "app", "testdata/example", "app/testdata/example", "testdata-tools"} {
+			project := filepath.Join(root, directory)
+			Expect(os.MkdirAll(project, 0o755)).To(Succeed())
+			if marker == ".uir.d/" {
+				Expect(os.Mkdir(filepath.Join(project, marker), 0o755)).To(Succeed())
+			} else {
+				Expect(os.WriteFile(filepath.Join(project, marker), nil, 0o644)).To(Succeed())
+			}
+		}
+		Expect(FindAllProjectRoots(root, []string{marker})).To(ConsistOf(root, filepath.Join(root, "app"), filepath.Join(root, "testdata-tools")))
+	}, Entry("UIR file", ".uir.yaml"), Entry("UIR directory", ".uir.d/"), Entry("Go", "go.mod"), Entry("JavaScript", "package.json"))
+
+	It("discovers projects when testdata itself is explicitly selected as the root", func() {
+		fixture := filepath.Join(root, "testdata")
+		Expect(os.MkdirAll(filepath.Join(fixture, "example"), 0o755)).To(Succeed())
+		for _, directory := range []string{fixture, filepath.Join(fixture, "example")} {
+			Expect(os.WriteFile(filepath.Join(directory, ".uir.yaml"), nil, 0o644)).To(Succeed())
+		}
+		Expect(FindAllProjectRoots(fixture, []string{".uir.yaml"})).To(ConsistOf(fixture, filepath.Join(fixture, "example")))
 	})
 
 	It("finds every outermost package.json under the tree", func() {

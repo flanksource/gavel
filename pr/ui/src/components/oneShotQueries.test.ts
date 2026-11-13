@@ -1,6 +1,8 @@
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  chatModelsQuery,
+  chatRuntimesQuery,
   jobLogsQuery,
   orgsQuery,
   prCommitDiffQuery,
@@ -42,6 +44,13 @@ describe('one-shot query options', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it.each(['models', 'runtimes'])('refuses an empty %s catalog instead of using offline defaults', async name => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const pending = name === 'models' ? client.fetchQuery(chatModelsQuery()) : client.fetchQuery(chatRuntimesQuery());
+    await expect(pending).rejects.toThrow(name === 'models' ? 'AI model catalog is empty' : 'AI runtime catalog is empty');
+  });
+
   it('forwards React Query cancellation to fetch', async () => {
     let requestSignal: AbortSignal | undefined;
     vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => {
@@ -69,5 +78,12 @@ describe('one-shot query options', () => {
 
     await expect(client.fetchQuery(projectActionSchemaQuery('acme/widget', 'lint')))
       .rejects.toThrow('Failed to load lint options for acme/widget: upstream unavailable');
+  });
+
+  it('refuses schemas older than v2', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ schemaVersion: 1 }) }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await expect(client.fetchQuery(projectActionSchemaQuery('acme/widget', 'commit')))
+      .rejects.toThrow('Unsupported commit options schema version 1');
   });
 });

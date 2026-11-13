@@ -60,9 +60,14 @@ func (p *Provider) PRLinks(ctx context.Context, todo *types.TODO) ([]todos.PRLin
 	return links, nil
 }
 
-// TodosForPR lists this workspace's TODOs that link the PR at url.
+// TodosForPR lists the TODOs that link the PR at url: this workspace's, or
+// every workspace's on the provider OpenGlobal returns.
 func (p *Provider) TodosForPR(ctx context.Context, url string) ([]todos.PRLinkedTODO, error) {
-	linked, err := p.repository.ListPRLinkedIssues(ctx, p.workspace.ID, url)
+	query := native.PRLinkedIssuesQuery{URL: url}
+	if p.workspace != nil {
+		query.WorkspaceID = p.workspace.ID
+	}
+	linked, err := p.repository.ListPRLinkedIssues(ctx, query)
 	if err != nil {
 		return nil, err
 	}

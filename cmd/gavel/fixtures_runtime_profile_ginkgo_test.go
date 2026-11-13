@@ -129,6 +129,5 @@ func runProfileFixture(input, cwd, document string) error {
 	previous := workingDir
 	workingDir = cwd
 	DeferCleanup(func() { workingDir = previous })
-	fixturesCmd.SetContext(context.Background())
-	return runFixtures(fixturesCmd, []string{path})
+	return runFixtures(withRootContext(fixturesCmd), []string{path})
 }

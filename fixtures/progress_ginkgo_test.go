@@ -2,10 +2,15 @@ package fixtures
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/flanksource/clicky/task"
 	. "github.com/onsi/ginkgo/v2"
@@ -113,6 +118,20 @@ var _ = Describe("fixture execution progress", func() {
 		Expect(first).NotTo(Equal(second))
 	})
 
+	It("carries each step's authored source on its node before the step runs", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "purge.fixture.yaml")
+		Expect(os.WriteFile(path, []byte("kind: Fixture\nsteps:\n  - id: approval\n    kind: form\n"), 0o600)).To(Succeed())
+		root := &FixtureNode{Name: "Fixtures", Type: SectionNode}
+		root.AddChild(&FixtureNode{Name: "approval", Type: TestNode, Test: &FixtureTest{Name: "approval"},
+			Origin: &FixtureOrigin{File: path, Kind: "step", Line: 3, EndLine: 4}})
+
+		node := newExecutionTracker(root, "", nil, nil).Snapshot().Root.Children[0]
+
+		Expect(node.State).To(Equal(ExecutionQueued))
+		Expect(node.Source).NotTo(BeNil())
+		Expect(node.Source.Text).To(Equal("  - id: approval\n    kind: form"))
+	})
+
 	It("attaches fixture results before publishing their terminal state", func() {
 		workDir := GinkgoT().TempDir()
 		path := filepath.Join(workDir, "progress.fixture.md")
@@ -144,6 +163,137 @@ var _ = Describe("fixture execution progress", func() {
 		})
 		Expect(result).NotTo(BeNil())
 		Expect(result.Status).To(Equal(task.StatusPASS))
+	})
+
+	It("streams a running command's output onto its node and lands its result when it finishes", func() {
+		workDir := GinkgoT().TempDir()
+		path := filepath.Join(workDir, "stream.fixture.md")
+		content := "# Stream\n\n## prints twice\n\n```bash\nprintf 'first\\n'; sleep 1; printf 'second\\n'\n```\n"
+		Expect(os.WriteFile(path, []byte(content), 0o644)).To(Succeed())
+
+		var mu sync.Mutex
+		var running []string
+		var last ExecutionSnapshot
+		runner, err := NewRunner(RunnerOptions{
+			Paths: []string{path}, WorkDir: workDir,
+			ProgressSink: func(_ context.Context, snapshot ExecutionSnapshot) error {
+				mu.Lock()
+				defer mu.Unlock()
+				walkExecution(snapshot.Root, func(node *ExecutionNode) {
+					if node.State == ExecutionRunning && node.Output != "" {
+						running = append(running, node.Output)
+					}
+				})
+				last = snapshot
+				return nil
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, runErr := runner.Run()
+		Expect(runErr).NotTo(HaveOccurred())
+
+		mu.Lock()
+		defer mu.Unlock()
+		Expect(running).To(ContainElement("first\n"), "the first line is published while the command still runs")
+		var finished *ExecutionNode
+		walkExecution(last.Root, func(node *ExecutionNode) {
+			if node.Result != nil {
+				finished = node
+			}
+		})
+		Expect(finished).NotTo(BeNil())
+		Expect(finished.Output).To(BeEmpty(), "a finished node's output is its result's")
+		Expect(finished.Result.Stdout).To(Equal("first\nsecond\n"))
+	})
+
+	It("coalesces a burst of output into one snapshot and flushes the rest after the interval", func() {
+		root := &FixtureNode{Name: "Fixtures", Type: SectionNode}
+		node := &FixtureNode{Name: "chatty", Type: TestNode, Test: &FixtureTest{Name: "chatty"}}
+		root.AddChild(node)
+		var mu sync.Mutex
+		var outputs []string
+		tracker := newExecutionTracker(root, "", nil, func(_ context.Context, snapshot ExecutionSnapshot) error {
+			mu.Lock()
+			defer mu.Unlock()
+			outputs = append(outputs, snapshot.Root.Children[0].Output)
+			return nil
+		})
+		ctx := context.Background()
+		Expect(tracker.Start(ctx, node)).To(Succeed())
+		writer := tracker.OutputWriter(ctx, node)
+		for _, line := range []string{"a\n", "b\n", "c\n"} {
+			_, err := io.WriteString(writer, line)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		read := func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(outputs)
+		}
+		Expect(read()).To(Equal([]string{"", "a\n"}), "the start, then only the first write of the burst")
+		Eventually(read).WithTimeout(2 * time.Second).Should(Equal([]string{"", "a\n", "a\nb\nc\n"}))
+		Consistently(read).WithTimeout(2 * outputPublishInterval).Should(HaveLen(3))
+	})
+
+	It("publishes a running fixture's live metadata, copied, and drops it once the fixture finishes", func() {
+		root := &FixtureNode{Name: "Fixtures", Type: SectionNode}
+		node := &FixtureNode{Name: "inspect", Type: TestNode, Test: &FixtureTest{Name: "inspect"}}
+		root.AddChild(node)
+		var mu sync.Mutex
+		var live []map[string]any
+		tracker := newExecutionTracker(root, "", nil, func(_ context.Context, snapshot ExecutionSnapshot) error {
+			mu.Lock()
+			defer mu.Unlock()
+			live = append(live, snapshot.Root.Children[0].Metadata)
+			return nil
+		})
+		ctx := context.Background()
+		Expect(tracker.Start(ctx, node)).To(Succeed())
+		step := &StepContext{evidence: newStepEvidence(withFixtureOutput(ctx, tracker.OutputWriter(ctx, node)), nil)}
+		record := map[string]any{"template": "SELECT 1", "connection": map[string]any{"name": "lab", "host": "db.example.com"}}
+		Expect(step.SetDetail(QueryMetadataKey, record)).To(Succeed())
+		record["sql"] = "SELECT 1"
+
+		mu.Lock()
+		first := live[len(live)-1]
+		mu.Unlock()
+		Expect(first).To(Equal(map[string]any{QueryMetadataKey: map[string]any{"template": "SELECT 1",
+			"connection": map[string]any{"name": "lab", "host": "db.example.com"}}}), "the first change publishes at once, as reported then")
+
+		Expect(tracker.Complete(ctx, node, FixtureResult{Name: "inspect", Status: task.StatusPASS})).To(Succeed())
+		Expect(tracker.Snapshot().Root.Children[0].Metadata).To(BeNil(), "a finished node's detail is its result's")
+		Expect(step.SetDetail(QueryMetadataKey, record)).To(Succeed())
+		Expect(tracker.Snapshot().Root.Children[0].Metadata).To(BeNil(), "detail reported after the fixture finished is dropped")
+	})
+
+	It("keeps only the tail of a large output, flagged truncated", func() {
+		root := &FixtureNode{Name: "Fixtures", Type: SectionNode}
+		node := &FixtureNode{Name: "loud", Type: TestNode, Test: &FixtureTest{Name: "loud"}}
+		root.AddChild(node)
+		tracker := newExecutionTracker(root, "", nil, func(context.Context, ExecutionSnapshot) error { return nil })
+		writer := tracker.OutputWriter(context.Background(), node)
+		_, err := io.WriteString(writer, strings.Repeat("x", MaxExecutionOutput)+"tail")
+		Expect(err).NotTo(HaveOccurred())
+
+		output := tracker.Snapshot().Root.Children[0]
+		Expect(output.Output).To(HaveLen(MaxExecutionOutput))
+		Expect(output.Output).To(HaveSuffix("xtail"))
+		Expect(output.OutputTruncated).To(BeTrue())
+	})
+
+	It("carries a finished node's result across the worker's JSON pipe", func() {
+		result := &FixtureResult{Name: "inspect", Status: task.StatusWarning, Stdout: "out",
+			Metadata: map[string]any{"step": map[string]any{"id": "inspect", "kind": "query"}},
+			Children: []*FixtureNode{{Name: "finding", Type: TestNode, Results: &FixtureResult{Name: "finding", Status: task.StatusWarning}}}}
+		raw, err := json.Marshal(workerEvent{Version: 1, Kind: "progress", Snapshot: &ExecutionSnapshot{Root: &ExecutionNode{Key: "k", Result: result}}})
+		Expect(err).NotTo(HaveOccurred())
+		var event workerEvent
+		Expect(json.Unmarshal(raw, &event)).To(Succeed())
+		Expect(event.Snapshot.Root.Result).To(Equal(result))
+	})
+
+	It("discards output written outside a tracked fixture", func() {
+		Expect(fixtureOutput(context.Background())).To(BeIdenticalTo(io.Discard))
 	})
 
 	It("records the pid of a fixture's command on its progress node", func() {

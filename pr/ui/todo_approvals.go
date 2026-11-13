@@ -232,7 +232,7 @@ func (s *Server) approvalStore(ctx context.Context, dir string) (*captaindb.DB, 
 		}
 		return store, 0, nil
 	}
-	provider, _, err := s.todoProviderContext(ctx, todoSource{Dir: dir})
+	provider, _, err := s.todoReadProviderContext(ctx, todoSource{Dir: dir})
 	if err != nil {
 		return nil, todoErrorStatus(http.StatusBadRequest, err), err
 	}

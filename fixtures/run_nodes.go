@@ -3,6 +3,7 @@ package fixtures
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -53,12 +54,23 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	if err := reporter.Publish(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fixtures: publish queued fixture progress: %w", err)
 	}
+	setup, err := prepareNodeSetup(ctx, nodes, opts)
+	if err != nil {
+		return nil, nil, err
+	}
 	ownScope := opts.Scope == nil
 	if ownScope {
-		opts.Scope = NewStepScope(scopeSeed(opts.Setup, firstFrontMatter(nodes), nil))
+		seed := opts.Setup
+		if setup != nil {
+			seed = setup.prepared()
+		}
+		opts.Scope = NewStepScope(scopeSeed(seed, firstFrontMatter(nodes), nil))
+	}
+	if err := setup.attach(opts.Scope, ownScope); err != nil {
+		return nil, nil, errors.Join(err, setup.setups.cleanup())
 	}
 	previous := append([]FixtureResult(nil), opts.PreviousResults...)
-	results, err := runNodeTree(ctx, nodes, opts, reporter, &previous)
+	results, err := runNodeTree(ctx, nodes, opts, reporter, &previous, setup)
 	if ownScope {
 		results = append(results, teardownResults(ctx, opts.Scope)...)
 	}
@@ -66,7 +78,7 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	return results, &snapshot, err
 }
 
-func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, reporter *ExecutionReporter, previous *[]FixtureResult) ([]FixtureResult, error) {
+func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, reporter *ExecutionReporter, previous *[]FixtureResult, setup *nodeSetup) ([]FixtureResult, error) {
 	var results []FixtureResult
 	for _, node := range nodes {
 		if node == nil {
@@ -81,14 +93,17 @@ func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, rep
 			nodeOpts.Progress = func(done, total int) error {
 				return reporter.UpdateFixture(ctx, node, done, total)
 			}
-			result := RunNode(ctx, *node.Test, nodeOpts)
+			nodeCtx := withFixtureOutput(withFixtureWaiting(ctx, func(waiting bool) error {
+				return reporter.SetFixtureWaiting(ctx, node, waiting)
+			}), reporter.OutputWriter(ctx, node))
+			result := setup.run(nodeCtx, *node.Test, nodeOpts)
 			results = append(results, result)
 			*previous = append(*previous, result)
 			if err := reporter.CompleteFixture(ctx, node, result); err != nil {
 				return results, err
 			}
 		}
-		childResults, err := runNodeTree(ctx, node.Children, opts, reporter, previous)
+		childResults, err := runNodeTree(ctx, node.Children, opts, reporter, previous, setup)
 		results = append(results, childResults...)
 		if err != nil {
 			return results, err

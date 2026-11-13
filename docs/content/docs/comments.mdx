@@ -1,0 +1,62 @@
+---
+title: Comments and agent delivery
+description: Send comment threads to Claude and Codex sessions, and route new comments to agents automatically.
+---
+
+Gavel stores comments made in `gavel edit`, the dashboard, `gavel launch serve` and the playground grabber. Each comment lives under a scope, such as `gavel://project/<name>` for a project, and its target URI sits beneath that scope (`.../files/<path>` for a file, `.../pages/<url>` for a web page).
+
+Any open thread can be handed to an agent. Gavel assigns the thread to the agent, acknowledges it as the agent, and delivers it with the commands the agent uses to reply and resolve it. The hand-off is recorded on the thread as its `agentRun`: the session, when it was requested, its state (`queued`, `sent`, or `error` with the error), and where it went.
+
+## Send a thread to an agent
+
+There are two kinds of target:
+
+- **A live session.** The thread is delivered into a Claude or Codex session that is already running, through Captain.
+- **A new run.** Gavel starts a managed session from a prompt (for example the library's `editor-comments`) in the project's directory. The session gets tools that list, reply to and resolve the threads on its target. With a group key, later threads of the same group are sent into that session while it is still live, instead of starting another one.
+
+```sh
+gavel comments deliver <id> --session <session-id>
+gavel comments deliver <id> --prompt editor-comments
+gavel comments deliver <id> --prompt editor-comments --group page:home --run-options '{"instructions":"Keep it short"}'
+gavel comments deliver <id> --prompt editor-comments --group page:home --fresh
+```
+
+`--run-options` takes `presets`, `spec`, `variables` and `instructions`. Gavel always sets the `dir`, `scope`, `target`, `actor`, `gavelExecutable` and `message` variables itself.
+
+`--fresh` always starts a new session, even when the group's session is still live. The new session becomes the group's, so later threads of the group go to it. It applies to `--prompt` only.
+
+A failed delivery is recorded on the thread as an error and reported by the command, so the thread shows what went wrong. To retry, deliver the thread again (add `--fresh` to retry in a new session); the new hand-off replaces the recorded one.
+
+The agent receives the thread with the context it was left in, whenever the comment has it: the page URL and title, the element's component and source file, the locators that find the element again, its HTML (trimmed to 4 KB), and links to the thread's attachments such as screenshots, followed by the comment and its replies.
+
+## Route new comments to agents
+
+A route sends every new comment under a target prefix to an agent, without anyone choosing **Send to agent**. Only comments written by a person are routed; replies, review decisions and comments written by agents are not. Delivery runs in the background, so creating a comment never waits for it.
+
+A prefix covers the target URI equal to it and everything beneath it after a `/`: `.../pages/team` covers `.../pages/team/members` but not `.../pages/team-x`. When several routes match, the one with the longest prefix wins. A disabled route opts its prefix out, so you can route a whole project but exclude one page.
+
+A routed delivery never gets in the way of the comment's author: attaching a screenshot right after creating the comment, with the version the create returned, succeeds while the agent picks the thread up.
+
+```sh
+gavel comments routes set --scope 'gavel://project/demo' --prefix 'gavel://project/demo/pages/' --prompt editor-comments --group pages
+gavel comments routes set --scope 'gavel://project/demo' --prefix 'gavel://project/demo/pages/private' --session <session-id> --disabled
+gavel comments routes list --scope 'gavel://project/demo'
+gavel comments routes delete <route-id>
+```
+
+Pass `--id <route-id>` to `routes set` to replace an existing route. A route set with `--fresh` starts a new session for every comment it routes.
+
+## HTTP API
+
+Every host that serves `/api/v1/comments` also serves:
+
+| Route | Body | Answer |
+| --- | --- | --- |
+| `GET /api/v1/comments/agent-sessions[?scope=][&all=1]` | | Live sessions: `{id, source, title, model, cwd, status, inCmux}` |
+| `POST /api/v1/comments/{id}/deliver` | `{expectedVersion, requestId, target}` | The updated comment; 409 on a stale version, 502 when delivery failed |
+| `POST /api/v1/comments/{id}/deliver/preview` | `{target}` | The resolved run and its tools, without starting it |
+| `GET /api/v1/comments/routes?scope=` | | The scope's routes |
+| `PUT /api/v1/comments/routes` | `{id?, scopeUri, targetPrefix, workflowId, target, enabled}` | The saved route |
+| `DELETE /api/v1/comments/routes/{routeId}` | | 204 |
+
+A target is `{kind: "session", sessionId}` or `{kind: "run", prompt, runOptions?, groupKey?, fresh?}`; `fresh` on a session target answers 400. Retrying a hand-off is another `deliver` with the thread's latest version and a new `requestId`. With `scope`, the session listing shows only sessions working in that scope's project directory; `all=1` lists every live session.

@@ -13,8 +13,11 @@ import (
 
 func TestMain(m *testing.M) {
 	if len(os.Args) == 2 && os.Args[1] == fixtures.WorkerCommand {
-		output := os.NewFile(3, "fixture-worker-results")
-		if err := fixtures.RunWorker(os.Stdin, output); err != nil {
+		wio, err := fixtures.WorkerProcessIO()
+		if err == nil {
+			err = fixtures.RunWorker(wio)
+		}
+		if err != nil {
 			os.Exit(1)
 		}
 		os.Exit(0)

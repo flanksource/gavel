@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query';
-import type { PromptSpecDetail } from '@flanksource/clicky-ui/ai';
+import { familiesFromRuntimeCatalog, type PromptSpecDetail, type RuntimeCatalogFamily } from '@flanksource/clicky-ui/ai';
+import type { ChatModel } from '@flanksource/clicky-ui/chat';
 import type { GitDiffPayload } from '@flanksource/clicky-ui/data';
 import type { JsonSchemaObject } from '@flanksource/clicky-ui/components';
 import type { Org } from '../types';
@@ -81,21 +82,72 @@ export function meQuery() {
   });
 }
 
+// A named per-user filter: a kind-tagged list of values (project dirs, GitHub
+// org logins) that list endpoints can exclude by name.
+export interface UserFilter {
+  name: string;
+  kind: string;
+  values: string[];
+}
+
+export const HIDDEN_GITHUB_ORGS_FILTER = 'hidden-github-orgs';
+
+export function userFilterQuery(name: string) {
+  return queryOptions({
+    queryKey: queryKeys.filter(name),
+    queryFn: async ({ signal }) => {
+      const context = `Failed to load the ${name} filter`;
+      const filter = await fetchJSON<UserFilter>(`/api/filters/${encodeURIComponent(name)}`, signal, context);
+      if (!Array.isArray(filter?.values)) throw new Error(`${context}: response omitted its values`);
+      return filter;
+    },
+    staleTime: oneShotStaleTime,
+  });
+}
+
 export function orgsQuery() {
   return queryOptions({
-    queryKey: ['orgs', { includeIgnored: true }] as const,
-    queryFn: ({ signal }) => fetchJSON<Org[]>('/api/orgs?include-ignored=1', signal, 'Failed to load organizations'),
+    queryKey: [...queryKeys.orgs(), { includeIgnored: true }] as const,
+    queryFn: ({ signal }) => fetchJSON<Org[]>('/api/orgs', signal, 'Failed to load organizations'),
     staleTime: oneShotStaleTime,
   });
 }
 
 export function projectActionSchemaQuery(projectName: string, action: ProjectActionName | null) {
   return queryOptions({
-    queryKey: ['projects', projectName, 'actions', 'schema', action] as const,
-    queryFn: ({ signal }) => {
+    queryKey: ['projects', projectName, 'actions', 'schema', action, 2] as const,
+    queryFn: async ({ signal }) => {
       if (!action) throw new Error(`Cannot load action options for ${projectName} without an action`);
       const url = `/api/projects/${encodeURIComponent(projectName)}/actions/schema?action=${action}`;
-      return fetchJSON<ProjectActionSchemaResponse>(url, signal, `Failed to load ${action} options for ${projectName}`);
+      const definition = await fetchJSON<ProjectActionSchemaResponse>(url, signal, `Failed to load ${action} options for ${projectName}`);
+      if (definition.schemaVersion !== 2) throw new Error(`Unsupported ${action} options schema version ${definition.schemaVersion}; reload the updated Gavel UI and server`);
+      return definition;
+    },
+    staleTime: oneShotStaleTime,
+  });
+}
+
+export function chatModelsQuery() {
+  return queryOptions({
+    queryKey: ['chat', 'models'] as const,
+    queryFn: async ({ signal }) => {
+      const models = await fetchJSON<ChatModel[]>('/api/chat/models', signal, 'Failed to load AI models');
+      if (!Array.isArray(models) || !models.length) throw new Error('AI model catalog is empty or invalid');
+      return models;
+    },
+    staleTime: oneShotStaleTime,
+  });
+}
+
+export function chatRuntimesQuery() {
+  return queryOptions({
+    queryKey: ['chat', 'runtimes'] as const,
+    queryFn: async ({ signal }) => {
+      const catalog = await fetchJSON<RuntimeCatalogFamily[]>('/api/chat/runtimes', signal, 'Failed to load AI runtimes');
+      if (!Array.isArray(catalog) || !catalog.length || catalog.some(family => !family?.modes?.length)) {
+        throw new Error('AI runtime catalog is empty or invalid');
+      }
+      return familiesFromRuntimeCatalog(catalog);
     },
     staleTime: oneShotStaleTime,
   });

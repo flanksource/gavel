@@ -36,6 +36,14 @@ func (*promptRuntimeProbe) GetCosts() clickyai.Costs { return nil }
 func (*promptRuntimeProbe) Close() error             { return nil }
 
 var _ = Describe("commit prompt runtime preservation", func() {
+	It("uses the editable squash body without replacing it with generated instructions", func() {
+		got, err := (Options{WorkDir: GinkgoT().TempDir(), Saved: &captainconfig.Config{}, AI: api.Spec{Model: api.Model{Name: "api:haiku"}}}).resolvePrompt(commitPromptOptions{
+			Prompt: verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "Custom: {{#each messages}}{{{this}}}{{/each}}"}}},
+			Name:   "commit.squash", Default: squashPrompt, Data: map[string]any{"messages": []string{"fix: parser"}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.Request.Prompt.User).To(Equal("Custom: fix: parser"))
+	})
 	It("rejects an explicitly cleared grouping model instead of recovering an inherited selection", func() {
 		opts := promptTestOptions()
 		opts.Flags = modelFlags("api:sonnet")
@@ -100,7 +108,7 @@ var _ = Describe("commit prompt runtime preservation", func() {
 		Expect(agent.request.Spec.CLIArgs).To(HaveKeyWithValue("verbose", true))
 		Expect(agent.request.Spec.Prompt.User).To(ContainSubstring("main.go"))
 		Expect(agent.request.Spec.Prompt.SchemaJSON).NotTo(BeEmpty())
-		Expect(agent.request.Spec.Prompt.SchemaStrictness).To(Equal(api.SchemaStrictnessRetry))
+		Expect(agent.request.Spec.Prompt.SchemaStrictness).To(Equal(api.SchemaStrictnessRepair))
 	})
 
 	It("keeps explicit false and zero PR settings above saved defaults in request and provider", func() {
@@ -122,7 +130,7 @@ var _ = Describe("commit prompt runtime preservation", func() {
 		Expect(agent.request.Spec.Memory.SkipUser).To(BeFalse())
 		Expect(agent.request.Spec.Prompt.System).To(Equal("Keep the rationale"))
 		Expect(agent.request.Spec.Prompt.User).To(Equal("Summarize fix: explicit settings"))
-		Expect(agent.request.Spec.Prompt.SchemaStrictness).To(Equal(api.SchemaStrictnessRetry))
+		Expect(agent.request.Spec.Prompt.SchemaStrictness).To(Equal(api.SchemaStrictnessRepair))
 	})
 
 	It("rejects an invalid operation setting before constructing a provider", func() {

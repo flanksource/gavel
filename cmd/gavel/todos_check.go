@@ -21,7 +21,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var loadTodoProjects = ui.LoadProjects
+var loadTodoProjects = ui.LoadVisibleProjects
 
 // openRuntimeTodosProvider is the only production provider constructor used by
 // TODO commands. It is a variable solely so command tests can exercise routing
@@ -79,7 +79,7 @@ func runTodosList(opts TodosListOptions) (any, error) {
 func listTodos(ctx context.Context, workDir string, opts TodosListOptions, filters todos.DiscoveryFilters) (types.TODOS, error) {
 	parentRef := strings.TrimSpace(opts.Parent)
 	if opts.All && parentRef == "" {
-		projects, err := loadTodoProjects(ui.LoadProjectsOptions{})
+		projects, err := loadTodoProjects(ctx)
 		if err != nil {
 			return nil, err
 		}

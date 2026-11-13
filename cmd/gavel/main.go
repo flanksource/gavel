@@ -8,6 +8,7 @@ import (
 	"runtime"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/extensions"
 	"github.com/flanksource/clicky/formatters"
 	"github.com/flanksource/clicky/mcp"
 	"github.com/flanksource/clicky/shutdown"
@@ -15,6 +16,7 @@ import (
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/workspace"
 	"github.com/spf13/cobra"
 	"gorm.io/gorm"
 )
@@ -30,8 +32,18 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "gavel",
 	Short: "Gavel CLI",
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		clicky.Flags.UseFlags()
+		dir, err := getWorkingDir()
+		if err != nil {
+			return err
+		}
+		dirs, err := workspace.Resolve(dir)
+		if err != nil {
+			return err
+		}
+		cmd.SetContext(workspace.With(cmd.Context(), dirs))
+		return nil
 	},
 }
 
@@ -60,8 +72,17 @@ func getWorkingDir() (string, error) {
 	return os.Getwd()
 }
 
+// commandDirs is the command's resolved Dirs: re-resolved from its own
+// --work-dir when set, else the ones the root command resolved from --cwd.
+func commandDirs(ctx context.Context, workDir string) (workspace.Dirs, error) {
+	if workDir != "" {
+		return workspace.Resolve(workDir)
+	}
+	return workspace.From(ctx)
+}
+
 func init() {
-	clicky.BindAllFlags(rootCmd.PersistentFlags(), "format", "tasks")
+	clicky.BindAllFlagsToCommand(rootCmd, "format", "tasks")
 	properties.BindFlags(rootCmd.PersistentFlags())
 	database.BindDatabaseURLFlag(rootCmd.PersistentFlags())
 	// A fixture's `setup:` resolves `connection://…` references against the
@@ -122,9 +143,11 @@ func gavelMCPExcludedCommands() []string {
 		"^action-watchdog$",
 		// Interactive authentication and credential mutation are not agent tools.
 		"^login$", "^logout$", "^whoami$", "^org$", "^org ", "^ssh-key$", "^ssh-key ",
+		"^connections$", "^connections ",
 		// needs a GitHub Actions job's OIDC token, or a sandbox job's run token
 		"^ci$", "^ci ", "^runner$", "^runner ",
 		// long-running servers that would block the MCP request indefinitely
+		"^edit$",
 		"^ssh$", "^ssh ",
 		"^ui$", "^ui ",
 		// top-level lint/test are enough; framework/linter aliases duplicate the same options
@@ -198,6 +221,7 @@ func gavelMCPPRListIgnoredParams() []string {
 		"all",
 		"interval",
 		"menu-bar",
+		"open",
 		"persist-port",
 		"port",
 	}
@@ -227,12 +251,11 @@ func gavelMCPFormatIgnoredParams() []string {
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == fixtures.WorkerCommand {
-		output := os.NewFile(3, "fixture-worker-protocol")
-		if output == nil {
-			fmt.Fprintln(os.Stderr, "fixture worker protocol descriptor is missing")
-			os.Exit(1)
+		wio, err := fixtures.WorkerProcessIO()
+		if err == nil {
+			err = fixtures.RunWorker(wio)
 		}
-		if err := fixtures.RunWorker(os.Stdin, output); err != nil {
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -248,6 +271,9 @@ func main() {
 
 func execute() int {
 	defer shutdown.RecoverAndShutdown()
+	// Commands register in init() across files, so the tree is only complete
+	// here: wire --interactive (argument forms) over all of it.
+	extensions.CobraExtensions(rootCmd).Interactive()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

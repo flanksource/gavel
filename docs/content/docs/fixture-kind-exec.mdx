@@ -1,0 +1,138 @@
+---
+title: Exec
+description: Execute commands and scripts with stdout, stderr, exit-code, and CEL assertions.
+parent: fixture-step-reference
+order: 1
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+import FixtureExample from "../../src/components/site/FixtureExample";
+
+Use the `exec` step to execute commands and scripts with stdout, stderr, exit-code, and CEL assertions.
+
+In YAML and JSON fixtures, a step with `exec:` can omit `kind: exec`; Gavel infers it from the executable field. An explicit kind is always honored. Steps using only `script:` still require `kind: exec`.
+
+## Example
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Exec example
+steps:
+  - id: greeting
+    exec: printf
+    args: ["%s", "ready"]
+    cel: stdout == "ready" && exitCode == 0
+```
+
+````markdown
+# Exec example
+
+| Name | Command | CEL |
+| --- | --- | --- |
+| Greeting | printf '%s' ready | stdout == "ready" && exitCode == 0 |
+````
+
+</FixtureExample>
+
+Save the YAML variant as `exec.fixture.yaml`, then inspect it with `gavel fixtures outline exec.fixture.yaml` and run `gavel fixtures exec.fixture.yaml`. For Markdown, save `exec.fixture.md` and pass that filename to the same commands.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+Install the executables and script tools used by your commands in the fixture's execution environment.
+
+</Prerequisites>
+
+Use `exec` and `args` for an executable or `script` for a shell body. `cwd`, `env`, `terminal`, expected streams, and expected exit code configure the process. Commands run in the fixture's execution directory.
+
+`$VAR` and `${VAR}` in `exec` and `args` expand to what the command will see: template variables first, then the step's `env:`, earlier steps' exports, armed traces' exports (a `pg_proxy`'s rewritten DSN, say) and the process environment. A `script` body expands template variables only and leaves the rest to the shell, which may reassign them. Anything else — an unknown variable, `${VAR:-default}`, `${0#prefix}`, `$1` — is passed through exactly as written.
+
+`goProfiles` declares the Go pprof files the command writes, as in markdown front matter. Under `--profile` each entry's `args` (with `{{.path}}` as the destination) are appended to the command, or its `env` variable is set, and the file is ingested into the run's `goprof` trace:
+
+```yaml
+- id: render
+  kind: exec
+  exec: ./app
+  args: [render, --company, $COMPANY]
+  goProfiles:
+    cpu: {file: cpu.pprof, args: ["--cpuprofile={{.path}}"]}
+```
+
+## Results and lifetime
+
+Outputs include `stdout`, `stderr`, and `exitCode`. A wait re-executes the command to observe fresh output, so polling commands must be safe to repeat. PTY mode merges stdout/stderr. Expected nonzero exits can be asserted explicitly.
+
+[Fixture formats](/docs/fixture-formats) covers Markdown command blocks, table cases, and golden files.
+
+`cleanup` is a shell body run with `bash -c` at fixture teardown, with the step's `env` and `cwd`. It runs once the step has run, whether the step or a later one passed or failed, so it undoes what the step changed. A non-zero exit fails the teardown and reports the output. `{{.tmp}}` outlives every cleanup, which makes it the place to record what to restore:
+
+```yaml
+- id: scaleDown
+  kind: exec
+  env: {STATE: "{{.tmp}}/replicas"}
+  script: |
+    kubectl get deploy/app -o jsonpath='{.spec.replicas}' > "$STATE"
+    kubectl scale deploy/app --replicas=0
+  cleanup: kubectl scale deploy/app --replicas="$(cat "$STATE")"
+```
+
+## Scripted terminal input
+
+With `terminal: pty`, `input` answers an interactive command the way a person at the terminal would. Each item waits until its `expect` text appears in the output (escape sequences stripped, after the previous item's match), then types `send` followed by the named `keys`: `enter`, `tab`, `space`, `esc`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`. While a script runs, the terminal also answers the cursor-position and background-colour queries TUI libraries send.
+
+```yaml
+- id: pick
+  kind: exec
+  terminal: pty
+  script: gavel todos run "$TODO_ID" --step plan
+  input:
+    - { expect: "Question from the agent" }
+    - { expect: "Other (type an answer)", keys: [down, enter] }
+  cel: exitCode == 0
+```
+
+The step fails when the command exits before an expectation appears, and the error ends with the output the command did print. `input` without `terminal: pty` is an error.
+
+## Workflow commands
+
+A step reports progress, status and findings by printing GitHub Actions workflow commands, each on a line of its own: `::name key=value,key=value::message`. Gavel reads them from stdout and stderr as the command runs, so the live view updates while the step is still going. The same commands work in CI, where GitHub reads them the same way. Every kind reads them from what it streams, not only `exec`.
+
+| Command | Effect |
+| --- | --- |
+| `::group::Name` … `::endgroup::` | Wraps the lines between them in a collapsible section of the step's output. Groups nest. |
+| `::error file=,line=,col=,endLine=,endColumn=,title=::message` | Adds an error finding as a child of the step and fails the step, even when the command exits 0. |
+| `::warning …::message` | Adds a warning finding and marks a passing step as warned. Its `cel`, outputs and exports still run. |
+| `::notice …::message` | Adds an info finding. The step's status does not change. |
+| `::progress::3/10` or `::progress done=3,total=10::` | Sets the step's progress bar. |
+| `::description::text` | Sets what the step is doing; it also lands in the result's `metadata.description`. |
+| `::status::text` | Sets the running step's status line; it also lands in `metadata.status`. |
+| `::debug::text` | Writes to the debug log only; it is shown with `-v`. |
+| `::stop-commands::token` … `::token::` | Treats every line in between as plain output. |
+
+Gavel removes command lines from `stdout`/`stderr`, both stored and live, and from the values `cel:`, `wait.until`, expected streams and exports read. The exception is group markers, which stay so the output can show its sections. A finding's `title` becomes its rule, and the enclosing group becomes its code. A line naming any other command (for example `::set-output`) is ordinary output. A command that does not parse, such as `line=twelve` or `::progress::half`, becomes an error finding saying what was wrong. Values use GitHub's escaping: `%25`, `%0D` and `%0A` in messages, plus `%3A` and `%2C` in properties.
+
+```yaml
+- id: migrate
+  kind: exec
+  script: |
+    echo "::description::applying migrations"
+    for i in 1 2 3; do
+      echo "::group::migration $i"
+      ./migrate --step "$i"
+      echo "::endgroup::"
+      echo "::progress::$i/3"
+    done
+    ./check-schema || echo "::warning title=Schema drift::views differ from models"
+  cel: stdout.contains('migration 3')
+```
+
+## Complete step reference
+
+Use Tree or Table to browse global fields and this kind's configuration separately. Expand nested fields or additional metadata when available. Shared behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="exec" />
+

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"testing"
 
+	"github.com/flanksource/gavel/workspace"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/spf13/cobra"
 )
 
 func TestGavelCLI(t *testing.T) {
@@ -17,3 +20,20 @@ func TestGavelCLI(t *testing.T) {
 var _ = BeforeEach(func() {
 	GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 })
+
+// withRootContext gives cmd the context the root command resolves from --cwd,
+// as it does before any subcommand runs.
+func withRootContext(cmd *cobra.Command) *cobra.Command {
+	cmd.SetContext(context.Background())
+	Expect(rootCmd.PersistentPreRunE(cmd, nil)).To(Succeed())
+	return cmd
+}
+
+func testWorkspaceDirs(t testing.TB, dir string) workspace.Dirs {
+	t.Helper()
+	dirs, err := workspace.Resolve(dir)
+	if err != nil {
+		t.Fatalf("resolve test workspace: %v", err)
+	}
+	return dirs
+}

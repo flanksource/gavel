@@ -3,7 +3,10 @@ package fixtures
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
+
+	"github.com/flanksource/clicky/task"
 
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
@@ -15,6 +18,7 @@ type ExecutionState string
 const (
 	ExecutionQueued    ExecutionState = "queued"
 	ExecutionRunning   ExecutionState = "running"
+	ExecutionWaiting   ExecutionState = "waiting" // running, blocked on a person answering a form
 	ExecutionPassed    ExecutionState = "passed"
 	ExecutionFailed    ExecutionState = "failed"
 	ExecutionErrored   ExecutionState = "errored"
@@ -66,14 +70,32 @@ type ExecutionNode struct {
 	// its commands once they exit.
 	PIDs []int `json:"pids,omitempty"`
 	// Traces are the windows of the traces the fixture armed, once it finished.
-	Traces   []parsers.TraceResult `json:"traces,omitempty"`
-	Children []*ExecutionNode      `json:"children,omitempty"`
+	Traces []parsers.TraceResult `json:"traces,omitempty"`
+	// Result is the fixture's result once it finished, so a live view shows a
+	// step's detail and children (a query step's findings) without waiting for
+	// the run to end.
+	Result *FixtureResult `json:"result,omitempty"`
+	// Source is the step's YAML/Markdown as authored, read once when the tree is
+	// built, so a queued, running or waiting step shows what it will execute.
+	Source *parsers.SourceSnippet `json:"source,omitempty"`
+	// Output is the tail (the last MaxExecutionOutput bytes) of what the running
+	// fixture wrote to its StepContext.Stdout/Stderr; OutputTruncated says earlier bytes were
+	// dropped. It is cleared when the fixture finishes: Result has the rest.
+	Output          string `json:"output,omitempty"`
+	OutputTruncated bool   `json:"output_truncated,omitempty"`
+	// Metadata is the running fixture's structured live detail, by the same
+	// keys its result's Metadata will carry (a query step's "query" record),
+	// set through StepContext.SetDetail. It is cleared when the fixture finishes:
+	// Result has the final one.
+	Metadata map[string]any   `json:"metadata,omitempty"`
+	Children []*ExecutionNode `json:"children,omitempty"`
 }
 
 type ExecutionSummary struct {
 	Total     int `json:"total"`
 	Queued    int `json:"queued,omitempty"`
 	Running   int `json:"running,omitempty"`
+	Waiting   int `json:"waiting,omitempty"`
 	Passed    int `json:"passed,omitempty"`
 	Failed    int `json:"failed,omitempty"`
 	Errored   int `json:"errored,omitempty"`
@@ -104,6 +126,55 @@ func withFixtureProgress(ctx context.Context, progress func(done, total int) err
 func fixtureProgressFromContext(ctx context.Context) func(done, total int) error {
 	progress, _ := ctx.Value(fixtureProgressKey{}).(func(done, total int) error)
 	return progress
+}
+
+type fixtureWaitingKey struct{}
+
+func withFixtureWaiting(ctx context.Context, report func(waiting bool) error) context.Context {
+	return context.WithValue(ctx, fixtureWaitingKey{}, report)
+}
+
+// ReportWaiting marks the progress node of the fixture ctx runs as waiting on
+// a person (true) or running again (false). A fixture run with no progress
+// tracker has no node to mark.
+func ReportWaiting(ctx context.Context, waiting bool) error {
+	report, _ := ctx.Value(fixtureWaitingKey{}).(func(waiting bool) error)
+	if report == nil {
+		return nil
+	}
+	return report(waiting)
+}
+
+type fixtureOutputKey struct{}
+
+func withFixtureOutput(ctx context.Context, output io.Writer) context.Context {
+	return context.WithValue(ctx, fixtureOutputKey{}, output)
+}
+
+// fixtureOutput is the live output stream of the fixture ctx runs (an
+// *outputStream onto its progress node, published at most once per
+// outputPublishInterval). A fixture run with no progress tracker, or one
+// nobody watches, has nowhere to stream to, so its writes are discarded. Kinds
+// write through StepContext.Stdout/Stderr/SetDetail, which also keep it.
+func fixtureOutput(ctx context.Context) io.Writer {
+	if output, ok := ctx.Value(fixtureOutputKey{}).(io.Writer); ok {
+		return output
+	}
+	return io.Discard
+}
+
+type fixtureTaskKey struct{}
+
+func withFixtureTask(ctx context.Context, t *task.Task) context.Context {
+	return context.WithValue(ctx, fixtureTaskKey{}, t)
+}
+
+// fixtureTask is the clicky task the fixture ctx runs as, when it runs as one
+// of its own (the Runner's per-fixture tasks); nil otherwise — RunNodes runs
+// nodes inline, and a task found further up ctx belongs to its caller.
+func fixtureTask(ctx context.Context) *task.Task {
+	t, _ := ctx.Value(fixtureTaskKey{}).(*task.Task)
+	return t
 }
 
 type fixtureProcessKey struct{}

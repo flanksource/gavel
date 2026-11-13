@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -24,9 +25,17 @@ import (
 const (
 	viewTabTests     = "tests"
 	viewTabLint      = "lint"
+	viewTabFiles     = "files"
 	viewTabBench     = "bench"
 	viewTabProcesses = "processes"
+	viewTabHistory   = "history"
 )
+
+// exportableTab reports whether a tab has an export rendering; the files,
+// processes and history tabs are page-only.
+func exportableTab(tab string) bool {
+	return tab != viewTabFiles && tab != viewTabProcesses && tab != viewTabHistory
+}
 
 type routeRequest struct {
 	Tab         string
@@ -279,7 +288,7 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 	}
 
 	switch tabSeg {
-	case viewTabTests, viewTabLint, viewTabBench, viewTabProcesses:
+	case viewTabTests, viewTabLint, viewTabFiles, viewTabBench, viewTabProcesses, viewTabHistory:
 		req.Tab = tabSeg
 	default:
 		return routeRequest{}, false
@@ -287,6 +296,11 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 
 	if len(segments) > 1 {
 		req.NodePath = append(req.NodePath, segments[1:]...)
+	}
+	// A files path names a file, whose extension is not an export format.
+	if req.Tab == viewTabFiles {
+		req.IsExport = pathFormat != ""
+		return req, true
 	}
 	if len(req.NodePath) > 0 {
 		last := req.NodePath[len(req.NodePath)-1]
@@ -341,23 +355,13 @@ func routeRequestedFormat(r *http.Request, pathFormat string) string {
 	}
 }
 
-// Status filter values as the UI writes them (src/routes.ts): a URL without
-// `status` means the failing-only default, `status=all` means no filter.
-const statusFilterAll = "all"
-
-var defaultStatusFilter = []string{"!passed", "!skipped"}
-
+// parseTestFilters reads the filters as the UI writes them (src/routes.ts):
+// a URL without `status` filters no status.
 func parseTestFilters(r *http.Request) testRouteFilters {
-	filters := testRouteFilters{Framework: splitList(r.URL.Query().Get("framework"))}
-	status, present := r.URL.Query()["status"]
-	switch {
-	case !present:
-		filters.Status = append([]string(nil), defaultStatusFilter...)
-	case len(status) == 1 && status[0] == statusFilterAll:
-	default:
-		filters.Status = splitList(strings.Join(status, ","))
+	return testRouteFilters{
+		Framework: splitList(r.URL.Query().Get("framework")),
+		Status:    splitList(strings.Join(r.URL.Query()["status"], ",")),
 	}
-	return filters
 }
 
 func parseLintFilters(r *http.Request) lintRouteFilters {
@@ -649,6 +653,7 @@ func buildLintByLinterFile(results []*linters.LinterResult, filters lintRouteFil
 				byLinter[result.Linter] = bucket
 			}
 			file := relLintPath(violation.File, result.WorkDir)
+			violation = relLintLocations(violation, result.WorkDir)
 			if file == "" {
 				rule := lintRuleName(violation)
 				if _, ok := bucket.NoFileRules[rule]; !ok {
@@ -721,6 +726,7 @@ func buildLintByLinterRuleFile(results []*linters.LinterResult, filters lintRout
 				rules[rule] = bucket
 			}
 			file := relLintPath(violation.File, result.WorkDir)
+			violation = relLintLocations(violation, result.WorkDir)
 			if file == "" {
 				bucket.NoFileViolations = append(bucket.NoFileViolations, violation)
 				continue
@@ -768,6 +774,7 @@ func buildLintByFileLinterRule(results []*linters.LinterResult, filters lintRout
 				continue
 			}
 			file := relLintPath(violation.File, result.WorkDir)
+			violation = relLintLocations(violation, result.WorkDir)
 			meta[result.Linter] = result
 			if file == "" {
 				if _, ok := byNoFileLinter[result.Linter]; !ok {
@@ -872,15 +879,33 @@ func lintViolationNode(linterName, file string, violation models.Violation) *Vie
 	if msg != "" {
 		name = name + " " + msg
 	}
+	status := statusFromSeverity(violation.Severity)
+	var children []*ViewNode
+	if len(violation.Locations) > 1 {
+		name = fmt.Sprintf("%s (%d locations)", name, len(violation.Locations))
+		for _, l := range violation.Locations {
+			children = append(children, &ViewNode{
+				Name:      strings.TrimSpace(l.String() + " " + l.Message),
+				Kind:      "lint-location",
+				Status:    status,
+				Framework: "lint",
+				File:      l.File,
+				Line:      l.Line,
+				Message:   l.Message,
+				Command:   linterName,
+			})
+		}
+	}
 	return &ViewNode{
 		Name:      name,
 		Kind:      "violation",
-		Status:    statusFromSeverity(violation.Severity),
+		Status:    status,
 		Framework: "lint",
 		File:      file,
 		Line:      violation.Line,
 		Message:   msg,
 		Command:   linterName,
+		Children:  children,
 	}
 }
 
@@ -1063,7 +1088,7 @@ func buildLintFolderNodes(root *lintFileTreeNode, meta map[string]*linters.Linte
 func lintNodeViolationCount(nodes []*ViewNode) int {
 	total := 0
 	for _, node := range nodes {
-		if len(node.Children) == 0 {
+		if node.Kind == "violation" || len(node.Children) == 0 {
 			total++
 			continue
 		}
@@ -1183,6 +1208,10 @@ func buildPerformanceViewNodes(tests []parsers.Test, performance *fixtures.Bench
 	return nodes
 }
 
+// unfinishedStates are the progress states of a fixture that has no result
+// yet: still queued, running, or waiting on a person to answer a form.
+var unfinishedStates = []fixtures.ExecutionState{fixtures.ExecutionQueued, fixtures.ExecutionRunning, fixtures.ExecutionWaiting}
+
 func buildFixtureBenchmarkViewNodes(state *FixtureBenchmarkState) []*ViewNode {
 	if state.Report == nil {
 		var nodes []*ViewNode
@@ -1192,7 +1221,7 @@ func buildFixtureBenchmarkViewNodes(state *FixtureBenchmarkState) []*ViewNode {
 				if node == nil {
 					return
 				}
-				if len(node.Children) == 0 && node.State != fixtures.ExecutionQueued && node.State != fixtures.ExecutionRunning {
+				if len(node.Children) == 0 && !slices.Contains(unfinishedStates, node.State) {
 					nodes = append(nodes, &ViewNode{Name: node.Name, Kind: string(node.Kind), Status: string(node.State), Duration: node.Duration})
 				}
 				for _, child := range node.Children {
@@ -1304,6 +1333,21 @@ func slugify(input string) string {
 		return "node"
 	}
 	return out
+}
+
+// relLintLocations rebases a violation's locations on workDir as relLintPath
+// does its file, copying them so the run's own result keeps its paths.
+func relLintLocations(v models.Violation, workDir string) models.Violation {
+	if len(v.Locations) == 0 {
+		return v
+	}
+	locations := make([]models.ViolationLocation, len(v.Locations))
+	for i, l := range v.Locations {
+		l.File = relLintPath(l.File, workDir)
+		locations[i] = l
+	}
+	v.Locations = locations
+	return v
 }
 
 func relLintPath(file, workDir string) string {

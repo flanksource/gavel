@@ -8,9 +8,11 @@ import (
 
 	"github.com/dustin/go-humanize"
 	cexec "github.com/flanksource/clicky/exec"
+	"github.com/flanksource/gavel/slots"
 )
 
 type Options struct {
+	Slots   slots.Limits      `json:"-" yaml:"-"`
 	Env     map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
 	Nice    *int              `json:"nice,omitempty" yaml:"nice,omitempty"`
 	CPU     *float64          `json:"cpu,omitempty" yaml:"cpu,omitempty"`
@@ -38,6 +40,9 @@ func (o Options) Merge(override Options) Options {
 	}
 	if override.Timeout != nil {
 		out.Timeout = override.Timeout
+	}
+	if override.Slots.Enabled() {
+		out.Slots = override.Slots
 	}
 	return out
 }
@@ -73,7 +78,7 @@ func (o Options) Validate() error {
 }
 
 func (o Options) Isolated() bool {
-	return o.CPU != nil && *o.CPU > 0 || o.Mem != nil && *o.Mem != "" || o.Timeout != nil && *o.Timeout != ""
+	return o.CPU != nil && *o.CPU > 0 || o.Mem != nil && *o.Mem != "" || !o.Slots.Enabled() && o.Timeout != nil && *o.Timeout != ""
 }
 
 func (o Options) Apply(p *cexec.Process) error {

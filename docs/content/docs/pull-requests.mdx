@@ -1,0 +1,176 @@
+---
+title: "Pull requests"
+description: "Inspect PR checks, reproduce failures, and browse pull requests in the dashboard."
+parent: cli-usage
+order: 20
+---
+
+## Status and verification
+
+Use `pr status` to inspect or follow GitHub Actions state for a pull request. It can resolve the current branch's PR automatically, fall back to the most recent PR, and optionally fetch failed job logs.
+
+This is the fastest command for:
+
+- Checking whether a PR is green
+- Following checks until completion
+- Pulling failed log tails into the CLI
+- Getting the exact command that re-runs the PR's failures locally
+- Seeing exactly which files a conflicting PR conflicts on
+
+A PR that GitHub reports as `CONFLICTING` renders a **Merge conflicts** section naming every conflicting path, how it conflicts, and the commands that clear it:
+
+```
+✖ Merge conflicts main ← feat/widget (2 files)
+├── go.mod (content)
+├── docs/api.md (modify/delete)
+╰── Resolve locally
+    ├── $ git fetch origin main
+    ├── $ git switch feat/widget
+    ╰── $ git rebase origin/main
+```
+
+No GitHub API returns the conflicting paths, so gavel replays the merge locally with `git merge-tree` against the same two commits GitHub merges — the PR head and the base branch's *current* tip. It needs a checkout whose remote points at the PR's repository; without one the section says so rather than showing an empty list. Nothing is written to your working tree, index, or refs.
+
+The exit code is `1` whenever the PR cannot merge — a failing check, a failing job, a failing gavel shard, or a merge conflict — and `0` only when it is clear on all four. A merge conflict is the one signal `--actions` and `--comments` never scope away: it blocks the merge whichever checks you asked about. `--fail-fast` is unaffected; it still stops only on a definitive check or job failure, because a conflict is cleared by pushing a rebased branch rather than by waiting.
+
+When the PR published gavel results, each failing shard renders its failing tests and lint violations plus a **Reproduce locally** block:
+
+```
+└─ ✖ gavel-test  passed: 41 failed: 2  total: 43
+   ├─ Test failures (2)
+   ├─ Lint summary: 3 of 47 violations
+   ├─ Reproduce locally
+   │  $ gavel test --pr 42
+   │  $ gavel lint --pr 42
+   └─ View full results: https://github.com/owner/repo/actions/runs/…
+```
+
+`--pr` downloads every gavel artifact on the PR, merges the shards into `.gavel/pr-<n>.json`, and narrows the run to those failures — the same narrowing `--failed` applies to a local run. It accepts `42`, `#42`, `owner/repo#42`, or a PR URL, and cannot be combined with `--failed` or `--baseline`.
+
+Common workflows:
+
+```bash
+gavel pr status
+gavel pr status 42
+gavel pr status https://github.com/owner/repo/pull/123
+gavel pr status --follow --interval 30s
+gavel pr status --follow --actions 'CI / Test' --fail-fast   # stop the moment Test goes red
+gavel pr status --follow --comments '@coderabbit'            # wait until those threads resolve
+gavel pr status --logs --tail-logs 50
+gavel test --pr 42        # re-run just the tests that failed on PR #42
+gavel lint --pr 42        # re-run just the linters that flagged PR #42
+```
+
+`--follow` gates on the dimensions you filtered on, ANDed together: `--actions` waits for
+the selected checks to reach `COMPLETED`, `--comments` waits for the selected review threads
+to be resolved, and with neither the gate is the whole status rollup. `--fail-fast` returns
+at the first definitive failure (`FAILURE`, `TIMED_OUT`, `STARTUP_FAILURE`) rather than
+holding the watch open for slower checks — useful when a later scan takes minutes longer
+than the check you care about.
+
+A selector that matches nothing is an error under `--follow` too, not a silent success: an
+empty filtered set used to satisfy the gate, so a typo — or a poll issued before GitHub had
+registered a freshly pushed commit's checks — returned exit 0 immediately.
+
+When stderr is not a terminal, each poll prints a one-line heartbeat rather than repainting
+the whole status table; the full report is still printed once, at the end.
+
+#### Fixing a PR with `--ai-fix`
+
+`--ai-fix` hands the status snapshot to an agent through the `pr.fix` prompt. The agent edits files, gavel commits and pushes each turn to the PR's head branch, and the prompt's `workflow.verify.commands` re-poll `gavel pr status <url>` until the PR is green or `--ai-fix-max-iterations` runs out.
+
+A PR that conflicts with its base is rebased first — never merged. Before the first turn, gavel starts `git rebase` onto the base commit GitHub merges against, which stops on the first conflicting commit. The prompt opens with a **Merge conflicts** section listing the paths GitHub's merge conflicts on. The agent resolves each stop, `git add`s the files and runs `git rebase --continue` until the rebase finishes; gavel commits nothing while a rebase is in progress. Once it has finished, gavel force-pushes the rebased branch with a lease on the head the run started from, so a push someone made in the meantime fails the run instead of being overwritten. Until then, cheap git checks run ahead of the CI poll: no rebase still in progress, the base an ancestor of the new head, no merge commits on the branch, and no conflict markers left — so an unresolved stop is fed back to the agent by name.
+
+Without `--worktree` the fix runs in your checkout, which must be clean and contain the PR head. `--worktree` moves the run into a fresh git worktree branched from the PR head under the user cache directory (`…/gavel/worktrees/<repo>/pr-<n>-<ts>`), so your branch and uncommitted work are never touched. The worktree is removed when the run ends. It is ordinary captain `setup:` isolation, so the same block can be declared under `pr.fix` in `.gavel.yaml` instead.
+
+```bash
+gavel pr status 42 --ai-fix              # fix in the current checkout
+gavel pr status 42 --ai-fix --worktree   # fix in an isolated worktree at the PR head
+```
+
+### Status options
+
+| Flag | Description |
+|------|-------------|
+| `-R` / `--repo` | GitHub repository (`owner/repo`) |
+| `--follow` | Keep watching until the dimensions you filtered on settle (see below) |
+| `--fail-fast` | With `--follow`, return at the first definitive failure instead of waiting for the rest |
+| `--interval` | Poll interval (default: `30s`) |
+| `--logs` | Fetch and include failed job logs (uses extra API quota) |
+| `--tail-logs` | Number of failed log lines to show per step (default: `100`) |
+| `--comments` | Filter review comments by MatchItem patterns over comment ID and `@author`/`@bot` tokens |
+| `--actions` | Filter workflow actions by MatchItem patterns over run/workflow ID, YAML path, workflow name, or job/check name |
+
+## List and dashboard
+
+List pull requests with filtering, a live browser dashboard, and macOS menu bar indicator.
+
+```bash
+gavel pr list
+gavel pr list --ui                            # serve the live dashboard
+gavel pr list --open                          # serve and open the dashboard in the browser
+gavel pr list --menu-bar                      # macOS menu bar status indicator
+gavel pr list --state merged --since 30d
+gavel pr list --any --status                  # all authors, with check status
+gavel pr list owner/repo another/repo         # specific repos
+gavel pr list --all --org myorg               # all repos in org
+```
+
+| Flag | Description |
+|------|-------------|
+| `--author` | GitHub username (default: `@me`) |
+| `--since` | Show PRs updated since (e.g. `7d`, `now-30d`, `2024-01-01`) |
+| `--state` | PR state: `open` (default), `closed`, `merged`, `all` |
+| `--all` | List PRs across all repos in the org |
+| `--any` | Show PRs from all authors |
+| `--bots` | Include bot-authored PRs |
+| `--org` | GitHub org for `--all` (auto-detected from git remote) |
+| `--limit` | Maximum PRs to return (default: `50`) |
+| `--status` | Show GitHub Actions check status counts |
+| `--logs` | Fetch failed job log tails (requires `--status -v`) |
+| `--url` | Show PR URL instead of number |
+| `--ui` | Serve the PR dashboard with live updates |
+| `--open` | Serve and open the PR dashboard in the browser |
+| `--menu-bar` | Show macOS menu bar status indicator; warn and keep serving if menu bar support was not compiled in |
+| `--interval` | Poll interval for `--ui`/`--menu-bar` (default: `60s`) |
+| `--addr` | Interface to bind the `--ui`/`--menu-bar` server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
+| `--port` | UI port (default: `9092`, `0` to auto-scan upward for a free port) |
+
+The dashboard opens a browser only with `--open`. This also applies to `gavel serve`: use `gavel serve --open` to open it at startup. Menu bar builds require macOS, `CGO_ENABLED=1`, and `-tags gavel_menubar` (or `task build:prod`).
+
+See [Azure DevOps support](/docs/azure-devops-pr-support) and [PR-linked TODOs](/docs/pr-todos).
+
+## Inspect an exact Actions run or job
+
+Paste the run or job URL from GitHub Actions. These targets work for pushes to the default branch and for runs without an associated pull request.
+
+```bash
+gavel pr status https://github.com/acme/widgets/actions/runs/123/job/456 --logs
+gavel pr status https://github.com/acme/widgets/actions/runs/123 --follow
+```
+
+A job URL selects only that job, including a job from an earlier run attempt. Other jobs do not delay its completion or change its exit status. A run URL selects every job in the run. `--logs` includes failed, timed out, and cancelled job logs; `--follow` waits for the selected target to finish. Failures and cancellations return a nonzero exit code.
+
+Use `--head-sha HEAD` to require the workflow's source commit to match the local checkout. PR-only options `--whole-pr`, `--comments`, `--ai-fix`, `--worktree`, and `--rules` require a PR target.
+
+For a GitHub PR whose merge state is blocked, use `gavel pr status 123 --rules --json` to include effective branch rulesets. JSON status also includes auto-merge state and legacy branch protection requirements when configured. Inspect these requirements alongside checks and review threads before merging.
+
+## Verify checks after merging
+
+Query a specific repository's default branch to find its current source commit and check URLs. JSON output includes `headSha` and `checks`, so verification can distinguish the merged commit from the PR's earlier checks.
+
+```bash
+gavel pr list --ci acme/widgets --json
+```
+
+Without repository arguments, `--ci` lists default-branch status across the selected organization. `--since` limits repositories by their most recent push and `--failed-only` keeps failing repositories.
+
+## Resolve an addressed review thread
+
+After addressing a review finding, obtain its native `threadId` from `gavel pr status 123 --json`, then resolve it on that explicit PR:
+
+```bash
+gavel pr resolve 123 --thread PRRT_example --repo acme/widgets
+```
+
+Gavel checks that the thread belongs to the selected PR and that the current viewer can resolve it before sending the mutation. An already resolved thread succeeds without another mutation.

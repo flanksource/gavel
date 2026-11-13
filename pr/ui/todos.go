@@ -54,7 +54,11 @@ func (s *Server) handleTodoItem(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTodosList(w http.ResponseWriter, r *http.Request) {
 	source := todoSourceFromRequest(r)
-	provider, source, err := s.todoProviderContext(r.Context(), source)
+	if source.Dir == "" && r.URL.Query().Has("exclude") {
+		s.handleOrgTodosList(w, r)
+		return
+	}
+	provider, source, err := s.todoReadProviderContext(r.Context(), source)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -157,7 +161,7 @@ func (s *Server) resolveTodoGetReference(
 	if ownerDir == "" {
 		return nil, source, nil, "", fmt.Errorf("resolved session %q has no owning workspace path", ref)
 	}
-	provider, source, err = s.todoProviderContext(ctx, todoSource{Dir: ownerDir})
+	provider, source, err = s.todoReadProviderContext(ctx, todoSource{Dir: ownerDir})
 	if err != nil {
 		return nil, source, nil, "", err
 	}
@@ -176,7 +180,7 @@ func (s *Server) resolveTodoGetReference(
 func (s *Server) resolveTodoReference(ctx context.Context, requested todoSource, ref string) (todos.Provider, todoSource, *types.TODO, error) {
 	globalLookup := strings.TrimSpace(requested.Dir) == ""
 	if !globalLookup {
-		provider, source, err := s.todoProviderContext(ctx, requested)
+		provider, source, err := s.todoReadProviderContext(ctx, requested)
 		if err != nil {
 			return nil, source, nil, err
 		}
@@ -196,7 +200,7 @@ func (s *Server) resolveTodoReference(ctx context.Context, requested todoSource,
 	if ownerDir == "" {
 		return nil, requested, nil, fmt.Errorf("resolved TODO %q has no owning workspace path", ref)
 	}
-	provider, source, err := s.todoProviderContext(ctx, todoSource{Dir: ownerDir})
+	provider, source, err := s.todoReadProviderContext(ctx, todoSource{Dir: ownerDir})
 	if err != nil {
 		return nil, source, nil, err
 	}
@@ -252,6 +256,9 @@ var authorizeTodoDir = func(dir string) (string, error) {
 }
 
 func (s *Server) todoProviderContext(ctx context.Context, source todoSource) (todos.Provider, todoSource, error) {
+	if s.workspaceData != nil && !s.hosted {
+		return s.todoReadProviderContext(ctx, source)
+	}
 	if s.workspaces != nil {
 		workspace, err := s.workspaces.Resolve(ctx, s.orgID(), source.Dir)
 		if err != nil {
@@ -298,6 +305,20 @@ var openTodoProvider = func(ctx context.Context, dir string) (todos.Provider, er
 	return todoruntime.Open(ctx, project.WorkspaceOptions())
 }
 
+func (s *Server) todoReadProviderContext(ctx context.Context, source todoSource) (todos.Provider, todoSource, error) {
+	if s.workspaceData != nil {
+		if source.Dir == "" && !s.hosted {
+			source.Dir = s.todoWorkDir()
+		}
+		provider, err := s.workspaceReadProvider(ctx, source.Dir)
+		if err == nil {
+			source.Dir = provider.Workspace().RootPath
+		}
+		return provider, source, err
+	}
+	return s.todoProviderContext(ctx, source)
+}
+
 var openGlobalTodoProvider = func(ctx context.Context) (todos.GlobalReferenceProvider, error) {
 	return todoruntime.OpenGlobal(ctx)
 }
@@ -305,6 +326,9 @@ var openGlobalTodoProvider = func(ctx context.Context) (todos.GlobalReferencePro
 // globalTodoProvider resolves todo references across the Server's workspaces: the
 // organization's repositories in hosted mode, the host's projects otherwise.
 func (s *Server) globalTodoProvider(ctx context.Context) (todos.GlobalReferenceProvider, error) {
+	if s.workspaceData != nil {
+		return todoruntime.NewGlobalForOrg(s.workspaceData.db, s.orgID())
+	}
 	if s.workspaces != nil {
 		return todoruntime.NewGlobalForOrg(s.orgDB, s.orgID())
 	}

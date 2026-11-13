@@ -12,6 +12,7 @@ import (
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/sdk/status"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,8 +24,9 @@ func TestMigrationMovesInlineJobLogsToTheBlobStore(t *testing.T) {
 	t.Setenv(database.LegacyEnvDSN, "")
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
-	cacheDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", cacheDir)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	cacheDir, err := status.CacheDir()
+	require.NoError(t, err)
 	ctx := t.Context()
 
 	migrated, err := database.Open(ctx, database.WithMigrations())
@@ -52,7 +54,7 @@ func TestMigrationMovesInlineJobLogsToTheBlobStore(t *testing.T) {
 	require.NoError(t, db.Raw(`SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'job_log_caches' AND column_name = 'logs_gz'`).Scan(&columns).Error)
 	assert.Zero(t, columns, "logs_gz is dropped")
 
-	stored, err := os.Open(filepath.Join(cacheDir, "gavel", "blobs", "orgs", tenant.LocalOrgID.String(), "joblogs", "7.log.gz"))
+	stored, err := os.Open(filepath.Join(cacheDir, "blobs", "orgs", tenant.LocalOrgID.String(), "joblogs", "7.log.gz"))
 	require.NoError(t, err)
 	defer stored.Close()
 	reader, err := gzip.NewReader(stored)

@@ -71,7 +71,9 @@ export function SearchTrigger({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSelectPR, onSelectTodo, onOpenUUID }: {
+export function CommandPalette({ open, onClose, prs, prsLoading = false, prError = '', todos, todosLoading, onSelectPR, onSelectTodo, onOpenUUID }: {
+  prsLoading?: boolean;
+  prError?: string;
   open: boolean;
   onClose: () => void;
   prs: PRItem[];
@@ -209,7 +211,7 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
           <div className="py-8 text-center text-sm text-muted-foreground">
             Type to search pull requests and todos, or paste a Todo or session UUID.
           </div>
-        ) : rows.length === 0 && !todosLoading ? (
+        ) : rows.length === 0 && !todosLoading && !prsLoading && !prError ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
             No pull requests, todos, or sessions match “{query.trim()}”.
           </div>
@@ -234,6 +236,8 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
                 ))}
               </Group>
             )}
+            {prError && <div role="alert" className="px-2 py-2 text-xs text-destructive">{prError}</div>}
+            {prsLoading && <div className="px-2 py-2 text-xs text-muted-foreground">Loading pull requests…</div>}
             {todosLoading && (
               <div className="px-2 py-2 text-xs text-muted-foreground">
                 <Spinner className="mr-1" />

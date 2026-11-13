@@ -11,6 +11,7 @@ const siblingExports = {
   '.': { import: './dist/index.js' },
   './components': './dist/components.js',
   './styles.css': './dist/styles.css',
+  './mdx-editor.css': './dist/mdx-editor.css',
 };
 
 vi.mock('node:fs', async importOriginal => {
@@ -40,18 +41,20 @@ describe('Clicky UI dependency resolution', () => {
       { find: /^@flanksource\/clicky-ui$/, replacement: resolve(localPackage, 'src/index.ts') },
       { find: /^@flanksource\/clicky-ui\/components$/, replacement: resolve(localPackage, 'src/components.ts') },
       { find: /^@flanksource\/clicky-ui\/styles\.css$/, replacement: resolve(localPackage, 'dist/styles.css') },
+      { find: /^@flanksource\/clicky-ui\/mdx-editor\.css$/, replacement: resolve(localPackage, 'dist/mdx-editor.css') },
     ]));
   });
 
-  it('keeps production builds on the published package even with a sibling checkout', async () => {
-    expect(await aliases('build')).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ replacement: expect.stringContaining('clicky-ui/packages/ui') }),
-    ]));
+  it('uses the same local exports for production builds and the dev UI', async () => {
+    expect(await aliases('build')).toEqual(await aliases('serve'));
   });
 
   it('serves the published package when the sibling checkout is absent', async () => {
     vi.mocked(existsSync).mockReturnValue(false);
     expect(await aliases('serve')).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ replacement: expect.stringContaining('clicky-ui/packages/ui') }),
+    ]));
+    expect(await aliases('build')).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ replacement: expect.stringContaining('clicky-ui/packages/ui') }),
     ]));
   });

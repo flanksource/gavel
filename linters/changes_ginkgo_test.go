@@ -20,7 +20,36 @@ var _ = Describe("Changed-file task verdicts", func() {
 		Expect(result.Violations).To(BeEmpty())
 		Expect(task.IsOk()).To(BeTrue())
 	})
+
+	DescribeTable("passes a task whose findings are all info, and warns on any above it",
+		func(severities []models.ViolationSeverity, ok bool) {
+			GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+			opts := RunOptions{WorkDir: GinkgoT().TempDir()}
+			task := clicky.StartTask[*LinterResult]("severity findings", func(ctx commonsContext.Context, task *clicky.Task) (*LinterResult, error) {
+				return RunLinterWithTask(ctx, task, severityTestLinter{severities: severities}, opts), nil
+			})
+			result, err := task.GetResult()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Violations).To(HaveLen(len(severities)))
+			Expect(task.IsOk()).To(Equal(ok))
+		},
+		Entry("info only", []models.ViolationSeverity{models.SeverityInfo, models.SeverityInfo}, true),
+		Entry("info and a warning", []models.ViolationSeverity{models.SeverityInfo, models.SeverityWarning}, false),
+	)
 })
+
+type severityTestLinter struct {
+	dryRunLinter
+	severities []models.ViolationSeverity
+}
+
+func (l severityTestLinter) Run(commonsContext.Context, *clicky.Task) ([]models.Violation, error) {
+	var out []models.Violation
+	for _, severity := range l.severities {
+		out = append(out, models.Violation{File: "rule.xml", Severity: severity})
+	}
+	return out, nil
+}
 
 type scopeTestLinter struct{ dryRunLinter }
 

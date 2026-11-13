@@ -14,18 +14,29 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// Routes the chooser's two reads: the unfiltered org list and the
+// hidden-github-orgs filter whose values decide which of them are hidden.
+function stubOrgFetch({ orgs = [], hidden = [] }: { orgs?: { login: string; avatarUrl: string }[]; hidden?: string[] } = {}) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    const body = url === '/api/orgs' ? orgs
+      : url === '/api/filters/hidden-github-orgs' ? { name: 'hidden-github-orgs', kind: 'github-org', values: hidden }
+        : undefined;
+    if (body === undefined) throw new Error(`unexpected request: ${url}`);
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 describe('OrgChooser', () => {
-  it('loads the full organization list once and reuses it when reopened', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => [{ login: 'acme', avatarUrl: '' }],
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  it('loads the full organization list and the hidden-org filter once and reuses them when reopened', async () => {
+    const fetchMock = stubOrgFetch({ orgs: [{ login: 'acme', avatarUrl: '' }] });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const config = { all: false, org: '', repos: [], ignoredOrgs: [] } as SearchConfig;
+    const config = { all: false, org: '', repos: [] } as SearchConfig;
     render(
       <QueryClientProvider client={queryClient}>
-        <OrgChooser config={config} projects={projects} onChange={vi.fn()} onSetProjectHidden={vi.fn()} />
+        <OrgChooser config={config} projects={projects} onChange={vi.fn()} onSetProjectHidden={vi.fn()} onSetOrgHidden={vi.fn()} />
       </QueryClientProvider>,
     );
 
@@ -36,14 +47,55 @@ describe('OrgChooser', () => {
     fireEvent.click(trigger);
     await waitFor(() => expect(screen.getByText('acme')).toBeTruthy());
 
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock).toHaveBeenCalledWith('/api/orgs?include-ignored=1', {
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).sort()).toEqual([
+      '/api/filters/hidden-github-orgs',
+      '/api/orgs',
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith('/api/orgs', {
       signal: expect.any(AbortSignal),
     });
   });
 
+  it('lists an org in the hidden-github-orgs filter only under Manage hidden and unhides it through the callback', async () => {
+    stubOrgFetch({ orgs: [{ login: 'acme', avatarUrl: '' }, { login: 'noisy', avatarUrl: '' }], hidden: ['noisy'] });
+    const onSetOrgHidden = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <OrgChooser config={{ repos: [] }} projects={projects} onChange={vi.fn()} onSetProjectHidden={vi.fn()} onSetOrgHidden={onSetOrgHidden} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTitle('Switch project / GitHub scope'));
+    expect(await screen.findByRole('button', { name: 'Select acme organization' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Select noisy organization' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Manage hidden \(1\)/ }));
+    fireEvent.click(screen.getByTitle('Unhide noisy'));
+    expect(onSetOrgHidden).toHaveBeenCalledExactlyOnceWith('noisy', false);
+  });
+
+  it('hides an org through the callback and drops back to @me when it was the active scope', async () => {
+    stubOrgFetch({ orgs: [{ login: 'acme', avatarUrl: '' }] });
+    const onSetOrgHidden = vi.fn();
+    const onChange = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <OrgChooser config={{ all: true, org: 'acme', repos: [] }} projects={projects} onChange={onChange} onSetProjectHidden={vi.fn()} onSetOrgHidden={onSetOrgHidden} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTitle('Switch project / GitHub scope'));
+    await screen.findByRole('button', { name: 'Select acme organization' });
+    fireEvent.click(screen.getByTitle('Hide acme from this list'));
+
+    expect(onSetOrgHidden).toHaveBeenCalledExactlyOnceWith('acme', true);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ org: '', all: false, repos: [] });
+  });
+
   it('selects a project as the active repo and workspace scope', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    stubOrgFetch();
     const onChange = vi.fn();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -53,6 +105,7 @@ describe('OrgChooser', () => {
           projects={projects}
           onChange={onChange}
           onSetProjectHidden={vi.fn()}
+          onSetOrgHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -69,7 +122,7 @@ describe('OrgChooser', () => {
   });
 
   it('selects every configured project and its repositories', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    stubOrgFetch();
     const onChange = vi.fn();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -79,6 +132,7 @@ describe('OrgChooser', () => {
           projects={projects}
           onChange={onChange}
           onSetProjectHidden={vi.fn()}
+          onSetOrgHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -95,7 +149,7 @@ describe('OrgChooser', () => {
   });
 
   it('shows the combined project scope as active', () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    stubOrgFetch();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
@@ -104,6 +158,7 @@ describe('OrgChooser', () => {
           projects={projects}
           onChange={vi.fn()}
           onSetProjectHidden={vi.fn()}
+          onSetOrgHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -112,7 +167,7 @@ describe('OrgChooser', () => {
   });
 
   it('keeps personal scope active until the project catalog loads', () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    stubOrgFetch();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
@@ -121,6 +176,7 @@ describe('OrgChooser', () => {
           projects={[]}
           onChange={vi.fn()}
           onSetProjectHidden={vi.fn()}
+          onSetOrgHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -129,7 +185,7 @@ describe('OrgChooser', () => {
   });
 
   it('keeps local-only projects selectable for todo scoping', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    stubOrgFetch();
     const onChange = vi.fn();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -139,6 +195,7 @@ describe('OrgChooser', () => {
           projects={projects}
           onChange={onChange}
           onSetProjectHidden={vi.fn()}
+          onSetOrgHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -156,10 +213,7 @@ describe('OrgChooser', () => {
   });
 
   it('clears the project scope when a GitHub organization is selected', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => [{ login: 'acme', avatarUrl: '' }],
-    }));
+    stubOrgFetch({ orgs: [{ login: 'acme', avatarUrl: '' }] });
     const onChange = vi.fn();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -169,6 +223,7 @@ describe('OrgChooser', () => {
           projects={projects}
           onChange={onChange}
           onSetProjectHidden={vi.fn()}
+          onSetOrgHidden={vi.fn()}
         />
       </QueryClientProvider>,
     );
@@ -186,16 +241,17 @@ describe('OrgChooser hidden projects', () => {
     { name: 'archive', dir: '/work/archive', repos: ['acme/archive'], hidden: true },
   ];
 
-  function renderChooser({ config, onChange = vi.fn(), onSetProjectHidden = vi.fn() }: {
+  function renderChooser({ config, onChange = vi.fn(), onSetProjectHidden = vi.fn(), onSetOrgHidden = vi.fn() }: {
     config: SearchConfig;
     onChange?: (partial: Partial<SearchConfig>) => void;
     onSetProjectHidden?: (name: string, hidden: boolean) => void;
+    onSetOrgHidden?: (login: string, hidden: boolean) => void;
   }) {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    stubOrgFetch();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={queryClient}>
-        <OrgChooser config={config} projects={withHidden} onChange={onChange} onSetProjectHidden={onSetProjectHidden} />
+        <OrgChooser config={config} projects={withHidden} onChange={onChange} onSetProjectHidden={onSetProjectHidden} onSetOrgHidden={onSetOrgHidden} />
       </QueryClientProvider>,
     );
     fireEvent.click(screen.getByTitle('Switch project / GitHub scope'));

@@ -1,0 +1,42 @@
+---
+title: Connections
+description: Manage layered files and encrypted organization connections.
+parent: cli-usage
+order: 30
+---
+
+# Connections
+
+`gavel connections` exposes the commons-db connection CLI. File mode is the default and reads the global Flanksource connections, Gavel connections, then `.connections` under `--cwd`. Later layers override earlier definitions. New files are created in the global layer; edits update their owning file.
+
+```bash
+gavel connections list
+gavel connections add http --name example --url https://example.com
+gavel connections --source=db list
+```
+
+Database mode uses Gavel's configured PostgreSQL database and built-in local organization. Initialize the database through the existing Gavel server migration workflow before using it. Connection identity and type are searchable metadata; URL, username, password, certificate and properties are encrypted with commons-db SecretKeeper. Connection names are unique within each organization and namespace.
+
+On macOS, the default KEK lives in Keychain under service `com.flanksource.gavel`, account `connections-kek:v1`. An interactive database operation prompts to initialize a missing KEK, then resumes. Declining does not create a key or connection. Locked, denied or corrupt entries fail instead of being replaced. An unattended process must have an existing accessible key or an explicitly configured keeper.
+
+```bash
+gavel connections kek init
+```
+
+`--secret-keeper-connection` overrides `GAVEL_SECRET_KEEPER_CONNECTION`, which overrides platform defaults. Configure a commons-db KMS connection reference from the layered connection files or a `local_kms` keeper. Bootstrap KMS credentials must remain outside the encrypted database catalog. On other platforms, the default derives a separate connections encryption key from `GAVEL_SECRET_KEY` (at least 32 random bytes, base64 encoded). Use a secret manager to provision configuration; do not put keys in command history.
+
+Preserve the KEK with database backups. Creating a new key does not recover records encrypted with a lost key. Restarts reuse the stored key; changing it causes existing records to fail with an explicit key mismatch. Key rotation and export are not provided by these commands.
+
+For hosted connections, log in and select an organization first:
+
+```bash
+gavel login --server https://gavel.example.com
+gavel org use example
+gavel connections --source=server list
+gavel connections --source=server add http --name example --url https://example.com
+gavel connections --source=server edit example --url https://api.example.com
+gavel connections --source=server validate example
+gavel connections --source=server delete example
+```
+
+Hosted clients send the existing bearer token and selected organization to `/api/connections`. Members can list redacted metadata; administrators can create, edit, validate and delete. Validation runs on the server. A hosted client never creates a local KEK to repair a server error. GitHub App installation links and token caching continue to use their existing storage.

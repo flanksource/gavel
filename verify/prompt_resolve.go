@@ -11,6 +11,7 @@ import (
 
 type PromptResolveOptions struct {
 	Base          api.Spec
+	Context       *api.Spec
 	DefaultPrompt string
 	FileSource    *string
 	Data          map[string]any
@@ -70,6 +71,9 @@ func (s PromptSpec) Layers(opts PromptResolveOptions) ([]api.SpecLayer, error) {
 	}
 	if err := addPrompt("built-in "+opts.Name+" prompt", opts.DefaultPrompt); err != nil {
 		return nil, err
+	}
+	if opts.Context != nil {
+		layers = append(layers, api.PromptSpecLayer(opts.Name+" lifecycle", *opts.Context))
 	}
 	if s.File != "" {
 		var source string

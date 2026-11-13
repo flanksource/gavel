@@ -55,7 +55,7 @@ func (k AIKind) Execute(ctx context.Context, step *fixtures.StepContext) (fixtur
 		opts.Runtime = &runtime
 	}
 	if plain {
-		return runAIPrompt(ctx, test, opts)
+		return runAIPrompt(ctx, step, test, opts)
 	}
 	result := k.grade(test, opts)
 	outputs := map[string]any{"passed": result.Status == task.StatusPASS}
@@ -100,8 +100,13 @@ func applyAIConfig(step *fixtures.StepContext) (fixtures.FixtureTest, error) {
 
 // runAIPrompt sends a plain prompt and exposes the reply as `output.text`
 // (and `output.data` for structured output). Its verdict is the step's `cel:`.
-func runAIPrompt(ctx context.Context, test fixtures.FixtureTest, opts fixtures.RunOptions) (fixtures.StepOutcome, error) {
+// The prompt is recorded on the step before it is sent and the reply as its
+// stdout, so a reply the step then fails on is still shown.
+func runAIPrompt(ctx context.Context, step *fixtures.StepContext, test fixtures.FixtureTest, opts fixtures.RunOptions) (fixtures.StepOutcome, error) {
 	now := time.Now()
+	if err := step.SetDetail("prompt", map[string]any{"prompt": test.AIStep.Prompt}); err != nil {
+		return fixtures.StepOutcome{}, err
+	}
 	runtime, config, err := resolveAISpec(test, opts, "fixture.prompt", api.Prompt{User: test.AIStep.Prompt, Source: "fixtures.ai-prompt"})
 	if err != nil {
 		return fixtures.StepOutcome{}, fmt.Errorf("resolve AI fixture runtime: %w", err)
@@ -118,6 +123,7 @@ func runAIPrompt(ctx context.Context, test fixtures.FixtureTest, opts fixtures.R
 	if resp == nil {
 		return fixtures.StepOutcome{}, fmt.Errorf("ai prompt returned no response")
 	}
+	fmt.Fprint(step.Stdout(), resp.Text)
 	output := map[string]any{"text": resp.Text}
 	if resp.StructuredData != nil {
 		if output["data"], err = fixtures.PlainValue(resp.StructuredData); err != nil {

@@ -10,12 +10,18 @@ func runNodesIsolated(ctx context.Context, nodes []*FixtureNode, opts RunOptions
 	if opts.Evaluator != nil || opts.Progress != nil || opts.Traces != nil || opts.Scope != nil {
 		return nil, nil, fmt.Errorf("fixture isolation cannot serialize an evaluator, progress callback, armed traces, or fixture scope")
 	}
+	// The worker prepares the document's setup and resolves step connections
+	// itself (RunNodes), so a host resolver it never receives would leave both
+	// resolving against gavel's own store instead.
+	if opts.Connections != nil {
+		return nil, nil, fmt.Errorf("fixture isolation cannot serialize a host connection resolver (RunOptions.Connections); run without process isolation")
+	}
 	if opts.Runtime != nil {
 		runtime := *opts.Runtime
 		opts.ResolveSpec = func(context.Context) (api.ResolveSpecOptions, error) { return runtime, nil }
 	}
-	carrier := &Runner{options: RunnerOptions{Context: ctx, WorkDir: opts.WorkDir, ExecutablePath: opts.ExecutablePath, ProcessRuntime: opts.ProcessRuntime, Spec: opts.Spec, ResolveSpec: opts.ResolveSpec, ProgressSink: ProgressSinkFromContext(ctx)}}
-	result, err := carrier.runWorkerRequest(workerRequest{Options: carrier.options, Nodes: nodes, NodeOptions: &opts})
+	carrier := &Runner{options: RunnerOptions{Context: ctx, WorkDir: opts.WorkDir, ExecutablePath: opts.ExecutablePath, ProcessRuntime: opts.ProcessRuntime, Spec: opts.Spec, ResolveSpec: opts.ResolveSpec, ProgressSink: ProgressSinkFromContext(ctx), Prompter: opts.Prompter}}
+	result, err := carrier.runWorkerRequest(workerRequest{Options: carrier.options, Nodes: nodes, NodeOptions: &opts, NodeParams: opts.Params})
 	if result == nil {
 		return nil, carrier.workerSnapshot, err
 	}

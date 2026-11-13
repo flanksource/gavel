@@ -1,0 +1,130 @@
+---
+title: Query
+description: Run a database query, turn its rows into lint findings, and gate later steps on the result.
+parent: fixture-step-reference
+order: 11
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+
+Use the `query` step to run a commons-db query against a connection. Its rows become step outputs, and its `findings:` turn rows into lint violations that render in the same lint UI and JSON as `gavel lint`.
+
+## Example
+
+```yaml
+kind: Fixture
+name: Oversized activities
+params:
+  type: object
+  properties:
+    minSize: {type: integer, minimum: 1, default: 20, title: Smallest size to report}
+steps:
+  - id: inspect
+    kind: query
+    connection: {type: sqlite, url: "file::memory:"}
+    query: >-
+      SELECT 'a1' AS guid, 10 AS size UNION ALL SELECT 'a2', 20 UNION ALL SELECT 'a3', 30
+    findings:
+      when: row.size >= params.minSize
+      severity: "row.size >= 30 ? 'warning' : 'info'"
+      message: "{{.row.guid}} holds {{.row.size}} KB"
+      locations: ["entity://Activity/{{.row.guid}}"]
+  - id: report
+    kind: query
+    if: inspect.rowCount == 3
+    connection: {type: sqlite, url: "file::memory:"}
+    query: SELECT count(*) AS n FROM (SELECT 1 UNION ALL SELECT 2) WHERE 1 <= {{.params.min}}
+    params: {min: 1}
+    cel: row.n == 2 && inspect.findings.size() == 2
+```
+
+Save it as `query.fixture.yaml` and run `gavel fixtures query.fixture.yaml`, or `gavel fixtures query.fixture.yaml --param minSize=30` to report only `a3`. `inspect` warns with two findings, and `report` still runs: a warned step records its outputs and exports and evaluates its `cel:`.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+The database the connection points at must be reachable from the fixture's execution environment. Named connections come from `gavel connections` (the shared and gavel layers) and the fixture directory's `.connections/`.
+
+</Prerequisites>
+
+- **`query`** is the query text, an inline commons-db profile body (`{query, params, columns, provider, …}`), or `{profile: <name>, params}` for a stored profile. Stored profiles are read from the fixture directory's `.profiles/`, then `~/.config/gavel/profiles`, then the host's profile store.
+- **`connection`** is a catalog name, a `connection://` reference, or an inline commons-db connection (`type`, `url`, `username`, `password`, each a string or `{valueFrom: …}`, which is hydrated). A host such as oipa-cli answers names first through its own resolver. A step-level `connection` overrides an inline profile's `provider.connection`.
+- **`params`** are bound by the provider as real query arguments wherever the query names `{{.params.<name>}}` or `$(.params.<name>)`. They are never pasted into the text. Inside `query`, `.params` is the step's own `params`. Elsewhere in the fixture it is the `params:` form.
+- **`database`** runs against another database on the connection's server (the SQL provider's `database` option), for example `database: "{{.target.database}}"` after a database picker form. It overrides the connection's own database and a profile's `provider.options.database`. A sqlite connection refuses it.
+- **`limit`** caps the rows read. A query with more rows reports `truncated: true`.
+- **`autoDiagnose`** (default `10s`; `0s` turns it off; `-1` samples from the start) is how long a statement runs before gavel samples its server session every 2s for state, CPU, IO, waits and blocking — see [Live detail](#live-detail). Postgres and SQL Server only.
+
+Statements run as written. The step makes no read-only or write distinction; restrict writes through the connection's credentials.
+
+## Live detail
+
+While the step runs, the test UI (`gavel fixtures --ui`) shows its Query section and updates it in place as the step progresses:
+
+- the connection's name and type, with its `host`, `user` and `db` as badges;
+- the query as authored (Template) and, once issued, the statement with its params bound (SQL), the params and the bound arguments;
+- each batch of a SQL program as it ends, with the rows it changed;
+- the server session the statement runs on, as a badge: `pid` (Postgres `pg_backend_pid()`), `spid` (SQL Server `@@SPID`), `conn` (MySQL `CONNECTION_ID()`) or the ClickHouse `query` id, with the server name;
+- once the statement has run for `autoDiagnose`, a diagnose panel streaming that session's activity every 2s: state, elapsed, CPU, logical and physical reads, writes, memory, wait type and resource, and the session blocking it. Postgres reports no per-session CPU, IO or memory, so those tiles are hidden. The samples are recorded under `diagnose` in the step's query details (the latest 100; `diagnoseDropped` counts the rest).
+
+On SQL Server the sampler reads `sys.dm_exec_requests` from a second connection, which sees another session only with `VIEW SERVER STATE` (`GRANT VIEW SERVER STATE TO <login>`). Without it, or on any other sampling failure, the step records `diagnoseError`, prints it on its output and stops sampling; the query itself still runs to completion.
+
+Server messages — `PRINT`, `RAISERROR` — are the step's output: each streams into the log viewer as it arrives, SQL Server's ANSI warnings (`Warning: …`) on Stderr and the rest on Stdout; the Response shows only result sets. The finished step keeps the same Query section and output — including a step the database rejected, so a failed query still shows the SQL it issued, the arguments it bound and the messages it printed before the error. SQL Server buffers plain `PRINT` output until something flushes it, often the end of the batch. For progress that shows while a long batch runs, use `RAISERROR('…', 0, 1) WITH NOWAIT`, which flushes at once:
+
+```sql
+RAISERROR('purge: listing the looping groups', 0, 1) WITH NOWAIT
+```
+
+### Progress from stored routines
+
+The repository's [database progress examples](https://github.com/flanksource/gavel/blob/main/examples/sql-progress.md) include YAML fixtures and adjacent SQL scripts for a PostgreSQL function and a SQL Server stored procedure. Each processes five one-second batches, streams `::progress::0/5` through `5/5`, updates `::description` and `::status`, and returns a count checked with CEL.
+
+```bash
+./.bin/gavel fixtures examples/postgres-progress.fixture.yaml --ui
+./.bin/gavel fixtures examples/sqlserver-progress.fixture.yaml --ui
+```
+
+Each fixture opens the existing connection picker, filtered to its database engine. Select a saved connection, or supply `--param connection=<name>` to use it without prompting. Both routines are session-local and disappear when the query connection closes. PostgreSQL forwards raw `RAISE NOTICE` messages; SQL Server flushes severity-zero `RAISERROR` messages with `WITH NOWAIT`. Neither fixture provisions a database or requires a database CLI. Keep each fixture next to its SQL script when copying it.
+
+Workflow commands update the running step and are removed from its stdout; ordinary batch-completion messages remain in the output. SQL Server uses a procedure because its functions cannot emit `RAISERROR` messages.
+
+## Results and findings
+
+Outputs are `rows`, `row` (the first row), `rowCount`, `columns`, `resultSets`, `connection` (its `name` and `type` and, for a SQL connection, the `host`, `port`, `user` and `database` the driver opens — `database:` when the step switches database, the file path for sqlite — never the password) and `findings`, plus `session` on a SQL server connection — `engine`, `sessionId` (0 for ClickHouse), `queryId`, `server`, `database`, `user` — so a `cel:` can read `session.sessionId`. The same `connection` map is recorded in the step's query details beside the template, issued SQL and params.
+
+`resultSets` is every result set the query returned, in the order the server sent them across batches: a list of row lists. A plain SELECT has one, equal to `rows`. A SQL program (an `EXEC`, several statements or GO-separated batches) can return several, each its own shape, and its `rows`, `row`, `rowCount` and `columns` describe the last one. A procedure that reports one result set per check is read whole through `resultSets`:
+
+```yaml
+cel: size(resultSets) == 2 && resultSets[0].all(r, r.detector == 'large')
+```
+
+`findings:` takes one of two forms. Both produce gavel lint violations (`models.Violation`).
+
+- **A CEL expression** that returns a list of violation maps. Write it over `outputs.rows`, because the CEL environment types step roots as `any` and `rows` alone would not resolve its element fields:
+
+  ```yaml
+  findings: >-
+    outputs.rows.filter(r, r.size >= 20).map(r, {"severity": "error",
+      "message": r.guid + " is " + string(r.size),
+      "locations": ["queries/q.sql:" + string(r.size), {"entity": {"kind": "Policy", "id": r.policy}}]})
+  ```
+
+- **A per-row mapper** with `when` (CEL over `row`; rows where it is false yield nothing), `severity` (`error`, `warning`, `info`, or a CEL expression returning one), `rule` (defaults to the step id), `message`, `code` and `locations`. Its strings are Go templates over `.row`. It maps the rows of every result set in order, and `resultSet` (`.resultSet` in templates) is the 0-based index of the row's set, so one mapper can tell differently shaped sets apart. An error names both, as `findings result set 1 row 3`.
+
+Each location is a `models.ViolationLocation` object (`file`, `line`, `column`, `ref`, `entity: {kind, id, name}`, `url: {url, css | xpath | testId | role+name | text}`, `image: {src, x, y, width, height}`) or one of these shortcuts:
+
+| Shortcut | Parses to |
+| --- | --- |
+| `path/file.sql:42`, `file.sql:42:7` | `{file, line, column}` |
+| `main:rules/data.xml:12:3` (a branch, tag or SHA first) | `{ref, file, line, column}` |
+| `entity://Policy/<id>` | `{entity: {kind, id}}` |
+| `https://app.example/x#css=.row` or `#xpath=//tr` | `{url, css or xpath}` |
+
+An `error` finding fails the step. `warning` and `info` findings only warn it. An unknown severity, a CEL result that is not a list of maps, an unparsable shortcut, or a URL target with two selector strategies is an error that names the element index.
+
+In Markdown, a table row with a `Query` column runs as a query step. It takes its connection from a `Connection` column or the front-matter `connection:` key, and an optional `Findings` column in the CEL form.
+
+## Complete step reference
+
+<FixtureKindReference kind="query" />

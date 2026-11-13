@@ -1,6 +1,12 @@
 package commit
 
-import "github.com/flanksource/gavel/prompts"
+import (
+	_ "embed"
+	"github.com/flanksource/gavel/prompts"
+)
+
+//go:embed commit-squash.prompt
+var squashPrompt string
 
 // Prompts returns the overridable prompt templates owned by the commit package:
 // the PR title/body/branch generator and the AI commit-grouping prompt. Overrides
@@ -10,6 +16,7 @@ import "github.com/flanksource/gavel/prompts"
 // with the other packages' Prompts() to render an editor per prompt.
 func Prompts() []prompts.Prompt {
 	return []prompts.Prompt{
+		{ID: prompts.CommitSquash, Title: "Commit consolidation", Description: "Consolidates commit messages for a logical change.", ConfigPath: prompts.CommitSquash, Default: squashPrompt, UsedBy: []string{"gavel commit --since"}},
 		{
 			ID:          prompts.PRContent,
 			Title:       "PR content",

@@ -1,0 +1,162 @@
+---
+title: Test execution
+description: Discover suites, focus tests, rerun failures, configure process limits, and integrate fixtures.
+order: 3
+---
+
+import DocChildren from "../../src/components/site/DocChildren";
+
+`gavel test` discovers supported test suites, runs their native engines, and combines their results into a report. Run it at a repository root or pass package, directory, or file paths to narrow discovery.
+
+```bash
+gavel test
+gavel test ./pkg/parser
+gavel test go ./pkg/parser -- -run TestParser -count=1
+gavel test --framework vitest ./web
+gavel test --lint
+```
+
+## Frameworks and discovery
+
+<DocChildren parent="test-execution" />
+
+| Framework | Selection | Project input |
+| --- | --- | --- |
+| Go testing | `gavel test go` | Go modules and packages containing tests |
+| Ginkgo | `gavel test ginkgo` | Ginkgo suites in Go packages |
+| Jest | `gavel test jest` | Jest project configuration |
+| Vitest | `gavel test vitest` | Vitest or Vite test configuration |
+| Playwright | `gavel test playwright` | Playwright configuration and test projects |
+| Fixtures | `gavel test --fixtures` | Configured fixture globs |
+
+Use `--framework` to restrict detection, `--ignore` to exclude paths, `--tags` for Go build tags, and `--recursive=false` to restrict recursive discovery. `--dry-run` prints what would run. Inspect the test structure without executing it with `gavel test outline`; inspect recorded timings and pass rates with `gavel test history`.
+
+```bash
+gavel test --dry-run ./pkg
+gavel test outline ./pkg/parser
+gavel test history ./pkg/parser
+```
+
+## Changed and failed runs
+
+```bash
+gavel test --changed
+gavel test --since origin/main
+gavel test --failed
+gavel test --failed .tmp/previous.json
+gavel test --pr 12
+```
+
+`--changed` selects packages affected by local staged, unstaged and nonignored untracked files, or by the runner changeset in CI. `--since` accepts refs, `HEAD` and `staged`. Combined `--lint` runs use the same changeset. See [Changed code](/docs/change-selection) for selection semantics, CI setup and empty selections.
+
+`--failed` reruns failures from an explicit snapshot, from `--baseline` when supplied, or from `.gavel/last.json`. Missing history is an error. `--pr` loads failed-test selection from a PR's Gavel CI artifacts and requires access to that repository.
+
+A test baseline marks matching existing failures as baseline passes so only new failures remain actionable. Use `--failed <snapshot>` without baseline suppression when checking whether a known failure has been repaired. Preserve a snapshot before running another command if you need a stable comparison, since the latest-run pointer changes as runs finish. See [Reporting](/docs/reporting).
+
+## Parallelism and deadlines
+
+`--concurrency` controls concurrent non-Go test commands. Go and Ginkgo packages share one `go test` command by default; Ginkgo `--nodes > 1` is unsupported. Bound the entire run and individual invocations separately:
+
+```bash
+gavel test --concurrency 2 --timeout 30m --test-timeout 10m ./pkg/integration
+gavel test --lint --lint-timeout 2m
+```
+
+| Setting | Scope |
+| --- | --- |
+| `--timeout` / `test.timeout` | The complete test and optional lint run |
+| `--test-timeout` / `test.testTimeout` | The Go test command or each non-Go test invocation |
+| `--lint-timeout` / `test.lintTimeout` | Each linter invocation during `--lint` |
+| `runtime.timeout` | Inherited subprocess deadline, refinable by category and framework |
+
+CLI settings override project defaults. `--timeout` defaults to `20m`; there is no per-package deadline unless `--test-timeout` or `test.testTimeout` sets one; each linter defaults to `5m`. A timeout is reported with the affected results, and Gavel logs a diagnostics block (its goroutines, active tasks and process tree) before killing child processes. A Go test package that passes its deadline is sent `SIGQUIT` first, and the goroutines it prints land on the timed-out attempt as `stack_trace` and `goroutine_count`.
+
+```bash
+gavel test --diagnostics --test-timeout 5m ./pkg/integration
+```
+
+`--diagnostics` (or `--ui`) records the run's process tree, CPU/RSS samples and stack dumps into its trace store, so a hang can be inspected after the run with `gavel ui serve`; `--process-facets` adds each process's open files, sockets, ports and environment. See [Traces, profiling and benchmarks](/docs/traces-profiling-benchmarks) before increasing a deadline.
+
+## Configure native execution
+
+Keep defaults in `.gavel.yaml`. `runtime` applies to all children, `test.runtime` specializes tests, and `test.frameworks.<name>` specializes one engine:
+
+```yaml
+runtime:
+  nice: 5
+  mem: 2GiB
+test:
+  timeout: 20m
+  testTimeout: 5m
+  lintTimeout: 2m
+  runtime:
+    env:
+      CI: "true"
+  frameworks:
+    go:
+      args: ["-count=1"]
+    vitest:
+      runtime:
+        mem: 1GiB
+```
+
+Environment values merge by key; a nonempty native argument list replaces an inherited list. Process CPU and memory limits include descendants. `gavel config --runtime --json` shows resolved settings while exposing environment names rather than their values. All fields are documented in the [Configuration reference](/docs/configuration-reference).
+
+## Fixtures in a test run
+
+```yaml
+fixtures:
+  enabled: true
+  files:
+    - "tests/**/*.fixture.yaml"
+    - "tests/**/*.fixture.md"
+    - "tests/**/*.fixture.json"
+```
+
+```bash
+gavel test --fixtures
+gavel test --fixtures --fixture-files "tests/**/*.fixture.yaml"
+```
+
+The example selects YAML fixtures; use `tests/**/*.fixture.md` to select Markdown instead. Fixture discovery still defaults to Markdown `**/*.fixture.md`, so add YAML and JSON globs explicitly. Use [Fixture overview](/docs/fixtures-overview) for YAML-first examples with Markdown tabs, and [Runner steps](/docs/fixture-runner-steps) to call the test engine from a fixture.
+
+## Live feedback and saved reports
+
+```bash
+gavel test --ui --addr localhost
+gavel test --ui --addr localhost --detach --auto-stop 30m --idle-timeout 5m
+```
+
+The server prints its URL. A detached UI continues in a child process and stops at its wall-clock or idle deadline. Export JSON, HTML, or Markdown with `--format`; a live UI and a report file are separate output choices. See [Reporting](/docs/reporting) for saved snapshots and CI artifacts.
+
+## Command options
+
+| Flag | Description |
+|------|-------------|
+| `[paths...]` | Package paths to test (e.g. `./pkg/...`). If empty, all packages are discovered. |
+| `--lint` | Run linters in parallel with tests |
+| `--ui` | Launch browser with real-time test progress dashboard |
+| `--addr` | Interface to bind the UI server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
+| `--cache` | Skip packages whose content fingerprint matches the last passing run |
+| `--changed` | Run packages affected by local edits, or by the runner changeset in CI |
+| `--since` | Select a ref's merge-base diff plus local edits; `HEAD` selects local edits, `staged` selects staged files |
+| `--changed-files` | Explicit changed files; union with another supplied change selector |
+| `--bench` | Run Go benchmarks matching this regex (`.` runs all) |
+| `--fixtures` | Discover and run fixture files (also enabled via `.gavel.yaml`) |
+| `--fixture-files` | Globs for fixture discovery (default: `**/*.fixture.md`) |
+| `-p` / `--nodes` | Number of parallel Ginkgo nodes (0 = default, -1 = auto) |
+| `-r` / `--recursive` | Recursive test discovery (default: true) |
+| `--show-passed` | Show passed tests in output |
+| `--show-stdout` | When to show stdout: `Never`, `OnFailure` (default), `Always` |
+| `--show-stderr` | When to show stderr: `Never`, `OnFailure` (default), `Always` |
+| `--skip-hooks` | Skip `.gavel.yaml` pre/post hooks (default: skip locally, run in CI) |
+| `--dry-run` | Print test commands without executing |
+| `--timeout` | Wall-clock deadline for the whole test + lint run (default: `20m`) |
+| `--test-timeout` | Deadline per test package; a Go test binary that passes it is `SIGQUIT` for a goroutine dump before it is killed |
+| `--lint-timeout` | Deadline per linter with `--lint` |
+| `--diagnostics` | Record the run's process tree, samples and stack dumps into `.gavel/traces/<run_id>` without `--ui` |
+| `--process-facets` | Also record each process's open files, sockets, ports and environment (needs `--ui` or `--diagnostics`) |
+| `--auto-stop` | With `--ui`, fork a detached UI server that exits after this duration |
+| `--idle-timeout` | With `--ui --auto-stop`, exit the detached UI after no HTTP requests |
+| `--extra-args` | Additional arguments broadcast to every selected test runner |
+| `--work-dir` | Working directory to run tests in |

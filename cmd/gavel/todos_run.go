@@ -27,14 +27,14 @@ import (
 type TodosRunOptions struct {
 	TodoTargetOptions
 	Step           string   `flag:"step" help:"The lifecycle step to run; gavel todos steps lists available steps"`
-	RuntimeProfile string   `flag:"runtime-profile" help:"Retired; use --preset"`
-	Presets        []string `flag:"preset" help:"Runtime preset name or ID; repeat to layer presets"`
-	NoPresets      bool     `flag:"no-presets" help:"Clear prompt and project runtime preset defaults"`
-	MaxBudget      float64  `flag:"max-budget" help:"Maximum budget in USD"`
-	MaxTurns       int      `flag:"max-turns" help:"Maximum conversation turns"`
-	Model          string   `flag:"model" help:"LLM model override as mode:model:effort"`
-	Effort         string   `flag:"effort" help:"Reasoning effort: low, medium, high, or xhigh"`
-	Resume         bool     `flag:"resume" help:"Resume the TODO's prior agent session"`
+	RuntimeProfile string   `flag:"runtime-profile" help:"Retired; use --preset" category:"Model runtime"`
+	Presets        []string `flag:"preset" help:"Runtime preset name or ID; repeat to layer presets" category:"Model runtime"`
+	NoPresets      bool     `flag:"no-presets" help:"Clear prompt and project runtime preset defaults" category:"Model runtime"`
+	MaxBudget      float64  `flag:"max-budget" help:"Maximum budget in USD" category:"Model runtime"`
+	MaxTurns       int      `flag:"max-turns" help:"Maximum conversation turns" category:"Model runtime"`
+	Model          string   `flag:"model" help:"LLM model override as mode:model:effort" category:"Model selection"`
+	Effort         string   `flag:"effort" help:"Reasoning effort: low, medium, high, or xhigh" category:"Model selection"`
+	Resume         bool     `flag:"resume" help:"Resume the TODO's prior agent session" category:"Model runtime"`
 	Force          bool     `flag:"force" help:"Dispatch despite another live run"`
 	ReuseBranch    bool     `flag:"reuse-branch" help:"Continue on the branch the TODO's previous run left behind instead of a fresh worktree (one TODO only)"`
 	Dirty          bool     `flag:"dirty" help:"Carry uncommitted and ignored files into a new worktree"`

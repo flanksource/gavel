@@ -17,17 +17,23 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/git/changeset"
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/workspace"
 )
 
 type Options struct {
 	ConfigDir    string                 `flag:"-" yaml:"-" json:"-"`
+	Dirs         workspace.Dirs         `flag:"-" yaml:"-" json:"-"`
 	Runtime      processruntime.Options `flag:"-" yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Linters      []string               `flag:"linters" yaml:"linters,omitempty" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
 	Ignore       []string               `flag:"ignore" yaml:"ignore,omitempty" help:"Glob patterns to exclude from linting"`
+	Generated    *bool                  `flag:"-" yaml:"generated,omitempty" json:"generated,omitempty"`
+	Tags         []string               `flag:"tags" yaml:"tags,omitempty" json:"tags,omitempty" help:"Build tags for supported linters (comma-separated or repeated)"`
+	Exclude      []string               `flag:"exclude" yaml:"exclude,omitempty" help:"Exclude rule IDs or * patterns, optionally source:rule (repeat or comma-separate); disable native rules where supported"`
 	Triage       bool                   `flag:"triage" yaml:"triage,omitempty" help:"Interactive mode to select violation types to ignore"`
 	Fix          bool                   `flag:"fix" yaml:"fix,omitempty" help:"Enable auto-fixing"`
-	NoCache      bool                   `flag:"no-lint-cache" yaml:"no-lint-cache,omitempty" help:"Disable linter result caching/debounce"`
+	NoCache      bool                   `flag:"no-lint-cache" yaml:"no-lint-cache,omitempty" help:"Make every caching linter re-check its inputs and overwrite its cached results"`
 	Timeout      string                 `flag:"timeout" yaml:"timeout,omitempty" help:"Timeout per linter; overrides runtime.timeout (default 5m)"`
 	WorkDir      string                 `flag:"work-dir" yaml:"work-dir,omitempty" help:"Working directory"`
 	Changed      bool                   `flag:"changed" yaml:"changed,omitempty" help:"Lint local staged/unstaged/untracked files, or the runner changeset in CI"`
@@ -42,8 +48,19 @@ type Options struct {
 	Summary      bool                   `flag:"summary" yaml:"summary,omitempty" help:"Collapse output: group by linter -> rule, show count and the first --summary-limit locations"`
 	SummaryLimit int                    `flag:"summary-limit" yaml:"summary-limit,omitempty" help:"Max example locations shown per rule in --summary mode" default:"5"`
 	Files        []string               `args:"true" yaml:"files,omitempty"`
-	OutputTee    io.Writer              `json:"-" yaml:"-"`
-	Context      context.Context        `json:"-" yaml:"-"`
+	// PassThroughArgs are the CLI arguments after --, appended to the single
+	// selected linter's native command.
+	PassThroughArgs []string        `flag:"-" json:"-" yaml:"-"`
+	OutputTee       io.Writer       `json:"-" yaml:"-"`
+	Context         context.Context `json:"-" yaml:"-"`
+	// Progress, when set, is told done of total linter runs each time one
+	// finishes (total grows while runs are still being scheduled), and once
+	// more when all have finished. Its first error fails the run.
+	Progress func(done, total int) error `flag:"-" json:"-" yaml:"-"`
+	// Registry, when set, is the full set of linters a run may select from in
+	// place of DefaultRegistry; an embedder registers its in-process linters
+	// on DefaultRegistry's result and passes it here.
+	Registry *linters.Registry `flag:"-" json:"-" yaml:"-"`
 
 	AIFix         bool `flag:"ai-fix" yaml:"ai-fix,omitempty" help:"Use lint.fix from Gavel config to repair violations and re-lint until clean; --model/--budget override it"`
 	AIFixMaxIters int  `flag:"ai-fix-max-iterations" yaml:"ai-fix-max-iterations,omitempty" help:"Max AI→re-lint cycles" default:"3"`
@@ -56,7 +73,9 @@ type Options struct {
 	// Explicit flags override lint.fix; Captain supplies any remaining runtime
 	// defaults.
 	captaincli.AIRuntimeOptions
-	Selection *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	Selection    *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	OptionFields map[string]bool      `json:"-" yaml:"-" flag:"-"`
+	Schema       string               `flag:"schema" json:"schema,omitempty" yaml:"schema,omitempty" help:"JSON Schema path or HTTP(S) URL; defaults to document schema declarations"`
 }
 
 func (o Options) Pretty() api.Text {
@@ -66,6 +85,9 @@ func (o Options) Pretty() api.Text {
 	}
 	if len(o.Linters) > 0 {
 		t = t.Append("Linters: ", "text-muted").Append(strings.Join(o.Linters, ","), "text-blue-500").Space()
+	}
+	if len(o.Exclude) > 0 {
+		t = t.Append("Exclude: ", "text-muted").Append(strings.Join(o.Exclude, ","), "text-blue-500").Space()
 	}
 	if o.Fix {
 		t = t.Append("Fix: on", "text-green-500").Space()
@@ -90,13 +112,18 @@ func (o Options) Help() string {
 	return `Run linters on the project.
 
 Automatically detects which linters are available and runs them.
-Supports: golangci-lint, ruff, eslint, oxlint, react-doctor, pyright, tsc, markdownlint, vale, jscpd, betterleaks.
+Supports: golangci-lint, ruff, eslint, oxlint, react-doctor, pyright, tsc, markdownlint, vale, jscpd, betterleaks, uir, json.
 
 Examples:
   gavel lint
   gavel lint jscpd
   gavel lint jscpd eslint
   gavel lint react-doctor
+  gavel lint uir                     # SQL rules from .uir.yaml
+  gavel lint uir --exclude 'small-*'
+  gavel lint json config.yaml --schema schema.json
+  gavel lint yaml config.yaml --schema schema.json  # YAML alias; errors include numbered source excerpts
+  gavel lint --exclude 'ruff:F401,eslint:no-debugger'
   gavel lint secrets                 # alias for betterleaks
   gavel lint --linters=golangci-lint
   gavel lint --linters=golangci-lint,ruff

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/sdk/status"
 	"github.com/flanksource/gavel/utils"
 )
 
@@ -86,15 +87,15 @@ func resolveUserDirs() (UserDirs, error) {
 	if err != nil {
 		return UserDirs{}, fmt.Errorf("resolve home directory: %w", err)
 	}
-	cache, err := os.UserCacheDir()
+	cache, err := status.CacheDir()
 	if err != nil {
-		return UserDirs{}, fmt.Errorf("resolve user cache directory: %w", err)
+		return UserDirs{}, err
 	}
 	return UserDirs{
 		Home:   home,
 		Gavel:  filepath.Join(home, StateDirName),
 		Config: filepath.Join(home, ".config", "gavel"),
-		Cache:  filepath.Join(cache, "gavel"),
+		Cache:  cache,
 	}, nil
 }
 

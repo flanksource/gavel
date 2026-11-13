@@ -148,14 +148,14 @@ func (Playwright) Execute(ctx context.Context, step *fixtures.StepContext) (fixt
 	report := filepath.Join(step.TmpDir, stepName(step)+"-playwright.json")
 	run.env["PLAYWRIGHT_JSON_OUTPUT_FILE"] = report
 	args := append([]string{"exec", "playwright", "test", spec, "--reporter=json"}, run.cfg.Args...)
-	process := cexec.NewExec("pnpm", args...).WithCwd(run.cwd).WithExactEnv(run.env).WithProcessGroup().WithContext(ctx)
+	step.SetCommand("pnpm "+strings.Join(args, " "), run.cwd)
+	process := cexec.NewExec("pnpm", args...).WithCwd(run.cwd).WithExactEnv(run.env).WithProcessGroup().WithContext(ctx).Stream(step.Stdout(), step.Stderr())
 	execution := process.Run().Result()
 	if err := run.cleanup(); err != nil {
 		return fixtures.StepOutcome{}, fmt.Errorf("playwright step %q: remove inline script: %w", step.Spec.ID, err)
 	}
 
 	result := newResult(step, start)
-	result.Command, result.CWD = "pnpm "+strings.Join(args, " "), run.cwd
 	result.Stdout, result.Stderr, result.ExitCode = execution.Stdout, execution.Stderr, execution.ExitCode
 	tests, reportErr := parsePlaywrightReport(report, run.cwd)
 	outputs := playwrightOutputs(tests, execution)

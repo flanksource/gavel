@@ -33,6 +33,7 @@ import { currentAuthMode } from '../../query';
 import { todoVisibilityVisible } from '../../hostedUI';
 import { HeaderActionsMenu } from './TodoDetailActions';
 import type { TodoDetailView } from '../../routes';
+import { useIsMobile } from '../../useIsMobile';
 
 const noTodos: TodoItem[] = [];
 const readyFamily: TodoFamilyStatus = { state: 'ready' };
@@ -80,6 +81,7 @@ export function TodoDetail(props: TodoDetailProps) {
     copyFullId, runPhase, stopRun, runTodo, submitAdvanced,
   } = useTodoDetail(props);
   const reusableBranch = useReusableRunBranch(dir, todo?.ref ?? '', events);
+  const mobile = useIsMobile();
 
   if (!todo) {
     return (
@@ -192,7 +194,9 @@ export function TodoDetail(props: TodoDetailProps) {
               </div>
             </div>
 
-            <HeaderActionsMenu
+            {/* Rendered only on mobile: as a third grid cell on desktop it took the
+                title row's second column and pushed the run strip onto its own line. */}
+            {mobile && <HeaderActionsMenu
               todo={todo}
               dir={dir}
               busy={busy}
@@ -209,7 +213,6 @@ export function TodoDetail(props: TodoDetailProps) {
               hasChildren={childTodos.length > 0}
               onSetParent={parent => patch({ parent })}
               onRemoveParent={() => patch({ parent: '' })}
-              className="md:hidden"
               onCopy={copyFullId}
               onEditTitle={startEditTitle}
               onStatus={status => patch({ status })}
@@ -225,7 +228,7 @@ export function TodoDetail(props: TodoDetailProps) {
               onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
               onArchive={archiveTodo}
               onPushToGithub={pushToGithub}
-            />
+            />}
 
             <div className="hidden min-w-0 flex-wrap items-center justify-end gap-1.5 md:flex">
               {/* While a run is live the cluster becomes what is true right now —
@@ -252,7 +255,7 @@ export function TodoDetail(props: TodoDetailProps) {
                     busy={runBusy || verificationRun.isPending}
                     onRunStep={(name, extras) => runPhase(name, { ...(phaseOptions[name] ?? loadLastTodoRunOptions(name, runContext)), ...extras })}
                     branchChoice={todo.pr ? undefined : reusableBranch}
-                    onReview={() => setTab('overview')}
+                    onReview={() => setTab(todo.status === 'review' ? 'plan' : 'overview')}
                     onOptionsChange={changePhaseOptions}
                     onAdvanced={setAdvancedMode}
                   />
@@ -361,6 +364,9 @@ export function TodoDetail(props: TodoDetailProps) {
         title={`${runContext?.lifecycle.steps.find(step => step.name === advancedMode)?.label ?? advancedMode ?? 'Run'} todo`}
         dir={dir}
         refID={todo.ref}
+        reviewRequired={todo.status === 'review'}
+        onChanged={onChanged}
+        onLaunch={() => setTab('session')}
         branchChoice={todo.pr ? undefined : reusableBranch}
       />
       {archivePrompt && (

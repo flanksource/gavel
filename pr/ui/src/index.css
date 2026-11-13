@@ -17,3 +17,13 @@ body,
 #root {
   height: 100%;
 }
+
+/* iOS zooms the whole page into any focused field under 16px and never zooms
+   back out. Unlayered, so it outranks the dense text-xs/text-sm utilities. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+}

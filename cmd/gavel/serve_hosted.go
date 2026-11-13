@@ -205,6 +205,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 			})
 		}
 		srv.SetAuthConfig(authConfig)
+		if err := srv.StartWorkspaceData(ctx, db); err != nil {
+			return nil, err
+		}
 		if app != nil {
 			ui.NewPoller(srv, orgPRSearch(srv, store, cache, scope.OrgID), interval).Start(ctx)
 			go syncReposEvery(ctx, store, scope.OrgID, repoSyncInterval)

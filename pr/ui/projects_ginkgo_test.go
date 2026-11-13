@@ -38,7 +38,7 @@ var _ = Describe("project catalog resolution", func() {
 	It("returns malformed catalog errors with the catalog path", func() {
 		Expect(os.WriteFile(projectsPath, []byte("{"), 0o600)).To(Succeed())
 
-		_, err := LoadProjects(LoadProjectsOptions{})
+		_, err := LoadProjects()
 
 		Expect(err).To(MatchError(ContainSubstring(projectsPath)))
 	})
@@ -58,6 +58,33 @@ var _ = Describe("project catalog resolution", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(project.Name).To(Equal("config-db"))
 	})
+
+	DescribeTable("matches a directory and a project root that name the same place through a symlink",
+		func(registerLink, lookUpLink bool) {
+			root := GinkgoT().TempDir()
+			real := filepath.Join(root, "volume", "envs", "base")
+			Expect(os.MkdirAll(filepath.Join(real, "schemas"), 0o755)).To(Succeed())
+			link := filepath.Join(root, "home", "envs")
+			Expect(os.MkdirAll(filepath.Dir(link), 0o755)).To(Succeed())
+			Expect(os.Symlink(filepath.Dir(real), link)).To(Succeed())
+			viaLink := filepath.Join(link, "base")
+			registered, lookedUp := real, filepath.Join(real, "schemas")
+			if registerLink {
+				registered = viaLink
+			}
+			if lookUpLink {
+				lookedUp = filepath.Join(viaLink, "schemas")
+			}
+			Expect(SaveProjects([]Project{{Name: "base", Dir: registered}})).To(Succeed())
+
+			project, err := ProjectForDir(lookedUp)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(project.Name).To(Equal("base"))
+		},
+		Entry("project registered at its real path, directory reached through the link", false, true),
+		Entry("project registered through the link, directory at its real path", true, false),
+	)
 
 	It("names the catalog file when no configured project contains a directory", func() {
 		Expect(SaveProjects([]Project{{Name: "other", Dir: GinkgoT().TempDir()}})).To(Succeed())
@@ -106,7 +133,7 @@ var _ = Describe("project repos are never null", func() {
 	It("heals a catalog written by an older gavel that stored repos as null", func() {
 		Expect(os.WriteFile(projectsPath, []byte(`[{"name":"time-kiosk","dir":"/tmp/time-kiosk","repos":null}]`), 0o600)).To(Succeed())
 
-		projects, err := LoadProjects(LoadProjectsOptions{})
+		projects, err := LoadProjects()
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(projects).To(HaveLen(1))

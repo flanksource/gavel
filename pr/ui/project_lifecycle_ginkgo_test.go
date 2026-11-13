@@ -111,6 +111,30 @@ var _ = Describe("project status lifecycle", func() {
 		Expect(response.Files[0].ResultsStale).To(BeTrue())
 	})
 
+	It("serializes linked dependencies in both stored and results status responses", func() {
+		server := newTrackedGitServer().server
+		dir := createDiffRepository()
+		writeDiffFile(dir, "package.json", `{"dependencies":{"ui":"link:../ui"}}`)
+		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir, Repos: []string{"acme/gavel"}}})).To(Succeed())
+		originalGather := gatherProjectStatus
+		gatherProjectStatus = func(string, status.Options) (*status.Result, error) {
+			return &status.Result{WorkDir: dir, Files: []status.FileStatus{{Path: "package.json", State: status.StateUntracked}}}, nil
+		}
+		DeferCleanup(func() { gatherProjectStatus = originalGather })
+		for _, query := range []string{"", "?includeResults=true"} {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/status"+query, nil)
+			request.SetPathValue("name", "gavel")
+			server.handleProjectStatus(recorder, request)
+			Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+			var response projectStatusResponse
+			Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.Files).To(HaveLen(1))
+			Expect(response.Files[0].LinkedDependencies).To(Equal([]projectLinkedDependency{{Name: "ui", Target: "link:../ui"}}))
+			Expect(recorder.Body.String()).To(ContainSubstring(`"linkedDependencies":[{"name":"ui","target":"link:../ui"}]`))
+		}
+	})
+
 	It("rejects an invalid includeResults option", func() {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/status?includeResults=sometimes", nil)
@@ -152,6 +176,8 @@ var _ = Describe("project status lifecycle", func() {
 		schemaPath, ok := paths["/api/projects/{name}/actions/schema"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(schemaPath).To(HaveKey("get"))
+		properties := projectActionSchemaResponseSchema()["properties"].(map[string]any)
+		Expect(properties["schemaVersion"]).To(HaveKeyWithValue("enum", []int{2}))
 
 		diffPath, ok := paths["/api/projects/{name}/diff"].(map[string]any)
 		Expect(ok).To(BeTrue())
@@ -178,7 +204,7 @@ var _ = Describe("project status lifecycle", func() {
 		server := &Server{}
 		server.SetProjectActionOptionsProvider(fakeProjectActionOptionsProvider{
 			schema: ProjectActionSchema{
-				SchemaVersion: 1,
+				SchemaVersion: 2,
 				Action:        "lint",
 				Schema:        map[string]any{"type": "object"},
 				Defaults:      map[string]any{"changed": false},
@@ -194,7 +220,7 @@ var _ = Describe("project status lifecycle", func() {
 		var response ProjectActionSchema
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
 		Expect(response).To(Equal(ProjectActionSchema{
-			SchemaVersion: 1,
+			SchemaVersion: 2,
 			Action:        "lint",
 			Schema:        map[string]any{"type": "object"},
 			Defaults:      map[string]any{"changed": false},

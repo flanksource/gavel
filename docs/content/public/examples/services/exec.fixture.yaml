@@ -1,0 +1,21 @@
+kind: Fixture
+name: Supervised HTTP service
+steps:
+  - id: resources
+    kind: services
+    services:
+      content:
+        git:
+          files:
+            index.html: hello from service
+      web:
+        exec: exec python3 -m http.server {{.port}} --bind 127.0.0.1
+        cwd: '{{.services.content.dir}}'
+        ready:
+          http: http://127.0.0.1:{{.port}}/
+        wait:
+          timeout: 10s
+  - id: request
+    kind: exec
+    script: curl --fail --silent "$WEB_URL/"
+    stdout: hello from service

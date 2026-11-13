@@ -1,9 +1,9 @@
 package shims
 
 import (
-	"os"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/sdk/status"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -54,11 +54,11 @@ var _ = Describe("Profiles", func() {
 	})
 
 	It("adds an eslint cache outside the repository", func() {
-		cache, err := os.UserCacheDir()
+		cache, err := status.CacheDir()
 		Expect(err).NotTo(HaveOccurred())
 		got, err := Profiles["eslint"].Inject([]string{"src"}, twoCores)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal([]string{"--cache", "--cache-location", filepath.Join(cache, "gavel", "eslint") + "/", "src"}))
+		Expect(got).To(Equal([]string{"--cache", "--cache-location", filepath.Join(cache, "eslint") + "/", "src"}))
 	})
 
 	DescribeTable("arguments left alone",

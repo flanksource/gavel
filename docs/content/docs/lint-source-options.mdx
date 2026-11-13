@@ -1,0 +1,18 @@
+---
+title: Generated sources and build tags
+description: Control generated-file findings and build tags across native linters.
+parent: lint-execution
+order: 12
+---
+
+```bash
+gavel lint --generated=false
+gavel lint golangci --generated=false --tags integration,postgres
+gavel lint uir --generated=false --tags integration --tags feature
+```
+
+`--generated=false` suppresses findings in generated files across native linters, including UIR. Gavel recognizes leading generated-code banners, leading `@generated` comments, and names ending in `_gen.go`, `.gen.go`, `.pb.go`, or containing `.generated.`. Generated source stays available for type resolution. Fileless diagnostics and execution failures remain visible. This is a reporting filter; it does not prevent native `--fix` edits.
+
+Omitting `--generated` preserves each tool's existing defaults. Bare `--generated` and `--generated=true` allow generated findings through Gavel's filter; native includes, excludes and rules still apply.
+
+`--tags` accepts comma-separated or repeated build tags. Gavel maps them to golangci-lint's `--build-tags` and UIR's `--tags`. Other adapters receive no extra arguments in mixed runs. Selecting only adapters without tag support fails explicitly. UIR requires a binary supporting `uir lint --tags`; its syntax and typed analysis use the selected tags and keep their cached analysis distinct. `gavel test --lint --tags integration` also passes tags to the lint phase. Both controls remain active during UI reruns and AI-fix iterations, and dry-run displays the native tag arguments.

@@ -168,7 +168,36 @@ func (s *Server) allowedTestEditRootLocked(requested string) string {
 			return trusted
 		}
 	}
-	return testWorkDirRoot(s.tests, requested)
+	if matched := matchWorkDir(s.knownWorkDirsLocked(), requested); matched != "" {
+		return cleanExistingRoot(matched)
+	}
+	return ""
+}
+
+// knownWorkDirsLocked lists every directory the current run vouches for: test
+// and lint work dirs plus the git root. Requests may only name one of these.
+func (s *Server) knownWorkDirsLocked() []string {
+	dirs := testWorkDirs(s.tests, nil)
+	for _, result := range s.lint {
+		if result != nil && result.WorkDir != "" {
+			dirs = append(dirs, result.WorkDir)
+		}
+	}
+	return append(dirs, s.gitRoot, snapshotGitRoot(s.git))
+}
+
+// matchWorkDir returns requested (an absolute, clean path) when it names one
+// of dirs exactly, and "" otherwise.
+func matchWorkDir(dirs []string, requested string) string {
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(dir); err == nil && filepath.Clean(abs) == requested {
+			return requested
+		}
+	}
+	return ""
 }
 
 func cleanExistingRoot(path string) string {
@@ -198,19 +227,14 @@ func testsHaveWorkDir(tests []parsers.Test) bool {
 	return false
 }
 
-func testWorkDirRoot(tests []parsers.Test, requested string) string {
+func testWorkDirs(tests []parsers.Test, dirs []string) []string {
 	for _, test := range tests {
 		if test.WorkDir != "" {
-			trustedWorkDir, err := filepath.Abs(test.WorkDir)
-			if err == nil && requested == filepath.Clean(trustedWorkDir) {
-				return cleanExistingRoot(test.WorkDir)
-			}
+			dirs = append(dirs, test.WorkDir)
 		}
-		if trusted := testWorkDirRoot(test.Children, requested); trusted != "" {
-			return trusted
-		}
+		dirs = testWorkDirs(test.Children, dirs)
 	}
-	return ""
+	return dirs
 }
 
 type testEditTarget struct {

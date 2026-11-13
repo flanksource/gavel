@@ -1,0 +1,150 @@
+---
+title: AI review fixtures
+description: Review a diff with an AI prompt, acceptance checklist, and CEL assertions.
+order: 9
+parent: fixtures-overview
+---
+
+import FixtureExample from "../../src/components/site/FixtureExample";
+import FixtureDocumentReference from "../../src/components/site/FixtureDocumentReference";
+
+AI review fixtures declare a prompt and acceptance checklist. In YAML, use a `kind: ai` step with `model`, `prompt`, and `criteria`. Markdown uses `ai` frontmatter, a `prompt` fence, and task-list criteria. Both grade each criterion and attach its evidence to the fixture result.
+
+```bash
+gavel fixtures review.fixture.yaml # [!code focus] [!code note:AI fixture]
+```
+
+AI review needs a configured backend. Run `captain configure`, set a supported provider key such as `ANTHROPIC_API_KEY`, or use a model alias that is already configured for the local environment.
+
+## Minimal AI fixture
+
+Save the default variant as `review.fixture.yaml`. Select Markdown to save `review.fixture.md` and run it with the same command and that filename.
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Verify parser changes
+steps:
+  - kind: ai
+    model: claude-code-sonnet
+    prompt: Focus on parser behavior, actionable errors, and regression coverage.
+    criteria:
+      - Parser errors are actionable
+      - Existing fixture formats still pass
+      - User-facing behavior is documented
+```
+
+````markdown
+---
+ai:
+  model: claude-code-sonnet # [!code focus] [!code note:model alias]
+  criteriaSection: Acceptance Criteria
+---
+
+# Verify parser changes
+
+```prompt
+Focus on parser behavior, actionable errors, and regression coverage. # [!code focus]
+```
+
+## Acceptance Criteria
+
+- [ ] Parser errors are actionable # [!code highlight]
+- [ ] Existing fixture formats still pass
+- [ ] User-facing behavior is documented
+
+````
+
+</FixtureExample>
+
+`model` selects the grader and `prompt` tells it what to inspect. The YAML `criteria` list and Markdown task list express the same review contract. A checklist step passes only when every criterion passes; each criterion includes the grader's rationale.
+
+In Markdown, the first `prompt` or `ai` code block supplies reviewer instructions. `ai.criteriaSection` limits the task list to the named section. Explicit Markdown CEL can check the checklist JSON, such as `json.items.all(item, item.passed)`. A typed YAML `ai` step exposes `passed` and `checklist` outputs.
+
+## Grader configuration
+
+YAML steps accept `model` or a complete Captain `spec`. In Markdown, `ai` frontmatter controls model execution:
+
+```yaml
+ai:
+  model: claude-code-sonnet # [!code focus]
+  temperature: 0
+  maxTokens: 10000
+  maxConcurrent: 4
+  cacheTTL: 10m
+  noCache: false
+```
+
+`model` selects the backend/model alias. `temperature: 0` makes review output more stable. `maxTokens` bounds the response. `maxConcurrent`, `cacheTTL`, and `noCache` control throughput and repeatability for larger fixture suites.
+
+Use `ai.spec` to carry a complete Captain grader runtime, including the mode, reasoning effort, fallback models, budget, permissions, memory, tools, setup, and sandbox settings:
+
+```yaml
+ai:
+  spec:
+    model: claude-sonnet-4-6
+    mode: cli
+    effort: high
+    budget:
+      cost: 2
+      maxTokens: 10000
+      timeout: 5m
+    permissions:
+      mode: dontAsk
+  criteriaSection: Acceptance Criteria
+```
+
+`ai.spec` replaces the runner's default verification spec. Flat `ai.model`, `temperature`, `maxTokens`, and `noCache` values override the fields they set. Generated TODO definitions of done use this snapshot so an external fixture runner receives the same resolved grader as an in-process run. Grading clears session and approval-resume state, message history, and nested verification/commit workflows; the fixture supplies a fresh prompt body and checklist response schema.
+
+## Writing criteria
+
+Write concrete criteria the grader can assess against the diff:
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Review contract
+steps:
+  - kind: ai
+    prompt: Review the working-tree diff and cite evidence for each criterion.
+    criteria:
+      - The change is covered by a test that fails without it
+      - User-facing behavior changes are reflected in README or docs
+```
+
+````markdown
+---
+ai:
+  criteriaSection: Acceptance Criteria
+---
+
+```prompt
+Review the working-tree diff and cite evidence for each criterion.
+```
+
+## Acceptance Criteria
+
+- [ ] The change is covered by a test that fails without it # [!code focus]
+- [ ] User-facing behavior changes are reflected in README or docs
+````
+
+</FixtureExample>
+
+Keep criteria specific enough that the grader can identify the relevant code and tests. Use command or runner steps alongside AI review when a requirement can be checked deterministically.
+
+## Schema
+
+<FixtureDocumentReference />
+
+## When to use AI fixtures
+
+Use AI fixtures when the question is broader than command output:
+
+- Does this diff satisfy the acceptance criteria?
+- Did the implementation cover failure paths?
+- Is the migration or compatibility story safe?
+- Did the docs change with the behavior?
+
+Use regular command/table fixtures when the expected result can be asserted directly with stdout, stderr, exit code, JSON, or files.

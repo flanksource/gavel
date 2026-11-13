@@ -39,10 +39,13 @@ func countWorkspaces(ctx context.Context, providers map[uuid.UUID]*Provider) (ma
 	if len(providers) == 0 {
 		return map[uuid.UUID]map[types.Status]int{}, nil
 	}
-	if err := reconcileWorkspaceAnswers(ctx, providers); err != nil {
-		return nil, err
-	}
 	ids := slices.Collect(maps.Keys(providers))
+	first := providers[ids[0]]
+	if !first.readOnly {
+		if err := reconcileWorkspaceAnswers(ctx, providers); err != nil {
+			return nil, err
+		}
+	}
 	groups, err := providers[ids[0]].repository.CountIssuesByStatus(ctx, ids)
 	if err != nil {
 		return nil, err

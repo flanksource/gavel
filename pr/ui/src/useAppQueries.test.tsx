@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen, waitFor } from '@testing-library/react';
-import type { PropsWithChildren } from 'react';
+import { useEffect, type PropsWithChildren } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PRItem, ProcStatus, Snapshot } from './types';
 import { queryKeys } from './query';
@@ -55,6 +55,10 @@ class FakeEventSource {
     this.listeners.set(type, listener);
   }
 
+  removeEventListener(type: string, listener: EventListener) {
+    if (this.listeners.get(type) === listener) this.listeners.delete(type);
+  }
+
   emit(type: string, data: unknown) {
     this.listeners.get(type)?.(new MessageEvent(type, { data: JSON.stringify(data) }));
   }
@@ -62,8 +66,9 @@ class FakeEventSource {
 
 function Probe({ name, enabled, hostData = true, onRender }: { name: string; enabled: boolean; hostData?: boolean; onRender?: () => void }) {
   const state = useAppQueries({ enabled, hostData, initialConfig: { repos: [] } });
-  // react-doctor-disable-next-line react-doctor/no-prop-callback-in-render -- test probe deliberately counts renders
-  onRender?.();
+  useEffect(() => {
+    onRender?.();
+  });
   return (
     <div data-testid={name} data-error={state.processError} data-project-error={state.projectError} data-pr-error={state.snapshot.error ?? ''}>
       {state.snapshot.prs.length}/{state.projects.length}
@@ -94,6 +99,23 @@ afterEach(() => {
 });
 
 describe('useAppQueries', () => {
+  it('loads shared configuration without requesting PR data when there is no PR consumer', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      return Response.json(url === '/api/config' ? snapshot.config : []);
+    }));
+    vi.stubGlobal('EventSource', FakeEventSource);
+    function TodosProbe() {
+      const state = useAppQueries({ enabled: true, prsEnabled: false, hostData: false, initialConfig: { repos: [] } });
+      return <div>{state.config.repos.join(',')}</div>;
+    }
+    render(<Provider client={createClient()}><TodosProbe /></Provider>);
+    await screen.findByText('acme/gavel');
+    expect(calls.sort()).toEqual(['/api/config', '/api/projects']);
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
   it('deduplicates bootstrap reads, stores stream frames in the cache, and reuses data after remount', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

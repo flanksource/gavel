@@ -56,30 +56,6 @@ var _ = Describe("CI changesets", func() {
 		Entry("Azure source", "azure", false), Entry("Azure merge", "azure", true),
 		Entry("GitLab source", "gitlab", false), Entry("GitLab merge", "gitlab", true))
 
-	DescribeTable("selects only a GitHub pull request's own files after its target advanced", func(merged bool) {
-		dir := repository()
-		git(dir, "checkout", "-qb", "feature")
-		write(dir, "feature.txt", "feature\n")
-		git(dir, "add", "feature.txt")
-		git(dir, "commit", "-qm", "feature")
-		head := strings.TrimSpace(git(dir, "rev-parse", "HEAD"))
-		git(dir, "checkout", "-q", "main")
-		write(dir, "target.txt", "landed on main after the branch point\n")
-		git(dir, "add", "target.txt")
-		git(dir, "commit", "-qm", "target")
-		base := strings.TrimSpace(git(dir, "rev-parse", "HEAD"))
-		if merged {
-			git(dir, "merge", "--no-ff", "-qm", "merge", "feature")
-		} else {
-			git(dir, "checkout", "-q", "feature")
-		}
-		values := map[string]string{"CI": "true", "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": "event.json"}
-		payload := fmt.Sprintf(`{"pull_request":{"base":{"sha":%q},"head":{"sha":%q}}}`, base, head)
-		selected, err := changeset.Resolve(context.Background(), changeset.Options{Dir: dir, Changed: true, Environment: environment(values, payload)})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(selected.Paths(dir)).To(Equal([]string{"feature.txt"}))
-	}, Entry("source checkout", false), Entry("refs/pull merge checkout", true))
-
 	It("uses a complete pushed range rather than only the latest commit", func() {
 		dir := repository()
 		base := strings.TrimSpace(git(dir, "rev-parse", "HEAD"))

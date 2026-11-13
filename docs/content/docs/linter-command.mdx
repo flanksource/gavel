@@ -1,0 +1,53 @@
+---
+title: Command linters
+description: External linters a project declares in .gavel.yaml, speaking gavel's report protocol.
+parent: lint-execution
+order: 12
+---
+
+## Declaring one
+
+A project adds its own linter by naming it under `lint.linters` with the command that runs it. The name must not be a built-in linter's.
+
+```yaml
+lint:
+  linters:
+    oipa-rules:
+      command: [oipa-cli, lint, rules, --context, dev]
+      includes: ["**/XMLData.xml", "**/data.xml"]
+```
+
+Declaring the linter activates it; `enabled: false` turns it off. `gavel lint oipa-rules --dry-run` shows the command, and `gavel lint` runs it with every other selected linter. Its findings are saved with theirs under `.gavel/` and shown by `gavel ui serve`.
+
+## Report protocol
+
+Gavel runs the command from the project directory, appending the linter's `args:`, then `--format json`, then the selected files relative to that directory. With `--changed` or `--since`, those are the changed files that match `includes`. With no selection, no files are passed, and the command decides what a whole-project run means.
+
+The command prints a JSON array holding exactly one `LinterResult` on stdout and exits 0 when the report has no failures, 1 when it does. Errors are failures; warnings and info findings are not.
+
+```json
+[{"linter": "oipa-transaction", "success": true, "file_count": 1, "rule_count": 2,
+  "violations": [{"file": "tr/Fee/XMLData.xml", "line": 12, "severity": "error",
+                  "message": "statement fee1 failed 1 of 1 executions", "code": "transaction.math.statement.error"}]}]
+```
+
+Each of these fails the linter, and its error carries the command's stderr:
+- the output does not parse;
+- the array holds other than one result;
+- the exit status is not 0 or 1;
+- the result reports `success: false`, `skipped`, `timed_out` or an `error`;
+- the exit status disagrees with the report's failures.
+
+The result's findings are kept even when the linter fails. The result is reported under the declared name, whatever `linter` the command names. UIR speaks the same protocol.
+
+## Source mapping
+
+A linter whose findings name files the work dir does not hold, such as rows of a database or rules in a remote system, maps each one under `sources`, keyed by the violation's `file`:
+
+```json
+"sources": {"rules/pc/Acme/pl/Gold/tr/Fee/XMLData.xml": {"url": "https://mc.example.com/entity/transaction/tx-1/xml", "content": "<Transaction>…</Transaction>"}}
+```
+
+- `content` is what the gavel UI's Files tab shows for that file, with the findings overlaid by line. It is served by `/api/file` in place of the work dir's file, so saved runs render it too.
+- `url` is where the file is browsed at its origin. Each finding offers it as **Open source**, with `line=<n>` added unless the URL already names a line.
+- A file named in `sources` is never read from disk: `--generated=false` decides whether it is generated from its `content`, and a result the linter answered from its cache keeps its `sources` (see [Cached lint results](/docs/lint-caching)).

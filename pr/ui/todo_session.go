@@ -105,6 +105,25 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		s.writeHostedSessionStats(w, r, sessionID)
 		return
 	}
+	if s.workspaceData != nil {
+		provider, _, err := s.todoReadProviderContext(r.Context(), todoSourceFromRequest(r))
+		if err != nil {
+			writeTodoError(w, http.StatusBadRequest, err)
+			return
+		}
+		native, ok := provider.(captainSessionProvider)
+		if !ok || native.Captain() == nil {
+			writeTodoError(w, http.StatusInternalServerError, fmt.Errorf("prepared workspace has no Captain session store"))
+			return
+		}
+		resolved, err := resolveCaptainSession(r.Context(), native.Captain(), sessionID)
+		if err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeCaptainSessionStats(w, r, native.Captain(), sessionID, resolved)
+		return
+	}
 	dir, err := s.resolveTodoDir(r.URL.Query().Get("dir"))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
@@ -392,9 +411,10 @@ func (s *Server) handleTodoSessionFocus(w http.ResponseWriter, r *http.Request) 
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
-	if agent == "" {
-		agent = "claude"
+	agent, err := sessionTerminalAgent(r.Context(), dir, r.URL.Query().Get("sessionId"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
 	}
 	if err := cmuxprov.FocusSession(r.Context(), cmuxprov.NewClient(""), dir, agent); err != nil {
 		writeTodoError(w, http.StatusBadGateway, err)
@@ -426,9 +446,10 @@ func (s *Server) handleTodoSessionCmux(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
-	if agent == "" {
-		agent = "claude"
+	agent, err := sessionTerminalAgent(r.Context(), dir, r.URL.Query().Get("sessionId"))
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
 	}
 	workspace, surface, err := resolveCmuxSurface(r.Context(), dir, agent)
 	resp := todoSessionCmuxResponse{Found: err == nil}

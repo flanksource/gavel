@@ -10,9 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/gavel/internal/linecounts"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
@@ -243,8 +243,8 @@ func isConflictPair(staged, work byte) bool {
 }
 
 // enrichWithLineCounts fills in Adds/Dels for each FileStatus by combining
-// staged and unstaged numstat output, and by counting lines of any untracked
-// file directly (git numstat does not report untracked content).
+// staged and unstaged numstat output, and by counting untracked text directly.
+// Binary files and non-SLOC assets retain their status without line counts.
 func enrichWithLineCounts(ctx context.Context, workDir string, gitConfig []string, files []FileStatus) error {
 	staged, err := numstat(ctx, workDir, gitConfig, true)
 	if err != nil {
@@ -258,6 +258,9 @@ func enrichWithLineCounts(ctx context.Context, workDir string, gitConfig []strin
 	for i := range files {
 		f := &files[i]
 		key := f.Path
+		if !linecounts.Supported(key) || staged[key].binary || unstaged[key].binary {
+			continue
+		}
 		if s, ok := staged[key]; ok {
 			f.Adds += s.adds
 			f.Dels += s.dels
@@ -268,16 +271,20 @@ func enrichWithLineCounts(ctx context.Context, workDir string, gitConfig []strin
 		}
 		if f.State == StateUntracked && f.Adds == 0 && f.Dels == 0 {
 			stopFile := rpchttp.Track(ctx, "file")
-			f.Adds = countFileLines(filepath.Join(workDir, f.Path))
+			f.Adds, err = countFileLines(filepath.Join(workDir, f.Path))
 			stopFile()
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
 type numstatEntry struct {
-	adds int
-	dels int
+	adds   int
+	dels   int
+	binary bool
 }
 
 func numstat(ctx context.Context, workDir string, gitConfig []string, cached bool) (map[string]numstatEntry, error) {
@@ -315,7 +322,7 @@ func numstat(ctx context.Context, workDir string, gitConfig []string, cached boo
 			i++
 			path = records[i]
 		}
-		result[path] = numstatEntry{adds: adds, dels: dels}
+		result[path] = numstatEntry{adds: adds, dels: dels, binary: fields[0] == "-" || fields[1] == "-"}
 	}
 	return result, nil
 }
@@ -334,19 +341,26 @@ func parseNumstatCount(s string) int {
 	return n
 }
 
-func countFileLines(path string) int {
+func countFileLines(path string) (int, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0, fmt.Errorf("stat untracked file %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return 0, nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("read untracked file %s: %w", path, err)
 	}
-	if len(data) == 0 {
-		return 0
+	if len(data) == 0 || bytes.IndexByte(data, 0) >= 0 {
+		return 0, nil
 	}
-	n := strings.Count(string(data), "\n")
-	if !strings.HasSuffix(string(data), "\n") {
+	n := bytes.Count(data, []byte{'\n'})
+	if data[len(data)-1] != '\n' {
 		n++
 	}
-	return n
+	return n, nil
 }
 
 // enrichWithModTime stats each file's working-tree path and records the
@@ -363,25 +377,6 @@ func enrichWithModTime(workDir string, files []FileStatus) {
 			continue
 		}
 		f.ModifiedAt = info.ModTime()
-	}
-}
-
-// HumanAge returns a Starship-style relative age ("3m", "5h", "2d") for the
-// given duration. Returns "" for zero or negative durations so callers can
-// skip rendering when ModifiedAt is unavailable.
-func HumanAge(d time.Duration) string {
-	if d <= 0 {
-		return ""
-	}
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	cexec "github.com/flanksource/clicky/exec"
 
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
 )
 
 // defaultCastBytes and maxCastEvents bound a capture. A command in a redraw
@@ -144,6 +145,11 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 	}
 	if err := opts.Runtime.Apply(process); err != nil {
 		return nil, err
+	}
+	if opts.Runtime.Slots.Enabled() && process.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = slots.Timeout(ctx, slots.TimeoutOptions{Limits: opts.Runtime.Slots, Duration: process.Timeout})
+		defer cancel()
 	}
 	cmd, err := process.PrepareCommand()
 	if err != nil {

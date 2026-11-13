@@ -1,0 +1,25 @@
+{{#each todos}}
+{{{before}}}{{#if reproduction}}## Steps to Reproduce
+
+Run the following to reproduce the failure:
+
+{{{reproduction}}}{{/if}}{{#if implementation}}## Implementation
+
+{{{implementation}}}
+
+{{/if}}{{#if rawFixture}}## Verification
+
+{{#if fixture}}The current fixture, verbatim:
+
+````markdown
+{{{fixture}}}
+````
+
+{{else}}This TODO has NO verification fixture — nothing can currently prove it done.
+
+{{/if}}{{else}}{{#if commands}}## Verification
+
+After implementing your fix, verify it works by running:
+
+{{{commands}}}{{/if}}{{/if}}
+{{/each}}

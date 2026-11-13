@@ -36,7 +36,7 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
     streamRef.current = stream;
     setLoading(true);
 
-    stream.addEventListener('pr', event => {
+    const onPR = (event: Event) => {
       try {
         const data = frame((event as MessageEvent<string>).data);
         if (!data.pr || typeof data.pr !== 'object') throw new Error('invalid PR frame');
@@ -53,8 +53,8 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
         failFrame(queryClient, key, 'Pull request detail stream received an invalid PR update.');
         setLoading(false);
       }
-    });
-    stream.addEventListener('runs', event => {
+    };
+    const onRuns = (event: Event) => {
       try {
         const data = frame((event as MessageEvent<string>).data);
         if (!data.runs || typeof data.runs !== 'object' || Array.isArray(data.runs)) throw new Error('invalid runs frame');
@@ -65,8 +65,8 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
       } catch {
         failFrame(queryClient, key, 'Pull request detail stream received an invalid runs update.');
       }
-    });
-    stream.addEventListener('gavel', event => {
+    };
+    const onGavel = (event: Event) => {
       try {
         const data = frame((event as MessageEvent<string>).data);
         if (!Array.isArray(data.gavelResults)) throw new Error('invalid Gavel frame');
@@ -77,8 +77,8 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
       } catch {
         failFrame(queryClient, key, 'Pull request detail stream received an invalid Gavel update.');
       }
-    });
-    stream.addEventListener('error', event => {
+    };
+    const onErrorFrame = (event: Event) => {
       const messageEvent = event as MessageEvent<string>;
       if (!messageEvent.data) return;
       try {
@@ -89,13 +89,18 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
         failFrame(queryClient, key, 'Pull request detail stream received an invalid error update.');
       }
       setLoading(false);
-    });
-    stream.addEventListener('done', () => {
+    };
+    const onDone = () => {
       if (streamRef.current !== stream) return;
       setLoading(false);
       stream.close();
       streamRef.current = null;
-    });
+    };
+    stream.addEventListener('pr', onPR);
+    stream.addEventListener('runs', onRuns);
+    stream.addEventListener('gavel', onGavel);
+    stream.addEventListener('error', onErrorFrame);
+    stream.addEventListener('done', onDone);
     stream.onerror = () => {
       if (streamRef.current !== stream) return;
       queryClient.setQueryData<PRDetail>(key, current => current ?? { error: 'Connection lost' });
@@ -105,6 +110,11 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
     };
 
     return () => {
+      stream.removeEventListener('pr', onPR);
+      stream.removeEventListener('runs', onRuns);
+      stream.removeEventListener('gavel', onGavel);
+      stream.removeEventListener('error', onErrorFrame);
+      stream.removeEventListener('done', onDone);
       if (streamRef.current !== stream) return;
       stream.close();
       streamRef.current = null;

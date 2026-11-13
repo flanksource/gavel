@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { TodoChildDisposition, TodoItem, TodoPriority, TodoRunOptions, TodoStatus, TodoVisibility } from '../../types';
 import { openChildrenOf } from './todoFamily';
 import type { TodoDetailProps } from './TodoDetail';
-import { useSessionStats } from './TodoSessionTimer';
 import { loadLastTodoRunOptions, normalizeRunOptions, rememberTodoRunOptions, requestStepFor, runSpec, useTodoRun, useTodoRunContext } from './run';
 import { loadPromptRunOptions, rememberPromptRunOptions, verificationSpec } from './PromptRunButton';
 import type { PhaseRunOptions } from './TodoPhaseButton';
@@ -32,7 +31,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir);
   const launch = useTodoLaunchProgress(dir, todo?.ref ?? '');
-  const { context: runContext } = useTodoRunContext({ dir });
+  const { context: runContext, error: runContextError } = useTodoRunContext({ dir, enabled: !!todo && !!dir.trim() });
   const updateTodo = useUpdateTodoMutation(dir, `Failed to update todo ${todo?.ref || ''}`.trim());
   const deleteTodo = useDeleteTodoMutation(dir);
   const transferTodo = useTransferTodoMutation();
@@ -43,14 +42,10 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   const closed = todo?.status === 'completed';
   const body = todo?.body?.trim() ?? '';
   const events = todo?.events ?? [];
-  // One attempts poll feeds both tab badges and the Verification tab, so a
-  // failed check is visible before the tab is ever opened. It keeps polling
-  // while the tab is closed, just more slowly.
   const { detail: verificationDetail, error: verificationError } = useTodoSessionDetail(
     dir,
     todo?.ref ?? '',
     !!todo?.ref,
-    { intervalMs: tab === 'verification' ? 1500 : 15000 }
   );
   const sessionAttemptCount = verificationDetail?.attempts.length ?? 0;
   const verification = verificationBadge(verificationAttempts(verificationDetail));
@@ -71,7 +66,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
     ? launch.promptRunId
     : todo?.lookupSessionId || todo?.sessionId;
   const viewingHistoricalSession = !!todo?.lookupSessionId && todo.lookupSessionId !== todo.sessionId;
-  const { stats: headerSessionStats } = useSessionStats({ dir, sessionId: todo?.sessionId, active: !!todo?.sessionId });
+  const headerSessionStats = todo?.sessionSummary;
   const sessionInProgress = !!todo && !!todo.sessionId && (headerSessionStats?.inProgress || (!headerSessionStats?.found && todo.status === 'in_progress'));
   // A todo awaiting a human decision (plan review or a blocking question) must
   // route through TodoReviewBanner's approve/reject/answer flow, not have its
@@ -337,7 +332,7 @@ export function useTodoDetail({ todo, dir, onChanged, onDeleted, workspaces = []
   }
 
   return {
-    advancedMode, setAdvancedMode, runSelections, setRunSelections, error, tab, setTab,
+    advancedMode, setAdvancedMode, runSelections, setRunSelections, error: error || runContextError, tab, setTab,
     editingTitle, setEditingTitle, editingBody, setEditingBody, draftTitle, setDraftTitle,
     draftBody, setDraftBody, copyState, runBusy, runMessage, runError, runContext,
     busy, transferTargets, closed, body, events, verificationDetail, verificationError,

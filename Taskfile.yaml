@@ -36,17 +36,15 @@ tasks:
   ui-install:
     run: once
     desc: |
-      Install UI deps serially. Both pr/ui and testrunner/ui link the sibling
-      clicky-ui as a workspace package, so each install writes into the SHARED
-      ../clicky-ui/packages/ui/node_modules. Running the two installs in parallel
-      (as build's deps did) races on those symlinks -> "EEXIST ... jsdom".
-      Serial installs avoid the race; the vite builds that follow only read
-      clicky-ui/dist, so they can still run in parallel.
+      Install UI deps serially. The editor links the sibling clicky-ui workspace
+      package, so its install also updates that package's node_modules. Serial
+      installs avoid races on shared symlinks; frontend builds can run in parallel.
     deps:
       - clicky-ui:build
     cmds:
       - cd testrunner/ui && CI=true corepack pnpm install --no-frozen-lockfile
       - cd pr/ui && CI=true corepack pnpm install --no-frozen-lockfile
+      - cd editor/ui && CI=true corepack pnpm install --no-frozen-lockfile
     sources:
       - testrunner/ui/package.json
       - testrunner/ui/pnpm-workspace.yaml
@@ -54,10 +52,14 @@ tasks:
       - pr/ui/package.json
       - pr/ui/pnpm-workspace.yaml
       - pr/ui/pnpm-lock.yaml
+      - editor/ui/package.json
+      - editor/ui/pnpm-workspace.yaml
+      - editor/ui/pnpm-lock.yaml
       - ../clicky-ui/packages/ui/package.json
     generates:
       - testrunner/ui/node_modules/.modules.yaml
       - pr/ui/node_modules/.modules.yaml
+      - editor/ui/node_modules/.modules.yaml
 
   test-ui:
     desc: Build the test UI frontend bundle (React 19 + clicky-ui + Vite)
@@ -75,6 +77,7 @@ tasks:
       - testrunner/ui/tailwind.config.js
     generates:
       - testrunner/ui/dist/testui.js
+      - testrunner/ui/dist/chunks/*.js
 
   gavel-lib:
     desc: |
@@ -109,6 +112,8 @@ tasks:
       - pr/ui/vite.config.ts
     generates:
       - pr/ui/dist/prui.js
+      - pr/ui/dist/prui.css
+      - pr/ui/dist/chunks/*.js
 
   ui:publish:
     desc: |
@@ -137,11 +142,31 @@ tasks:
       # OIDC provider (the release workflow supplies that). Manual local publishes omit it.
       - npm publish --access public
 
+  editor-ui:
+    desc: Build the local file editor
+    dir: editor/ui
+    deps: [ui-install]
+    cmds:
+      - corepack pnpm run build
+    sources:
+      - editor/ui/src/**/*
+      - editor/ui/index.html
+      - editor/ui/package.json
+      - editor/ui/vite.config.ts
+      - editor/ui/pnpm-lock.yaml
+      - editor/ui/pnpm-workspace.yaml
+      - editor/ui/tsconfig.json
+      - ../clicky-ui/packages/ui/dist/**/*
+    generates:
+      - editor/ui/dist/index.html
+      - editor/ui/dist/assets/*
+
   build:
     desc: Build the binary
     deps:
       - test-ui
       - pr-ui
+      - editor-ui
     vars:
       VERSION:
         sh: git describe --tags --always 2>/dev/null || echo "dev"
@@ -169,6 +194,7 @@ tasks:
       # which looks exactly like the fix not working.
       - ./pr/ui/dist/**
       - ./testrunner/ui/dist/**
+      - ./editor/ui/dist/**
     generates:
       - ./{{.BINARY_NAME}}
 
@@ -177,6 +203,7 @@ tasks:
     deps:
       - test-ui
       - pr-ui
+      - editor-ui
     vars:
       VERSION:
         sh: git describe --tags --always 2>/dev/null || echo "dev"
@@ -197,6 +224,7 @@ tasks:
     deps:
       - test-ui
       - pr-ui
+      - editor-ui
     vars:
       GOOS: '{{.GOOS | default "linux"}}'
       GOARCH: '{{.GOARCH | default "amd64"}}'

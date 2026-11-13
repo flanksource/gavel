@@ -1,7 +1,7 @@
 ---
 model: claude
 prompt:
-  schemaStrictness: retry
+  schemaStrictness: repair
 permissions:
   # Use the runtime's native auto approval: an implementation run executes
   # commands and edits files without stopping to ask, and each runtime's own

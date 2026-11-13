@@ -38,8 +38,17 @@
       "type": "object",
       "additionalProperties": false,
       "oneOf": [{ "required": ["deps"] }, { "required": ["exec"] }, { "required": ["git"] }, { "required": ["dbtest"] }],
+      "dependencies": {"connection": ["deps"]},
       "properties": {
         "name": { "type": "string" },
+        "connection": {
+          "type": "object", "additionalProperties": false, "required": ["ref"],
+          "description": "Reuse a saved connection when defined; otherwise provision with deps. Connection failures never trigger provisioning.",
+          "properties": {
+            "ref": {"type": "string", "minLength": 1, "pattern": "^connection://[^/\\s]+(/[^/\\s]+)?$"},
+            "app": {"type": "string", "description": "Connection store application layer, default gavel."}
+          }
+        },
         "dbtest": {
           "type": "object",
           "additionalProperties": false,

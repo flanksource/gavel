@@ -959,6 +959,60 @@ func TestFixtureNodeToTests(t *testing.T) {
 			}},
 		},
 		{
+			name: "a step's result children (query findings) become its warned and failed children",
+			node: &fixtures.FixtureNode{
+				Name: "inspect",
+				Type: fixtures.TestNode,
+				Results: &fixtures.FixtureResult{
+					Name:   "inspect",
+					Status: task.StatusWarning,
+					Error:  "1 warning/info finding(s)",
+					Children: []*fixtures.FixtureNode{{
+						Name:    "inspect: a3 holds 30 KB",
+						Type:    fixtures.TestNode,
+						Results: &fixtures.FixtureResult{Name: "inspect: a3 holds 30 KB", Status: task.StatusWarning, Error: "a3 holds 30 KB"},
+					}},
+				},
+			},
+			expected: []parsers.Test{{
+				Name:      "inspect",
+				Framework: "fixture",
+				Warned:    true,
+				Message:   "1 warning/info finding(s)",
+				Children: []parsers.Test{{
+					Name:      "inspect: a3 holds 30 KB",
+					Framework: "fixture",
+					Warned:    true,
+					Message:   "a3 holds 30 KB",
+				}},
+			}},
+		},
+		{
+			name: "findings the Runner moved onto the step's node stay its children",
+			node: &fixtures.FixtureNode{
+				Name:    "inspect",
+				Type:    fixtures.TestNode,
+				Results: &fixtures.FixtureResult{Name: "inspect", Status: task.StatusFAIL, Error: "1 error finding(s), 0 other"},
+				Children: []*fixtures.FixtureNode{{
+					Name:    "looping-spawn: P1 x120",
+					Type:    fixtures.TestNode,
+					Results: &fixtures.FixtureResult{Name: "looping-spawn: P1 x120", Status: task.StatusFAIL, Error: "P1 x120"},
+				}},
+			},
+			expected: []parsers.Test{{
+				Name:      "inspect",
+				Framework: "fixture",
+				Failed:    true,
+				Message:   "1 error finding(s), 0 other",
+				Children: []parsers.Test{{
+					Name:      "looping-spawn: P1 x120",
+					Framework: "fixture",
+					Failed:    true,
+					Message:   "P1 x120",
+				}},
+			}},
+		},
+		{
 			name: "section node wraps children",
 			node: &fixtures.FixtureNode{
 				Name: "section",

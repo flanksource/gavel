@@ -57,6 +57,9 @@ type FixtureTest struct {
 	TestOS   string `json:"test_os,omitempty"`
 	TestArch string `json:"test_arch,omitempty"`
 	TestSkip string `json:"test_skip,omitempty"`
+	// If is a markdown node's `if:` gate (an `If` column, a code-block
+	// `if:` key), lowered onto its StepSpec like a typed step's.
+	If string `json:"if,omitempty"`
 
 	TemplateVars map[string]any           `json:"template_vars,omitempty"` // Template variables (.file, .filename, .dir)
 	TempFiles    map[string]*TempFileInfo `json:"temp_files,omitempty"`
@@ -159,7 +162,7 @@ func (fixture FixtureTest) StepSpec() StepSpec {
 	if fixture.Step != nil {
 		return *fixture.Step
 	}
-	return StepSpec{Kind: fixture.KindName()}
+	return StepSpec{Kind: fixture.KindName(), If: fixture.If}
 }
 
 // RunnerStepKind identifies which engine a RunnerStep drives.
@@ -495,6 +498,10 @@ type FrontMatter struct {
 	// dropping it silently.
 	Setup *SetupSpec `yaml:"setup,omitempty" json:"setup,omitempty"`
 
+	// Params is the JSON Schema of the run's parameters, lowered to a leading
+	// `params` form step (ParamsStepID). File-level only.
+	Params map[string]any `yaml:"params,omitempty" json:"params,omitempty"`
+
 	Metadata map[string]interface{} `yaml:",inline" json:"metadata,omitempty"`
 }
 
@@ -523,6 +530,7 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "ai")
 	delete(f.Metadata, "verify")
 	delete(f.Metadata, "setup")
+	delete(f.Metadata, "params")
 }
 
 // ShouldSkip returns a non-empty reason string if the fixture should be skipped
@@ -1155,17 +1163,18 @@ func (f FixtureNode) Pretty() api.Text {
 // the node was written as.
 func (f FixtureNode) resultPretty() api.Text {
 	text := f.Results.Pretty()
-	if source, ok := f.Results.Metadata["source"].(parsers.SourceSnippet); ok {
+	if source, ok := f.Results.Metadata["source"].(parsers.SourceSnippet); ok && isFailureStatus(f.Results.Status) {
 		text = text.NewLine().Append(fmt.Sprintf("  source %s:%d-%d", source.File, source.Line, source.EndLine), "text-muted").
 			NewLine().Add(source.Pretty())
 	}
 	return text
 }
 
-// stampSource records, on a failed result, the source lines its node was
-// written as, so every report of the failure can show them.
+// stampSource records on every result the source lines its node was written
+// as: the UI shows each step's YAML or markdown, and the terminal prints them
+// under a failure (resultPretty).
 func stampSource(node *FixtureNode, result *FixtureResult) {
-	if !isFailureStatus(result.Status) || node.Origin == nil {
+	if node.Origin == nil {
 		return
 	}
 	source := parsers.SourceRange{File: node.Origin.File, Line: node.Origin.Line, EndLine: node.Origin.EndLine}

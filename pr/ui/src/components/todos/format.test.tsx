@@ -125,7 +125,7 @@ describe('TodoRow session badge', () => {
 
     render(
       <TodoRow
-        todo={{ ...baseTodo, status: 'draft', executionState: 'failed', sessionId: SESSION_ID }}
+        todo={{ ...baseTodo, status: 'draft', executionState: 'failed', sessionId: SESSION_ID, sessionSummary: { found: true, inProgress: false, state: 'completed', durationMs: RUN_MS, costUsd: RUN_COST, updatedAt: new Date().toISOString() } }}
         active={false}
         onSelect={() => {}}
         dir="/work/repo"
@@ -148,7 +148,7 @@ describe('TodoRow session badge', () => {
       />,
     );
 
-    expect(useSessionStats).toHaveBeenCalledWith(expect.objectContaining({ sessionId: SESSION_ID, expectLive: false }));
+    expect(useSessionStats).not.toHaveBeenCalled();
   });
 
   it('falls back to the todo status icon when a settled todo has no session stats', () => {
@@ -165,7 +165,7 @@ describe('TodoRow session badge', () => {
     expect(screen.queryByText('In progress')).toBeNull();
   });
 
-  it('keeps the live chip and polling while a running todo has no session stats yet', () => {
+  it('keeps the live chip without fetching while a running todo has no session stats yet', () => {
     render(
       <TodoRow
         todo={{ ...baseTodo, status: 'in_progress', executionState: 'running', sessionId: SESSION_ID }}
@@ -176,7 +176,7 @@ describe('TodoRow session badge', () => {
     );
 
     expect(screen.getByTitle('In progress · agent session')).toBeTruthy();
-    expect(useSessionStats).toHaveBeenCalledWith(expect.objectContaining({ sessionId: SESSION_ID, expectLive: true }));
+    expect(useSessionStats).not.toHaveBeenCalled();
   });
 
   it('never reads session stats for a todo that has no session', () => {

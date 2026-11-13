@@ -1,0 +1,184 @@
+package ui
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
+
+	"github.com/flanksource/gavel/comments"
+	"github.com/flanksource/gavel/comments/agents"
+	commentblob "github.com/flanksource/gavel/comments/blob"
+	commentapi "github.com/flanksource/gavel/comments/clicky"
+	commentlint "github.com/flanksource/gavel/comments/lint"
+	"github.com/flanksource/gavel/comments/postgres"
+	"github.com/flanksource/gavel/comments/providers"
+	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/tenant"
+	"gorm.io/gorm"
+)
+
+var commentEntityOnce sync.Once
+var commentEntityErr error
+
+// RegisterComments declares request-scoped operations without opening or provisioning a database.
+func RegisterComments() error {
+	commentEntityOnce.Do(func() {
+		if commentEntityErr = commentapi.Register(OpenComments); commentEntityErr != nil {
+			return
+		}
+		commentEntityErr = commentlint.Register(commentlint.APIOptions{Service: OpenComments, Directory: commentLintDirectory})
+	})
+	return commentEntityErr
+}
+func OpenComments(ctx context.Context) (*comments.Service, error) {
+	var db *gorm.DB
+	var err error
+	if s := entityServer(ctx); s != nil && s.orgDB != nil {
+		db = s.orgDB
+	} else {
+		db, err = database.Require(ctx, "Gavel comments")
+	}
+	if err != nil {
+		return nil, err
+	}
+	store, err := postgres.New(db)
+	if err != nil {
+		return nil, err
+	}
+	var blobs comments.Blobs = store
+	if s := entityServer(ctx); s != nil && s.blobs != nil {
+		blobs = commentblob.Store{Store: s.blobs}
+	}
+	access := CommentAccess{}
+	options := comments.Options{Store: store, Access: access, Targets: access, Workflows: []comments.Workflow{comments.HumanReview(), comments.NativePR()}, Blobs: blobs, AttachmentLimit: 10 << 20, Providers: []comments.Provider{providers.GitHub{Resolve: commentGitHub}, providers.Azure{Resolve: commentAzure}}}
+	// Agent delivery reaches this machine's Captain sessions, so only the local tenant gets it.
+	if tenant.FromContext(ctx).IsLocal() {
+		if options.Delivery, err = agents.Delivery(agents.Options{Bridge: agents.Captain{}, Groups: store, Workdir: CommentWorkdir}); err != nil {
+			return nil, err
+		}
+		options.Routes = store
+	}
+	return comments.New(options)
+}
+
+// CommentWorkdir is the directory of the project a gavel://project/<name> target belongs to.
+func CommentWorkdir(ctx context.Context, t comments.Target) (string, error) {
+	project, err := commentProject(ctx, t.ScopeURI)
+	if err != nil {
+		return "", err
+	}
+	if project.Dir == "" {
+		return "", fmt.Errorf("project %q has no local directory for an agent session to run in", project.Name)
+	}
+	return CanonicalPath(project.Dir)
+}
+
+// CommentAccess is the comment host for gavel://project/<name> scopes: the
+// signed-in user or, locally, the asserted actor or the OS user. `gavel edit`
+// embeds it so file threads live under their project, where `gavel comments` reaches them.
+type CommentAccess struct{}
+
+func (CommentAccess) Principal(ctx context.Context) (comments.Principal, error) {
+	scope := tenant.FromContext(ctx)
+	if scope.UserID != nil {
+		return comments.Principal{TenantID: scope.OrgID.String(), Actor: comments.Actor{Kind: "user", ID: scope.UserID.String()}}, nil
+	}
+	if !scope.IsLocal() {
+		return comments.Principal{}, comments.ErrForbidden
+	}
+	// Locally the caller may act as an agent it asserted (GAVEL_COMMENT_ACTOR on
+	// the CLI, the loopback actor header over HTTP): the same machine-local trust.
+	if actor, ok := commentapi.ActorFrom(ctx); ok {
+		return comments.Principal{TenantID: scope.OrgID.String(), Actor: actor}, nil
+	}
+	actor, err := commentapi.LocalUser()
+	return comments.Principal{TenantID: scope.OrgID.String(), Actor: actor}, err
+}
+func (CommentAccess) Authorize(ctx context.Context, p comments.Principal, _ string, t comments.Target) error {
+	if p.TenantID != tenant.FromContext(ctx).OrgID.String() {
+		return comments.ErrForbidden
+	}
+	if s := entityServer(ctx); s != nil && s.orgID().String() != p.TenantID {
+		return comments.ErrForbidden
+	}
+	project, err := commentProject(ctx, t.ScopeURI)
+	if err != nil {
+		return err
+	}
+	if t.URI == "" {
+		return nil
+	}
+	if strings.HasPrefix(t.URI, t.ScopeURI+"/") {
+		return nil
+	}
+	u, err := url.Parse(t.URI)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return comments.ErrForbidden
+	}
+	if u.Host == "github.com" {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) != 4 || parts[2] != "pull" {
+			return comments.ErrForbidden
+		}
+		for _, repo := range project.Repos {
+			if repo == parts[0]+"/"+parts[1] {
+				return nil
+			}
+		}
+		return comments.ErrForbidden
+	}
+	if u.Host == "dev.azure.com" {
+		_, err := commentAzure(ctx, p, t)
+		return err
+	}
+	return comments.ErrForbidden
+}
+func (a CommentAccess) Resolve(ctx context.Context, p comments.Principal, t comments.Target) (comments.Target, error) {
+	if err := a.Authorize(ctx, p, "resolve-target", t); err != nil {
+		return t, err
+	}
+	if t.Kind == "" || t.URI == "" {
+		return t, comments.ErrInvalid
+	}
+	if t.Kind == "code" {
+		selector, err := comments.ParseCodeSelector(t.Selector)
+		if err != nil {
+			return t, err
+		}
+		if selector.Kind == "code-range" && selector.Revision != t.Revision {
+			return t, comments.ErrConflict
+		}
+	}
+	return t, nil
+}
+func commentProject(ctx context.Context, scope string) (projectInfo, error) {
+	raw, ok := strings.CutPrefix(scope, "gavel://project/")
+	if !ok || raw == "" {
+		return projectInfo{}, fmt.Errorf("%w: scope must name gavel://project/<escaped-project-name>", comments.ErrInvalid)
+	}
+	name, err := url.PathUnescape(raw)
+	if err != nil || url.PathEscape(name) != raw {
+		return projectInfo{}, comments.ErrInvalid
+	}
+	var projects []projectInfo
+	if s := entityServer(ctx); s != nil && s.hosted {
+		projects, err = s.projectList(ctx)
+	} else {
+		var local []Project
+		local, err = LoadProjects()
+		for _, p := range local {
+			projects = append(projects, projectInfo{Name: p.Name, Dir: p.ResolvedDir(), Repos: p.Repos})
+		}
+	}
+	if err != nil {
+		return projectInfo{}, err
+	}
+	for _, p := range projects {
+		if p.Name == name {
+			return p, nil
+		}
+	}
+	return projectInfo{}, comments.ErrForbidden
+}

@@ -1,0 +1,99 @@
+---
+title: "PostgreSQL databases with dbtest"
+parent: fixture-kind-services
+order: 13
+---
+
+import Prerequisites from "../../../src/components/site/Prerequisites";
+
+Use `dbtest` when a fixture needs disposable PostgreSQL data. Gavel calls [`dbtest.Open`](https://pkg.go.dev/github.com/flanksource/commons-db/dbtest#Open), which creates an isolated database on the shared test server by default. Teardown releases the database and keeps the shared server available for other fixtures and later runs.
+
+## Empty database and automatic connection
+
+<Prerequisites>
+
+- A Gavel binary built from this checkout.
+- The PostgreSQL `psql` client on `PATH`.
+
+</Prerequisites>
+
+commons-db provisions or reuses the server; you do not need to start PostgreSQL manually.
+
+The complete <a href="/examples/services/dbtest.fixture.yaml" download>empty-database fixture</a> declares `dbtest: {}`, checks that the connection variables identify the provisioned database, and creates and queries a table using plain `psql`. No `export` map or connection argument is needed.
+
+```bash
+./.bin/gavel fixtures outline docs/content/public/examples/services/dbtest.fixture.yaml
+./.bin/gavel fixtures docs/content/public/examples/services/dbtest.fixture.yaml
+```
+
+Expected results: the environment check passes, `psql` reports the leased database name, and the final query prints `hello from fixture`. The table is removed with the leased database at teardown.
+
+## Automatic connections
+
+For the default database, Gavel exports these variables before starting subsequent entries or steps:
+
+| Variables | Meaning |
+| --- | --- |
+| `DATABASE_URL`, `GAVEL_DB_DSN`, `COMMONS_DB_URL` | The provisioned database's connection URL |
+| `COMMONS_DB_CREATE` | `false`, so a child calling [`dbtest.Open`](https://pkg.go.dev/github.com/flanksource/commons-db/dbtest#Open) or its testing adapters uses this database directly |
+| `PGHOST`, `PGPORT`, `PGDATABASE` | PostgreSQL host, port, and database |
+| `PGUSER`, `PGPASSWORD`, `PGSSLMODE` | Connection credentials and TLS mode |
+
+The fixture environment reaches command steps, test runner children, and later services. An explicit command `env` overrides its inherited settings. No process-wide environment variables are changed. Gavel's own provisioning continues using its original `COMMONS_DB_*` process environment, so creating a second fixture database does not accidentally reuse the first lease.
+
+Every database also exposes named `<NAME>_URL` and `<NAME>_PORT` variables and outputs including `url`, `host`, `port`, `database`, `username`, `password`, `connection`, `env`, `ready`, and `default`. Do not print connection URLs or environment maps in shared reports: externally supplied servers may use real credentials.
+
+The complete <a href="/examples/services/dbtest-tests.fixture.yaml" download>Go test fixture</a> seeds a small Go module, then runs it through `kind: test`. Its test invokes plain `psql` and verifies it connected to `PGDATABASE`, demonstrating that runner children inherit the same environment as command steps. This example also requires Go; `runtime.env.GOWORK: off` keeps the disposable module independent of the caller's workspace.
+
+```bash
+./.bin/gavel fixtures docs/content/public/examples/services/dbtest-tests.fixture.yaml
+```
+
+A child that supplies its own [`dbtest.Options.Provisioner`](https://pkg.go.dev/github.com/flanksource/commons-db/dbtest#Options) cannot use direct mode. Fixture consumers should connect using the provided environment without requesting another provisioner; tests that need independent provisioning should acquire their own database instead.
+
+## Reusable HCL and SQL templates
+
+The <a href="/examples/services/dbtest-migrations.fixture.yaml" download>migration fixture</a> uses the <a href="/examples/services/schema/schema.hcl" download>HCL schema</a>, <a href="/examples/services/schema/seed.sql" download>seed SQL</a>, and <a href="/examples/services/schema/instance.sql" download>instance SQL</a>. Download these files into an adjacent `schema/` directory. The fixture supplies a typed HCL variable, verifies a seeded message, and checks that an always-run script recorded the current cloned database.
+
+```bash
+./.bin/gavel fixtures docs/content/public/examples/services/dbtest-migrations.fixture.yaml
+./.bin/gavel fixtures docs/content/public/examples/services/dbtest-migrations.fixture.yaml
+```
+
+Both runs should print `hello from template` and pass the instance reconciliation check. commons-db fingerprints the native migration inputs and prepares a reusable template. Each acquisition gets a separate clone. Changing HCL, SQL, or variables changes the fingerprint; native `runs: always` SQL and instance security reconciliation still run for each clone. A clone's writes never alter the reusable template.
+
+| Setting | Meaning |
+| --- | --- |
+| `dbtest.default` | Select this database for automatic connections. A sole database is selected when omitted; explicit `false` disables automatic connections |
+| `dbtest.migrations.dir` | Required when declaring migrations; directory of HCL/SQL files, relative to the effective fixture working directory, or an absolute path |
+| `dbtest.migrations.name` | Optional native migration metadata scope; omitted uses commons-db's default scope |
+| `dbtest.migrations.schema` | Optional target PostgreSQL schema; omitted uses `public` |
+| `dbtest.migrations.variables` | Optional map of JSON values converted to native HCL values, preserving strings, numbers, booleans, objects, lists, and null |
+
+Use native commons-db migration syntax inside the bundle. There is no separate Gavel migration language. Missing directories, malformed bundles, and failed migrations are errors. Entry-level `env`, `ready`, `wait`, `cwd`, `version`, `runtime`, and `parameters` do not apply to `dbtest`.
+
+## Multiple databases
+
+The <a href="/examples/services/dbtest-multiple.fixture.yaml" download>multiple-database fixture</a> marks its application database `default: true` and queries the auxiliary database through its named URL. Selection covers every services step in the fixture file. With multiple database entries, exactly one must explicitly select the default; ambiguous selections are rejected before resources start.
+
+```bash
+./.bin/gavel fixtures docs/content/public/examples/services/dbtest-multiple.fixture.yaml
+```
+
+Expected results: plain `psql` connects to the application database, while `psql "$AUX_URL"` connects to the distinct auxiliary database. Other databases retain named outputs without replacing the standard connection variables.
+
+## External disposable test servers
+
+Set `COMMONS_DB_URL` in the environment launching Gavel to use an external test server. Leave `COMMONS_DB_CREATE` unset or set it to `true` to create and release isolated databases there. The account needs database creation and deletion rights.
+
+```bash
+COMMONS_DB_URL='<disposable-test-server-url>' COMMONS_DB_CREATE=true ./.bin/gavel fixtures docs/content/public/examples/services/dbtest.fixture.yaml
+```
+
+For an externally managed disposable database, `COMMONS_DB_CREATE=false` uses that exact database and leaves it intact at teardown. This direct mode supports empty declarations but refuses migration-template provisioning. The child `COMMONS_DB_CREATE=false` setting exported by a fixture has a different purpose: it tells child tests to reuse the already acquired fixture database.
+
+## Troubleshooting and lifetime
+
+For connection failures, check the original Gavel process's `COMMONS_DB_URL`, server permissions, and PostgreSQL startup error. A fixture's connection must be ready before any consumer starts. Do not point disposable-schema tests at valuable data.
+
+Declare services that use a database after it. Reverse cleanup stops consumers first, closes Gavel's probe connection, and releases the database. Failed startup also releases databases already acquired by that step. commons-db bounds acquisition internally; Gavel checks cancellation before and after acquisition and immediately releases a database returned after cancellation. The current [`dbtest.Open`](https://pkg.go.dev/github.com/flanksource/commons-db/dbtest#Open) API does not accept a caller context.

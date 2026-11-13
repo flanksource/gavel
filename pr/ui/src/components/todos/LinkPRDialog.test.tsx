@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { PRSearchItem } from '../../types';
 import { LinkPRDialog } from './LinkPRDialog';
 import { queryTestWrapper } from './queryTestWrapper';
@@ -14,7 +14,7 @@ const searchResults: PRSearchItem[] = [
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let postStatus: number;
-let onClose: ReturnType<typeof vi.fn>;
+let onClose: Mock<() => void>;
 
 function respond(body: unknown, status = 200) {
   return Promise.resolve({

@@ -81,6 +81,7 @@ func TestGavelMCPProfileIgnoresPRListDashboardParams(t *testing.T) {
 		"all",
 		"interval",
 		"menu-bar",
+		"open",
 		"persist-port",
 		"port",
 	} {

@@ -18,6 +18,7 @@
 package prompt
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/prompts"
+	"github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -47,6 +49,8 @@ var triageNewTemplate string
 // Options configures Render.
 type Options struct {
 	WorkDir string
+	// FrontmatterOnly avoids reading context templates while resolving runtime declarations.
+	FrontmatterOnly bool
 	// Prompt names the template to render. Empty means the default run prompt.
 	// It is independent of Mode: several prompts share one behaviour class.
 	Prompt string
@@ -104,11 +108,19 @@ func Default(name string) (string, error) {
 // It is exported because todos/headless renders the same templates' frontmatter with
 // the same variables, and a template that computes its frontmatter would resolve
 // differently against a divergent set.
-func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
+func TemplateData(todoList []*types.TODO, opts Options) (map[string]any, error) {
+	var body string
+	if !opts.FrontmatterOnly && len(todoList) > 0 {
+		var err error
+		body, err = Sections(todoList, opts.WorkDir, opts.RawFixture)
+		if err != nil {
+			return nil, err
+		}
+	}
 	data := map[string]any{
 		"multiple":     len(todoList) > 1,
 		"count":        len(todoList),
-		"body":         Sections(todoList, opts.WorkDir, opts.RawFixture),
+		"body":         body,
 		"existingPlan": opts.ExistingPlan,
 		"backlog":      opts.Backlog,
 		"labels":       opts.Labels,
@@ -116,7 +128,7 @@ func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
 	for name, value := range opts.Inputs {
 		data[name] = value
 	}
-	return data
+	return data, nil
 }
 
 // promptName is the name Render reports in errors and stamps on the request.
@@ -151,7 +163,11 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 		return captainai.Request{}, captainai.Config{}, err
 	}
 
-	rendered, _, err := dotprompt.Load(template).Render(dotprompt.RenderOptions{Data: TemplateData(todoList, opts), Declared: true})
+	data, err := TemplateData(todoList, opts)
+	if err != nil {
+		return captainai.Request{}, captainai.Config{}, err
+	}
+	rendered, _, err := dotprompt.Load(template).Render(dotprompt.RenderOptions{Data: data, Declared: true})
 	if err != nil {
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("render todos %s prompt: %w", opts.promptName(), err)
 	}
@@ -191,8 +207,20 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	if err := req.Validate(); err != nil {
 		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.promptName(), err)
 	}
-	if directive := EffortDirective(string(req.Effort)); directive != "" {
-		req.Prompt.User = directive + "\n\n" + withoutEffortDirectives(user)
+	tier := string(req.Effort)
+	if tier == "" {
+		tier = "medium"
+	}
+	if slices.Contains(effortDirectiveTiers, tier) {
+		dir := opts.WorkDir
+		if dir == "" {
+			dir = "."
+		}
+		directive, err := library.Render(context.Background(), library.RenderOptions{Directory: dir, Name: "todos-effort", Data: map[string]any{tier: true}})
+		if err != nil {
+			return captainai.Request{}, captainai.Config{}, err
+		}
+		req.Prompt.User = effortBlocks.Wrap("effort", directive.User) + "\n\n" + withoutEffortDirectives(user)
 	}
 	return req, captainai.Config{Model: req.Model, Budget: req.Budget}, nil
 }
@@ -259,38 +287,14 @@ func EnvelopeSchemaJSON(events []string) (json.RawMessage, error) {
 	return raw, nil
 }
 
-// EffortDirective renders the leading reasoning-effort instruction for a run,
-// or "" for an unknown tier.
-func EffortDirective(effort string) string {
-	switch effort {
-	case "low":
-		return "Be concise."
-	case "medium", "":
-		return "Think carefully before implementing."
-	case "high":
-		return "Think hard and reason thoroughly; consider edge cases before implementing."
-	case "xhigh":
-		return "Think very hard, reason exhaustively, and validate edge cases before implementing."
-	default:
-		return ""
-	}
-}
-
 var effortDirectiveTiers = []string{"low", "medium", "high", "xhigh"}
+var effortBlocks = dotprompt.NewHookBlocks("gavel:effort")
 
 // withoutEffortDirectives removes the directive lines leading a prompt so Render
 // can lead it with exactly one. An override edited from a preview already starts
 // with the directive the preview rendered, possibly for a different effort.
 func withoutEffortDirectives(user string) string {
-	for {
-		line, rest, _ := strings.Cut(strings.TrimLeft(user, "\r\n"), "\n")
-		if !slices.ContainsFunc(effortDirectiveTiers, func(tier string) bool {
-			return strings.TrimRight(line, "\r ") == EffortDirective(tier)
-		}) {
-			return user
-		}
-		user = strings.TrimLeft(rest, "\r\n")
-	}
+	return strings.TrimLeft(effortBlocks.Strip(user), "\r\n")
 }
 
 // Prompts returns the overridable todo prompt descriptors for the settings

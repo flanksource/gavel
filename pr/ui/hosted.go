@@ -25,6 +25,7 @@ var hostedPassThrough = []string{
 	"GET /api/events", "POST /api/events/{conn}/subs", "DELETE /api/events/{conn}/subs/{id}",
 	"/api/status", "GET /api/auth/config", "GET /api/me",
 	"GET /api/ssh-keys", "POST /api/ssh-keys", "DELETE /api/ssh-keys/{id}",
+	"GET /api/filters", "GET /api/filters/{name}", "POST /api/filters/{name}/values", "DELETE /api/filters/{name}/values",
 	"GET /api/model-keys", "PUT /api/model-keys/{provider}", "DELETE /api/model-keys/{provider}",
 	"GET /api/sandbox-runs", "GET /api/sandbox-runs/{id}/log",
 
@@ -41,7 +42,7 @@ var hostedPassThrough = []string{
 	// The organization's CI runs, as its repositories' GitHub Actions jobs upload them (see ci_runs.go).
 	"GET /api/projects/{name}/ci-runs", "GET /api/projects/{name}/ci-runs/{run}",
 
-	"GET /api/projects", "/api/todos", "POST /api/todos/batch", "POST /api/todos/new", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
+	"GET /api/todos/changes", "GET /api/projects", "/api/todos", "POST /api/todos/labels/batch", "POST /api/todos/new", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
 	"/api/todos/pr-links", "POST /api/todos/criteria", "/api/todos/attachments", "GET /api/todos/attachments/{id}",
 	// Runs execute in sandbox jobs (see agent_runs.go).
 	"/api/todos/run", "POST /api/todos/plan/approve", "POST /api/todos/plan/revise", "POST /api/todos/plan/reject",
@@ -51,6 +52,13 @@ var hostedPassThrough = []string{
 	"GET /api/captain/sessions/{id}", "GET /api/todos/run/context", "/api/todos/run/preview",
 	// The todo entity acts for the organization's user (see todo_entity.go).
 	"GET /api/entities", "GET /api/v1/todo", "POST /api/v1/todo", "GET /api/v1/todo/{id}",
+	"GET /api/v1/comments", "POST /api/v1/comments", "GET /api/v1/comments/{id}",
+	"GET /api/v1/comments/events", "GET /api/v1/comments/{id}/capabilities", "POST /api/v1/comments/{id}/read",
+	"POST /api/v1/comments/{id}/reply", "POST /api/v1/comments/{id}/assign", "POST /api/v1/comments/{id}/acknowledge",
+	"POST /api/v1/comments/{id}/edit", "POST /api/v1/comments/{id}/resolve", "POST /api/v1/comments/{id}/close", "POST /api/v1/comments/{id}/reopen",
+	"POST /api/v1/comments/sync", "POST /api/v1/comments/{id}/publish", "POST /api/v1/comments/{id}/publish-reply",
+	"POST /api/v1/comments/{id}/resolve-native", "POST /api/v1/comments/{id}/reopen-native", "GET /api/v1/comments/{id}/operation",
+	"POST /api/v1/comments/{id}/attachments", "GET /api/v1/comments/{id}/attachments/{attachment}",
 	"POST /api/v1/todo/steps", "DELETE /api/v1/todo/{id}/delete", "PUT /api/v1/todo/{id}/edit",
 	"POST /api/v1/todo/{id}/comment", "POST /api/v1/todo/{id}/labels", "POST /api/v1/todo/{id}/priority",
 	"POST /api/v1/todo/{id}/status", "POST /api/v1/todo/{id}/reopen", "POST /api/v1/todo/{id}/transfer",

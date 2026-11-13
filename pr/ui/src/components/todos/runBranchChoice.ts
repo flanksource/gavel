@@ -4,9 +4,6 @@ import { unresolvedLineCommentCount } from './lineComments';
 import { latestRunWorkspace } from './runWorkspace';
 import { useTodoSessionDetail } from './TodoSessionDetail';
 
-// RUN_BRANCH_POLL_MS matches TodoRunBranch, so both share one attempts poll.
-const RUN_BRANCH_POLL_MS = 15_000;
-
 /** The branch a new run may continue on instead of starting a fresh one. */
 export interface RunBranchChoice {
   branch: string;
@@ -25,7 +22,7 @@ export function reusableRunBranch(attempts: TodoSessionAttempt[], events: TodoEv
 }
 
 export function useReusableRunBranch(dir: string, todoRef: string, events: TodoEvent[]): RunBranchChoice | null {
-  const { detail } = useTodoSessionDetail(dir, todoRef, !!todoRef, { intervalMs: RUN_BRANCH_POLL_MS });
+  const { detail } = useTodoSessionDetail(dir, todoRef, !!todoRef);
   return useMemo(() => (detail ? reusableRunBranch(detail.attempts, events) : null), [detail, events]);
 }
 

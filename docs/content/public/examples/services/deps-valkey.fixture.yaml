@@ -1,0 +1,15 @@
+kind: Fixture
+name: Catalog Valkey
+steps:
+  - id: resources
+    kind: services
+    services:
+      cache:
+        deps: valkey
+        version: '8.1'
+        runtime: docker
+    cel: cache.ready && cache.connection.type == 'redis'
+  - id: ping
+    kind: exec
+    script: valkey-cli -u "$CACHE_URL" PING
+    stdout: "PONG\n"

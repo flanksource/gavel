@@ -1,0 +1,54 @@
+---
+title: "Supervised command services"
+parent: fixture-kind-services
+order: 15
+---
+
+import Prerequisites from "../../../src/components/site/Prerequisites";
+
+Use an `exec` service when the dependency is an application command rather than a catalog service. Gavel starts a supervised shell command, waits for readiness, makes the allocated address available to later steps, and stops the process group at teardown.
+
+## A complete HTTP service
+
+<Prerequisites>
+
+- Git, Python 3, and curl on `PATH`.
+
+</Prerequisites>
+
+The <a href="/examples/services/exec.fixture.yaml" download>HTTP fixture</a> creates static content in a disposable git repository, starts Python's HTTP server on an allocated port, waits for HTTP 200, and checks the served content with curl.
+
+```bash
+./.bin/gavel fixtures outline docs/content/public/examples/services/exec.fixture.yaml
+./.bin/gavel fixtures docs/content/public/examples/services/exec.fixture.yaml
+```
+
+Expected results: the content repository is seeded, HTTP readiness succeeds, and the final command prints `hello from service`. The HTTP service stops before the temporary repository is removed.
+
+`{{.port}}` allocates a free local port for this entry. The ready URL uses the same value. The example uses `exec python3 ...` so the service replaces its shell wrapper. Shell variables such as `$DATABASE_URL`, `$?`, and loop variables remain shell expressions in the command; Go templates resolve fixture values before launch.
+
+## Configuration
+
+| Setting | Meaning |
+| --- | --- |
+| `exec` | Shell command to run under supervision |
+| `cwd` | Optional working directory, relative to the effective fixture directory, or an absolute/template path |
+| `env` | Additional process environment; inherited fixture exports are already available |
+| `ready.http` | URL that must respond with the expected status |
+| `ready.status` | HTTP status, default `200`; applies only to HTTP readiness |
+| `ready.tcp` | Host and port that must accept a connection |
+| `ready.exec` | Command whose exit code must be zero |
+| `wait` | Readiness interval, backoff, jitter, and timeout |
+| `export` | Additional output-to-environment mappings |
+
+Choose exactly one readiness probe. Entry-level waits configure probe timing, not a CEL `until` or `failWhen`. For aggregate conditions use the services step's own wait policy. Native `version`, `runtime`, and `parameters` belong to deps entries.
+
+## Database-connected applications
+
+Declare a default `dbtest` database before the application. The application automatically receives `DATABASE_URL`, `GAVEL_DB_DSN`, `COMMONS_DB_URL`, and `PG*`. There is no need to add an `env` map that repeats these values. Use a real application-specific readiness check after launch, such as a health endpoint that checks its database connection.
+
+## Outputs and failures
+
+Outputs include the service URL and allocated port when applicable, readiness details, process information, and log path. Later commands inherit `<NAME>_URL` and `<NAME>_PORT`. Refer to a previous entry as `{{.services.<name>.url}}` inside the same services step, or `{{.steps.<id>.<name>.url}}` from a later step.
+
+Gavel reports an early exit or readiness timeout with the log tail and stops the failed service. Teardown stops entries in reverse declaration order and terminates the process group, including subprocesses. Investigate a failed health check before increasing timeouts; an alive process alone does not mean the application is ready.

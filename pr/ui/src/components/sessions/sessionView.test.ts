@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentSession } from '../../types';
-import { attentionReasons, contextUsedPercent, filterSessions, groupSessions } from './sessionView';
+import {
+  attentionReasons,
+  contextUsedPercent,
+  parentSessionIds,
+  sessionFamilies,
+  sessionState,
+  visibleFamilies,
+  type SessionFamily,
+} from './sessionView';
 
 const NOW = Date.parse('2026-10-06T12:00:00Z');
 const HOUR = 60 * 60 * 1000;
@@ -21,23 +29,66 @@ function session(title: string, overrides: Partial<AgentSession> = {}): AgentSes
   };
 }
 
-describe('groupSessions', () => {
-  it('puts live and input-waiting sessions in Active, then splits the rest at 24h, keeping server order', () => {
-    const sessions = [
-      session('asking', { activityState: 'ask', lastActivityAt: new Date(NOW - 30 * HOUR).toISOString() }),
-      session('running', { processActive: true }),
-      session('finished today'),
-      session('finished last week', { lastActivityAt: new Date(NOW - 7 * 24 * HOUR).toISOString() }),
-    ];
-    const titles = (rows: AgentSession[]) => rows.map(row => row.title);
+type Outline = [string, Outline[]];
+const outline = (families: SessionFamily[]): Outline[] => families.map(f => [f.session.title, outline(f.children)]);
+const ago = (hours: number) => new Date(NOW - hours * HOUR).toISOString();
 
-    const groups = groupSessions(sessions, NOW);
+describe('sessionFamilies', () => {
+  it('nests subagents, and theirs, under the session that delegated them', () => {
+    const families = sessionFamilies([
+      session('root'),
+      session('child', { parentId: 'root' }),
+      session('grandchild', { parentId: 'child' }),
+      session('solo'),
+    ]);
 
-    expect({ active: titles(groups.active), recent: titles(groups.recent), older: titles(groups.older) }).toEqual({
-      active: ['asking', 'running'],
-      recent: ['finished today'],
-      older: ['finished last week'],
-    });
+    expect(outline(families)).toEqual([['root', [['child', [['grandchild', []]]]]], ['solo', []]]);
+  });
+
+  it('fails on a subagent whose parent is not listed', () => {
+    expect(() => sessionFamilies([session('orphan', { parentId: 'gone' })])).toThrow('names parent gone');
+  });
+});
+
+describe('visibleFamilies', () => {
+  const families = sessionFamilies([
+    session('Quiet parent', { lastActivityAt: ago(5), startedAt: ago(9), costUsd: 4 }),
+    session('Busy subagent', { parentId: 'Quiet parent', lastActivityAt: ago(1), activityState: 'ask', project: 'gavel' }),
+    session('Recent root', { lastActivityAt: ago(2), startedAt: ago(3), costUsd: 1, project: 'gavel', worktree: { path: '/w', branch: 'fix/pgproxy', base: 'main', primary: false } }),
+  ]);
+  const unfiltered = { search: '', project: '', state: '', sort: 'activity-desc' } as const;
+
+  it('orders families by the latest activity anywhere in them', () => {
+    expect(outline(visibleFamilies(families, unfiltered))).toEqual([['Quiet parent', [['Busy subagent', []]]], ['Recent root', []]]);
+  });
+
+  it('keeps a matching subagent with its parent and drops non-matching siblings', () => {
+    expect(outline(visibleFamilies(families, { ...unfiltered, state: 'ask' }))).toEqual([['Quiet parent', [['Busy subagent', []]]]]);
+  });
+
+  it('matches search text against the branch as well as the title', () => {
+    expect(outline(visibleFamilies(families, { ...unfiltered, search: 'PGPROXY' }))).toEqual([['Recent root', []]]);
+  });
+
+  it('sorts by start time and by cost', () => {
+    expect(outline(visibleFamilies(families, { ...unfiltered, sort: 'started-desc' })).map(([title]) => title)).toEqual(['Recent root', 'Quiet parent']);
+    expect(outline(visibleFamilies(families, { ...unfiltered, sort: 'cost-desc' })).map(([title]) => title)).toEqual(['Quiet parent', 'Recent root']);
+  });
+
+  it('lists every session with subagents for collapse-all', () => {
+    expect(parentSessionIds(families)).toEqual(['Quiet parent']);
+  });
+});
+
+describe('sessionState', () => {
+  it('prefers the input a session waits on over its live process, then how it ended', () => {
+    expect([
+      session('a', { activityState: 'approval', processActive: true }),
+      session('b', { activityState: 'ask' }),
+      session('c', { processActive: true }),
+      session('d', { lifecycleStatus: 'interrupted' }),
+      session('e'),
+    ].map(sessionState)).toEqual(['approval', 'ask', 'working', 'failed', 'completed']);
   });
 });
 
@@ -63,22 +114,6 @@ describe('attentionReasons', () => {
     });
 
     expect(attentionReasons(fine)).toEqual([]);
-  });
-});
-
-describe('filterSessions', () => {
-  const sessions = [
-    session('Fix sniffer', { project: 'commons-db', worktree: { path: '/w', branch: 'fix/pgproxy', base: 'main', primary: false } }),
-    session('Sessions tab', { project: 'gavel', activityState: 'ask' }),
-  ];
-
-  it('matches search text against the branch as well as the title', () => {
-    expect(filterSessions(sessions, { search: 'PGPROXY', project: '', attention: false }).map(s => s.title)).toEqual(['Fix sniffer']);
-  });
-
-  it('combines the project and needs-attention filters', () => {
-    expect(filterSessions(sessions, { search: '', project: 'gavel', attention: true }).map(s => s.title)).toEqual(['Sessions tab']);
-    expect(filterSessions(sessions, { search: '', project: 'commons-db', attention: true })).toEqual([]);
   });
 });
 

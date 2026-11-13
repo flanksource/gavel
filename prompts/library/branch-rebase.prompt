@@ -1,0 +1,89 @@
+---
+name: branch-rebase
+description: Resolve a failed worktree rebase and restore saved local edits, keeping the branch and worktree.
+model: claude
+mode: agent
+effort: high
+budget:
+  maxTurns: 40
+  timeout: 30m
+setup:
+  cwd: "{{worktree}}"
+prompt:
+  system: >-
+    Recover Gavel rebase operation {{operation}} in {{worktree}}. Keep branch {{branch}}
+    and its worktree. Resolve commit conflicts by preserving each commit's intent on
+    top of the pinned target. Saved local edits belong to the user: restore them as
+    uncommitted edits, retaining the original index where possible. Do not commit
+    those saved edits. Never push, merge, delete a branch or worktree, reset history,
+    change the target, or abort the rebase. Gavel owns stash restoration and cleanup.
+permissions:
+  mode: acceptEdits
+  tools:
+    Read: allow
+    Glob: allow
+    Grep: allow
+    Edit: allow
+    Write: allow
+    Bash(git status:*): allow
+    Bash(git diff:*): allow
+    Bash(git log:*): allow
+    Bash(git show:*): allow
+    Bash(git rev-parse:*): allow
+    Bash(git ls-files:*): allow
+    Bash(git stash show:*): allow
+    Bash(git stash apply:*): allow
+    Bash(git restore --staged:*): allow
+    Bash(git add:*): allow
+    Bash(git rm:*): allow
+    Bash(git rebase --continue:*): allow
+    Bash(git rebase --skip:*): allow
+    Bash(git -c core.editor=true rebase --continue:*): allow
+    "Bash({{shq gavelExecutable}} git rebase start:*)": allow
+    "Bash({{shq gavelExecutable}} git rebase check:*)": allow
+    "Bash({{shq gavelExecutable}} git rebase finish:*)": allow
+    Bash(gavel test:*): allow
+    Bash(gavel lint:*): allow
+    Bash(make build:*): allow
+    Bash(git push:*): deny
+    Bash(git merge:*): deny
+    Bash(git reset:*): deny
+    Bash(git checkout:*): deny
+    Bash(git switch:*): deny
+    Bash(git branch:*): deny
+    Bash(git worktree:*): deny
+    Bash(git commit:*): deny
+    Bash(git rebase --abort:*): deny
+    Bash(git stash drop:*): deny
+    Bash(git stash clear:*): deny
+workflow:
+  verify:
+    maxIterations: 3
+    commands:
+      - |-
+        {{shq gavelExecutable}} git rebase check --worktree {{shq worktree}} --operation {{shq operation}}
+  after:
+    - when: onVerify
+      cwd: "{{worktree}}"
+      commands:
+        - |-
+          {{shq gavelExecutable}} git rebase finish --worktree {{shq worktree}} --operation {{shq operation}}
+---
+# Recover the rebase of `{{branch}}`
+
+Worktree: `{{worktree}}`. Operation: `{{operation}}`. Target: `{{target}}` (pinned commit `{{targetSha}}`). Phase when sent: `{{phase}}`. Saved edits: `{{stashSha}}`.
+
+The failed attempt reported:
+
+```text
+{{error}}
+```
+
+{{#each conflicts}}
+- `{{this}}`
+{{/each}}
+
+1. Inspect the live Git status. If a rebase is paused, resolve its current conflicts, stage only the resolved paths, and run `git -c core.editor=true rebase --continue`. Repeat for every stopped commit. Skip a commit only when its entire change is already present and it has become empty. Do not restart the rebase over a paused operation.
+2. If preparation or fetching failed before the rebase began, retry the same operation with `{{shq gavelExecutable}} git rebase start --worktree {{shq worktree}} --operation {{shq operation}}`. This retains its original target and saved edits. Explain missing credentials or inaccessible remotes if they cannot be fixed within the existing configuration.
+3. If saved-edit restoration failed, inspect the retained stash and the live index and files. Git can refuse `stash apply --index` without creating unmerged paths: do not assume an empty conflict list means the edits were restored. Reconstruct all saved tracked and untracked edits, preserve staging where possible, and keep them uncommitted. Only after confirming the complete restoration, run `{{shq gavelExecutable}} git rebase finish --resolved --worktree {{shq worktree}} --operation {{shq operation}}`. This acknowledgement is also required when restoration was interrupted.
+4. For a finished rebase, run the project's focused tests and build. Do not commit test fixes or saved edits. Report any remaining failure rather than landing or publishing the branch. Gavel's verification hook checks the operation, then its finalization hook restores saved edits. A restoration failure keeps the stash and is reported as a failed run for another recovery attempt.

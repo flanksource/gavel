@@ -18,7 +18,7 @@ func TestRuntimeCancellation(t *testing.T) {
 }
 
 var _ = Describe("plan review status projection", func() {
-	DescribeTable("projects plan approval without hiding terminal or active states",
+	DescribeTable("keeps pending plan approval reachable after inactive attempts",
 		func(status native.IssueStatus, execution native.ExecutionState, step native.StepKind, approval captaindb.PlanApprovalState, expected types.Status) {
 			Expect(todoStatusWithPlan(status, execution, step, approval)).To(Equal(expected))
 		},
@@ -26,7 +26,12 @@ var _ = Describe("plan review status projection", func() {
 		Entry("draft pending plan", native.StatusDraft, native.ExecutionIdle, native.StepPlan, captaindb.PlanApprovalPending, types.StatusReview),
 		Entry("draft revision requested", native.StatusDraft, native.ExecutionIdle, native.StepPlan, captaindb.PlanApprovalRevisionRequested, types.StatusReview),
 		Entry("failed plan with recovered content", native.StatusOpen, native.ExecutionFailed, native.StepPlan, captaindb.PlanApprovalPending, types.StatusReview),
-		Entry("failed implementation", native.StatusOpen, native.ExecutionFailed, native.StepRun, captaindb.PlanApprovalPending, types.StatusFailed),
+		Entry("failed implementation with pending plan", native.StatusOpen, native.ExecutionFailed, native.StepRun, captaindb.PlanApprovalPending, types.StatusReview),
+		Entry("failed verification with pending plan", native.StatusOpen, native.ExecutionVerificationFailed, native.StepVerify, captaindb.PlanApprovalPending, types.StatusReview),
+		Entry("stalled implementation with changes requested", native.StatusOpen, native.ExecutionStalled, native.StepRun, captaindb.PlanApprovalRevisionRequested, types.StatusReview),
+		Entry("failed implementation with approved plan", native.StatusOpen, native.ExecutionFailed, native.StepRun, captaindb.PlanApprovalApproved, types.StatusFailed),
+		Entry("failed verification with approved plan", native.StatusOpen, native.ExecutionVerificationFailed, native.StepVerify, captaindb.PlanApprovalApproved, types.StatusUnverified),
+		Entry("waiting for an answer", native.StatusOpen, native.ExecutionWaiting, native.StepRun, captaindb.PlanApprovalPending, types.StatusAsk),
 		Entry("draft approved plan", native.StatusDraft, native.ExecutionIdle, native.StepPlan, captaindb.PlanApprovalApproved, types.StatusPending),
 		Entry("draft rejected plan", native.StatusDraft, native.ExecutionIdle, native.StepPlan, captaindb.PlanApprovalRejected, types.StatusPending),
 		Entry("running open issue", native.StatusOpen, native.ExecutionRunning, native.StepPlan, captaindb.PlanApprovalPending, types.StatusInProgress),

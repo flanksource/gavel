@@ -1,0 +1,76 @@
+---
+title: "GitHub Action"
+description: "Run Gavel in GitHub Actions and retain reports and PR summaries."
+parent: cli-usage
+order: 20
+---
+
+Run `gavel test --lint` in CI, upload JSON + HTML artifacts, and post a sticky PR comment with the markdown summary.
+
+### Minimal usage
+
+```yaml
+- uses: flanksource/gavel@main
+  with:
+    args: test --lint
+```
+
+### Full example
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # required when comment=true so the action can post/update the sticky PR comment
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: flanksource/gavel@main
+        with:
+          args: test --lint
+          timeout-minutes: "20"
+          version: latest
+          json-file: gavel-results.json
+          html-file: gavel-results.html
+          summary-file: gavel-summary.md
+          artifact-name: gavel-results
+          comment: "true"
+          comment-header: gavel
+          fail-on-error: "true"
+```
+
+If you disable PR commenting (`comment: "false"`), `contents: read` is sufficient. Keep `pull-requests: write` when the action should post or update the sticky PR comment.
+
+### Inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `args` | `test --lint` | Arguments passed to gavel |
+| `working-directory` | `.` | Working directory for execution |
+| `timeout-minutes` | `20` | Hard wall-clock limit; timeout diagnostics are printed before the process tree is terminated |
+| `version` | `latest` | Release tag, `latest`, or `source` to use a pre-installed binary |
+| `json-file` | `gavel-results.json` | Path for the JSON artifact |
+| `html-file` | `gavel-results.html` | Path for the HTML artifact |
+| `summary-file` | `gavel-summary.md` | Path for the compact markdown summary |
+| `artifact-name` | `gavel-results` | Name of the uploaded artifact bundle |
+| `comment` | `true` | Post/update a sticky PR comment with the summary |
+| `comment-header` | `gavel` | Unique marker for the sticky comment (allows multiple comments per PR) |
+| `github-token` | `${{ github.token }}` | Token used to post PR comments |
+| `fail-on-error` | `true` | Fail the step when gavel exits non-zero (artifacts are still uploaded) |
+| `gavel-server` | — | Upload the results to this hosted gavel with `gavel ci upload`; `gavel test` also streams its in-flight results and diagnostics there every 15s, so a killed job keeps its latest state. Needs `permissions: id-token: write` and a repository linked through the gavel GitHub App |
+
+### Outputs
+
+| Output | Description |
+|--------|-------------|
+| `exit-code` | Exit code from gavel |
+| `json-path` | Absolute path to the JSON artifact |
+| `html-path` | Absolute path to the HTML artifact |
+| `summary-path` | Absolute path to the markdown summary |
+| `log-path` | Absolute path to the stderr log (`gavel.log`) — always present, even on crash |
+
+The action is crash-resilient: if gavel exits before writing results, placeholder stubs with the exit code and log tail are written so the artifact upload and PR comment still succeed.

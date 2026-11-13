@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
@@ -137,6 +139,10 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
+	if err := answerRuntimeError(activeRun, prepared.Resolution.Spec.Model); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	req.Prepared = prepared
 	stream := newTodoLaunchStream(w, r)
 	if err := stream.resolved(prepared); err != nil {
@@ -193,6 +199,26 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	writeTodoJSON(w, http.StatusOK, response)
 }
 
+// answerRuntimeError refuses an answer whose resolved runtime cannot continue
+// the asking run's conversation: an answer is that conversation's next turn,
+// so unlike a plan revision it has no fresh run to fall back to. A workspace
+// whose runtime records no prompt run has no recorded runtime to contradict.
+func answerRuntimeError(asking *captaindb.PromptRun, model api.Model) error {
+	if asking == nil {
+		return nil
+	}
+	continues, err := run.ContinuesPrior(asking, model)
+	if err != nil {
+		return err
+	}
+	if continues {
+		return nil
+	}
+	resolved := asking.Runtime.Resolved
+	return fmt.Errorf("%w: this conversation runs %s/%s; answer it with the same agent (requested %s/%s)",
+		todos.ErrRunResumeProviderMismatch, resolved.Provider, resolved.Model, run.ProviderKey(model), model.Name)
+}
+
 // answeredFromCaptain reports whether the todo's latest ask was answered from
 // Captain's session page: an ask_answered event a read reconciled from Captain,
 // with no lifecycle outcome since. A second answer from here would resume the
@@ -222,7 +248,15 @@ func answerText(payload todoAnswerPayload) (string, error) {
 		answer = string(encoded)
 	}
 	if answer == "" && payload.Rejected {
-		answer = "The pending question was rejected. Continue without that answer or explain what is required."
+		dir := payload.Dir
+		if dir == "" {
+			dir = "."
+		}
+		rendered, err := library.Render(context.Background(), library.RenderOptions{Directory: dir, Name: "todos-answer-rejected"})
+		if err != nil {
+			return "", err
+		}
+		answer = rendered.User
 	}
 	if answer == "" {
 		return "", fmt.Errorf("answer is required")

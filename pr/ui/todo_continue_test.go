@@ -199,8 +199,8 @@ func TestTodoAPIPlanReviseInheritsPlanRunRuntime(t *testing.T) {
 		t.Fatal("revise never dispatched a resume")
 	}
 	spec := resolvedRun(t, *gotReq).Spec
-	if providerKey(spec.Model) != "openai" || spec.Name != priorCodexModel {
-		t.Errorf("runtime = %s/%s, want openai/%s — a codex plan must not be revised by claude", providerKey(spec.Model), spec.Name, priorCodexModel)
+	if run.ProviderKey(spec.Model) != "openai" || spec.Name != priorCodexModel {
+		t.Errorf("runtime = %s/%s, want openai/%s — a codex plan must not be revised by claude", run.ProviderKey(spec.Model), spec.Name, priorCodexModel)
 	}
 	if spec.SessionID != sid {
 		t.Errorf("session id = %q, want the plan session %q", spec.SessionID, sid)
@@ -246,8 +246,8 @@ func TestTodoAPIPlanApproveAndRunInheritsPlanRunRuntime(t *testing.T) {
 		t.Errorf("chained run carried no pre-flight resolution; Start would fold a second time")
 	}
 	spec := resolvedRun(t, got).Spec
-	if providerKey(spec.Model) != "openai" || spec.Name != priorCodexModel {
-		t.Errorf("runtime = %s/%s, want openai/%s — a codex plan must not be implemented by claude", providerKey(spec.Model), spec.Name, priorCodexModel)
+	if run.ProviderKey(spec.Model) != "openai" || spec.Name != priorCodexModel {
+		t.Errorf("runtime = %s/%s, want openai/%s — a codex plan must not be implemented by claude", run.ProviderKey(spec.Model), spec.Name, priorCodexModel)
 	}
 
 	var resp todoApproveResponse

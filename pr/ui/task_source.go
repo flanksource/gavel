@@ -401,8 +401,10 @@ func runningSupervisorRoots() ([]string, error) {
 	return roots, nil
 }
 
+// configuredProjectRoots is the visible projects' roots. Task history is
+// process-wide background work, so it reads the local scope's hidden projects.
 func configuredProjectRoots() ([]string, error) {
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := visibleProjects(context.Background(), nil)
 	if err != nil {
 		return nil, err
 	}

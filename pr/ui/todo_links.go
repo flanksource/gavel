@@ -125,7 +125,7 @@ func (s *Server) decodeTodoLinkRequest(w http.ResponseWriter, r *http.Request) (
 func (s *Server) todoLinkTarget(ctx context.Context, source todoSource, ref string) (
 	todos.RelationshipProvider, *types.TODO, error,
 ) {
-	provider, _, err := s.todoProviderContext(ctx, source)
+	provider, _, err := s.todoReadProviderContext(ctx, source)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -1,0 +1,4 @@
+# Built UI bundles are committed only on release tag commits (see release.yml).
+# Treat them as binary so diffs, stats and diff previews don't expand 100k+ minified lines.
+pr/ui/dist/** -diff linguist-generated
+testrunner/ui/dist/** -diff linguist-generated

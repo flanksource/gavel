@@ -141,6 +141,10 @@ func open(ctx context.Context, deps openDependencies, optionFns ...Option) (*DB,
 	return &DB{gorm: gormDB, migrated: options.migrate, dsn: dsn, dsnSource: source}, nil
 }
 
+// Migrate applies Captain's and Gavel's schemas (comments included) to dsn,
+// as WithMigrations does on open, for hosts and tests that own their DSN.
+func Migrate(ctx context.Context, dsn string) error { return migrateDatabase(ctx, dsn) }
+
 func migrateDatabase(ctx context.Context, dsn string) error {
 	return withMigrationAdvisoryLock(ctx, dsn, func() error {
 		// Captain owns its schema and must migrate before Gavel's projection
