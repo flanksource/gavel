@@ -21,6 +21,19 @@ function workspaceDir(query: Query): string {
   return '';
 }
 
+// trailing runs fn once, delayMs after the first schedule() since the last run;
+// cancel() drops a pending run. The caller's effect cleanup owns cancel().
+function trailing(fn: () => void, delayMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    pending: () => timer !== undefined,
+    schedule: () => {
+      timer ??= setTimeout(() => { timer = undefined; fn(); }, delayMs);
+    },
+    cancel: () => { clearTimeout(timer); timer = undefined; },
+  };
+}
+
 export function useWorkspaceChanges(enabled: boolean) {
   const client = useQueryClient();
   const [ready, setReady] = useState(false);
@@ -29,18 +42,17 @@ export function useWorkspaceChanges(enabled: boolean) {
     if (!enabled) return;
     const dirty = pending.get(client) ?? new Set<string>();
     pending.set(client, dirty);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const schedule = () => {
-      if (!timer && client.getQueryCache().getAll().some(query => dirty.has(query.queryHash) && query.state.fetchStatus !== 'fetching')) timer = setTimeout(flush, 1000);
-    };
     const flush = () => {
-      timer = undefined;
       for (const hash of dirty) {
         const query = client.getQueryCache().get(hash);
         if (query?.state.fetchStatus === 'fetching') continue;
         dirty.delete(hash);
         if (query) void client.invalidateQueries({ predicate: candidate => candidate.queryHash === hash }, { cancelRefetch: false });
       }
+    };
+    const flushLater = trailing(flush, 1000);
+    const schedule = () => {
+      if (!flushLater.pending() && client.getQueryCache().getAll().some(query => dirty.has(query.queryHash) && query.state.fetchStatus !== 'fetching')) flushLater.schedule();
     };
     const unsubscribe = client.getQueryCache().subscribe(schedule);
     schedule();
@@ -78,7 +90,7 @@ export function useWorkspaceChanges(enabled: boolean) {
     };
     stream.addEventListener('message', onMessage);
     stream.onerror = () => setError('Workspace change feed disconnected; reconnecting…');
-    return () => { if (timer) clearTimeout(timer); unsubscribe(); stream.removeEventListener('message', onMessage); stream.close(); };
+    return () => { flushLater.cancel(); unsubscribe(); stream.removeEventListener('message', onMessage); stream.close(); };
   }, [client, enabled]);
   return { ready, error };
 }
