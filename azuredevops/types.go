@@ -1,6 +1,9 @@
 package azuredevops
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type repositoryInfo struct {
 	ID            string `json:"id"`
@@ -46,10 +49,11 @@ type policyEvaluation struct {
 	ID            string `json:"evaluationId"`
 	Status        string `json:"status"`
 	Configuration struct {
-		ID       int  `json:"id"`
-		Enabled  bool `json:"isEnabled"`
-		Blocking bool `json:"isBlocking"`
-		Deleted  bool `json:"isDeleted"`
+		ID       int             `json:"id"`
+		Enabled  bool            `json:"isEnabled"`
+		Blocking bool            `json:"isBlocking"`
+		Deleted  bool            `json:"isDeleted"`
+		Settings json.RawMessage `json:"settings"`
 		Type     struct {
 			ID   string `json:"id"`
 			Name string `json:"displayName"`
