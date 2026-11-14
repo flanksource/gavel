@@ -5,7 +5,7 @@ parent: lint-execution
 order: 12
 ---
 
-`gavel lint json` checks `.json`, `.yaml`, `.yml`, and `.ndjson` files, and the YAML frontmatter of `.md` and `.mdx` files. It is built into Gavel and runs automatically during `gavel lint` when matching files are found. Files without a schema receive syntax checks; Markdown without frontmatter is skipped.
+`gavel lint json` checks `.json`, `.yaml`, `.yml`, and `.ndjson` files, and the YAML frontmatter of `.md` and `.mdx` files. It is built into Gavel and runs automatically during `gavel lint` when matching files are found. Files without a schema receive syntax checks; Markdown without frontmatter is skipped, and so are files under a Helm chart's `templates/` directory (one next to a `Chart.yaml`): those are Go templates that only become YAML once Helm renders them.
 
 ```sh
 gavel lint json '*.yaml' '*.json' '*.ndjson'

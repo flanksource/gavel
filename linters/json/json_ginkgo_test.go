@@ -68,6 +68,19 @@ var _ = Describe("JSON linter", func() {
 		Entry("large NDJSON record", "data.ndjson", `{"text":"`+strings.Repeat("x", 70000)+`"}`, 0),
 	)
 
+	It("skips Helm chart templates, which are Go templates rather than YAML", func() {
+		const template = "{{- if .Values.enabled }}\nkind: ConfigMap\n{{- end }}\n"
+		write("chart/Chart.yaml", "apiVersion: v2\nname: example\nversion: 0.1.0\n")
+		write("chart/templates/config.yaml", template)
+		write("chart/templates/nested/secret.yaml", template)
+		plain := write("other/templates/data.yaml", "enabled: [\n")
+		adapter.Files = []string{"."}
+		violations, err := adapter.Run(commonsContext.NewContext(context.Background()), nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(violations).To(HaveExactElements(HaveField("File", plain)), "a templates/ directory outside a chart is still YAML")
+		Expect(adapter.GetFileCount()).To(Equal(2), "Chart.yaml and the non-chart file are linted; the two templates are not")
+	})
+
 	It("reports original NDJSON line numbers and continues after malformed records", func() {
 		violations, err := run("data.ndjson", "{}\n\n{bad}\n{bad}\n")
 		Expect(err).NotTo(HaveOccurred())
