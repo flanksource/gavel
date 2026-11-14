@@ -21,8 +21,10 @@ export interface Test {
   message?: string;
   file?: string;
   line?: number;
+  end_line?: number;
   framework?: string;
   duration?: number; // nanoseconds
+  started?: string; // RFC3339; a running task node carries this instead of a duration
   fixture_profile?: FixtureProfile;
   sql_profile?: FixtureSQLProfile;
   fixture?: FixtureExecution;
@@ -41,6 +43,8 @@ export interface Test {
   // distinct from pending (queued/not-yet-started). Renderers show running with
   // an active spinner and pending with a static hollow icon.
   running?: boolean;
+  // waiting marks a running fixture blocked on a person answering a form.
+  waiting?: boolean;
   timed_out?: boolean;
   cached?: boolean;
   task_id?: string;
@@ -76,11 +80,18 @@ export interface Violation {
   raw_file?: string;
   line?: number;
   column?: number;
+  end_line?: number;
+  end_column?: number;
   message?: string;
   source?: string;
   rule?: { method?: string; description?: string };
   severity?: Severity;
   code?: string;
+}
+
+export interface SourceFile {
+  url?: string;
+  content?: string;
 }
 
 export interface LinterResult {
@@ -97,6 +108,15 @@ export interface LinterResult {
   error?: string;
   file_count?: number;
   rule_count?: number;
+  // sources maps a violation's file the work dir does not hold to its
+  // content (served by /api/file) and a URL to browse it at its origin.
+  sources?: Record<string, SourceFile>;
+  // status is set only while the linter is in flight; a final result omits it.
+  status?: 'pending' | 'running';
+  // run_id is the Captain prompt run producing the result; session_id is the
+  // agent session behind it, kept so a replayed snapshot still names it.
+  run_id?: string;
+  session_id?: string;
 }
 
 export interface TestAttempt {
@@ -321,6 +341,8 @@ export interface RunMeta {
   timed_out?: boolean;
   // run_id names the run's trace store, .gavel/traces/<run_id>.
   run_id?: string;
+  // prompt_owner scopes the run's pending form prompts (/api/prompts?owner=).
+  prompt_owner?: string;
   // process_trace names the run's process capture in that store.
   process_trace?: ProcessTraceRefs;
 }
@@ -505,6 +527,11 @@ export interface RerunRequest {
   lint?: boolean;
   lint_files?: string[];
   lint_linters?: string[];
+  /** The fixture file a retry-from-step reruns: a fixture step test's `file`. */
+  fixture?: string;
+  /** The id of the fixture step to resume at; earlier steps reuse the last run's results. */
+  from_step?: string;
+  params?: Record<string, unknown>;
 }
 
 export type TestEditAction = 'skip' | 'delete';

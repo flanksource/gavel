@@ -5,6 +5,7 @@ import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, revie
 import { ShardLintFindings, ShardTestFailures } from './ShardFindings';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
 import { PRLinkedTodos } from './PRLinkedTodos';
+import { PRLifecycleActions } from './PRLifecycleActions';
 import { PRActions, type ExtraAction } from './PRActions';
 import { RelativeTime } from './RelativeTime';
 import { stripAnsi } from '../ansi';
@@ -247,6 +248,7 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
       {activeTab === 'overview' && (
         <>
           <PRLinkedTodos prUrl={pr.url} />
+          <PRLifecycleActions key={pr.url} pr={pr} projects={workspaces} />
 
           {detail?.runs && Object.keys(detail.runs).length > 0 && (
             <Section
@@ -849,6 +851,7 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
   const agg = useMemo(() => aggregateGavelShards(shards), [shards]);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   if (!agg) return null;
+
   const multi = shards.length > 1;
 
   // The aggregate has no single artifact, so the metric cards in the

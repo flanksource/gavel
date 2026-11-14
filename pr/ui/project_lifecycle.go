@@ -89,22 +89,28 @@ type projectLintStatus struct {
 }
 
 type projectFileStatus struct {
-	Path           string                `json:"path"`
-	PreviousPath   string                `json:"previousPath,omitempty"`
-	State          status.FileState      `json:"state"`
-	StagedKind     status.ChangeKind     `json:"stagedKind,omitempty"`
-	WorkKind       status.ChangeKind     `json:"workKind,omitempty"`
-	Adds           int                   `json:"adds"`
-	Dels           int                   `json:"dels"`
-	ModifiedAt     time.Time             `json:"modifiedAt,omitempty"`
-	Language       string                `json:"language,omitempty"`
-	Scopes         []string              `json:"scopes,omitempty"`
-	TestStatus     projectTestStatus     `json:"testStatus"`
-	LintStatus     projectLintStatus     `json:"lintStatus"`
-	Problems       []projectFileProblem  `json:"problems,omitempty"`
-	ResultsStale   bool                  `json:"resultsStale"`
-	RepomapError   string                `json:"repomapError,omitempty"`
-	ConflictReason status.ConflictReason `json:"conflictReason,omitempty"`
+	Path               string                    `json:"path"`
+	PreviousPath       string                    `json:"previousPath,omitempty"`
+	State              status.FileState          `json:"state"`
+	StagedKind         status.ChangeKind         `json:"stagedKind,omitempty"`
+	WorkKind           status.ChangeKind         `json:"workKind,omitempty"`
+	Adds               int                       `json:"adds"`
+	Dels               int                       `json:"dels"`
+	ModifiedAt         time.Time                 `json:"modifiedAt,omitempty"`
+	Language           string                    `json:"language,omitempty"`
+	Scopes             []string                  `json:"scopes,omitempty"`
+	TestStatus         projectTestStatus         `json:"testStatus"`
+	LintStatus         projectLintStatus         `json:"lintStatus"`
+	Problems           []projectFileProblem      `json:"problems,omitempty"`
+	ResultsStale       bool                      `json:"resultsStale"`
+	RepomapError       string                    `json:"repomapError,omitempty"`
+	ConflictReason     status.ConflictReason     `json:"conflictReason,omitempty"`
+	LinkedDependencies []projectLinkedDependency `json:"linkedDependencies,omitempty"`
+}
+
+type projectLinkedDependency struct {
+	Name   string `json:"name"`
+	Target string `json:"target"`
 }
 
 type projectStatusResponse struct {
@@ -325,8 +331,13 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		// The stored scan carries no repomap classification; the scope filter needs it.
 		status.EnrichRepomap(workDir, files)
+		views := projectStatusFiles(files)
+		if err := enrichProjectLinkedDeps(workDir, views); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		respondJSON(w, http.StatusOK, projectStatusResponse{
-			Project: project, WorkDir: workDir, Branch: wt.Branch, Files: projectStatusFiles(files),
+			Project: project, WorkDir: workDir, Branch: wt.Branch, Files: views,
 			Action: s.projectActionFor(project.Name),
 		})
 		return
@@ -338,11 +349,16 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	views := projectStatusFiles(result.Files)
+	if err := enrichProjectLinkedDeps(workDir, views); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	respondJSON(w, http.StatusOK, projectStatusResponse{
 		Project:      project,
 		WorkDir:      result.WorkDir,
 		Branch:       result.Branch,
-		Files:        projectStatusFiles(result.Files),
+		Files:        views,
 		ResultsStale: result.ResultsStale,
 		Action:       s.projectActionFor(project.Name),
 	})

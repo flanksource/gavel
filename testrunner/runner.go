@@ -29,11 +29,13 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/git/changeset"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 	"github.com/flanksource/gavel/traces"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
+	"github.com/flanksource/gavel/workspace"
 	"github.com/samber/lo"
 )
 
@@ -106,9 +108,10 @@ func (o OutputMode) ShouldShow(failed bool) bool {
 // TestOrchestrator orchestrates test execution.
 type TestOrchestrator struct {
 	RunOptions
-	registry *Registry
-	streamer *TestStreamer
-	selector *selectorContext
+	configurationScoped bool
+	registry            *Registry
+	streamer            *TestStreamer
+	selector            *selectorContext
 }
 
 // RunOptions configures test execution behavior.
@@ -141,6 +144,7 @@ type RunOptions struct {
 	Timeout                  time.Duration                    `json:"timeout,omitempty" yaml:"timeout,omitempty"`                                                                                                                                                             // Global wall-clock deadline for the entire test+lint run. 0 = default 20m. Cancels every in-flight subprocess when it fires.
 	LintTimeout              time.Duration                    `json:"lint_timeout,omitempty" yaml:"lint-timeout,omitempty"`                                                                                                                                                   // Per-linter subprocess deadline. 0 = the linter default (5m). Forwarded to executeLinters when --lint is set.
 	TestTimeout              time.Duration                    `json:"test_timeout,omitempty" yaml:"test-timeout,omitempty"`                                                                                                                                                   // Per-test-package subprocess deadline. 0 = none (test.testTimeout still reaches each package through its runtime).
+	Dirs                     workspace.Dirs                   `json:"-" yaml:"-"`                                                                                                                                                                                             // The run's resolved directories; .gavel state lives under Dirs.StateRoot.
 	Context                  context.Context                  `json:"-" yaml:"-"`                                                                                                                                                                                             // Parent context for the run. Nil = context.Background(). Global --timeout is applied on top.
 	Lint                     bool                             `json:"lint,omitempty" yaml:"lint,omitempty" flag:"lint"`                                                                                                                                                       // Run linters in parallel with tests
 	Cache                    bool                             `json:"cache,omitempty" yaml:"cache,omitempty" flag:"cache"`                                                                                                                                                    // Skip packages whose content fingerprint matches the last passing run
@@ -157,6 +161,10 @@ type RunOptions struct {
 	SigquitDumper            *SigquitDumper                   `json:"-" yaml:"-"`                                                                                                    // The process capture's sigquit stack transport, which watches the go test batches for the Go test binaries it can dump. Nil watches none.
 	FixtureBenchmarkProgress func(fixtures.ExecutionSnapshot) `json:"-" yaml:"-"`
 	FixtureBenchmarkResult   func(*fixtures.BenchmarkReport)  `json:"-" yaml:"-"`
+	FixturePrompter          fixtures.Prompter                `json:"-" yaml:"-"`                                                       // Answers the fixtures' form steps (the --ui server's prompts); overrides the fixture runner's own.
+	FixtureRunID             string                           `json:"-" yaml:"-"`                                                       // The prompt owner FixturePrompter files the fixtures' forms under.
+	FixtureParams            map[string]any                   `json:"-" yaml:"-"`                                                       // Pre-supplied values for the fixtures' params: forms (a UI run request's params); overrides the fixture runner's own.
+	FixtureResume            *fixtures.Resume                 `json:"-" yaml:"-"`                                                       // Restarts the fixture run at a step, reusing the earlier steps' results (a UI "retry from here" rerun).
 	Frameworks               []string                         `json:"frameworks,omitempty" yaml:"framework,omitempty" flag:"framework"` // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
 	Baseline                 string                           `json:"baseline,omitempty" yaml:"baseline,omitempty" flag:"baseline"`     // Path to previous results JSON; only report NEW failures not in baseline
 	Failed                   string                           `json:"failed,omitempty" yaml:"failed,omitempty" flag:"failed"`           // Path to previous results JSON; re-run only failed tests
@@ -178,10 +186,26 @@ type RunOptions struct {
 
 	PassThroughArgs []string `json:"pass_through_args,omitempty" yaml:"-"` // CLI-only arguments supplied after --. Focus aliases are normalized; remaining args require one selected framework.
 
-	Selection *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	Selection    *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	OptionFields map[string]bool      `json:"-" yaml:"-" flag:"-"`
 }
 
 type fixtureOptions = fixtures.RunnerOptions
+
+// withFixtureForms hands runner the run's form prompter, prompt owner and
+// pre-supplied params, where the run has them.
+func (opts RunOptions) withFixtureForms(runner fixtures.RunnerOptions) fixtures.RunnerOptions {
+	if opts.FixturePrompter != nil {
+		runner.Prompter, runner.RunID = opts.FixturePrompter, opts.FixtureRunID
+	}
+	if opts.FixtureParams != nil {
+		runner.Params = opts.FixtureParams
+	}
+	if opts.FixtureResume != nil {
+		runner.Resume = opts.FixtureResume
+	}
+	return runner
+}
 
 func (opts RunOptions) Pretty() api.Text {
 	text := clicky.Text("")
@@ -440,6 +464,9 @@ func findNearestGoModRoot(dir string) string {
 }
 
 func Run(opts RunOptions) (any, error) {
+	if err := opts.Configure(); err != nil {
+		return nil, err
+	}
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
@@ -472,7 +499,7 @@ func Run(opts RunOptions) (any, error) {
 		opts.StartingPaths = groups[0].paths
 		result, err = runSingleRoot(opts)
 	}
-	return requireExecutedTests(result, err, opts.DryRun || opts.UIRAllowEmpty || opts.hasChangeSelector())
+	return requireExecutedTests(result, err, opts.DryRun || opts.hasChangeSelector() || opts.UIRAllowEmpty)
 }
 
 func requireExecutedTests(result any, err error, allowEmpty bool) (any, error) {
@@ -698,13 +725,7 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	// --show-stderr are presentation concerns applied at pretty-print time
 	// (cmd/gavel/test.go), never here — filtering or clearing stdout/stderr at
 	// the runner level would make the JSON/UI snapshot lossy.
-	tests := []parsers.Test{}
-	for _, result := range results {
-		tests = append(tests, result.Tests...)
-	}
-
-	// Build hierarchical tree from flat test results
-	tree := attachFailedPackageStderr(parsers.BuildTestTree(tests), results)
+	tree := attachFailedPackageStderr(results.Tree(), results)
 
 	// Discover and run fixture tests, gated on the --fixtures flag or
 	// fixtures.enabled in .gavel.yaml. Keep the partial tree and return direct
@@ -715,7 +736,16 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 		opts.FixtureRunner.TraceHost = opts.TraceHost
 		opts.FixtureRunner.ProcessTrace = opts.ProcessTrace
 		opts.FixtureRunner.ProcessRuntime = opts.FixtureRunner.ProcessRuntime.Merge(opts.fixtureRuntime())
-		fixtureTests, err := t.runFixtureRunner(*opts.FixtureRunner)
+		if opts.FixtureRunner.ExecutablePath == "" {
+			// A runtime cap (test.testTimeout, --cpu, --mem) isolates the run in a
+			// worker spawned from this binary, exactly as fixture discovery does.
+			execPath, err := os.Executable()
+			if err != nil {
+				return nil, fmt.Errorf("resolve fixture worker executable: %w", err)
+			}
+			opts.FixtureRunner.ExecutablePath = execPath
+		}
+		fixtureTests, err := t.runFixtureRunner(opts.withFixtureForms(*opts.FixtureRunner), opts.runtimeWorkDir())
 		if err != nil {
 			fixtureErr = err
 		}
@@ -778,27 +808,6 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 	return results, nil
 }
 
-// filterFrameworks narrows detected frameworks to the set the user asked for
-// via --framework. Each requested name must resolve to a known framework
-// (parsers.ParseFramework handles aliases and errors on typos). A requested
-// framework that exists but wasn't detected in this workdir is also an error,
-// so `gavel test --framework jest` in a repo without jest fails loudly instead
-// of silently running nothing.
-func filterIgnoredPackages(packages []string, ignore []string) []string {
-	if len(ignore) == 0 {
-		return packages
-	}
-	out := make([]string, 0, len(packages))
-	for _, pkg := range packages {
-		if packageIgnored(pkg, ignore) {
-			logger.V(1).Infof("Ignoring test package %s", pkg)
-			continue
-		}
-		out = append(out, pkg)
-	}
-	return out
-}
-
 func packageIgnored(pkg string, ignore []string) bool {
 	pkg = filepath.ToSlash(strings.TrimPrefix(pkg, "./"))
 	for _, pattern := range ignore {
@@ -828,6 +837,7 @@ func (o *TestOrchestrator) packageConcurrency() int {
 	return 4
 }
 
+// filterFrameworks rejects unknown or undetected frameworks before execution.
 func filterFrameworks(detected []Framework, requested []string) ([]Framework, error) {
 	detectedSet := make(map[Framework]bool, len(detected))
 	for _, fw := range detected {
@@ -1068,7 +1078,10 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			return nil, fmt.Errorf("failed to discover packages for %s: %w", fw, err)
 		}
 
-		packagesByFramework[fw] = filterIgnoredPackages(packages, o.Ignore)
+		packagesByFramework[fw], err = o.configuredPackages(fw, packages)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	for framework, items := range packagesByFramework {
@@ -1339,6 +1352,16 @@ func (o *TestOrchestrator) runPackageTest(
 	// task group dumps dirty tasks before the package finishes.
 	t.SetName(formatRunningCommand(testRun.Process.Cmd, testRun.Process.Args))
 
+	lease, err := o.acquireSlots(ctx, slots.Request{Limits: testRun.Slots, WorkDir: process.Cwd, Command: formatRunningCommand(process.Cmd, process.Args)})
+	if err != nil {
+		return packageResult{}, err
+	}
+	defer func() {
+		if err := lease.Close(); err != nil {
+			logger.Errorf("release test slots: %v", err)
+		}
+	}()
+	process.WithEnv(lease.Env())
 	pkgCtx, cancelPkg, supervision := o.supervisePackage(ctx, process, pkgPath)
 	defer cancelPkg()
 	process.WithContext(pkgCtx)
@@ -1349,6 +1372,9 @@ func (o *TestOrchestrator) runPackageTest(
 	}
 	runStart := time.Now()
 	result := clearOrphanedPipeError(process.WithContext(pkgCtx).Run().Result(), pkgPath)
+	if err := lease.Close(); err != nil {
+		return packageResult{}, err
+	}
 	runDuration := time.Since(runStart)
 	cancelPkg()
 	timedOut := supervision.TimedOut()
@@ -1537,7 +1563,8 @@ func markSubtreeTimedOut(t *parsers.Test, marker string) bool {
 
 // augmentBenchArgs decides whether benchmarks should run for a specific Go test package
 // and returns the adjusted extraArgs with `-bench=<pattern>` (and `-run=^$` when the
-// package has no regular Test* funcs) appended. It is a no-op when:
+// package has no runnable tests: no plain Test* funcs and no Ginkgo suite)
+// appended. It is a no-op when:
 //   - any of the incoming extraArgs already contain `-bench` (user override)
 //   - bench is neither requested via RunOptions.Bench nor auto-enabled for this package
 func (o *TestOrchestrator) augmentBenchArgs(r runners.Runner, pkgPath string, extraArgs []string) []string {
@@ -1719,7 +1746,7 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 		return nil, err
 	}
 	for _, batch := range goBatches {
-		process, err := o.buildGoBatchCommand(batch)
+		process, err := o.buildGoBatchCommand(batch, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -1754,7 +1781,7 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 				testRun.Process.Args,
 				testRun.Process.Cwd,
 			)
-			runtime, _, runtimeErr := o.runtimeFor(framework)
+			runtime, _, runtimeErr := o.runtimeFor(framework, "")
 			if runtimeErr != nil {
 				return nil, runtimeErr
 			}
@@ -1815,11 +1842,17 @@ type Runner = TestOrchestrator
 // .gavel.yaml fixtures.enabled is set). Flag-supplied globs take precedence
 // over config; config takes precedence over the default glob.
 func resolveFixtureGlobs(opts RunOptions) []string {
+	if opts.OptionFields["fixtures"] && !opts.Fixtures {
+		return nil
+	}
 	cfg, err := verify.LoadGavelConfig(opts.runtimeWorkDir())
 	if err != nil {
 		logger.Warnf("failed to load .gavel.yaml for fixture config: %v", err)
 	}
 	if !opts.Fixtures && !cfg.Fixtures.Enabled {
+		return nil
+	}
+	if configured := cfg.TestOptionsFor("").Fixtures; configured != nil && !*configured && !opts.OptionFields["fixtures"] {
 		return nil
 	}
 	if len(opts.FixtureFiles) > 0 {
@@ -1891,23 +1924,45 @@ func (t *TestOrchestrator) runDiscoveredFixtures(globs []string) ([]parsers.Test
 			return nil, err
 		}
 	}
-	return t.runFixtureRunner(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: fixtureFiles, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace, TraceArchive: archive})
+	var tests []parsers.Test
+	for _, file := range fixtureFiles {
+		fixtureTests, err := t.runFixtureRunner(opts.withFixtureForms(fixtures.RunnerOptions{Context: opts.Context, ProcessRuntime: opts.fixtureRuntime(), Paths: []string{file}, WorkDir: opts.WorkDir, Logger: logger.StandardLogger(), ExecutablePath: execPath, TraceHost: opts.TraceHost, ProcessTrace: opts.ProcessTrace, TraceArchive: archive}), filepath.Dir(file))
+		// A broad discovery glob also matches markdown that only supports
+		// fixtures (shared templates, notes); such a file is not a fixture file.
+		if errors.Is(err, fixtures.ErrNoFixtures) {
+			logger.Debugf("fixture discovery: %s declares no fixtures, skipping", file)
+			continue
+		}
+		tests = append(tests, fixtureTests...)
+		if err != nil {
+			return tests, err
+		}
+	}
+	return tests, nil
 
 }
 
-func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions) ([]parsers.Test, error) {
+func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions, configDir string) ([]parsers.Test, error) {
 	streamer := t.streamer
 	onProgress, onReport := t.FixtureBenchmarkProgress, t.FixtureBenchmarkResult
-	config, err := verify.LoadGavelConfig(t.runtimeWorkDir())
+	config, err := verify.LoadGavelConfig(configDir)
 	if err != nil {
 		return nil, err
 	}
+	if framework := config.Test.Frameworks["fixture"]; framework.Enabled != nil && !*framework.Enabled {
+		return nil, nil
+	}
 	var runtimeArgs []string
-	runnerOpts.ProcessRuntime, runtimeArgs, err = config.RuntimeFor("test", "fixture", runnerOpts.ProcessRuntime)
+	configured := *t
+	configured.Runtime = runnerOpts.ProcessRuntime
+	runnerOpts.ProcessRuntime, runtimeArgs, err = configured.configuredRuntime(config, parsers.Fixture)
 	if err != nil {
 		return nil, err
 	}
 	runnerOpts.Args = append(runtimeArgs, runnerOpts.Args...)
+	// The runner's display options prune passing results from its tree, but
+	// every result is merged into the tests; RunOptions' Show* filter them.
+	runnerOpts.Display = nil
 	if streamer != nil || onProgress != nil {
 		upstream := runnerOpts.ProgressSink
 		runnerOpts.ProgressSink = func(ctx context.Context, snapshot fixtures.ExecutionSnapshot) error {
@@ -1917,7 +1972,11 @@ func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions) (
 				}
 			}
 			if streamer != nil {
-				streamer.UpdateFixtures(executionSnapshotToTests(snapshot))
+				tests, err := executionSnapshotToTests(snapshot)
+				if err != nil {
+					return err
+				}
+				streamer.UpdateFixtures(tests)
 			}
 			if onProgress != nil {
 				onProgress(snapshot)
@@ -1947,8 +2006,12 @@ func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions) (
 	if result == nil {
 		return nil, err
 	}
-	tests := executionSnapshotToTests(runner.ExecutionSnapshot())
-	if mergeErr := mergeFixtureResultDetails(tests, result, runnerOpts.WorkDir); mergeErr != nil {
+	snapshot := runner.ExecutionSnapshot()
+	tests, projectErr := executionSnapshotToTests(snapshot)
+	if projectErr != nil {
+		return nil, errors.Join(err, projectErr)
+	}
+	if mergeErr := mergeFixtureResultDetails(tests, result, runnerOpts.WorkDir, liveResultKeys(snapshot)); mergeErr != nil {
 		return tests, errors.Join(err, mergeErr)
 	}
 	mergeFixtureMeasurements(tests, runner.BenchmarkReport())
@@ -1977,6 +2040,7 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 			Stderr:    r.Stderr,
 			Failed:    r.Status == task.StatusFAIL || r.Status == task.StatusFailed || r.Status == task.StatusERR,
 			Passed:    r.Status == task.StatusPASS || r.Status == task.StatusSuccess,
+			Warned:    r.Status == task.StatusWarning,
 			Message:   r.Error,
 			Context: parsers.FixtureContext{
 				Command:       r.Command,
@@ -1992,6 +2056,12 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 		}
 		if detail := fixtures.ResultDetail(r); detail != nil {
 			t.Detail = fixtureDetail(detail)
+		}
+		// A step's own result children — a query step's findings — are part of
+		// what it reports, so they become the test's children. The Runner moves
+		// them onto the node (attachResult); RunNodes leaves them on the result.
+		for _, child := range append(append([]*fixtures.FixtureNode{}, node.Children...), r.Children...) {
+			t.Children = append(t.Children, fixtureNodeToTestsWithFile(child, fixtureFile)...)
 		}
 		if r.Profile != nil {
 			t.FixtureProfile = &parsers.FixtureProfile{

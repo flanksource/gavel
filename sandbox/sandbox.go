@@ -106,7 +106,7 @@ const jobPrefix = "gavel-run-"
 // SubstrateActor is the SPIFFE ID substrate's egress gateway reports for run's environment in
 // atespace, the actor named after the run.
 func SubstrateActor(atespace string, run uuid.UUID) string {
-	return substrate.Actor(atespace, JobName(run))
+	return substrate.SPIFFEID(atespace, JobName(run))
 }
 
 // sortedEnv lists env as KEY=VALUE, sorted, rejecting a name that would split differently.

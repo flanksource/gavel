@@ -12,25 +12,15 @@ import { VerificationFailureStatus } from './VerificationFailureStatus';
 import { currentAuthMode } from '../../query';
 import { hostControlsVisible } from '../../hostedUI';
 
-// useSessionStats polls /api/todos/session/stats for one agent session. The
-// server serves live runs from the cmux tailer's in-memory cache and reads
-// finished/old sessions from the on-disk log, so this hook simply polls: fast
-// while a run is in progress, slower while waiting for the log to appear, and it
-// stops once a finished session's totals are final. Between polls of a running
-// session the displayed clock ticks locally so the timer advances smoothly.
-export function useSessionStats({ dir, sessionId, active, expectLive = true }: {
+export function useSessionStats({ dir, sessionId, active }: {
   dir: string;
   sessionId: string | undefined;
   active: boolean;
-  // expectLive marks a run that should still produce a session, so the stats
-  // request keeps retrying until it appears. Settled callers (a list row reading
-  // a finished run's totals) pass false and look exactly once.
-  expectLive?: boolean;
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const enabled = active && !!sessionId;
   const query = useQuery({
-    ...sessionStatsQueryOptions({ dir, sessionId: sessionId ?? '', expectLive }),
+    ...sessionStatsQueryOptions({ dir, sessionId: sessionId ?? '' }),
     enabled,
   });
   const stats = enabled && !query.error ? query.data ?? null : null;
@@ -197,11 +187,12 @@ interface CmuxSurface {
 // on. It only fetches while `enabled` (the menu is open) because each call shells
 // out to cmux; a stopped cmux or a closed terminal resolves to found=false with a
 // reason rather than throwing, so the control still offers Resume.
-function useCmuxSurface(dir: string, agent: string | undefined, enabled: boolean) {
+function useCmuxSurface(dir: string, sessionId: string, agent: string | undefined, enabled: boolean) {
   const query = useQuery({
-    queryKey: todoQueryKeys.cmuxSurface(dir, agent),
+    queryKey: [...todoQueryKeys.cmuxSurface(dir, agent), sessionId],
     queryFn: async ({ signal }) => {
       const params = new URLSearchParams(todoQuery(dir));
+      params.set('sessionId', sessionId);
       if (agent) params.set('agent', agent);
       return fetchJSON<CmuxSurface>({
         url: `/api/todos/session/cmux?${params.toString()}`,
@@ -238,12 +229,13 @@ export function CmuxSessionButton(props: CmuxSessionButtonProps) {
 
 function CmuxSessionMenu({ dir, sessionId, agent, onResume, resumeDisabled }: CmuxSessionButtonProps) {
   const [open, setOpen] = useState(false);
-  const { surface, loading } = useCmuxSurface(dir, agent, open);
+  const { surface, loading } = useCmuxSurface(dir, sessionId, agent, open);
   const queryClient = useQueryClient();
   const focusMutation = useMutation({
     mutationKey: ['todos', 'session', 'focus', { dir: dir.trim(), agent: agent ?? '' }],
     mutationFn: () => {
       const params = new URLSearchParams(todoQuery(dir));
+      params.set('sessionId', sessionId);
       if (agent) params.set('agent', agent);
       return todoMutationJSON<{ focused: boolean }>(
         `/api/todos/session/focus?${params.toString()}`,

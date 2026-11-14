@@ -38,12 +38,16 @@ type todoListResponse struct {
 }
 
 type todoSummary struct {
-	PR             *types.PR      `json:"pr,omitempty"`
-	Ref            string         `json:"ref"`
-	ID             string         `json:"id,omitempty"`
-	ShortID        string         `json:"shortId,omitempty"`
-	Version        int64          `json:"version,omitempty"`
-	WorkspaceID    string         `json:"workspaceId,omitempty"`
+	SessionSummary *types.SessionSummary `json:"sessionSummary,omitempty"`
+	PR             *types.PR             `json:"pr,omitempty"`
+	Ref            string                `json:"ref"`
+	ID             string                `json:"id,omitempty"`
+	ShortID        string                `json:"shortId,omitempty"`
+	Version        int64                 `json:"version,omitempty"`
+	WorkspaceID    string                `json:"workspaceId,omitempty"`
+	// Dir is the todo's workspace, as the projects list names it: set on the flat
+	// list of every workspace's todos, which the dashboard groups by it.
+	Dir            string         `json:"dir,omitempty"`
 	ParentID       string         `json:"parentId,omitempty"`
 	ExecutionState string         `json:"executionState,omitempty"`
 	Title          string         `json:"title"`
@@ -155,6 +159,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		LastRun:        todo.LastRun,
 		ExternalIssue:  todo.ExternalIssue,
 		Phases:         todo.PhaseRuns,
+		SessionSummary: todo.SessionSummary,
 	}
 	if todo.LLM != nil {
 		out.SessionID = todo.LLM.SessionId

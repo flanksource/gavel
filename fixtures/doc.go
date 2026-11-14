@@ -168,5 +168,72 @@
 //   - {filename}: Filename without extension
 //   - {dir}: Directory containing file
 //
+// # Params, Forms and if: Gates
+//
+// Front-matter (or a YAML fixture's top level) may declare params: as an
+// object JSON Schema. It is lowered to a leading form step whose id is
+// "params". Values from --param k=v, --params file.yaml or the UI start request
+// are typed by the schema and filled with its defaults; when they satisfy it the
+// step resolves without asking, otherwise it asks with them pre-filled.
+//
+// A kind: form step asks a person through the run's Prompter (the --ui
+// server's prompt manager, a TTY form, or a host's) and blocks until they answer:
+//
+//	steps:
+//	  - id: approval
+//	    kind: form
+//	    title: Purge {{.inspect.rowCount}} rows?
+//	    schema: {type: object, required: [expected], properties: {expected: {type: integer}}}
+//
+// Its outputs are approved (false when cancelled or rejected, which does not
+// fail the step), values (also spread at the top level), answeredBy and
+// answeredAt. A property with format: connection (optionally
+// x-connection-types: [sql_server]) is a picker over the connection catalog
+// that commits the connection name. Without a prompter a form that must ask
+// fails, naming the missing keys.
+//
+// Every completed step's outputs are bound at the root under its id, beside
+// steps.<id>: approval.approved in CEL, {{.approval.expected}} in templates.
+// An id used as a root must be a CEL identifier and may not shadow env, steps,
+// outputs, fixture or tmp. A skipped step binds {skipped: true, reason}, so
+// `false && approval.approved` short-circuits while a bare read fails.
+//
+// if: on any step is a CEL gate evaluated before the step renders. False skips
+// the step ("skipped (if: <expr> = false)") without failing the fixture; an
+// expression that does not evaluate errors it. Markdown rows take an If column.
+//
+// # Query Steps and Findings
+//
+// A kind: query step runs a commons-db query against a connection:
+//
+//	steps:
+//	  - id: inspect
+//	    kind: query
+//	    connection: "{{.params.db}}"        # a name, connection://ref or inline spec
+//	    query: SELECT guid, size FROM activities WHERE size >= {{.params.min}}
+//	    params: {min: 20}                   # bound as driver arguments
+//
+// query is the text, an inline profile body ({query, params, columns, …}) or
+// {profile: <name>, params} from ./.profiles, ~/.config/gavel/profiles or the
+// host's store. connection is a catalog name or connection:// reference (the
+// host's resolver, then the gavel layers and ./.connections), or an inline
+// connection whose valueFrom references are hydrated. Outputs are rows, row,
+// rowCount, columns and connection (name and type only).
+//
+// findings: turns rows into lint violations (models.Violation): either a CEL
+// expression returning a list of maps, written over outputs.rows because
+// gomplate types the roots as any —
+//
+//	findings: >-
+//	  outputs.rows.filter(r, r.size >= 20).map(r, {"severity": "error",
+//	    "message": r.guid, "locations": ["entity://Activity/" + r.guid]})
+//
+// — or a per-row mapper {when, severity, rule, message, code, locations} whose
+// strings are templates over .row and whose when and severity may be CEL.
+// Locations take models.ViolationLocation objects or the ParseLocation
+// shortcuts file:line[:col], <gitref>:path:line[:col], entity://Kind/id and
+// https://…#css=… / #xpath=…. An error finding fails the step; warnings and
+// info warn it, and a warned step still evaluates its cel: and exports.
+//
 // See also: github.com/flanksource/gavel/cmd for CLI integration
 package fixtures

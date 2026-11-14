@@ -47,7 +47,7 @@ var _ = Describe("project Open PR queue", func() {
 		Expect(queued).To(Equal(commitQueueRequest{
 			action:  projectActionOpenPR,
 			files:   []string{"one.go"},
-			args:    []string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--push", "one.go"},
+			args:    []string{"commit", "--work-dir", project.ResolvedDir(), "--push", "one.go"},
 			workDir: project.ResolvedDir(),
 		}))
 	})
@@ -59,7 +59,7 @@ var _ = Describe("project Open PR queue", func() {
 		Expect(queued).To(Equal(commitQueueRequest{
 			action:  projectActionOpenPR,
 			files:   []string{},
-			args:    []string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--stage=staged", "--push"},
+			args:    []string{"commit", "--work-dir", project.ResolvedDir(), "--stage=staged", "--push"},
 			workDir: project.ResolvedDir(),
 		}))
 	})
@@ -103,7 +103,7 @@ var _ = Describe("project Open PR queue", func() {
 
 		queued, err := server.commitQueueActionArgs(project, requests[0])
 		Expect(err).NotTo(HaveOccurred())
-		Expect(queued.args).To(Equal([]string{"commit", "--work-dir", project.ResolvedDir(), "--precommit=fail", "--stage=staged", "--push"}))
+		Expect(queued.args).To(Equal([]string{"commit", "--work-dir", project.ResolvedDir(), "--stage=staged", "--push"}))
 	})
 
 	It("rejects missing actions and advanced Open PR options", func() {

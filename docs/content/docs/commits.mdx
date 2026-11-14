@@ -1,0 +1,81 @@
+---
+title: "Commits"
+description: "Generate conventional commits, select changes, and configure commit gates."
+parent: cli-usage
+order: 20
+---
+
+`commit` is for authoring commit messages and running pre-commit hooks described in `.gavel.yaml`. It can generate one conventional commit message, or plan multiple commits from a larger staged change set.
+
+This is the right command when you want:
+
+- An LLM-generated conventional commit message
+- AI warnings for removed functionality or compatibility issues before the commit is written
+- Hook execution before finalizing the commit
+- Interactive file selection with an in-picker `/` filter for path, status, language, or scope
+- AI-assisted splitting of a large change into multiple logical commits (`-A`), with a separate chore commit for lock/generated files. `-A` feeds the LLM a `gavel status` table (scope, file, status, line counts), groups by logical change (scope is a hint, not a hard boundary), and caps the result at `--max-commits` (default 7, excluding the chore commit) — rendered into the grouping prompt's output schema as `maxItems` and enforced by captain's `schemaStrictness=retry` policy. Each group is committed as soon as its message is ready
+- Optional follow-up push behavior
+
+By default (`--stage session`) commit scopes itself to the running agent's edits: it resolves a session id from `GAVEL_SESSION_ID`, `CLAUDE_SESSION_ID`, or `CODEX_SESSION_ID` and stages only the files that Claude or Codex session touched. With no session id in the environment it falls back to the previous default of committing the already-staged set. Pass `--stage staged|unstaged|all` or an explicit session id to override.
+
+Common workflows:
+
+```bash
+gavel commit
+gavel commit -t
+gavel commit -A
+gavel commit -A --max-commits=3
+gavel commit --max-commits=3
+gavel commit -m "chore: bump dep"
+gavel commit --stage all --dry-run
+gavel commit --force
+```
+
+## Command options
+
+| Flag | Description |
+|------|-------------|
+| `--stage` | Which changes to commit: `session` (default — commits only the running agent's edits, resolving `GAVEL_SESSION_ID`/`CLAUDE_SESSION_ID`/`CODEX_SESSION_ID`, falling back to `staged` when none is set), `staged`, `unstaged`, `all`, or an explicit Claude/Codex session id |
+| `-t` / `--tree`, `-i` / `--interactive` | Open an interactive tree picker over changed files; press `/` in the picker to filter by path, status, language, or scope |
+| `-s` / `--summary` | With `-i`/`-t`, stream a one-line AI summary into each candidate file row while the picker remains interactive |
+| `-A` / `--commit-all` | Stage all changes and ask the LLM to split them into logical commit groups (plus a separate chore commit for lock files / build artifacts / generated bundles). Each group is committed as soon as its message is ready |
+| `--max-commits` | Cap the number of logical commits, excluding the chore commit (default 7). Setting it implies `-A`. Rendered into the grouping prompt's output schema as `maxItems` and enforced by captain's `schemaStrictness=retry` policy |
+| `-m` / `--message` | Explicit commit message; skips only the message-generation LLM call |
+| `--model` | Override LLM model for commit-message/PR generation from `.gavel.yaml` `commit.message.model` (falling back to `ai.model`); accepts a compact `mode:model:effort` selector |
+| `--group-model` | Override LLM model for AI grouping (`-A`) from `.gavel.yaml` `commit.grouping.model` (capable/sonnet-class); falls back to `--model` |
+| `--dry-run` | Print the generated message without committing |
+| `--force` | Skip pre-commit hooks |
+| `--no-cache` | Bypass the LLM response cache |
+| `--precommit` | How to handle gitignore + linked-dependency precommit checks: `prompt`, `fail`, `skip`, or `false` |
+| `--ai-fix[=true\|false]` | Override automatic AI repair for commit lint findings |
+| `--ai-fix-max-iterations` | Override the positive repair iteration limit, which defaults to three |
+
+## Projects advanced options
+
+On a phone, open **Projects**, choose a project, and tap a changed file to review its full-width diff. Use **Previous file** and **Next file** to move through the changes, and **Include in commit** to select each file. **Files** returns to the file list while retaining your selection. The commit button stays at the bottom of the screen; its options menu opens the advanced form. The worktree picker keeps review and commit scoped to the chosen checkout.
+
+The Projects page provides schema-driven advanced forms for commit, lint, and test. Options inherit project configuration and command defaults until explicitly changed. Opening a form or editing another field does not save inherited defaults as overrides.
+
+Commit grouping reveals its maximum commit count; enabling it clears an explicit message, and disabling it clears the count override. Lint, secrets, repair, and module tidying use Inherit / Enabled / Disabled toggles. Enabling lint repair reveals a positive iteration limit. Leave that limit unset to inherit configuration, otherwise three iterations are used.
+
+The commit AI runtime bar offers execution mode, provider/model selection, and reasoning effort. Unspecified controls inherit the configured runtime. Grouping models, fallback models, temperature, and cache overrides remain available through the CLI and project configuration. The advanced form excludes these overrides from remembered options and submissions.
+
+The forms remember explicit choices in v2 browser storage. Older preferences are ignored without migration, and commit/lint file selections always come from the current selection. Formatting, database, and server-management switches remain CLI options. Historical commit retries retain their saved requests; an invalid old request must be requeued through the updated form.
+
+## Repair lint findings
+
+Configure commit repair independently of commit-message generation:
+
+```yaml
+commit:
+  lint:
+    enabled: true
+    aiFix: true
+    aiFixMaxIterations: 3
+  fix:
+    model: agent:sonnet
+    budget:
+      cost: 1
+```
+
+`commit.fix` inherits the shared `ai` and `lint.fix` settings. Explicit repair flags override configuration. `aiFix: false` disables repair, including the implicit `-y` trigger; leaving it unset preserves interactive repair and `-y` behavior. Each repair rechecks the original selected file scope and lint gates. Remaining findings, linter errors, or an exhausted repair limit block the commit.

@@ -61,7 +61,7 @@ func TestHandleProjectUpdate(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := LoadProjects()
 	if err != nil {
 		t.Fatalf("LoadProjects = %v", err)
 	}
@@ -91,7 +91,7 @@ func TestHandleProjectDelete(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE status = %d, want 204; body = %q", rec.Code, rec.Body.String())
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := LoadProjects()
 	if err != nil {
 		t.Fatalf("LoadProjects = %v", err)
 	}

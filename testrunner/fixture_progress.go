@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
@@ -18,7 +19,10 @@ import (
 // and the verdict its teardown attached to the file — and the teardown
 // verdict, which carries what the step observed (a watcher's events), is laid
 // over the start result.
-func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode, workDir string) error {
+//
+// A test in live (liveResultKeys: its progress node carried its result) had
+// its start result applied already, so only its teardown verdict is laid on.
+func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode, workDir string, live map[string]bool) error {
 	location := func(test parsers.Test) string {
 		file := test.File
 		if !filepath.IsAbs(file) {
@@ -42,9 +46,12 @@ func mergeFixtureResultDetails(tests []parsers.Test, tree *fixtures.FixtureNode,
 			test := &items[i]
 			if test.Fixture != nil && test.File != "" {
 				key := location(*test)
-				for _, queue := range []map[string][]parsers.Test{results, teardowns} {
+				for i, queue := range []map[string][]parsers.Test{results, teardowns} {
 					if matches := queue[key]; len(matches) > 0 {
 						queue[key] = matches[1:]
+						if i == 0 && live[test.TaskID] {
+							continue
+						}
 						if err := applyFixtureResult(test, matches[0]); err != nil {
 							return err
 						}
@@ -79,6 +86,13 @@ func applyFixtureResult(test *parsers.Test, result parsers.Test) error {
 	test.Stdout, test.Stderr, test.Context = result.Stdout, result.Stderr, result.Context
 	test.Message, test.FixtureProfile = result.Message, result.FixtureProfile
 	test.SQLProfile = result.SQLProfile
+	// A progress leaf gains the children its step's result reported (a query
+	// step's findings); a node with children of its own keeps the live tree's.
+	if len(test.Children) == 0 && len(result.Children) > 0 {
+		test.Children = result.Children
+		summary := parsers.Tests(test.Children).Sum()
+		test.Summary = &summary
+	}
 	return mergeDetail(test, result.Detail)
 }
 
@@ -151,14 +165,21 @@ func mergeFixtureMeasurements(tests []parsers.Test, report *fixtures.BenchmarkRe
 	enrich(tests)
 }
 
-func executionSnapshotToTests(snapshot fixtures.ExecutionSnapshot) []parsers.Test {
+// executionSnapshotToTests projects a progress snapshot onto tests. A node
+// that finished carries its result (fixtures.ExecutionNode.Result), which is
+// applied as the run's end would, so a live view shows a step's detail and
+// findings as soon as it completes; a running node shows its streamed output.
+func executionSnapshotToTests(snapshot fixtures.ExecutionSnapshot) ([]parsers.Test, error) {
 	if snapshot.Root == nil {
-		return nil
+		return nil, nil
 	}
 	tests := make([]parsers.Test, 0, len(snapshot.Root.Children))
 	lifecycle := parsers.Test{Name: "Fixture lifecycle", Framework: parsers.Fixture}
 	for _, child := range snapshot.Root.Children {
-		test := executionNodeToTest(child)
+		test, err := executionNodeToTest(child)
+		if err != nil {
+			return nil, err
+		}
 		switch child.Kind {
 		case fixtures.ExecutionKindSetup, fixtures.ExecutionKindBuild, fixtures.ExecutionKindDaemon,
 			fixtures.ExecutionKindDaemonStop, fixtures.ExecutionKindCleanup:
@@ -170,7 +191,45 @@ func executionSnapshotToTests(snapshot fixtures.ExecutionSnapshot) []parsers.Tes
 	if len(lifecycle.Children) > 0 {
 		tests = append([]parsers.Test{lifecycle}, tests...)
 	}
-	return tests
+	return tests, nil
+}
+
+// liveResultKeys are the TaskIDs of the snapshot's nodes that carry their
+// result, which executionSnapshotToTests already applied.
+func liveResultKeys(snapshot fixtures.ExecutionSnapshot) map[string]bool {
+	keys := map[string]bool{}
+	if snapshot.Root == nil {
+		return keys
+	}
+	var walk func(*fixtures.ExecutionNode)
+	walk = func(node *fixtures.ExecutionNode) {
+		if node.Result != nil {
+			keys[node.Key] = true
+		}
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+	walk(snapshot.Root)
+	return keys
+}
+
+// applyNodeResult lays a finished node's result over its test, through the
+// same projection the run's end uses.
+func applyNodeResult(test *parsers.Test, node *fixtures.ExecutionNode) error {
+	if node.Result == nil {
+		test.Stdout = node.Output
+		if node.OutputTruncated {
+			test.Stdout = "[earlier output truncated]\n" + node.Output
+		}
+		return nil
+	}
+	file := ""
+	if node.Origin != nil {
+		file = node.Origin.File
+	}
+	projected := fixtureNodeToTestsWithFile(&fixtures.FixtureNode{Name: node.Name, Type: fixtures.TestNode, Origin: node.Origin, Results: node.Result}, file)
+	return applyFixtureResult(test, projected[0])
 }
 
 // executionDetail is an ExecutionNode as its test's display detail: everything
@@ -189,9 +248,40 @@ type executionDetail struct {
 	Error      string                  `json:"error,omitempty"`
 	PIDs       []int                   `json:"pids,omitempty"`
 	Traces     []parsers.TraceResult   `json:"traces,omitempty"`
+	Source     *parsers.SourceSnippet  `json:"source,omitempty"`
+	// Query is a running query step's live record (ExecutionNode.Metadata),
+	// under the key a finished step's detail carries it, so the UI renders the
+	// same Query section while the step runs and updates it in place.
+	Query any `json:"query,omitempty"`
+	// Description and Status are what a running step last reported with its
+	// `::description` and `::status` workflow commands.
+	Description any `json:"description,omitempty"`
+	Status      any `json:"status,omitempty"`
 }
 
-func executionNodeToTest(node *fixtures.ExecutionNode) parsers.Test {
+// liveFindings are the findings a running step reported with its workflow
+// commands, as the child rows its finished result will have.
+func liveFindings(node *fixtures.ExecutionNode) (parsers.Tests, error) {
+	raw, ok := node.Metadata["findings"]
+	if !ok || node.Result != nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("live findings of %s: %w", node.Name, err)
+	}
+	var violations []models.Violation
+	if err := json.Unmarshal(data, &violations); err != nil {
+		return nil, fmt.Errorf("live findings of %s: %w", node.Name, err)
+	}
+	var tests parsers.Tests
+	for _, v := range violations {
+		tests = append(tests, fixtureNodeToTestsWithFile(fixtures.ViolationNode(v), "")...)
+	}
+	return tests, nil
+}
+
+func executionNodeToTest(node *fixtures.ExecutionNode) (parsers.Test, error) {
 	test := parsers.Test{
 		Name:      node.Name,
 		Framework: parsers.Fixture,
@@ -201,8 +291,20 @@ func executionNodeToTest(node *fixtures.ExecutionNode) parsers.Test {
 		Detail: executionDetail{
 			Name: node.Name, Kind: node.Kind, State: node.State, Origin: node.Origin,
 			StartedAt: node.StartedAt, FinishedAt: node.FinishedAt, Duration: node.Duration,
-			Done: node.Done, Total: node.Total, Error: node.Error, PIDs: node.PIDs, Traces: node.Traces,
+			Done: node.Done, Total: node.Total, Error: node.Error, PIDs: node.PIDs, Traces: node.Traces, Source: node.Source,
+			Query:       node.Metadata[fixtures.QueryMetadataKey],
+			Description: node.Metadata["description"], Status: node.Metadata["status"],
 		},
+	}
+	phase := string(node.Kind)
+	for _, key := range []string{"status", "description"} {
+		if text, ok := node.Metadata[key].(string); ok && text != "" {
+			phase = text
+			if test.Message == "" {
+				test.Message = text
+			}
+			break
+		}
 	}
 	if node.Origin != nil {
 		test.File = node.Origin.File
@@ -213,7 +315,19 @@ func executionNodeToTest(node *fixtures.ExecutionNode) parsers.Test {
 		test.Context = parsers.FixtureContext{Traces: node.Traces}
 	}
 	for _, child := range node.Children {
-		test.Children = append(test.Children, executionNodeToTest(child))
+		childTest, err := executionNodeToTest(child)
+		if err != nil {
+			return parsers.Test{}, err
+		}
+		test.Children = append(test.Children, childTest)
+	}
+	findings, err := liveFindings(node)
+	if err != nil {
+		return parsers.Test{}, err
+	}
+	test.Children = append(test.Children, findings...)
+	if err := applyNodeResult(&test, node); err != nil {
+		return parsers.Test{}, err
 	}
 	applyExecutionState(&test, node.State)
 	if len(node.Children) > 0 {
@@ -223,9 +337,9 @@ func executionNodeToTest(node *fixtures.ExecutionNode) parsers.Test {
 		test.Fixture = &parsers.FixtureExecution{Key: node.Key, Kind: string(node.Kind), State: string(node.State), PIDs: node.PIDs}
 	}
 	if node.Total > 0 {
-		test.Progress = &parsers.TestProgress{Phase: string(node.Kind), Done: node.Done, Total: node.Total}
+		test.Progress = &parsers.TestProgress{Phase: phase, Done: node.Done, Total: node.Total}
 	}
-	return test
+	return test, nil
 }
 
 func applyExecutionState(test *parsers.Test, state fixtures.ExecutionState) {
@@ -234,6 +348,8 @@ func applyExecutionState(test *parsers.Test, state fixtures.ExecutionState) {
 		test.Pending = true
 	case fixtures.ExecutionRunning:
 		test.Running = true
+	case fixtures.ExecutionWaiting:
+		test.Running, test.Waiting = true, true
 	case fixtures.ExecutionPassed:
 		test.Passed = true
 	case fixtures.ExecutionFailed, fixtures.ExecutionErrored:

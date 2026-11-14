@@ -9,6 +9,10 @@ package all
 import (
 	// browser, playwright, agent-browser
 	_ "github.com/flanksource/gavel/fixtures/kinds/browser"
+	// form (and the fixture-level params: form)
+	_ "github.com/flanksource/gavel/fixtures/kinds/form"
+	// query
+	_ "github.com/flanksource/gavel/fixtures/kinds/query"
 	// services
 	_ "github.com/flanksource/gavel/fixtures/kinds/services"
 	// todo, todo_prompt

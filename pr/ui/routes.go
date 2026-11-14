@@ -39,6 +39,7 @@ type prRouteFilters struct {
 	Checks  []string `json:"checks,omitempty"`
 	Repos   []string `json:"repos,omitempty"`
 	Authors []string `json:"authors,omitempty"`
+	Age     []string `json:"age,omitempty"`
 }
 
 type exportReport struct {
@@ -196,7 +197,7 @@ func (r exportReport) GetChildren() []api.TreeNode {
 }
 
 func renderPRFilters(f prRouteFilters) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
 	if len(f.State) > 0 {
 		parts = append(parts, "state="+strings.Join(f.State, ","))
 	}
@@ -208,6 +209,9 @@ func renderPRFilters(f prRouteFilters) string {
 	}
 	if len(f.Authors) > 0 {
 		parts = append(parts, "authors="+strings.Join(f.Authors, ","))
+	}
+	if len(f.Age) > 0 {
+		parts = append(parts, "age="+strings.Join(f.Age, ","))
 	}
 	return strings.Join(parts, " ")
 }
@@ -308,6 +312,7 @@ func parsePRFilters(r *http.Request) prRouteFilters {
 		Checks:  splitList(r.URL.Query().Get("checks")),
 		Repos:   splitList(r.URL.Query().Get("repos")),
 		Authors: splitList(r.URL.Query().Get("authors")),
+		Age:     splitList(r.URL.Query().Get("age")),
 	}
 }
 
@@ -403,13 +408,14 @@ func findPRNode(nodes []*PRViewNode, path []string) *PRViewNode {
 }
 
 func filterPRNodes(nodes []*PRViewNode, f prRouteFilters) []*PRViewNode {
-	if len(f.State) == 0 && len(f.Checks) == 0 && len(f.Repos) == 0 && len(f.Authors) == 0 {
+	if len(f.State) == 0 && len(f.Checks) == 0 && len(f.Repos) == 0 && len(f.Authors) == 0 && len(f.Age) == 0 {
 		return nodes
 	}
 	stateSet := toSet(f.State)
 	checkSet := toSet(f.Checks)
 	repoSet := toSet(f.Repos)
 	authorSet := toSet(f.Authors)
+	now := time.Now()
 
 	out := nodes[:0:0]
 	for _, node := range nodes {
@@ -423,6 +429,9 @@ func filterPRNodes(nodes []*PRViewNode, f prRouteFilters) []*PRViewNode {
 			continue
 		}
 		if len(authorSet) > 0 && !authorSet[node.Author] {
+			continue
+		}
+		if !matchesPRAge(prAgeBucket(node.UpdatedAt, now), f.Age) {
 			continue
 		}
 		out = append(out, node)

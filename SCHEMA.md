@@ -57,6 +57,35 @@ field is left undocumented.
 
 ---
 
+## Machine-wide slots
+
+`slots` limits concurrently running test, lint and fixture command subprocesses across Gavel processes on the machine. Each command needs capacity in both its configured global pool and its configured project pool. A project is identified by the absolute git common directory, so branches and linked worktrees share one pool. A project pool requires a Git repository.
+
+| Key | Source | Meaning |
+| --- | --- | --- |
+| `slots.global` | `~/.gavel.yaml` only | Maximum number of subprocesses across all projects. Project files cannot change this limit. |
+| `slots.projectDefault` | `~/.gavel.yaml` only | Default maximum number of subprocesses for each repository. |
+| `slots.project` | Layered project `.gavel.yaml` | Overrides `projectDefault` for this repository. The global limit still applies. |
+
+Values are positive integers such as `8`, or percentages such as `50%` of CPU cores, rounded down with a minimum of 1. Zero, negative numbers, percentages above 100%, and other values are errors naming the configuration key. Omit a limit to leave its pool unlimited. With no slots configured anywhere, commands take no locks and retain their existing execution behavior.
+
+For example, set machine defaults in `~/.gavel.yaml`:
+
+```yaml
+slots:
+  global: 8
+  projectDefault: 50%
+```
+
+Then override a repository's share in its `.gavel.yaml`:
+
+```yaml
+slots:
+  project: 2
+```
+
+Exclusive OS file locks live under the user cache directory at `gavel/slots/global/` and `gavel/slots/projects/<repo-id>/`, where `repo-id` is the SHA-256 hash of the canonical git common directory. On macOS the cache is `~/Library/Caches/gavel`. Lock files record the holder PID and command. Exits, crashes and timeouts release the locks automatically; stale PID records are overwritten when the slot is next acquired. Waiting logs name the pool and its holders, and waiting time is excluded from the command's execution timeout. A caller's whole-run deadline and cancellation remain active while waiting. Configured Go runs start one package per admitted command.
+
 ## Shared process runtime
 
 `runtime` configures every linter and test type, including fixtures. Put defaults in `~/.gavel.yaml`, then override them in a repository or invocation directory. Each file applies root `runtime`, category `lint.runtime` or `test.runtime`, then the type's runtime. Later files win even when an earlier file has a more specific override; explicit CLI/caller settings win last. `gavel config --runtime --json` shows the effective settings for each type with environment names only.
@@ -71,7 +100,7 @@ field is left undocumented.
 
 Type settings live in `lint.linters.<name>` and `test.frameworks.<name>`. Test names are `go`, `ginkgo`, `jest`, `vitest`, `playwright`, and `fixture`. Each accepts `args` and `runtime`; nonempty argument lists replace inherited lists. Native arguments control tool concurrency and soft budgets, while runtime CPU/memory/deadline settings terminate processes that exceed caps. Sampling can permit short bursts beyond a cap.
 
-Fixtures run in process unless an explicit CPU, memory, or timeout cap is active. Capped invocations run in a supervised worker, including their setup, build, daemons, traces, and profiling. Environment and niceness settings alone apply to child commands without changing the parent. Fixture native arguments append to each exec step's argv. Built-in per-test deadlines alone do not trigger worker isolation.
+Fixtures run in process unless an explicit CPU, memory, or timeout cap is active. Capped invocations run in a supervised worker, including their setup, build, daemons, traces, and profiling. With slots enabled, timeout budgets apply to commands, while CPU and memory caps still use the worker. Environment and niceness settings alone apply to child commands without changing the parent. Fixture native arguments append to each exec step's argv. Built-in per-test deadlines alone do not trigger worker isolation.
 
 ```yaml
 runtime:

@@ -212,6 +212,7 @@ func (f *Finding) ToViolation(workDir string) models.Violation {
 		WithRuleFromLinter("betterleaks", f.RuleID).
 		Build()
 	v.Severity = models.SeverityError
+	v.EndLine, v.EndColumn = f.EndLine, f.EndColumn
 	return v
 }
 

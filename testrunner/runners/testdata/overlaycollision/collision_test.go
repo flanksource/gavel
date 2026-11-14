@@ -4,28 +4,19 @@ import (
 	"testing"
 
 	"github.com/onsi/ginkgo/v2"
-	"github.com/onsi/gomega"
 )
 
-// Package-level names that a dot-imported Ginkgo, or an unaliased import in
-// the injected reporter, would redeclare.
-type Labels []string
-
-var (
-	types  = Labels{"types"}
-	fmt    = "fmt"
-	os     = "os"
-	json   = "json"
-	base64 = "base64"
-)
-
-func TestCollision(t *testing.T) {
-	gomega.RegisterFailHandler(ginkgo.Fail)
+func TestSuite(t *testing.T) {
 	ginkgo.RunSpecs(t, "Overlay collision fixture")
 }
 
-var _ = ginkgo.Describe("collision", func() {
-	ginkgo.It("keeps package names that shadow reporter imports", func() {
-		gomega.Expect([]string{fmt, os, json, base64}).To(gomega.HaveLen(len(types) + 3))
+var _ = ginkgo.Describe("package-level names", func() {
+	ginkgo.It("coexist with the injected reporter", func() {
+		_ = Report{}
+		_ = Context{}
+		_ = Labels{}
+		if len(Names()) != 5 {
+			ginkgo.Fail("package-level names are missing")
+		}
 	})
 })

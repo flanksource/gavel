@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	goruntime "runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,17 +17,22 @@ import (
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/clicky/task"
 	commonsCtx "github.com/flanksource/commons/context"
+	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 )
 
 type goBatchPlan struct {
-	packages  []string
-	ginkgo    []string
-	args      []string
-	targets   []string
-	skipEmpty []string
-	framework Framework
+	runtime     processruntime.Options
+	runtimeArgs []string
+	packages    []string
+	ginkgo      []string
+	args        []string
+	targets     []string
+	skipEmpty   []string
+	framework   Framework
 	// coverProfile, when set, is the -coverprofile the batch writes.
 	coverProfile string
 }
@@ -34,48 +41,52 @@ type goBatchPlan struct {
 var goBatchCount atomic.Int64
 
 func (o *TestOrchestrator) unfocusedGoRun(startingPaths []string) bool {
-	return len(startingPaths) == 0 && (len(o.Frameworks) == 0 || o.UIRRunAll) && len(o.Ignore) == 0 &&
+	return !o.configurationScoped && len(startingPaths) == 0 && (len(o.Frameworks) == 0 || o.UIRRunAll) && len(o.Ignore) == 0 &&
 		!o.hasChangeSelector() && o.Failed == "" && len(o.PassThroughArgs) == 0 && o.UIRSkippable == nil
 }
 
 func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string, unfocused bool) ([]goBatchPlan, error) {
-	all, ginkgo := sortedGoPackages(packagesByFramework)
+	all, _ := sortedGoPackages(packagesByFramework)
 	if len(all) == 0 {
 		return nil, nil
 	}
-	goArgs := argsByFramework[parsers.GoTest]
-	ginkgoArgs := append([]string(nil), argsByFramework[parsers.Ginkgo]...)
-	if len(ginkgo) > 0 {
-		var err error
-		ginkgoArgs, err = runners.GinkgoGoTestArgs(ginkgoArgs)
-		if err != nil {
-			return nil, err
-		}
-	}
-	runtimeEqual := true
-	if len(packagesByFramework[parsers.GoTest]) > 0 && len(ginkgo) > 0 {
-		goRuntime, goRuntimeArgs, err := o.runtimeFor(parsers.GoTest)
-		if err != nil {
-			return nil, err
-		}
-		ginkgoRuntime, ginkgoRuntimeArgs, err := o.runtimeFor(parsers.Ginkgo)
-		if err != nil {
-			return nil, err
-		}
-		ginkgoRuntimeArgs, err = runners.GinkgoGoTestArgs(ginkgoRuntimeArgs)
-		if err != nil {
-			return nil, err
-		}
-		runtimeEqual = reflect.DeepEqual(goRuntime, ginkgoRuntime) && slices.Equal(goRuntimeArgs, ginkgoRuntimeArgs)
-	}
 	var bases []goBatchPlan
-	if len(packagesByFramework[parsers.GoTest]) == 0 {
-		bases = append(bases, goBatchPlan{packages: all, ginkgo: ginkgo, args: ginkgoArgs, framework: parsers.Ginkgo})
-	} else if len(ginkgo) == 0 || slices.Equal(goArgs, ginkgoArgs) && runtimeEqual {
-		bases = append(bases, goBatchPlan{packages: all, ginkgo: ginkgo, args: goArgs, framework: parsers.GoTest})
-	} else {
-		bases = append(bases, goBatchPlan{packages: packagesByFramework[parsers.GoTest], args: goArgs, framework: parsers.GoTest})
-		bases = append(bases, goBatchPlan{packages: ginkgo, ginkgo: ginkgo, args: ginkgoArgs, framework: parsers.Ginkgo})
+	for _, framework := range []Framework{parsers.GoTest, parsers.Ginkgo} {
+		for _, pkg := range packagesByFramework[framework] {
+			runtime, runtimeArgs, err := o.runtimeFor(framework, pkg)
+			if err != nil {
+				return nil, err
+			}
+			args := slices.Clone(argsByFramework[framework])
+			if framework == parsers.Ginkgo {
+				args, err = runners.GinkgoGoTestArgs(args)
+				if err != nil {
+					return nil, err
+				}
+				runtimeArgs, err = runners.GinkgoGoTestArgs(runtimeArgs)
+				if err != nil {
+					return nil, err
+				}
+			}
+			index := -1
+			for i := range bases {
+				if reflect.DeepEqual(bases[i].runtime, runtime) && slices.Equal(bases[i].runtimeArgs, runtimeArgs) && slices.Equal(bases[i].args, args) {
+					index = i
+					break
+				}
+			}
+			if index < 0 {
+				bases = append(bases, goBatchPlan{runtime: runtime, runtimeArgs: runtimeArgs, args: args, framework: framework})
+				index = len(bases) - 1
+			}
+			if !slices.Contains(bases[index].packages, pkg) {
+				bases[index].packages = append(bases[index].packages, pkg)
+				bases[index].targets = append(bases[index].targets, pkg)
+			}
+			if framework == parsers.Ginkgo {
+				bases[index].ginkgo = append(bases[index].ginkgo, pkg)
+			}
+		}
 	}
 	if unfocused && len(bases) == 1 {
 		return o.planUnfocusedGoBatch(bases[0]), nil
@@ -96,13 +107,13 @@ func (o *TestOrchestrator) planGoBatches(packagesByFramework map[Framework][]str
 			}
 			index := -1
 			for i := range plans {
-				if plans[i].framework == base.framework && slices.Equal(plans[i].args, args) {
+				if plans[i].framework == base.framework && reflect.DeepEqual(plans[i].runtime, base.runtime) && slices.Equal(plans[i].runtimeArgs, base.runtimeArgs) && slices.Equal(plans[i].args, args) {
 					index = i
 					break
 				}
 			}
 			if index < 0 {
-				plans = append(plans, goBatchPlan{args: args, framework: base.framework})
+				plans = append(plans, goBatchPlan{args: args, framework: base.framework, runtime: base.runtime, runtimeArgs: base.runtimeArgs})
 				index = len(plans) - 1
 			}
 			plans[index].packages = append(plans[index].packages, pkg)
@@ -137,7 +148,7 @@ func (o *TestOrchestrator) planUnfocusedGoBatch(base goBatchPlan) []goBatchPlan 
 			}
 		}
 		if index < 0 {
-			plans = append(plans, goBatchPlan{args: args, framework: base.framework})
+			plans = append(plans, goBatchPlan{args: args, framework: base.framework, runtime: base.runtime, runtimeArgs: base.runtimeArgs})
 			index = len(plans) - 1
 		}
 		plans[index].packages = append(plans[index].packages, pkg)
@@ -149,11 +160,39 @@ func (o *TestOrchestrator) planUnfocusedGoBatch(base goBatchPlan) []goBatchPlan 
 	return plans
 }
 
+// acquireGoBatchSlots takes up to one slot per test binary the batch would run
+// at once (-p) and returns the -p it may use: 0 with slots disabled, else the granted
+// count (or the wanted one when running on an inherited lease).
+func (o *TestOrchestrator) acquireGoBatchSlots(ctx commonsCtx.Context, plan goBatchPlan) (*slots.Lease, int, error) {
+	wanted, err := goBatchParallelism(plan)
+	if err != nil {
+		return nil, 0, err
+	}
+	lease, err := o.acquireSlots(ctx, slots.Request{Limits: plan.runtime.Slots, WorkDir: o.WorkDir, Command: "go test " + strings.Join(plan.targets, " "), Count: wanted})
+	if err != nil || !plan.runtime.Slots.Enabled() {
+		return lease, 0, err
+	}
+	if granted := lease.Count(); granted > 0 && granted < wanted {
+		logger.Infof("Downgraded go test parallelism from %d to %d to fit available slots", wanted, granted)
+		return lease, granted, nil
+	}
+	return lease, wanted, nil
+}
+
 func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan goBatchPlan) (packageResult, error) {
+	lease, parallel, err := o.acquireGoBatchSlots(ctx, plan)
+	if err != nil {
+		return packageResult{}, err
+	}
+	defer func() {
+		if err := lease.Close(); err != nil {
+			logger.Errorf("release test slots: %v", err)
+		}
+	}()
 	if o.CoverDir != "" {
 		plan.coverProfile = filepath.Join(o.CoverDir, fmt.Sprintf("batch-%d.out", goBatchCount.Add(1)))
 	}
-	process, err := o.buildGoBatchCommand(plan)
+	process, err := o.buildGoBatchCommand(plan, parallel)
 	if err != nil {
 		return packageResult{}, err
 	}
@@ -162,6 +201,7 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 		process.Stream(o.OutputTee, o.OutputTee)
 	}
 	t.SetName(formatRunningCommand(process.Cmd, process.Args))
+	process.WithEnv(lease.Env())
 	started := time.Now()
 	// --test-timeout bounds each package, not the batch: the process itself
 	// is held only to the run's --timeout.
@@ -181,6 +221,9 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 		return packageResult{}, err
 	}
 	result := process.WithContext(runContext).Run().Result()
+	if err := lease.Close(); err != nil {
+		return packageResult{}, err
+	}
 	var dumped []goTestBinary
 	if deadlines != nil {
 		deadlines.stop()
@@ -220,7 +263,11 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 				hasReport = hasReport || suite.Framework == parsers.Ginkgo
 			}
 			if !hasReport && packageSuites.All().Sum().Failed == 0 {
-				return packageResult{}, fmt.Errorf("package %s passed without Ginkgo metadata", pkgPath)
+				packageSuites = append(packageSuites, parsers.TestResults{
+					Framework: parsers.Ginkgo, ExitCode: 1,
+					Tests: parsers.Tests{{Name: "Ginkgo metadata", Package: importPath, Framework: parsers.Ginkgo, Failed: true,
+						Message: fmt.Sprintf("package %s passed without Ginkgo metadata", pkgPath)}},
+				})
 			}
 		}
 		if (len(plan.targets) == 1 && plan.targets[0] == "./..." && !slices.Contains(plan.packages, pkgPath) || slices.Contains(plan.skipEmpty, pkgPath)) && emptyGoPackage(packageSuites) {
@@ -308,7 +355,7 @@ func resolveGoBatchPaths(workDir string, packages, importPaths []string, allowEx
 			if used[pkg] {
 				continue
 			}
-			if rel == "." && importPath == module || rel != "." && (importPath == module+"/"+rel || strings.HasSuffix(importPath, "/"+rel)) {
+			if rel == "." && importPath == module || rel != "." && (importPath == module+"/"+rel || module == "" && strings.HasSuffix(importPath, "/"+rel)) {
 				if len(rel) > longest {
 					matches = nil
 					longest = len(rel)
@@ -337,7 +384,7 @@ func resolveGoBatchPaths(workDir string, packages, importPaths []string, allowEx
 			remainingPackages = append(remainingPackages, pkg)
 		}
 	}
-	if len(remainingImports) == 1 && len(remainingPackages) == 1 {
+	if module == "" && len(remainingImports) == 1 && len(remainingPackages) == 1 {
 		paths[remainingImports[0]] = remainingPackages[0]
 		return paths, nil
 	}
@@ -391,15 +438,50 @@ func goImportPrefix(workDir string) (string, error) {
 	}
 }
 
-func (o *TestOrchestrator) buildGoBatchCommand(plan goBatchPlan) (*exec.Process, error) {
+// goBatchParallelism is how many test binaries a batch wants to run at once:
+// its own -p, or go test's default of GOMAXPROCS.
+func goBatchParallelism(plan goBatchPlan) (int, error) {
+	args := append(slices.Clone(plan.runtimeArgs), plan.args...)
+	for i, arg := range args {
+		value, ok := strings.CutPrefix(arg, "-p=")
+		if !ok && arg == "-p" && i+1 < len(args) {
+			value, ok = args[i+1], true
+		}
+		if !ok {
+			continue
+		}
+		parallel, err := strconv.Atoi(value)
+		if err != nil || parallel < 1 {
+			return 0, fmt.Errorf("go test -p must be a positive integer, got %q", value)
+		}
+		return parallel, nil
+	}
+	return goruntime.GOMAXPROCS(0), nil
+}
+
+// withoutGoParallelism drops -p from args so the slot-granted value applies.
+func withoutGoParallelism(args []string) []string {
+	var kept []string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "-p" && i+1 < len(args):
+			i++
+		case strings.HasPrefix(args[i], "-p="):
+		default:
+			kept = append(kept, args[i])
+		}
+	}
+	return kept
+}
+
+// buildGoBatchCommand runs the batch with -p=parallel when parallel is
+// positive, replacing any -p in its args.
+func (o *TestOrchestrator) buildGoBatchCommand(plan goBatchPlan, parallel int) (*exec.Process, error) {
 	overlay, err := runners.BuildGinkgoOverlay(o.WorkDir, plan.ginkgo, o.Tags)
 	if err != nil {
 		return nil, err
 	}
-	runtime, runtimeArgs, err := o.runtimeFor(plan.framework)
-	if err != nil {
-		return nil, err
-	}
+	runtime, runtimeArgs := plan.runtime, slices.Clone(plan.runtimeArgs)
 	timeout := 10 * time.Minute
 	if runtime.Timeout != nil {
 		if *runtime.Timeout == "" {
@@ -427,8 +509,12 @@ func (o *TestOrchestrator) buildGoBatchCommand(plan goBatchPlan) (*exec.Process,
 			return nil, err
 		}
 	}
+	flags := append(runtimeArgs, plan.args...)
+	if parallel > 0 {
+		flags = append(withoutGoParallelism(flags), fmt.Sprintf("-p=%d", parallel))
+	}
 	var ginkgoArgs []string
-	for _, arg := range append(runtimeArgs, plan.args...) {
+	for _, arg := range flags {
 		if strings.HasPrefix(arg, "-ginkgo.") {
 			ginkgoArgs = append(ginkgoArgs, arg)
 		} else {

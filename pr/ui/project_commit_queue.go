@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -152,7 +151,7 @@ func (s *Server) commitQueueArgs(workDir string, request projectActionRequest) (
 			return commitQueueRequest{
 				action: action,
 				files:  []string{},
-				args:   []string{"commit", "--work-dir", workDir, "--precommit=fail", "--stage=staged", "--push"},
+				args:   []string{"commit", "--work-dir", workDir, "--stage=staged", "--push"},
 			}, nil
 		}
 		request.Action = projectActionCommit
@@ -204,7 +203,7 @@ func (q *commitQueue) enqueue(s *Server, project Project, requests []commitQueue
 		if predecessors := predecessorsLocked(generation); len(predecessors) > 0 {
 			opts = append(opts, clickytask.WithDependencies(predecessors...))
 		}
-		entry.task = executeProjectAction(generation.group.Context(), q.workDir, request.args, io.Discard, generation.group.Group, opts...)
+		entry.task = executeProjectCommit(s, generation.group.Context(), q.workDir, request.args, generation.group.Group, opts...)
 		entry.task.SetName(projectCommitTaskName(request.action, request.files))
 		entry.task.SetDescription(strings.Join(request.files, ", "))
 		generation.entries = append(generation.entries, entry)

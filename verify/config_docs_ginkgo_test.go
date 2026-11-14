@@ -42,8 +42,8 @@ func livePromptIDs() []string {
 // rename shipped — still telling readers to configure commit.messagePrompt and a
 // top-level verify: section that no longer parse.
 var docFiles = []string{
-	"SCHEMA.md",
-	"site/content/docs/prompt-overrides.mdx",
+	"docs/content/docs/configuration-reference.mdx",
+	"docs/content/docs/prompt-overrides.mdx",
 }
 
 // repoFile reads a path relative to the repo root. go test runs each package in

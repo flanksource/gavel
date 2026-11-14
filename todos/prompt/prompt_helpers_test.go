@@ -24,8 +24,12 @@ func renderResolvedForTest(todos []*types.TODO, options Options) (captainai.Requ
 	if err != nil {
 		return captainai.Request{}, captainai.Config{}, err
 	}
+	data, err := TemplateData(todos, options)
+	if err != nil {
+		return captainai.Request{}, captainai.Config{}, err
+	}
 	resolved, err := (verify.PromptSpec{}).Resolve(verify.PromptResolveOptions{
-		DefaultPrompt: template, Data: TemplateData(todos, options), Request: options.Spec,
+		DefaultPrompt: template, Data: data, Request: options.Spec,
 	})
 	if err != nil {
 		return captainai.Request{}, captainai.Config{}, err

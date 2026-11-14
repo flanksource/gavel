@@ -5,13 +5,14 @@ import (
 	"testing"
 
 	captainapi "github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 )
 
-func triageOutcomeFor(execution *todos.ExecutionResult) *lifecycle.StepOutcome {
-	return &lifecycle.StepOutcome{Step: lifecycle.Step{Name: "triage"}, Execution: execution}
+func triageOutcomeFor(execution *todos.ExecutionResult) *lifecycle1.StepOutcome {
+	return &lifecycle1.StepOutcome{Step: lifecycle.Step{Name: "triage"}, Execution: execution}
 }
 
 // The reported status is the lifecycle's, rendered through types.Status.Pretty —

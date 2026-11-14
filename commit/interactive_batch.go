@@ -40,7 +40,7 @@ func runInteractiveBatch(ctx context.Context, opts Options) (*Result, error) {
 
 	result := &Result{DryRun: opts.DryRun}
 	for i, batch := range batches {
-		if err := stageExplicitFiles(opts.WorkDir, batch); err != nil {
+		if err := stageExplicitFiles(ctx, opts.WorkDir, batch); err != nil {
 			return result, fmt.Errorf("batch %d of %d: %w", i+1, len(batches), err)
 		}
 

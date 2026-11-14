@@ -1,0 +1,79 @@
+---
+title: Services
+description: Prepare databases, ordered dependencies, supervised commands, and seeded repositories.
+parent: fixture-step-reference
+order: 5
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+
+import DocChildren from "../../src/components/site/DocChildren";
+
+Use the `services` step in a YAML fixture to prepare databases, ordered dependencies, supervised commands, and seeded repositories. This typed step also supports JSON; Markdown has no native `services` fence. Each worked guide includes prerequisites, complete runnable examples, and cleanup behavior.
+
+<DocChildren parent="fixture-kind-services" />
+
+## Example
+
+```yaml
+kind: Fixture
+name: Services example
+steps:
+  - id: resources
+    kind: services
+    services:
+      repository:
+        git:
+          files:
+            README.md: Fixture repository
+          commit: true
+```
+
+Save the document as a `.fixture.yaml` file. Inspect it with `gavel fixtures outline <file>`, then execute it with `gavel fixtures <file>` once its prerequisites are available.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+Install Git for this example, which seeds a disposable repository. Other service types require the tools listed in their [worked guides](/docs/infrastructure).
+
+</Prerequisites>
+
+`services` accepts a name-to-entry mapping or a named-entry list. Each entry selects exactly one of `dbtest`, `deps`, `exec`, or `git`. Mapping order is retained; entries start in declaration order and can use earlier exports.
+
+## Automatic PostgreSQL connections
+
+Declare `dbtest: {}` to lease an isolated PostgreSQL database from commons-db's shared test server. Optional `dbtest.migrations` prepares reusable HCL/SQL templates. The selected database automatically supplies `DATABASE_URL`, `GAVEL_DB_DSN`, `COMMONS_DB_URL`, `COMMONS_DB_CREATE=false`, and libpq `PG*` variables to subsequent services and command/test children. No manual export map is needed.
+
+A sole database is selected automatically. With multiple `dbtest` entries across the fixture, set exactly one `dbtest.default: true`; ambiguity fails before resources start. Every database also retains its named URL/port exports and connection outputs. See the [database guide](/docs/service-dbtest) for migrations, variables, external servers, and multi-database examples.
+
+## Results and lifetime
+
+`exec` entries require one readiness probe: `ready.http`, `ready.tcp`, or `ready.exec`. A deps entry uses its catalog health check. Entry waits configure readiness timing; step-level `wait.until` judges aggregate outputs. Resources are cleaned up after the fixture.
+
+The entry definitions below come from the native services schema, including database provisioning, deps parameters, command probes, Git seeds, and exports.
+
+## Complete step reference
+
+Use Tree or Table to browse global fields and this kind's configuration separately. Expand nested fields or additional metadata when available. Shared behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="services" />
+
+## Chaining and exports
+
+During service startup, an entry can refer to an earlier entry using `{{.services.<name>.<output>}}`. Later steps use `{{.steps.<step-id>.<name>.<output>}}`. URL-bearing entries automatically export `<NAME>_URL` and `<NAME>_PORT`; camel case becomes uppercase snake case.
+
+An entry's `export` map adds application-specific variables. For example, `export: {APP_ENDPOINT: "{{.outputs.url}}"}` exposes its URL as `APP_ENDPOINT`. `export: {"*": "{{.outputs.env}}"}` exports a complete environment map. Conflicting exports fail rather than silently choosing a resource. Step-level `override: true` permits an intentional replacement of an earlier step's exports.
+
+The default `dbtest` database additionally configures standard PostgreSQL and Gavel connection variables automatically. These variables are scoped to this fixture and its children; the shell and Gavel's own database connection are unchanged. See [automatic database connections](/docs/service-dbtest#automatic-connections).
+
+Both mapping and named-list service declarations preserve order. Use a list when a tool serializing the fixture cannot preserve mapping order. Put dependencies before their consumers so reverse cleanup stops consumers first.
+
+## Failure handling
+
+An entry must start and become ready before the next entry starts. When startup or exporting fails, entries already started by that step are stopped immediately. A successful services step keeps its resources until fixture teardown, including when a later step fails. Cleanup attempts every resource and reports errors.
+
+`exec` readiness checks use `ready` and entry-level `wait` timing. `deps` uses the catalog's health check and accepts an entry `wait.timeout`. `dbtest` uses commons-db provisioning and a PostgreSQL connection probe. Git entries are ready once their files and optional commit exist.
+
+For a multi-resource example, combine the <a href="/examples/services/dbtest.fixture.yaml" download>database example</a> with an exec service after its database entry. The exec service automatically inherits `DATABASE_URL`, `PG*`, and the named database URL. Give it a real readiness probe; merely starting a process does not establish readiness.

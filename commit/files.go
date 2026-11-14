@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -65,14 +66,31 @@ func validateFilesOptions(opts Options) error {
 // stageExplicitFiles resets the index then stages exactly files (git-root-
 // relative pathspecs), so `gavel commit <files>` commits only those paths
 // regardless of what was previously staged. Mirrors the interactive picker's
-// reset-then-stage (runInteractiveStaging). Explicit selection intentionally
-// overrides .gitignore — the user named the files — while the precommit
-// gitignore gate (applyPrecommitChecks) still runs downstream.
-func stageExplicitFiles(workDir string, files []string) error {
-	if err := resetAllStaged(workDir); err != nil {
+// reset-then-stage (runInteractiveStaging). Ignored paths require approval
+// before the reset; the precommit checks still run downstream.
+func stageExplicitFiles(ctx context.Context, workDir string, files []string) error {
+	ignored, err := explicitIgnoredPaths(workDir, files)
+	if err != nil {
+		return err
+	}
+	if err := approveIgnoredPaths(ctx, workDir, ignored); err != nil {
+		return err
+	}
+	var regular, forced []string
+	for _, file := range files {
+		if _, ok := ignored[file]; ok {
+			forced = append(forced, file)
+		} else {
+			regular = append(regular, file)
+		}
+	}
+	if err := resetAllStaged(ctx, workDir); err != nil {
 		return fmt.Errorf("reset index before staging file arguments: %w", err)
 	}
-	if err := addFiles(workDir, files); err != nil {
+	if err := addFiles(ctx, addFilesOptions{WorkDir: workDir, Files: forced, Force: true}); err != nil {
+		return fmt.Errorf("force-stage file arguments: %w", err)
+	}
+	if err := addFiles(ctx, addFilesOptions{WorkDir: workDir, Files: regular}); err != nil {
 		return fmt.Errorf("stage file arguments: %w", err)
 	}
 	return nil

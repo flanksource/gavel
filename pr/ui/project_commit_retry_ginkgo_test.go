@@ -234,7 +234,7 @@ var _ = Describe("project commit run retry", func() {
 
 		gavel, err := GetProject("gavel")
 		Expect(err).NotTo(HaveOccurred())
-		argv := []string{"commit", "--work-dir", gavel.ResolvedDir(), "--precommit=fail", "--message=fix: one", "one.go"}
+		argv := []string{"commit", "--work-dir", gavel.ResolvedDir(), "--message=fix: one", "one.go"}
 		Eventually(runs.arguments).Should(Equal([][]string{argv, argv}))
 	})
 })

@@ -35,7 +35,8 @@ vi.mock('@flanksource/clicky-ui/components', async () => {
   };
 });
 
-vi.mock('@flanksource/clicky-ui/icons', () => ({
+vi.mock('@flanksource/clicky-ui/icons', async importOriginal => ({
+  ...await importOriginal<typeof import('@flanksource/clicky-ui/icons')>(),
   UiFolder: () => null,
   UiGavel: () => null,
   UiChevronRight: () => null,

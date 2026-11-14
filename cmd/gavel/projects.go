@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
+	"slices"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/gavel/filters"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/tenant"
 	"github.com/spf13/cobra"
 )
 
@@ -22,29 +28,49 @@ type ProjectsListOptions struct{}
 // projectListRow is the display shape for `projects list`: the stored config
 // plus the native TODO backend.
 type projectListRow struct {
-	Name        string   `json:"name"`
-	Dir         string   `json:"dir"`
-	Repos       []string `json:"repos"`
-	TodoBackend string   `json:"todoBackend"`
-	Hidden      bool     `json:"hidden"`
+	Name          string   `json:"name"`
+	Dir           string   `json:"dir"`
+	Repos         []string `json:"repos"`
+	ReposInferred bool     `json:"reposInferred"`
+	TodoBackend   string   `json:"todoBackend"`
+	Hidden        bool     `json:"hidden"`
 }
 
 func runProjectsList(_ ProjectsListOptions) ([]projectListRow, error) {
-	ps, err := ui.LoadProjects(ui.LoadProjectsOptions{IncludeHidden: true})
+	ps, err := ui.LoadProjects()
+	if err != nil {
+		return nil, err
+	}
+	store, err := localFilterStore(context.Background(), "gavel projects list")
+	if err != nil {
+		return nil, err
+	}
+	hidden, err := store.Get(context.Background(), tenant.Local(), filters.HiddenProjects)
 	if err != nil {
 		return nil, err
 	}
 	rows := make([]projectListRow, 0, len(ps))
 	for _, p := range ps {
 		rows = append(rows, projectListRow{
-			Name:        p.Name,
-			Dir:         p.Dir,
-			Repos:       p.Repos,
-			TodoBackend: "db",
-			Hidden:      p.Hidden,
+			Name:          p.Name,
+			Dir:           p.Dir,
+			Repos:         p.Repos,
+			ReposInferred: p.ReposInferred,
+			TodoBackend:   "db",
+			Hidden:        slices.Contains(hidden.Values, filepath.Clean(p.ResolvedDir())),
 		})
 	}
 	return rows, nil
+}
+
+// localFilterStore is the local org's named filters, which the dashboard reads in
+// local mode.
+func localFilterStore(ctx context.Context, feature string) (*filters.Store, error) {
+	db, err := database.Require(ctx, feature)
+	if err != nil {
+		return nil, err
+	}
+	return filters.NewStore(db), nil
 }
 
 type ProjectsGetOptions struct {
@@ -124,13 +150,27 @@ type ProjectsHiddenOptions struct {
 	Args []string `args:"true"`
 }
 
-// setProjectHidden backs `projects hide` and `projects unhide`.
-func setProjectHidden(hidden bool) func(ProjectsHiddenOptions) (ui.Project, error) {
-	return func(opts ProjectsHiddenOptions) (ui.Project, error) {
+// setProjectHidden backs `projects hide` and `projects unhide`: it edits the local
+// hidden-projects filter and returns it.
+func setProjectHidden(hidden bool) func(ProjectsHiddenOptions) (filters.Filter, error) {
+	return func(opts ProjectsHiddenOptions) (filters.Filter, error) {
 		if len(opts.Args) != 1 {
-			return ui.Project{}, fmt.Errorf("expected exactly one project name, got %d", len(opts.Args))
+			return filters.Filter{}, fmt.Errorf("expected exactly one project name, got %d", len(opts.Args))
 		}
-		return ui.SetProjectHidden(opts.Args[0], hidden)
+		p, err := ui.GetProject(opts.Args[0])
+		if err != nil {
+			return filters.Filter{}, err
+		}
+		ctx := context.Background()
+		store, err := localFilterStore(ctx, "gavel projects hide")
+		if err != nil {
+			return filters.Filter{}, err
+		}
+		edit := store.Remove
+		if hidden {
+			edit = store.Add
+		}
+		return edit(ctx, tenant.Local(), filters.HiddenProjects, p.ResolvedDir())
 	}
 }
 

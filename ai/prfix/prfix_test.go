@@ -205,8 +205,8 @@ func TestResolveSpecVerifiesTheRebaseBeforePolling(t *testing.T) {
 
 func TestPromptsRegistersPRFixOnce(t *testing.T) {
 	got := Prompts()
-	if len(got) != 1 {
-		t.Fatalf("Prompts() = %d entries, want 1", len(got))
+	if len(got) != 2 {
+		t.Fatalf("Prompts() = %d entries, want fix and review", len(got))
 	}
 	if got[0].ID != got[0].ConfigPath {
 		t.Errorf("ID %q and ConfigPath %q must match for reflection-based resolution", got[0].ID, got[0].ConfigPath)

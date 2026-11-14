@@ -94,7 +94,7 @@ describe('useSessionStats', () => {
     unmount();
   });
 
-  it('continues the live clock across server polls', async () => {
+  it('advances the live clock without recurring server reads', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-13T12:00:00Z'));
     const durations = [30_000, 32_000];
@@ -137,7 +137,7 @@ describe('useSessionStats', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.current.elapsedMs).toBeGreaterThanOrEqual(32_000);
     unmount();
   });
@@ -188,6 +188,10 @@ describe('CmuxSessionButton', () => {
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/todos/session/focus'))).toBe(true),
     );
+	for (const path of ['/api/todos/session/cmux', '/api/todos/session/focus']) {
+	  const call = fetchMock.mock.calls.find(([url]) => String(url).includes(path));
+	  expect(new URL(String(call?.[0]), 'http://localhost').searchParams.get('sessionId')).toBe('sess-1234');
+	}
   });
 
   it('resumes via the supplied handler and hides Resume without one', async () => {

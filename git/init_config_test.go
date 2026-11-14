@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/flanksource/gavel/verify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,31 +58,10 @@ func TestInitConfig_NotGitRepo(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a git repository")
 }
 
-func TestResolveAICLI(t *testing.T) {
-	tests := []struct {
-		model         string
-		wantName      string
-		wantModelFlag string
-	}{
-		{"claude", "claude", ""},
-		{"gemini", "gemini", ""},
-		{"codex", "codex", ""},
-		{"claude-sonnet-4", "claude", "claude-sonnet-4"},
-		{"gemini-2.5-flash", "gemini", "gemini-2.5-flash"},
-		{"unknown-model", "claude", "unknown-model"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.model, func(t *testing.T) {
-			name, modelFlag := resolveAICLI(tt.model)
-			assert.Equal(t, tt.wantName, name)
-			assert.Equal(t, tt.wantModelFlag, modelFlag)
-		})
-	}
-}
-
 func TestBuildInitPrompt(t *testing.T) {
-	prompt := buildInitPrompt("/repo/.gitanalyze.yaml")
-	assert.Contains(t, prompt, "/repo/.gitanalyze.yaml")
-	assert.Contains(t, prompt, "git log")
-	assert.Contains(t, prompt, "repository structure")
+	layers, err := (verify.PromptSpec{}).Layers(verify.PromptResolveOptions{DefaultPrompt: initConfigPrompt, Data: map[string]any{"workDir": "/repo", "configPath": "/repo/.gitanalyze.yaml"}})
+	require.NoError(t, err)
+	assert.Contains(t, layers[1].Spec.Prompt.User, "/repo/.gitanalyze.yaml")
+	assert.Contains(t, layers[1].Spec.Prompt.User, "git log")
+	assert.Contains(t, layers[1].Spec.Prompt.User, "repository structure")
 }

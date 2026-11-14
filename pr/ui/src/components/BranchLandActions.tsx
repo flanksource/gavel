@@ -134,6 +134,7 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
           />
         </span>
       </span>
+      {reasons.merge && <span className="max-w-md text-right text-xs text-muted-foreground">{reasons.merge}</span>}
       {opened && (
         <span role="status" className="text-[11px] text-muted-foreground">
           Opened <a href={opened.url} target="_blank" rel="noreferrer" className="text-primary underline">#{opened.number}</a> from {opened.topicBranch}

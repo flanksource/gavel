@@ -1,0 +1,141 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"slices"
+	"syscall"
+
+	"github.com/flanksource/captain/pkg/claude"
+	captaincli "github.com/flanksource/captain/pkg/cli"
+	"github.com/flanksource/clicky"
+	lintprompt "github.com/flanksource/gavel/lint/prompt"
+	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/snapshots"
+	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/workspace"
+	"github.com/spf13/cobra"
+)
+
+func registerLintPromptCommand(parent *cobra.Command) *cobra.Command {
+	var cmd *cobra.Command
+	cmd = clicky.AddNamedCommandWithContext("prompt", parent, lintprompt.Options{}, func(ctx context.Context, opts lintprompt.Options) (any, error) {
+		opts.AIRuntimeOptions = opts.WithChangedFlags(cmd.Flags())
+		positional, through, err := splitAtDash(cmd, cmd.Flags().Args())
+		if err != nil {
+			return nil, err
+		}
+		prompt, promptArgs, err := captaincli.ParsePromptArgs(through)
+		if err != nil {
+			return nil, fmt.Errorf("prompt arguments after --: %w", err)
+		}
+		opts.Prompt = prompt
+		opts.Prompt.File, opts.Paths = splitPromptArgs(append(positional, promptArgs...), prompt.Prompt != "")
+		if opts.Dirs, err = workspace.From(ctx); err != nil {
+			return nil, err
+		}
+		dir := opts.Dirs.Invocation
+		opts.Selection = opts.LintScope(ctx, dir).ChangeSelection()
+		if opts.DryRun {
+			return lintprompt.Render(ctx, opts)
+		}
+		// Model variants, fixes and UI reruns replay the same piped input.
+		var stdin []byte
+		if claude.IsStdinPiped() {
+			if stdin, err = io.ReadAll(os.Stdin); err != nil {
+				return nil, fmt.Errorf("read stdin: %w", err)
+			}
+		}
+		run := func(rctx context.Context, o lintprompt.Options) (*testui.Snapshot, error) {
+			if stdin != nil {
+				o.Stdin = bytes.NewReader(stdin)
+			}
+			return runPromptLint(rctx, o)
+		}
+		ctx, cancelRun := newStopContext(ctx, 0)
+		defer cancelRun()
+		ctx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+		defer stopSignals()
+		var uiServer *testui.Server
+		if opts.UI {
+			// The UI follows each prompt run through Captain's run and session
+			// routes; the host keeps them pruned.
+			defer captaincli.StartSessionHost(ctx)()
+			uiServer, err = startLintUI(lintUIOptions{Addr: opts.Addr, Context: ctx, Cancel: cancelRun, Writer: os.Stderr,
+				Rerun: func(rctx context.Context, req testui.RerunRequest, _ *testui.RerunOutputBuffer) ([]*linters.LinterResult, error) {
+					rerun := opts
+					rerun.Selection = opts.Selection.Fresh()
+					// A file-scoped rerun reviews exactly those files, not the change selection.
+					if len(req.LintFiles) > 0 {
+						rerun.Paths, rerun.Selection, rerun.Changed, rerun.Since, rerun.ChangedFiles = req.LintFiles, nil, false, "", nil
+					}
+					snapshot, err := run(rctx, rerun)
+					if snapshot == nil {
+						return nil, err
+					}
+					return snapshot.Lint, err
+				}})
+			if err != nil {
+				return nil, err
+			}
+			uiServer.SetGitRoot(dir)
+			uiServer.SetVersion(version)
+			uiServer.SetGitInfo(snapshots.GitInfo(dir))
+			opts.Publisher = uiServer
+		}
+		snapshot, err := run(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		if opts.AIFix {
+			var names []string
+			for _, result := range snapshot.Lint {
+				if !slices.Contains(names, result.Linter) {
+					names = append(names, result.Linter)
+				}
+			}
+			_, err = runAIFix(aiFixOptions{Context: ctx, WorkDir: dir, Linters: names, Runtime: opts.AIRuntimeOptions, MaxIterations: opts.AIFixMaxIters, ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
+				rerun := opts
+				rerun.Selection = opts.Selection.Fresh()
+				next, err := run(rctx, rerun)
+				if next == nil {
+					return nil, err
+				}
+				snapshot = next
+				return next.Lint, err
+			}}, snapshot.Lint)
+			if err != nil {
+				return nil, fmt.Errorf("ai-fix: %w", err)
+			}
+		}
+		if uiServer != nil {
+			uiServer.SetLintResults(snapshot.Lint)
+			uiServer.MarkDone()
+			<-ctx.Done()
+			latest := uiServer.Snapshot()
+			latest.Tests = nil
+			return promptLintReturnValue(&latest), nil
+		}
+		return promptLintReturnValue(snapshot), nil
+	})
+	cmd.Use = "prompt [name|id|file] [path...] [-- prompt flags]"
+	cmd.Short = "Run a Captain prompt with the lint output preset"
+	cmd.Long = "Run a Captain prompt with the lint output preset.\n\nThe first argument is the prompt; remaining arguments (all of them with -p) are files or directories. They are all reviewed by one prompt run, which gets them as the files list. --changed, --since and --changed-files narrow that scope to changed files, as in gavel lint.\n\nThe reviewing agent gets three tools: read_file reads a file under the work dir, lint runs the project's configured linters on paths, and report_violation records findings as soon as they are found, several per call, checking each quoted code snippet against its file and line. When every path is a file, report_violation's file must be one of them; with a directory in scope it must be under one. Findings for any other file are rejected. Reported findings are merged with the prompt's final violations. --ai-fix repairs findings with lint.fix from Gavel config and re-runs the prompt until clean. --ui shows the findings in the browser UI, where they can be re-run.\n\nFlags before -- configure gavel: scope, reporting and --ai-fix, with --model and the other runtime flags selecting the fixer. Arguments after -- go to the Captain prompt: --model, -p, -V, --preset and friends configure the reviewing prompt, and positional arguments there are the prompt and paths."
+	cmd.Example = "  gavel lint prompt review.prompt\n  gavel lint prompt review.prompt ./pkg cmd/main.go\n  gavel lint prompt --changed --ai-fix --model agent:opus -- --model agent:sonnet review.prompt\n  gavel lint prompt --ui --changed review.prompt\n  git diff | gavel lint prompt review.prompt -- -V change=-\n  gavel lint prompt --since main ./pkg -- -p 'Review the current change' --model agent:sonnet"
+	cmd.Long += "\n\nAccepted findings are printed to stderr and saved to a per-run .gavel snapshot as they become available, with or without --ui. Each review pass updates the same snapshot until it finishes; reruns create a new history entry. Structured output remains on stdout."
+	cmd.Args = cobra.ArbitraryArgs
+	return cmd
+}
+
+// splitPromptArgs separates the prompt reference from the paths under review.
+// An inline -p prompt leaves every positional argument as a path.
+func splitPromptArgs(args []string, inline bool) (string, []string) {
+	if inline || len(args) == 0 {
+		return "", args
+	}
+	return args[0], args[1:]
+}

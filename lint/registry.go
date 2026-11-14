@@ -4,28 +4,56 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/betterleaks"
+	"github.com/flanksource/gavel/linters/command"
 	"github.com/flanksource/gavel/linters/eslint"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/jscpd"
+	jsonlint "github.com/flanksource/gavel/linters/json"
 	"github.com/flanksource/gavel/linters/markdownlint"
 	"github.com/flanksource/gavel/linters/oxlint"
 	"github.com/flanksource/gavel/linters/pyright"
 	"github.com/flanksource/gavel/linters/reactdoctor"
 	"github.com/flanksource/gavel/linters/ruff"
 	"github.com/flanksource/gavel/linters/tsc"
+	"github.com/flanksource/gavel/linters/uir"
 	"github.com/flanksource/gavel/linters/vale"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
-// buildLinterRegistry registers every available linter rooted at workDir.
-// Shared between the execute path and the dry-run path so both stay in sync.
-func buildLinterRegistry(workDir string) *linters.Registry {
+// DefaultRegistry registers every available linter rooted at workDir: the
+// built-ins and each command the .gavel.yaml in force there (for an
+// invocation from configDir) declares — which its validation keeps off the
+// built-ins' names. An embedder adds its own linters to it and passes it as
+// Options.Registry.
+func DefaultRegistry(workDir, configDir string) (*linters.Registry, error) {
+	cfg, err := verify.LoadGavelConfig(verify.RuntimeConfigDirectory(workDir, configDir))
+	if err != nil {
+		return nil, err
+	}
+	registry := builtinLinterRegistry(workDir)
+	for _, declared := range command.Declared(workDir, cfg.Lint) {
+		registry.Register(declared)
+	}
+	return registry, nil
+}
+
+// registry is Options.Registry when an embedder set one, else DefaultRegistry.
+// Execute, DryRun and Validate all resolve linters through it.
+func (o Options) registry() (*linters.Registry, error) {
+	if o.Registry != nil {
+		return o.Registry, nil
+	}
+	return DefaultRegistry(o.WorkDir, o.ConfigDir)
+}
+
+func builtinLinterRegistry(workDir string) *linters.Registry {
 	registry := linters.NewRegistry()
 	registry.Register(golangci.NewGolangciLint(workDir))
 	registry.Register(ruff.NewRuff(workDir))
@@ -38,6 +66,8 @@ func buildLinterRegistry(workDir string) *linters.Registry {
 	registry.Register(vale.NewVale(workDir))
 	registry.Register(jscpd.NewJSCPD(workDir))
 	registry.Register(betterleaks.NewBetterleaks(workDir))
+	registry.Register(uir.New(workDir))
+	registry.Register(jsonlint.New(workDir))
 	return registry
 }
 
@@ -69,6 +99,7 @@ func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, 
 // project root (go.mod / package.json / tsconfig.json / ...). A linter may
 // produce multiple invocations when the input spans several project roots.
 type linterInvocation struct {
+	configDir   string
 	skip        bool
 	linter      linters.Linter
 	projectRoot string   // absolute; WorkDir the linter runs from
@@ -81,6 +112,16 @@ type linterInvocation struct {
 // discovered via the input files (or by scanning opts.WorkDir when no files
 // were passed) and files are bucketed + relativized per root.
 func resolveLinterInvocations(linter linters.Linter, opts Options) []linterInvocation {
+	invocations := discoverLinterInvocations(linter, opts)
+	if factory, ok := linter.(linters.ProjectFactory); ok {
+		for i := range invocations {
+			invocations[i].linter = factory.NewProject(invocations[i].projectRoot)
+		}
+	}
+	return invocations
+}
+
+func discoverLinterInvocations(linter linters.Linter, opts Options) []linterInvocation {
 	rooted, ok := linter.(linters.ProjectRooted)
 	if !ok {
 		return []linterInvocation{{linter: linter, projectRoot: opts.WorkDir, files: opts.Files}}
@@ -92,6 +133,9 @@ func resolveLinterInvocations(linter linters.Linter, opts Options) []linterInvoc
 
 	if len(opts.Files) == 0 {
 		roots := utils.FindAllProjectRoots(opts.WorkDir, markers)
+		if linter.Name() == "uir" && (len(roots) == 0 || linterHasDefaultActivation(opts.WorkDir, linter)) && !slices.Contains(roots, opts.WorkDir) {
+			roots = append([]string{opts.WorkDir}, roots...)
+		}
 		if len(roots) == 0 {
 			return nil
 		}
@@ -111,6 +155,17 @@ func resolveLinterInvocations(linter linters.Linter, opts Options) []linterInvoc
 			dir = filepath.Dir(abs)
 		}
 		root := utils.FindNearestProjectRoot(dir, markers)
+		if linter.Name() == "uir" && root != opts.WorkDir {
+			if home, err := os.UserHomeDir(); err == nil && root == home {
+				root = ""
+			}
+		}
+		if root == "" && linter.Name() == "uir" {
+			root = utils.FindNearestGoModRoot(dir)
+			if root == "" {
+				root = opts.WorkDir
+			}
+		}
 		if root == "" {
 			logger.V(2).Infof("Skipping %s for %s: no %v found", linter.Name(), f, markers)
 			continue
@@ -140,8 +195,19 @@ func isProjectRootCovered(projectRoot string, scheduledRoots []string) bool {
 	return false
 }
 
+func isInvocationCovered(invocation linterInvocation, scheduledRoots []string) bool {
+	if invocation.configDir != "" {
+		return false
+	}
+	if independent, ok := invocation.linter.(interface{ IndependentProjects() bool }); ok && independent.IndependentProjects() {
+		return false
+	}
+	return isProjectRootCovered(invocation.projectRoot, scheduledRoots)
+}
+
 // linterAliases maps CLI-friendly aliases onto registered linter names.
 var linterAliases = map[string]string{
+	"yaml":          "json",
 	"secrets":       "betterleaks",
 	"golangci-lint": "golangci-lint",
 	"golangci":      "golangci-lint",
@@ -175,6 +241,15 @@ func resolveRequestedLinters(registry *linters.Registry, requested []string) ([]
 		out = append(out, name)
 	}
 	return out, true, nil
+}
+
+// checkPassThrough rejects -- arguments unless exactly one linter is selected:
+// native flags only make sense for a single tool.
+func checkPassThrough(requested, passThrough []string) error {
+	if len(passThrough) > 0 && len(requested) != 1 {
+		return fmt.Errorf("arguments after -- require exactly one linter (got %s); use gavel lint <linter> -- %s", strings.Join(requested, ", "), strings.Join(passThrough, " "))
+	}
+	return nil
 }
 
 // hasMatchingFiles checks if any files in workDir match at least one of the glob

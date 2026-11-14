@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 
 	"github.com/flanksource/clicky/prompt"
@@ -79,17 +80,7 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 		return nil, fmt.Errorf("load after-agent commit configuration: %w", err)
 	}
 
-	// Scope any prompt this commit raises (gitignore / linked-deps / file-size /
-	// compatibility) to the todo and session, so the dashboard can surface it on the
-	// todo detail page and the session view. When no UI sink is installed this is
-	// inert and the commit keeps its terminal/non-TTY behavior.
-	if meta.IssueID != "" || meta.SessionID != "" {
-		scope := prompt.Scope{Owner: meta.IssueID, Kind: "commit"}
-		if meta.SessionID != "" {
-			scope.Labels = map[string]string{"session": meta.SessionID}
-		}
-		ctx = prompt.WithScope(ctx, scope)
-	}
+	ctx = agentPromptScope(ctx, meta)
 
 	// Scope the commit to the files the agent's session actually edited. Without
 	// a session id (e.g. a codex run with no on-disk Claude log) fall back to
@@ -143,6 +134,29 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 		logger.Infof("Committed %s: %s", c.Hash, firstLine(c.Message))
 	}
 	return result, nil
+}
+
+// agentPromptScope scopes any prompt this commit raises (gitignore / linked-deps /
+// file-size / stale lock) to the todo and session, so the dashboard can surface it
+// on the todo detail page and the session view. It extends the scope already on
+// ctx, keeping the running task's label so the prompt also shows on that task.
+// When no UI sink is installed this is inert and the commit keeps its
+// terminal/non-TTY behavior.
+func agentPromptScope(ctx context.Context, meta AgentRunMetadata) context.Context {
+	if meta.IssueID == "" && meta.SessionID == "" {
+		return ctx
+	}
+	scope := prompt.ScopeFrom(ctx)
+	scope.Owner, scope.Kind = meta.IssueID, "commit"
+	labels := maps.Clone(scope.Labels)
+	if meta.SessionID != "" {
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels["session"] = meta.SessionID
+	}
+	scope.Labels = labels
+	return prompt.WithScope(ctx, scope)
 }
 
 // resolveAgentCommitDir resolves the directory the agent worked in, mirroring how

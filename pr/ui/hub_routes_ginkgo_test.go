@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/clicky/metrics"
 	"github.com/flanksource/clicky/sse"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/procfile"
@@ -152,7 +153,7 @@ var _ = Describe("dashboard stream routes behind the events hub", func() {
 	DescribeTable("serves direct GETs that are not browser stream loads",
 		func(path string, header http.Header, wantContentType string) {
 			useProcFixture()
-			server := newDashboardTestServer(&Server{})
+			server := newDashboardTestServer(&Server{procMetrics: metrics.NewMemory(metrics.MemoryConfig{})})
 
 			resp := doRequest(newRequest(http.MethodGet, server.URL+path, header, nil))
 
@@ -161,6 +162,10 @@ var _ = Describe("dashboard stream routes behind the events hub", func() {
 		},
 		Entry("a CLI stream client without Sec-Fetch-Mode",
 			"/api/proc/status/stream", http.Header{"Accept": {eventStreamAccept}}, eventStreamAccept),
+		Entry("the process metrics stream the page's timeseries provider subscribes to",
+			"/api/proc/metrics/stream?id=gavel%2Fweb%2Fcpu", http.Header{"Accept": {eventStreamAccept}}, eventStreamAccept),
+		Entry("the task metrics stream carrying the worker-pool gauges",
+			"/api/v1/tasks/metrics/stream?id=pool%3Aworkers-busy", http.Header{"Accept": {eventStreamAccept}}, eventStreamAccept),
 		Entry("a browser JSON fetch of a non-stream route",
 			"/api/proc/status", http.Header{"Accept": {"application/json"}, "Sec-Fetch-Mode": {browserFetchMode}}, "application/json"),
 		Entry("the multiplexed events stream itself",

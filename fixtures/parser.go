@@ -109,6 +109,8 @@ func parseTableRow(headers, values []string) (*FixtureNode, error) {
 			fixture.TestArch = value
 		case "skip":
 			fixture.TestSkip = value
+		case "if":
+			fixture.If = value
 		case "cli args", "args", "arguments":
 			fixture.Args = strings.Split(value, " ")
 		case "exit code", "exitcode", "expected exit code":
@@ -338,6 +340,9 @@ func ParseMarkdownContentWithTree(name, content, sourceDir string, frontMatter *
 
 	if err := expandGlobInRows(fileTree, sourceDir); err != nil {
 		return nil, fmt.Errorf("expand row globs: %w", err)
+	}
+	if err := lowerMarkdownParams(fileTree, frontMatter, strings.TrimSuffix(name, filepath.Ext(name)), sourceDir); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 
 	return fileTree, nil

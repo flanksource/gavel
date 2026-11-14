@@ -90,6 +90,10 @@ var (
 	}, []string{"op"})
 )
 
+func init() {
+	rangesComputed.WithLabelValues()
+}
+
 // ResetMetrics clears recorded git activity without changing live tracker state.
 func ResetMetrics() {
 	refsScanDuration.Reset()
@@ -98,6 +102,7 @@ func ResetMetrics() {
 	scanQueueWait.Reset()
 	scansEnqueued.Reset()
 	rangesComputed.Reset()
+	rangesComputed.WithLabelValues()
 	readDuration.Reset()
 }
 

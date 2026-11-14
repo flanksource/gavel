@@ -168,7 +168,12 @@ func (p *uiTestTODOProvider) SessionAttempt(_ context.Context, _ *types.TODO, se
 // run history gets a waiting run, which is where an ask turn parks its run.
 func seedAskingAttempt(provider *uiTestTODOProvider, sessionID string, step types.Phase) {
 	if provider.activeRun == nil {
-		provider.activeRun = &captaindb.PromptRun{State: captaindb.PromptRunStateWaiting}
+		// An asking turn ran, so it resolved a runtime: the suite's default
+		// claude, which an answer without options continues.
+		provider.activeRun = &captaindb.PromptRun{
+			State:   captaindb.PromptRunStateWaiting,
+			Runtime: captaindb.PromptRunRuntime{Resolved: captaindb.PromptRunRuntimeSelection{Provider: "anthropic"}},
+		}
 	}
 	provider.activeRun.ID = uuid.New()
 	if provider.attempts == nil {

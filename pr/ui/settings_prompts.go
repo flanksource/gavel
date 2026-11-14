@@ -93,6 +93,10 @@ func buildPromptDetailResponse(input promptDetailInput) promptDetailResponse {
 func (s *Server) handleSettingsPromptDetail(w http.ResponseWriter, r *http.Request) {
 	desc, ok := findRegisteredPrompt(r.PathValue("id"))
 	if !ok {
+		if strings.HasPrefix(r.PathValue("id"), libraryPromptPrefix) {
+			s.handleLibraryPromptDetail(w, r)
+			return
+		}
 		respondError(w, http.StatusNotFound, "unknown prompt "+r.PathValue("id"))
 		return
 	}

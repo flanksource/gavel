@@ -1,0 +1,18 @@
+---
+title: TODO worktree status
+description: Inspect a run's worktree while its agent and verification are still active.
+---
+
+The TODO overview shows a worktree as soon as Captain prepares it. This includes newly created worktrees and existing linked worktrees supplied through setup or as the execution directory. A clean worktree with no commits remains visible.
+
+The overview shows its branch, path, commit count, and live staged, unstaged, untracked, conflict, and line-change counts. Git tracker updates refresh these counts independently of the agent's status. A failed or cancelled run retains its worktree information. After removal, the recorded path and removal status remain visible.
+
+Inspect an attempt's recorded workspace through the session detail API, supplying its owning project directory:
+
+```sh
+curl --get http://localhost:9092/api/todos/session/detail --data-urlencode ref=YOUR_TODO_ID --data-urlencode dir=/path/to/project
+```
+
+`ref` identifies the TODO. `dir` is its registered project directory. Each attempt's `workspace` contains its execution directory, worktree identity, and recorded commits. Active runs created before workspace recording was available reconcile their missing workspace from their saved execution directory without changing their execution state or staged files.
+
+Automatic commit-message generation runs inside the agent workflow without waiting for unrelated server tasks. A successful agent result still proceeds through the configured commit gates, PR publication, and verification before the TODO receives its final status.

@@ -79,6 +79,8 @@ type Options struct {
 	DryRun     bool
 	Force      bool
 	Push       bool
+	// PushMode, with Push, selects which commits are published and seed the PR.
+	PushMode PushMode
 	// PushBranch, with Push, pushes HEAD to this remote branch instead of
 	// searching for the PR to push to: the caller already knows which PR it is
 	// working on, and may be committing on a scratch branch no PR is open for.
@@ -227,6 +229,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.PrecommitMode = precommitMode
+	ctx = withGitLockPolicy(ctx, gitLockPolicy{Mode: precommitMode, AssumeYes: opts.AssumeYes})
 
 	gates, err := resolveLintGates(opts.LintFlag, opts.LintSecretsFlag, opts.Config.Lint)
 	if err != nil {
@@ -243,7 +246,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	// stageCommitAllSource both no-op on a non-empty index, so no per-flow
 	// change is needed.
 	if len(opts.Files) > 0 {
-		if err := stageExplicitFiles(opts.WorkDir, opts.Files); err != nil {
+		if err := stageExplicitFiles(ctx, opts.WorkDir, opts.Files); err != nil {
 			return nil, err
 		}
 		opts.Stage = StageStaged
@@ -296,7 +299,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 			return nil, err
 		}
 	} else {
-		if err := stageFiles(opts.WorkDir, opts.Stage, opts.Config); err != nil {
+		if err := stageFiles(ctx, opts.WorkDir, opts.Stage, opts.Config); err != nil {
 			return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
 		}
 	}
@@ -361,7 +364,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return result, nil
 	}
 
-	hash, err := commitWithMessage(opts.WorkDir, analysis.Message)
+	hash, err := commitWithMessage(ctx, opts.WorkDir, analysis.Message)
 	if err != nil {
 		return result, fmt.Errorf("create commit: %w", err)
 	}

@@ -220,6 +220,16 @@ func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, ove
 	assignString(&payload.Parent, "parent")
 	assignString(&payload.Visibility, "visibility")
 	assignString(&payload.Step, "step")
+	if raw := firstTodoNewValue(values, "spec"); raw != "" && (overwrite || payload.Spec == nil) {
+		if err := json.Unmarshal([]byte(raw), &payload.Spec); err != nil {
+			return fmt.Errorf("invalid spec: %w", err)
+		}
+	}
+	if raw := firstTodoNewValue(values, "presets"); raw != "" && (overwrite || payload.Presets == nil) {
+		if err := json.Unmarshal([]byte(raw), &payload.Presets); err != nil {
+			return fmt.Errorf("invalid presets: %w", err)
+		}
+	}
 	if raw := firstTodoNewValue(values, "pr"); raw != "" && (overwrite || payload.PR == nil) {
 		pr, err := todoPRFormValue(raw)
 		if err != nil {

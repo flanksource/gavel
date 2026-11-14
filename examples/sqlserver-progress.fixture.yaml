@@ -1,0 +1,21 @@
+kind: Fixture
+name: SQL Server stored procedure progress
+params:
+  type: object
+  required: [connection]
+  properties:
+    connection:
+      type: string
+      title: SQL Server connection
+      format: connection
+      x-connection-types: [sql_server]
+steps:
+  - id: progress
+    name: Process five batches inside a SQL Server procedure
+    kind: query
+    if: params.approved
+    connection: "{{.params.connection}}"
+    query:
+      queryFile: sqlserver-progress.sql
+    timeout: 30s
+    cel: row.completed == 5

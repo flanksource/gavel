@@ -179,7 +179,8 @@ func isLinkedDepsManifest(path string) bool {
 	}
 }
 
-func evaluateManifestLinkedDeps(gitRoot, rel string, blob []byte) ([]LinkedDepViolation, error) {
+// EvaluateManifestLinkedDeps identifies local dependency paths outside gitRoot.
+func EvaluateManifestLinkedDeps(gitRoot, rel string, blob []byte) ([]LinkedDepViolation, error) {
 	switch filepath.Base(rel) {
 	case "go.mod":
 		return evaluateGoModBlob(gitRoot, rel, blob)
@@ -217,7 +218,7 @@ func EvaluateLinkedDepsAgainstHEAD(workDir, gitRoot string, changes []stagedChan
 		if err != nil {
 			return nil, err
 		}
-		stagedViolations, err := evaluateManifestLinkedDeps(gitRoot, rel, stagedBlob)
+		stagedViolations, err := EvaluateManifestLinkedDeps(gitRoot, rel, stagedBlob)
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +238,7 @@ func EvaluateLinkedDepsAgainstHEAD(workDir, gitRoot string, changes []stagedChan
 
 		var headViolations []LinkedDepViolation
 		if ok {
-			headViolations, err = evaluateManifestLinkedDeps(gitRoot, headPath, headBlob)
+			headViolations, err = EvaluateManifestLinkedDeps(gitRoot, headPath, headBlob)
 			if err != nil {
 				return nil, err
 			}
@@ -706,7 +707,7 @@ func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, 
 		for f := range unstage {
 			files = append(files, f)
 		}
-		if err := resetFiles(p.WorkDir, files); err != nil {
+		if err := resetFiles(ctx, p.WorkDir, files); err != nil {
 			return CheckOutcome{}, fmt.Errorf("unstage: %w", err)
 		}
 		outcome.Unstaged = files
@@ -715,7 +716,7 @@ func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, 
 	if len(upgrades) > 0 {
 		gitRoot := rootOrWorkDir(p)
 		for file, ups := range upgrades {
-			if err := applyGoModReplaceUpgrade(p.WorkDir, gitRoot, file, ups); err != nil {
+			if err := applyGoModReplaceUpgrade(ctx, p.WorkDir, gitRoot, file, ups); err != nil {
 				return outcome, fmt.Errorf("apply go.mod upgrade for %s: %w", file, err)
 			}
 			outcome.Upgraded = append(outcome.Upgraded, file)

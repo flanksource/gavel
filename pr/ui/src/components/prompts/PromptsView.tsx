@@ -7,6 +7,7 @@ import { promptModelCatalog } from '../settings/models';
 import { settingsPromptsQuery, settingsRunContextQuery } from '../settings/queries';
 import { promptCatalogQuery, promptPageAdapter, scopeQueryFor, withDefaults } from './promptCatalog';
 import { RuntimePresetsView } from './RuntimePresetsView';
+import { LifecyclesView } from './LifecyclesView';
 
 interface Props {
   projects: Project[];
@@ -21,6 +22,7 @@ const GLOBAL_SCOPE = '__global__';
 const LIBRARY_TABS = [
   { id: 'prompts', label: 'Prompts' },
   { id: 'presets', label: 'Presets' },
+  { id: 'lifecycles', label: 'Lifecycles' },
 ];
 
 // PromptsView is the Prompts tab: every prompt gavel runs for a scope as a
@@ -30,8 +32,9 @@ export function PromptsView({ projects, scopeProject, selectedId, onNavigate }: 
   const scopeQuery = scopeQueryFor(scopeProject);
   const scopeProjectRecord = projects.find(project => project.name === scopeProject);
   const presetRoute = selectedId === 'presets' || selectedId.startsWith('presets/');
+  const lifecycleRoute = selectedId === 'lifecycles' || selectedId.startsWith('lifecycles/');
   const selectedPresetId = selectedId.startsWith('presets/') ? selectedId.slice('presets/'.length) : undefined;
-  const selectedPromptId = presetRoute ? '' : selectedId;
+  const selectedPromptId = presetRoute || lifecycleRoute ? '' : selectedId;
   const catalog = useQuery(promptCatalogQuery(scopeQuery));
   const descriptors = useQuery(settingsPromptsQuery());
   const runContext = useQuery(settingsRunContextQuery(scopeProjectRecord?.dir));
@@ -70,23 +73,23 @@ export function PromptsView({ projects, scopeProject, selectedId, onNavigate }: 
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-4 py-2">
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Scope</span>
         <Combobox
           value={scopeProject || GLOBAL_SCOPE}
-          onChange={value => onNavigate(presetRoute ? 'presets' : '', value === GLOBAL_SCOPE ? '' : value)}
+          onChange={value => onNavigate(lifecycleRoute ? selectedId : presetRoute ? 'presets' : '', value === GLOBAL_SCOPE ? '' : value)}
           options={scopeOptions}
-          className="w-72"
+          className="w-72 max-w-full"
           placeholder="Choose a scope"
         />
-        <span className="text-xs text-muted-foreground">
+        <span className="hidden text-xs text-muted-foreground sm:inline">
           Prompts and runtime presets resolve for the selected workspace.
         </span>
       </div>
       <Tabs
         tabs={LIBRARY_TABS}
-        value={presetRoute ? 'presets' : 'prompts'}
-        onChange={next => onNavigate(next === 'presets' ? 'presets' : '', scopeProject)}
+        value={lifecycleRoute ? 'lifecycles' : presetRoute ? 'presets' : 'prompts'}
+        onChange={next => onNavigate(next === 'prompts' ? '' : next, scopeProject)}
         className="shrink-0 px-4"
       />
       {selectedPromptId && !selected && !catalog.isLoading && (
@@ -94,7 +97,7 @@ export function PromptsView({ projects, scopeProject, selectedId, onNavigate }: 
           No prompt {selectedPromptId} in this scope.
         </div>
       )}
-      {!presetRoute ? (
+      {lifecycleRoute ? <LifecyclesView key={`${scopeQuery}:${selectedId}`} scopeQuery={scopeQuery} kind={selectedId === 'lifecycles/pr' ? 'pr' : 'todos'} onSelect={kind => onNavigate(`lifecycles/${kind}`, scopeProject)} /> : !presetRoute ? (
         <div className="min-h-0 flex-1 p-4">
           <PromptCatalogTable
             className="min-h-0 flex-1"

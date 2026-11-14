@@ -9,9 +9,9 @@ export type ExportFormat = 'json' | 'md';
 // Tab is the top-level view, encoded as the first path segment. PRs, projects,
 // todos, sessions, tasks, prompts and sandbox runs carry their selection in the path;
 // filters only apply to PRs.
-export type Tab = 'prs' | 'projects' | 'todos' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs';
+export type Tab = 'prs' | 'projects' | 'processes' | 'todos' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs';
 
-const SPA_TABS: readonly Tab[] = ['projects', 'todos', 'sessions', 'activity', 'tasks', 'prompts', 'runs'];
+const SPA_TABS: readonly Tab[] = ['projects', 'processes', 'todos', 'sessions', 'activity', 'tasks', 'prompts', 'runs'];
 
 export interface RouteState {
   tab: Tab;
@@ -111,6 +111,7 @@ export function parseRoute(location: Location): RouteState {
       checks: parseFacet(params.get('checks')),
       repos: parseFacet(params.get('repos')),
       authors: parseFacet(params.get('authors')),
+      age: parseFacet(params.get('age')),
     },
   };
 }
@@ -129,11 +130,12 @@ export function buildRoute(state: RouteState): string {
   const params = new URLSearchParams();
   if (state.scopeProject) params.set('project', state.scopeProject);
   if (state.tab === 'prs') {
-    const { state: st, checks, repos, authors } = state.filters;
+    const { state: st, checks, repos, authors, age } = state.filters;
     if (Object.keys(st).length) params.set('state', buildFacet(st));
     if (Object.keys(checks).length) params.set('checks', buildFacet(checks));
     if (Object.keys(repos).length) params.set('repos', buildFacet(repos));
     if (Object.keys(authors).length) params.set('authors', buildFacet(authors));
+    if (Object.keys(age).length) params.set('age', buildFacet(age));
   } else if (state.tab === 'projects') {
     if (!state.projectRunId && state.projectDiffPath) params.set('diff', state.projectDiffPath);
     if (!state.projectRunId && state.projectHistory) params.set('history', 'true');

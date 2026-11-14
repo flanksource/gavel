@@ -11,7 +11,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/verify"
-	"github.com/flanksource/repomap"
 	"github.com/hairyhenderson/toml"
 )
 
@@ -31,7 +30,7 @@ type configLayer struct {
 }
 
 // DiscoverConfigs walks the standard gavel config hierarchy layer-by-layer
-// (home dir → git root → cwd), collecting the native betterleaks/gitleaks
+// (verify.GavelConfigDirs: home dir → git root's parent → git root → cwd), collecting the native betterleaks/gitleaks
 // config in each directory plus any extra paths declared by that layer's
 // `.gavel.yaml`. Relative `secrets.configs` entries resolve from the
 // directory containing the `.gavel.yaml` that declared them.
@@ -72,40 +71,18 @@ func discoverConfigLayers(workDir string) []configLayer {
 		logger.V(2).Infof("betterleaks: failed to load config trace for %s: %v", workDir, err)
 	}
 
-	seen := make(map[string]struct{}, 3)
-	layers := make([]configLayer, 0, 3)
-	addLayer := func(dir string) {
-		if dir == "" {
-			return
-		}
-		abs, err := filepath.Abs(dir)
-		if err == nil {
-			dir = abs
-		}
-		if _, ok := seen[dir]; ok {
-			return
-		}
-		seen[dir] = struct{}{}
-
-		layer := configLayer{dir: dir}
-		if cfg, ok := sourceConfigs[filepath.Join(dir, ".gavel.yaml")]; ok {
-			layer.cfg = cfg
-		}
-		layers = append(layers, layer)
+	absWorkDir, err := filepath.Abs(workDir)
+	if err != nil {
+		absWorkDir = workDir
 	}
-
-	if home, err := os.UserHomeDir(); err == nil {
-		addLayer(home)
+	dirs := verify.GavelConfigDirs(absWorkDir)
+	layers := make([]configLayer, 0, len(dirs))
+	for _, dir := range dirs {
+		layers = append(layers, configLayer{
+			dir: dir.Dir,
+			cfg: sourceConfigs[filepath.Join(dir.Dir, verify.GavelConfigFileName)],
+		})
 	}
-	if gitRoot := repomap.FindGitRoot(workDir); gitRoot != "" {
-		addLayer(gitRoot)
-	}
-	if abs, err := filepath.Abs(workDir); err == nil {
-		addLayer(abs)
-	} else {
-		addLayer(workDir)
-	}
-
 	return layers
 }
 

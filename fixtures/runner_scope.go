@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/task"
 	flanksourceContext "github.com/flanksource/commons/context"
+	"github.com/flanksource/gavel/slots"
 )
 
 // defaultFixtureTimeout caps a markdown fixture that declares no timeout.
@@ -28,11 +29,7 @@ func (r *Runner) addFixtureTasks(group task.TypedGroup[FixtureResult], parent co
 	var scopes []fileScope
 	var queued []queuedFixture
 	for _, file := range r.tree.Children {
-		var setup *PreparedSetup
-		if file.Origin != nil {
-			setup = r.setups[file.Origin.File]
-		}
-		scope := NewStepScope(scopeSeed(setup, firstFrontMatter([]*FixtureNode{file}), r.fileTraceEnv(file)))
+		scope := NewStepScope(scopeSeed(r.setups.get(nodeFile(file)), firstFrontMatter([]*FixtureNode{file}), r.fileTraceEnv(file)))
 		scopes = append(scopes, fileScope{file: file, scope: scope})
 		sequential := hasTypedSteps(file)
 		var previous *task.Task
@@ -42,12 +39,27 @@ func (r *Runner) addFixtureTasks(group task.TypedGroup[FixtureResult], parent co
 			}
 			env := r.envForNode(node)
 			env.scope = scope
-			opts := []task.Option{task.WithContext(parent), clicky.WithTaskTimeout(fixtureTimeout(*node.Test, r.backstopGrace))}
+			opts := []task.Option{task.WithContext(parent)}
+			run := r.fixtureTask(node, env)
+			var cancel context.CancelFunc
+			var deadline context.Context
+			if r.options.ProcessRuntime.Slots.Enabled() {
+				timed, stop, start := slots.DeferredTimeout(parent, slots.TimeoutOptions{Limits: r.options.ProcessRuntime.Slots, Duration: fixtureTimeout(*node.Test, r.backstopGrace)})
+				cancel = stop
+				deadline = timed
+				opts = []task.Option{task.WithContext(timed)}
+				run = func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
+					start()
+					return r.fixtureTask(node, env)(ctx, t)
+				}
+			} else {
+				opts = append(opts, clicky.WithTaskTimeout(fixtureTimeout(*node.Test, r.backstopGrace)))
+			}
 			if sequential && previous != nil {
 				opts = append(opts, task.WithDependencies(previous))
 			}
-			queuedTask := group.Add(node.Test.String(), r.fixtureTask(node, env), opts...)
-			queued = append(queued, queuedFixture{node: node, task: queuedTask, scope: scope})
+			queuedTask := group.Add(node.Test.String(), run, opts...)
+			queued = append(queued, queuedFixture{node: node, task: queuedTask, scope: scope, cancel: cancel, deadline: deadline})
 			previous = queuedTask.Task
 		})
 	}
@@ -57,9 +69,11 @@ func (r *Runner) addFixtureTasks(group task.TypedGroup[FixtureResult], parent co
 // queuedFixture pairs a fixture node with the task that runs it and the scope
 // its file's steps share.
 type queuedFixture struct {
-	node  *FixtureNode
-	task  task.TypedTask[FixtureResult]
-	scope *StepScope
+	deadline context.Context
+	cancel   context.CancelFunc
+	node     *FixtureNode
+	task     task.TypedTask[FixtureResult]
+	scope    *StepScope
 }
 
 func (r *Runner) fixtureTask(node *FixtureNode, env fixtureEnv) func(flanksourceContext.Context, *task.Task) (FixtureResult, error) {
@@ -67,12 +81,24 @@ func (r *Runner) fixtureTask(node *FixtureNode, env fixtureEnv) func(flanksource
 		if err := r.progress.Start(ctx, node); err != nil {
 			return FixtureResult{}, fmt.Errorf("start fixture progress: %w", err)
 		}
-		runContext := flanksourceContext.NewContext(withFixtureProcess(withFixtureProgress(ctx, func(done, total int) error {
+		runContext := flanksourceContext.NewContext(withFixtureTask(withFixtureOutput(withFixtureWaiting(withFixtureProcess(withFixtureProgress(ctx, func(done, total int) error {
 			return r.progress.Update(ctx, node, done, total)
 		}), func(pid int) error {
 			return r.progress.AddProcess(ctx, node, pid)
-		}))
+		}), func(waiting bool) error {
+			return r.progress.SetWaiting(ctx, node, waiting)
+		}), r.progress.OutputWriter(ctx, node)), t))
+		// Read at run time, not queue time: a params-reading setup is prepared
+		// only after the file's params step (afterParams).
+		env.setup = r.setups.get(env.file)
 		result, err := r.executeFixture(runContext, *node.Test, env)
+		result = r.setups.afterParams(runContext, *node.Test, env.file, env.scope, result)
+		if r.options.ProcessRuntime.Slots.Enabled() && ctx.Err() != nil {
+			result = cutOffVerdict(result, context.Cause(ctx), "")
+			if node.Test.Step != nil && !node.Test.Step.ContinueOnError {
+				env.scope.MarkFailed(stepID(*node.Test))
+			}
+		}
 		return result, errors.Join(err, r.completeFixture(ctx, node, result))
 	}
 }
@@ -98,6 +124,12 @@ func (r *Runner) collectFixtureResults(ctx context.Context, queued []queuedFixtu
 	var errs []error
 	for _, q := range queued {
 		returned, taskErr := q.task.GetResult()
+		if q.deadline != nil && q.deadline.Err() != nil {
+			taskErr = errors.Join(taskErr, context.Cause(q.deadline))
+		}
+		if q.cancel != nil {
+			q.cancel()
+		}
 		landed, err := r.settleFixture(ctx, q, returned, taskErr)
 		errs = append(errs, err)
 		tests = append(tests, FixtureNode{Name: landed.Name, Type: TestNode, Results: landed})

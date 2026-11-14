@@ -65,6 +65,37 @@ function TestProgress() {
 `rerun(body?)` POSTs to `/api/rerun`; `stop(taskId?)` POSTs to `/api/stop` (omit `taskId` for a
 global stop).
 
+## Run-scoped preparation tasks in Go
+
+An embedded server can display preparation as a virtual test group by calling `server.SetTaskSource(source)` after `BeginRun`. `source` is a non-nil function returning independent `[]task.TaskSnapshot` values for that run, without I/O. Include group snapshots and their task snapshots; task `GroupID` values must match the group's `GroupID`, and every `DependencyIDs` entry must identify a task in the returned slice. Pending tasks show the names of unfinished prerequisites.
+
+Use `group.PlanStep(name, options...)` to register a pending phase without scheduling a worker, then call `step.Start()` before doing the work and `step.Finish(err)` with its outcome. `Start` rejects unfinished prerequisites, canceled contexts, and repeated starts. Call `SetTaskSource` before preparation begins so its initial state can stream immediately.
+
+The server freezes the task source when the run finishes and includes these virtual nodes in `Snapshot()` for persistence and replay. Their summary contributes zero authored tests. An explicit source returning an empty slice disables process-global CLI task groups for the server. Existing CLI callers that omit a source keep their normal task groups.
+
+For concurrent plans within one server, use `testui.TaskTests(snapshots)` to project each plan's preparation snapshots into its own result subtree. Keep the execution tree's authored indices unchanged and decorate copies for streaming and persistence. Each projected group contributes zero authored tests, and the snapshots retain phase dependencies and errors.
+
+```go
+server := testui.NewServer()
+server.BeginRun("example-run")
+group := clicky.StartGroup[struct{}]("Before", task.WithGroupID("example-run-before"))
+phase := group.Group.PlanStep("Load configuration", task.WithContext(ctx))
+server.SetTaskSource(func() []task.TaskSnapshot {
+    return []task.TaskSnapshot{task.SnapshotGroup(group.Group), task.SnapshotTask(phase.Task(), group.Group)}
+})
+if err := phase.Start(); err != nil {
+    phase.Finish(err)
+    server.MarkDone()
+    return err
+}
+err := loadConfiguration(ctx)
+phase.Finish(err)
+server.MarkDone()
+return err
+```
+
+The example uses `testui` from `github.com/flanksource/gavel/testrunner/ui`, `clicky` from `github.com/flanksource/clicky`, and `task` from `github.com/flanksource/clicky/task`. Serve `server.Handler()` under your API prefix and save `server.Snapshot()` when execution ends. When streaming authored results, `server.StreamFrom(updates)` returns a channel that closes after the final update is consumed; wait for it before saving the snapshot.
+
 ## Components
 
 The full UI is exported from `@flanksource/gavel/testrunner`:

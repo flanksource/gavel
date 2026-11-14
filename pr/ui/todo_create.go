@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -47,8 +48,10 @@ type TodoCreatePayload struct {
 
 type todoNewPayload struct {
 	TodoCreatePayload
-	AutoSave *bool  `json:"autoSave,omitempty"`
-	Step     string `json:"step,omitempty" jsonschema_description:"Lifecycle step to start on the saved TODO; must be one GET /api/todos/new/steps lists for its status. Omitted starts nothing"`
+	AutoSave *bool     `json:"autoSave,omitempty"`
+	Step     string    `json:"step,omitempty" jsonschema_description:"Lifecycle step to start on the saved TODO; must be one GET /api/todos/new/steps lists for its status. Omitted starts nothing"`
+	Spec     *api.Spec `json:"spec,omitempty"`
+	Presets  []string  `json:"presets,omitempty"`
 }
 
 type todoAttachmentSummary struct {
@@ -203,6 +206,15 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
+	runPayload := todoRunPayload{Step: payload.Step, Presets: payload.Presets}
+	if payload.Spec != nil {
+		runPayload.Spec = *payload.Spec
+	}
+	options, err := buildTodoRunOptions(runPayload, nil)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	if payload.Step != "" {
 		if err := validateTodoCreateStep(provider, source.Dir, payload.Status, payload.Step); err != nil {
 			writeTodoError(w, http.StatusBadRequest, err)
@@ -231,7 +243,7 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 		Attachments: attachments,
 	}
 	if payload.Step != "" {
-		response.Run = s.startNewTodoStep(r, provider, source, todo, payload.Step)
+		response.Run = s.startNewTodoStep(r, provider, source, todo, options)
 	}
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response) //nolint:errcheck

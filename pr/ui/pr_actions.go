@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -163,7 +164,7 @@ func (s *Server) handlePRUpdateBranch(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, github.ErrUpdateBranchConflict):
 		conflict := prUpdateConflict{Error: err.Error(), Conflict: true}
-		rebase, blocked := s.prRebaseRequest(body.Repo, body.Number)
+		rebase, blocked := s.prRebaseRequest(r.Context(), body.Repo, body.Number)
 		if blocked != nil {
 			logger.Warnf("update branch PR %s#%d: AI rebase unavailable: %v", body.Repo, body.Number, blocked)
 			conflict.RebaseBlocked = blocked.Error()
@@ -184,8 +185,8 @@ func (s *Server) handlePRUpdateBranch(w http.ResponseWriter, r *http.Request) {
 // and fetches the PR's head and base into it. The rebase force-pushes the head
 // branch, so a PR from a fork — whose branch is not on the checkout's remote —
 // is refused rather than pushed somewhere else.
-func (s *Server) prRebaseRequest(repo string, number int) (*prRebaseRequest, error) {
-	projects, err := LoadProjects(LoadProjectsOptions{})
+func (s *Server) prRebaseRequest(ctx context.Context, repo string, number int) (*prRebaseRequest, error) {
+	projects, err := visibleProjects(ctx, s)
 	if err != nil {
 		return nil, err
 	}

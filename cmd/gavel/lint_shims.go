@@ -16,6 +16,8 @@ import (
 	cexec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/gavel/lint/shims"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
+	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
 
@@ -129,6 +131,18 @@ func runShimExec(ctx context.Context, tool string, args []string, stdin io.Reade
 		return fail("%v", err)
 	}
 	runtime.Env = profile.Env(limits, map[string]string{"GOMEMLIMIT": os.Getenv("GOMEMLIMIT"), "NODE_OPTIONS": os.Getenv("NODE_OPTIONS")})
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fail("getwd: %v", err)
+	}
+	config, err := verify.LoadGavelConfig(cwd)
+	if err != nil {
+		return fail("slots config: %v", err)
+	}
+	runtime.Slots, err = config.SlotLimits()
+	if err != nil {
+		return fail("slots config: %v", err)
+	}
 
 	if ctx == nil {
 		ctx = context.Background()
@@ -137,12 +151,8 @@ func runShimExec(ctx context.Context, tool string, args []string, stdin io.Reade
 	defer stop()
 	if timeout := settings.TimeoutDuration(); timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		ctx, cancel = slots.Timeout(ctx, slots.TimeoutOptions{Limits: runtime.Slots, Duration: timeout})
 		defer cancel()
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fail("getwd: %v", err)
 	}
 	cmd := processruntime.NewCommand(ctx, runtime, real, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = cwd, stdin, stdout, stderr

@@ -130,8 +130,9 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("RESOLUTION ORDER", heading).NewLine().
 		Append("  0. ", flag).Append("built-in defaults", muted).NewLine().
 		Append("  1. ", flag).Append("~/.gavel.yaml", code).Append(" when present", muted).NewLine().
-		Append("  2. ", flag).Append("<git-root>/.gavel.yaml", code).Append(" when the target is inside a git repo", muted).NewLine().
-		Append("  3. ", flag).Append("<target-dir>/.gavel.yaml", code).Append(" or the parent directory when the target path is a file", muted).NewLine().NewLine().
+		Append("  2. ", flag).Append("<git-root>/../.gavel.yaml", code).Append(" for sibling repository defaults", muted).NewLine().
+		Append("  3. ", flag).Append("<git-root>/.gavel.yaml", code).Append(" when the target is inside a git repo", muted).NewLine().
+		Append("  4. ", flag).Append("every directory through <target-dir>/.gavel.yaml", code).Append(" or the parent directory when the target path is a file", muted).NewLine().NewLine().
 		Append("OUTPUT", heading).NewLine().
 		Append("  interactive output shows merged YAML with comments for non-git-root sources", muted).NewLine().
 		Append("  redirected output writes merged YAML only", muted).NewLine().
@@ -139,7 +140,7 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("RESOLVED AI CONFIG", heading).NewLine().
 		Append("  ").Append("--resolve", flag).Append(" / ").Append("-r", flag).Append(" expands every registered prompt", muted).NewLine().
 		Append("  shows the full effective spec and field origins, including saved Captain defaults", muted).NewLine().
-		Append("  ").Append("lint.fix.model", code).Append(" controls source repair for lint --ai-fix and commit --fix", muted).NewLine().
+		Append("  ").Append("lint.fix.model", code).Append(" controls lint --ai-fix; commit.fix overrides it for commit repair", muted).NewLine().
 		Append("  ").Append("commit.message.model", code).Append(" controls commit-message generation independently", muted).NewLine().
 		Append("  with ", muted).Append("--json", flag).Append(" or ", muted).Append("--yaml", flag).Append(" returns {config, prompts}", muted).NewLine().NewLine().
 		Append("EXAMPLES", heading).NewLine().
@@ -154,9 +155,16 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("  bundled from ", muted).Append("gavel.yaml.example", code).Append(" so the file and help stay in sync", muted).NewLine().
 		Add(clicky.CodeBlock("yaml", gaveldocs.GavelConfigExample)).
 		NewLine().
-		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
-		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
+		Add(renderHelpFlagGroups(cmd))
 
+	return t
+}
+
+func renderHelpFlagGroups(cmd *cobra.Command) api.Text {
+	t := clicky.Text("")
+	for _, group := range clicky.CommandFlagGroups(cmd) {
+		t = t.Add(renderHelpFlags(group.Title, group.Flags))
+	}
 	return t
 }
 

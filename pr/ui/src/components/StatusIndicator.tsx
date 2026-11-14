@@ -31,6 +31,7 @@ const DOT_LABEL: Record<Severity, string> = {
 };
 
 interface Props {
+  onOpenChange?: (open: boolean) => void;
   fetchedAt: string;
   nextFetchIn: number;
   paused: boolean;
@@ -46,7 +47,7 @@ interface Props {
 const backend = typeof window !== 'undefined' ? window.__GAVEL__ : undefined;
 const frontend = { version: __GAVEL_UI_VERSION__, commit: __GAVEL_UI_COMMIT__ };
 
-export function StatusIndicator({ fetchedAt, nextFetchIn, paused, rateLimit, error, onRefresh, onPause, networkBusy }: Props) {
+export function StatusIndicator({ onOpenChange, fetchedAt, nextFetchIn, paused, rateLimit, error, onRefresh, onPause, networkBusy }: Props) {
   const visible = useDocumentVisible();
   const healthQuery = useQuery({
     queryKey: queryKeys.health(),
@@ -73,6 +74,7 @@ export function StatusIndicator({ fetchedAt, nextFetchIn, paused, rateLimit, err
 
   return (
     <DropdownMenu
+      onOpenChange={onOpenChange}
       align="right"
       menuLabel="Status"
       menuClassName="w-[360px] max-w-[calc(100vw-24px)]"

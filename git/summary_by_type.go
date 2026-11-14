@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/linecounts"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -131,6 +132,7 @@ func parseNumstatLine(line string) (adds int, dels int, file string, isBinary bo
 		return 0, 0, "", false, false
 	}
 	addsField, delsField, path := fields[0], fields[1], fields[2]
+	path = numstatDestination(path)
 	if path == "" {
 		return 0, 0, "", false, false
 	}
@@ -143,6 +145,26 @@ func parseNumstatLine(line string) (adds int, dels int, file string, isBinary bo
 		return 0, 0, "", false, false
 	}
 	return a, d, path, false, true
+}
+
+func numstatDestination(path string) string {
+	if strings.HasPrefix(path, `"`) {
+		unquoted, err := strconv.Unquote(path)
+		if err != nil {
+			return ""
+		}
+		path = unquoted
+	}
+	if arrow := strings.LastIndex(path, " => "); arrow >= 0 {
+		before, after := path[:arrow], path[arrow+4:]
+		if open := strings.LastIndexByte(before, '{'); open >= 0 {
+			if close := strings.IndexByte(after, '}'); close >= 0 {
+				return before[:open] + after[:close] + after[close+1:]
+			}
+		}
+		return after
+	}
+	return path
 }
 
 // resolveDimensionKey returns the bucket key for a single grouping dimension.
@@ -222,7 +244,7 @@ func aggregate(meta commitMeta, rows []numstatRow, agg map[string]*groupAccumula
 			skipped++
 			continue
 		}
-		if !r.isBinary {
+		if !r.isBinary && linecounts.Supported(r.file) {
 			acc.adds += r.adds
 			acc.dels += r.dels
 		}

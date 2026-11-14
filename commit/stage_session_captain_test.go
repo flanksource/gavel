@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -24,7 +25,7 @@ var _ = Describe("session staging", func() {
 		sessionID := "11111111-1111-1111-1111-111111111111"
 		writeCaptainSessionFixture(home, sessionID, repo)
 
-		Expect(stageFiles(repo, sessionID[:8], verify.CommitConfig{})).To(Succeed())
+		Expect(stageFiles(context.Background(), repo, sessionID[:8], verify.CommitConfig{})).To(Succeed())
 		staged, err := stagedFiles(repo)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(staged).To(ConsistOf("root.go", "agent.go"))
@@ -40,7 +41,7 @@ var _ = Describe("session staging", func() {
 		sessionID := "22222222-2222-2222-2222-222222222222"
 		writeCaptainCodexFixture(home, sessionID, repo, "shell.go")
 
-		Expect(stageFiles(repo, sessionID[:8], verify.CommitConfig{})).To(Succeed())
+		Expect(stageFiles(context.Background(), repo, sessionID[:8], verify.CommitConfig{})).To(Succeed())
 		staged, err := stagedFiles(repo)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(staged).To(Equal([]string{"shell.go"}))

@@ -180,30 +180,31 @@ type restRun struct {
 	HTMLURL    string `json:"html_url"`
 	HeadSHA    string `json:"head_sha"`
 	WorkflowID int64  `json:"workflow_id"`
-	HeadBranch string `json:"head_branch"`
-
-	PullRequests []restRunPR `json:"pull_requests"`
+	Path       string `json:"path"`
 }
 
 func (r restRun) toWorkflowRun(jobs []model.Job) *model.WorkflowRun {
 	return &model.WorkflowRun{
-		DatabaseID: r.ID,
-		Name:       r.Name,
-		Status:     r.Status,
-		Conclusion: r.Conclusion,
-		URL:        r.HTMLURL,
-		HeadSHA:    r.HeadSHA,
-		WorkflowID: r.WorkflowID,
-		Jobs:       jobs,
+		DatabaseID:   r.ID,
+		Name:         r.Name,
+		Status:       r.Status,
+		Conclusion:   r.Conclusion,
+		URL:          r.HTMLURL,
+		HeadSHA:      r.HeadSHA,
+		WorkflowID:   r.WorkflowID,
+		WorkflowPath: r.Path,
+		Jobs:         jobs,
 	}
 }
 
 type restJobsResponse struct {
-	Jobs []restJob `json:"jobs"`
+	Jobs       []restJob `json:"jobs"`
+	TotalCount int       `json:"total_count"`
 }
 
 type restJob struct {
 	ID          int64      `json:"id"`
+	RunID       int64      `json:"run_id"`
 	Name        string     `json:"name"`
 	Status      string     `json:"status"`
 	Conclusion  string     `json:"conclusion"`
@@ -246,12 +247,13 @@ func (s restStep) toStep() model.Step {
 	}
 }
 
-// RunLogOptions controls whether FetchRunJobs eagerly fetches and attaches
-// failed-job logs before persisting the run to the immutable cache. Attaching
+// RunLogOptions selects an exact job when JobID is set, and controls whether
+// FetchRunJobs attaches failed-job logs before caching complete runs. Attaching
 // logs before caching keeps "fetch + cache" atomic: a run cached with
 // FetchLogs=false can never hide logs from a later FetchLogs=true caller,
 // because that caller re-enriches the cached payload (see FetchRunJobs).
 type RunLogOptions struct {
+	JobID     int64
 	FetchLogs bool
 	TailLines int
 }
@@ -270,7 +272,7 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 	// stored one we never have to talk to GitHub again — except that a run
 	// cached without logs must still be enriched (and re-cached) when the
 	// caller now wants logs, otherwise --logs would be a silent no-op.
-	if payload := opts.cacheStore().GetCompletedRunPayload(runID); payload != nil {
+	if payload := opts.cacheStore().GetCompletedRunPayload(runID); logOpts.JobID == 0 && payload != nil {
 		var cached model.WorkflowRun
 		if err := json.Unmarshal(payload, &cached); err == nil {
 			logger.Tracef("github cache hit for completed run %d", runID)
@@ -295,25 +297,14 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 		return nil, fmt.Errorf("parse run response: %w", err)
 	}
 
-	jobsPath := fmt.Sprintf("/repos/%s/actions/runs/%d/jobs", repo, runID)
-	jobsResp, err := cachedGet(ctx, opts.cacheStore(), token, jobsPath, nil)
+	jobs, err := fetchRunJobs(opts, runID, logOpts.JobID)
 	if err != nil {
 		return nil, err
 	}
-	var jobsPayload restJobsResponse
-	if err := json.Unmarshal(jobsResp.Body, &jobsPayload); err != nil {
-		return nil, fmt.Errorf("parse jobs response: %w", err)
-	}
-
-	jobs := make([]model.Job, len(jobsPayload.Jobs))
-	for i, j := range jobsPayload.Jobs {
-		jobs[i] = j.toJob()
-	}
 
 	result := run.toWorkflowRun(jobs)
-	logger.Debugf("fetched run %d %q: status=%s conclusion=%s jobs=%d (cached=%t)",
-		result.DatabaseID, result.Name, result.Status, result.Conclusion, len(result.Jobs),
-		runResp.FromCache && jobsResp.FromCache)
+	logger.Debugf("fetched run %d %q: status=%s conclusion=%s jobs=%d",
+		result.DatabaseID, result.Name, result.Status, result.Conclusion, len(result.Jobs))
 
 	// Attach logs BEFORE persisting so the cached payload always reflects the
 	// logs-requested intent of this call. Gate on the JOBS, not the run
@@ -326,11 +317,57 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 	// Persist completed runs into the immutable cache. Subsequent calls
 	// (including from new processes) will short-circuit at the top of this
 	// function.
-	if result.Status == "completed" {
+	if result.Status == "completed" && logOpts.JobID == 0 {
 		persistCompletedRun(opts.cacheStore(), repo, runID, result)
 	}
 
 	return result, nil
+}
+
+func fetchRunJobs(opts Options, runID, jobID int64) ([]model.Job, error) {
+	token, err := opts.token()
+	if err != nil {
+		return nil, err
+	}
+	repo, err := opts.resolveRepo()
+	if err != nil {
+		return nil, err
+	}
+	if jobID != 0 {
+		response, err := cachedGet(context.Background(), opts.cacheStore(), token, fmt.Sprintf("/repos/%s/actions/jobs/%d", repo, jobID), nil)
+		if err != nil {
+			return nil, err
+		}
+		var job restJob
+		if err := json.Unmarshal(response.Body, &job); err != nil {
+			return nil, fmt.Errorf("parse job response: %w", err)
+		}
+		if job.ID != jobID || job.RunID != runID {
+			return nil, fmt.Errorf("job %d belongs to run %d, expected job %d in run %d", job.ID, job.RunID, jobID, runID)
+		}
+		return []model.Job{job.toJob()}, nil
+	}
+	var jobs []model.Job
+	for page := 1; ; page++ {
+		path := fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?per_page=100&page=%d", repo, runID, page)
+		response, err := cachedGet(context.Background(), opts.cacheStore(), token, path, nil)
+		if err != nil {
+			return nil, err
+		}
+		var payload restJobsResponse
+		if err := json.Unmarshal(response.Body, &payload); err != nil {
+			return nil, fmt.Errorf("parse jobs response: %w", err)
+		}
+		for _, job := range payload.Jobs {
+			jobs = append(jobs, job.toJob())
+		}
+		if len(jobs) >= payload.TotalCount {
+			return jobs, nil
+		}
+		if len(payload.Jobs) == 0 {
+			return nil, fmt.Errorf("workflow run %d returned an empty jobs page before total_count %d", runID, payload.TotalCount)
+		}
+	}
 }
 
 func persistCompletedRun(store *cache.Store, repo string, runID int64, run *model.WorkflowRun) {
@@ -646,81 +683,16 @@ func ParseRunURL(url string) (repo string, runID, jobID int64, err error) {
 	if err != nil {
 		return "", 0, 0, fmt.Errorf("invalid run ID in %q: %w", url, err)
 	}
+	if runID <= 0 {
+		return "", 0, 0, fmt.Errorf("invalid run ID in %q: expected a positive integer", url)
+	}
 	if m[3] != "" {
 		if jobID, err = strconv.ParseInt(m[3], 10, 64); err != nil {
 			return "", 0, 0, fmt.Errorf("invalid job ID in %q: %w", url, err)
 		}
+		if jobID <= 0 {
+			return "", 0, 0, fmt.Errorf("invalid job ID in %q: expected a positive integer", url)
+		}
 	}
 	return m[1], runID, jobID, nil
-}
-
-type restRunPR struct {
-	Number int `json:"number"`
-}
-
-type restCommitPR struct {
-	Number int    `json:"number"`
-	State  string `json:"state"`
-	Head   struct {
-		Ref string `json:"ref"`
-	} `json:"head"`
-}
-
-// FetchRunPR resolves the pull request a workflow run belongs to: the run's
-// own pull_requests association first (empty for fork PRs), then the PRs
-// associated with the run's head commit.
-func FetchRunPR(opts Options, runID int64) (int, error) {
-	token, err := opts.token()
-	if err != nil {
-		return 0, err
-	}
-	repo, err := opts.resolveRepo()
-	if err != nil {
-		return 0, err
-	}
-	ctx := context.Background()
-
-	runResp, err := cachedGet(ctx, opts.cacheStore(), token, fmt.Sprintf("/repos/%s/actions/runs/%d", repo, runID), nil)
-	if err != nil {
-		return 0, fmt.Errorf("fetch run %d in %s: %w", runID, repo, err)
-	}
-	var run restRun
-	if err := json.Unmarshal(runResp.Body, &run); err != nil {
-		return 0, fmt.Errorf("parse run %d response: %w", runID, err)
-	}
-	if len(run.PullRequests) > 0 {
-		return run.PullRequests[0].Number, nil
-	}
-
-	pullsResp, err := cachedGet(ctx, opts.cacheStore(), token, fmt.Sprintf("/repos/%s/commits/%s/pulls", repo, run.HeadSHA), nil)
-	if err != nil {
-		return 0, fmt.Errorf("fetch PRs for commit %s: %w", run.HeadSHA, err)
-	}
-	var pulls []restCommitPR
-	if err := json.Unmarshal(pullsResp.Body, &pulls); err != nil {
-		return 0, fmt.Errorf("parse PRs for commit %s: %w", run.HeadSHA, err)
-	}
-	if n := pickRunPR(pulls, run.HeadBranch); n != 0 {
-		return n, nil
-	}
-	return 0, fmt.Errorf("run %d (%s@%.7s) in %s is not associated with any pull request", runID, run.HeadBranch, run.HeadSHA, repo)
-}
-
-// pickRunPR prefers an open PR whose head ref is the run's branch, then any
-// PR on that branch, then the first PR containing the commit.
-func pickRunPR(pulls []restCommitPR, headBranch string) int {
-	for _, p := range pulls {
-		if p.Head.Ref == headBranch && p.State == "open" {
-			return p.Number
-		}
-	}
-	for _, p := range pulls {
-		if p.Head.Ref == headBranch {
-			return p.Number
-		}
-	}
-	if len(pulls) > 0 {
-		return pulls[0].Number
-	}
-	return 0
 }

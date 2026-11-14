@@ -287,7 +287,7 @@ func RunFileSizeCheck(ctx context.Context, p FileSizeParams) (CheckOutcome, erro
 		}
 	}
 
-	return applyFileSizePlan(p, plan)
+	return applyFileSizePlan(ctx, p, plan)
 }
 
 type fileSizePlan struct {
@@ -319,7 +319,7 @@ func (v *FileSizeViolation) withFolderSiblings(rest []FileSizeViolation, decided
 	v.folderSiblings = n
 }
 
-func applyFileSizePlan(p FileSizeParams, plan fileSizePlan) (CheckOutcome, error) {
+func applyFileSizePlan(ctx context.Context, p FileSizeParams, plan fileSizePlan) (CheckOutcome, error) {
 	var outcome CheckOutcome
 
 	gitRoot := p.GitRoot
@@ -332,7 +332,7 @@ func applyFileSizePlan(p FileSizeParams, plan fileSizePlan) (CheckOutcome, error
 		if err != nil {
 			return CheckOutcome{}, fmt.Errorf("append .gitignore: %w", err)
 		}
-		if err := resetFiles(p.WorkDir, plan.unstage); err != nil {
+		if err := resetFiles(ctx, p.WorkDir, plan.unstage); err != nil {
 			return CheckOutcome{}, fmt.Errorf("unstage: %w", err)
 		}
 		outcome.Unstaged = plan.unstage

@@ -6,11 +6,26 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/prompts/library"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("AI fixture final runtime resolution", func() {
+	DescribeTable("renders the captured checklist template without changing its verdict schema", func(snapshot bool) {
+		spec := api.Spec{Model: api.Model{Name: "gpt-5", Mode: api.ModeAPI}, Prompt: api.Prompt{Metadata: map[string]string{library.ChecklistTemplateKey: "Review these exact items:\n{{{criteria}}}"}}}
+		fixture := checklistFixture(nil)
+		opts := fixtures.RunOptions{Runtime: &api.ResolveSpecOptions{Layers: []api.SpecLayer{api.PromptSpecLayer("grader", spec)}}}
+		if snapshot {
+			spec = fixtures.GraderSpec(spec)
+			fixture.AI = &fixtures.FixtureAIConfig{Spec: &spec}
+		}
+		resolved, _, err := resolveAIStepSpec(fixture, opts, &checklistResponse{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved.Spec.Prompt.User).To(HavePrefix("Review these exact items:"))
+		Expect(resolved.Spec.Prompt.User).NotTo(ContainSubstring("You are verifying"))
+		Expect(resolved.Spec.Prompt.Schema).NotTo(BeNil())
+	}, Entry("authored runtime layers", false), Entry("serialized grader snapshot", true))
 	It("canonicalizes the final flat selector before provider construction", func() {
 		var schema checklistResponse
 		runtime, config, err := resolveAIStepSpec(checklistFixture(&fixtures.FixtureAIConfig{Model: "api:gpt-5:low"}), fixtures.RunOptions{}, &schema)

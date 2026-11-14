@@ -3,7 +3,7 @@
 TASK_PACKAGE := github.com/go-task/task/v3/cmd/task@latest
 GOBIN := $(shell if command -v go >/dev/null 2>&1; then gobin=$$(go env GOBIN); if [ -n "$$gobin" ]; then printf '%s' "$$gobin"; else printf '%s' "$$(go env GOPATH)/bin"; fi; fi)
 TASK := PATH="$(if $(GOBIN),$(GOBIN):)$(PATH)" task
-UI_DIRS := testrunner/ui pr/ui
+UI_DIRS := testrunner/ui pr/ui editor/ui
 
 .PHONY: build lint test install restart fmt tidy clean all ensure-task deps runner-image
 

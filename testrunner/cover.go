@@ -47,7 +47,12 @@ func CoverTest(opts RunOptions, test parsers.Test, profile string) error {
 	if len(o.Tags) > 0 {
 		plan.args = append(plan.args, "-tags="+strings.Join(o.Tags, ","))
 	}
-	process, err := o.buildGoBatchCommand(plan)
+	runtime, runtimeArgs, err := o.runtimeFor(test.Framework, target)
+	if err != nil {
+		return err
+	}
+	plan.runtime, plan.runtimeArgs = runtime, runtimeArgs
+	process, err := o.buildGoBatchCommand(plan, 0)
 	if err != nil {
 		return err
 	}

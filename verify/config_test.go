@@ -109,6 +109,36 @@ func TestLintIgnoreRule_MatchesViolation(t *testing.T) {
 			match: true,
 		},
 		{
+			name:  "occurrence matches its file and line",
+			rule:  LintIgnoreRule{Rule: "errcheck", File: "pkg/foo.go", Line: 12},
+			v:     models.Violation{File: "pkg/foo.go", Line: 12, Rule: &models.Rule{Method: "errcheck"}},
+			match: true,
+		},
+		{
+			name:  "occurrence does not match another line of the file",
+			rule:  LintIgnoreRule{Rule: "errcheck", File: "pkg/foo.go", Line: 12},
+			v:     models.Violation{File: "pkg/foo.go", Line: 13, Rule: &models.Rule{Method: "errcheck"}},
+			match: false,
+		},
+		{
+			name:  "fingerprint matches its occurrence on any line",
+			rule:  LintIgnoreRule{Fingerprint: "ca88741f1bc4e36e", File: "pkg/foo.go", Line: 12},
+			v:     models.Violation{File: "pkg/foo.go", Line: 40, Fingerprint: "ca88741f1bc4e36e"},
+			match: true,
+		},
+		{
+			name:  "fingerprint does not match another occurrence",
+			rule:  LintIgnoreRule{Fingerprint: "ca88741f1bc4e36e"},
+			v:     models.Violation{File: "pkg/foo.go", Line: 12, Fingerprint: "ca88741f1bc4e36e-1"},
+			match: false,
+		},
+		{
+			name:  "line without file never matches",
+			rule:  LintIgnoreRule{Rule: "errcheck", Line: 12},
+			v:     models.Violation{File: "pkg/foo.go", Line: 12, Rule: &models.Rule{Method: "errcheck"}},
+			match: false,
+		},
+		{
 			name:  "rule wildcard matches anything",
 			rule:  LintIgnoreRule{Rule: "*", Source: "betterleaks"},
 			v:     models.Violation{Source: "betterleaks", Rule: &models.Rule{Method: "anything"}},
@@ -118,7 +148,7 @@ func TestLintIgnoreRule_MatchesViolation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.match, tt.rule.MatchesViolation(tt.v))
+			assert.Equal(t, tt.match, tt.rule.MatchesViolation(tt.v, ""))
 		})
 	}
 }
@@ -202,7 +232,11 @@ func TestSaveGavelConfig_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, cfg.AI.Model.Name, loaded.AI.Model.Name)
-	assert.Equal(t, cfg.Lint.Ignore, loaded.Lint.Ignore)
+	// A file rule resolves relative to the .gavel.yaml that declared it.
+	assert.Equal(t, []LintIgnoreRule{
+		{Rule: "errcheck", Source: "golangci-lint"},
+		{baseDir: dir, Rule: "no-unused-vars", File: "src/legacy.ts"},
+	}, loaded.Lint.Ignore)
 }
 
 func TestLoadGavelConfig_WithFixtures(t *testing.T) {

@@ -16,10 +16,13 @@ var _ = Describe("Go test batch metadata", func() {
 		Expect(filtered.Context).To(Equal(original.Context))
 	})
 
-	It("fails when a Ginkgo report is missing a frame", func() {
+	DescribeTable("files test-binary build events under the package they test", func(variant string) {
+		const pkg = "example.com/store/models"
 		lines := []goTestEvent{
-			{Action: "output", Package: "example.com/suite", Output: "GAVEL_GINKGO_V1:0/2:e30=\n"},
-			{Action: "pass", Package: "example.com/suite"},
+			{Action: "build-output", ImportPath: variant, Output: "# " + variant + "\n"},
+			{Action: "run", Package: pkg, Test: "TestModels"},
+			{Action: "pass", Package: pkg, Test: "TestModels"},
+			{Action: "pass", Package: pkg},
 		}
 		var input strings.Builder
 		for _, event := range lines {
@@ -28,9 +31,53 @@ var _ = Describe("Go test batch metadata", func() {
 			input.Write(data)
 			input.WriteByte('\n')
 		}
-		_, err := ParseGoTestBatch(strings.NewReader(input.String()), "", map[string]bool{"example.com/suite": true})
-		Expect(err).To(MatchError(ContainSubstring("incomplete Ginkgo metadata")))
-	})
+		results, err := ParseGoTestBatch(strings.NewReader(input.String()), "", nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results).To(HaveLen(1))
+		Expect(results[pkg].All()).To(ContainElement(And(HaveField("Name", "TestModels"), HaveField("Passed", true))))
+	},
+		Entry("in-package test variant", "example.com/store/models [example.com/store/models.test]"),
+		Entry("external test package", "example.com/store/models_test [example.com/store/models.test]"),
+	)
+
+	DescribeTable("keeps metadata errors on their package and retains passing results", func(frames []string, message string) {
+		const badPackage = "example.com/suite"
+		const goodPackage = "example.com/plain"
+		lines := []goTestEvent{
+			{Action: "run", Package: goodPackage, Test: "TestPlain"},
+			{Action: "pass", Package: goodPackage, Test: "TestPlain"},
+			{Action: "pass", Package: goodPackage},
+			{Action: "run", Package: badPackage, Test: "TestOrdinary"},
+			{Action: "pass", Package: badPackage, Test: "TestOrdinary"},
+		}
+		for _, frame := range frames {
+			lines = append(lines, goTestEvent{Action: "output", Package: badPackage, Output: frame + "\n"})
+		}
+		lines = append(lines, goTestEvent{Action: "pass", Package: badPackage})
+		var input strings.Builder
+		for _, event := range lines {
+			data, err := json.Marshal(event)
+			Expect(err).NotTo(HaveOccurred())
+			input.Write(data)
+			input.WriteByte('\n')
+		}
+		results, err := ParseGoTestBatch(strings.NewReader(input.String()), "", map[string]bool{badPackage: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results[goodPackage].All()).To(ContainElement(And(HaveField("Name", "TestPlain"), HaveField("Passed", true))))
+		Expect(results[badPackage].All()).To(ContainElement(And(HaveField("Name", "TestOrdinary"), HaveField("Passed", true))))
+		failures := results[badPackage].Failed()
+		Expect(failures).To(HaveLen(1))
+		Expect(failures[0].Package).To(Equal(badPackage))
+		Expect(failures[0].Framework).To(Equal(Ginkgo))
+		Expect(failures[0].Message).To(ContainSubstring(message))
+	},
+		Entry("missing report", nil, "without Ginkgo metadata"),
+		Entry("missing frame", []string{"GAVEL_GINKGO_V1:0/2:e30="}, "incomplete Ginkgo metadata"),
+		Entry("malformed frame", []string{"GAVEL_GINKGO_V1:invalid"}, "invalid Ginkgo metadata frame"),
+		Entry("duplicate frame", []string{"GAVEL_GINKGO_V1:0/2:e30=", "GAVEL_GINKGO_V1:0/2:e30="}, "duplicate Ginkgo metadata chunk"),
+		Entry("invalid base64", []string{"GAVEL_GINKGO_V1:0/1:!"}, "decode Ginkgo metadata"),
+		Entry("invalid report JSON", []string{"GAVEL_GINKGO_V1:0/1:eA=="}, "invalid character"),
+	)
 
 	DescribeTable("attributes a test-variant build failure to the package under test",
 		func(variant string) {

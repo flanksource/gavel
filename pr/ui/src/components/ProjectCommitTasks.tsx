@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { TaskProgress, type TaskControlAction, type TaskSnapshot } from '@flanksource/clicky-ui/data';
 import { useTaskRun, useTaskRuns } from '@flanksource/clicky-ui/hooks';
+import { Button } from '@flanksource/clicky-ui/components';
+import { useIsMobile } from '../useIsMobile';
 import { queryKeys } from '../query';
 import {
   projectCommitLockedFiles,
@@ -32,6 +34,8 @@ export function ProjectCommitTasks({
   onComplete,
   onRunChange,
 }: Props) {
+  const mobile = useIsMobile();
+  const [expandedRun, setExpandedRun] = useState('');
   const queryClient = useQueryClient();
   const labels = useMemo(() => ({ project: projectName, ...(worktree ? { worktree } : {}) }), [projectName, worktree]);
   const listed = useTaskRuns({
@@ -124,10 +128,17 @@ export function ProjectCommitTasks({
       </section>
     );
   }
+  const collapsedHistory = mobile && !preferredRunId && isComplete && !reportedError
+    && snapshots.find(snapshot => snapshot.type === 'group')?.status === 'success';
+  const expanded = !collapsedHistory || expandedRun === runId;
   return (
-    <section aria-label="Commit tasks" className="shrink-0 border-b border-border bg-muted/30 px-4 py-3">
+    <section aria-label="Commit tasks" className={`shrink-0 border-b border-border bg-muted/30 ${collapsedHistory ? 'px-3' : 'px-4 py-3'}`}>
+      {collapsedHistory && <Button variant="ghost" type="button" aria-expanded={expanded} onClick={() => setExpandedRun(expanded ? '' : runId)} className="flex min-h-11 w-full items-center justify-between gap-2 px-0 text-xs">
+        <span className="font-medium text-green-700 dark:text-green-400">Commit complete</span>
+        <span className="text-muted-foreground">{expanded ? 'Hide details' : 'Show details'}</span>
+      </Button>}
       {reportedError && <div role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{reportedError}</div>}
-      {!ownership.error && (
+      {!ownership.error && expanded && (
         <TaskProgress
           snapshots={snapshots}
           compact

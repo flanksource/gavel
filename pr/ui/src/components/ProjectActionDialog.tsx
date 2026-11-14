@@ -4,11 +4,14 @@ import {
   Button,
   JsonSchemaForm,
   Modal,
+  type PreExtension,
 } from '@flanksource/clicky-ui/components';
 import {
   projectActionSchemaQuery,
   type ProjectActionName,
 } from './oneShotQueries';
+import { RuntimeOptions } from './project-action/RuntimeOptions';
+import { runtimeKeys, withoutRemovedAIOptions } from './project-action/runtime';
 
 export type ProjectAction = ProjectActionName;
 
@@ -27,7 +30,25 @@ interface RememberedActionOptions {
 
 type RememberedOptions = Record<string, Partial<Record<ProjectAction, RememberedActionOptions>>>;
 
-const storageKey = 'gavel.project-action-options.v1';
+const storageKey = 'gavel.project-action-options.v2';
+
+const inheritedBoolean: PreExtension = field => (
+  field.kind === 'boolean' && field.value === undefined && typeof field.schema.default === 'boolean'
+    ? { ...field, value: field.schema.default }
+    : field
+);
+const formExtensions = [inheritedBoolean];
+const commitControls: PreExtension = field => {
+  if (runtimeKeys.some(key => key === field.key)) return null;
+  if (field.schema['x-enum-display'] !== 'segmented') return field;
+  return {
+    ...field,
+    options: field.options?.map(option => ({ ...option, label: field.schema['x-enum-labels']?.[option.value] ?? option.label })),
+    value: field.value ?? '',
+    onChange: next => field.onChange(next === '' ? undefined : next),
+  };
+};
+const commitExtensions = [...formExtensions, commitControls];
 
 export function ProjectActionDialog({ projectName, action, selectedFiles, onClose, onRun }: Props) {
   const [value, setValue] = useState<Record<string, unknown>>({});
@@ -48,12 +69,23 @@ export function ProjectActionDialog({ projectName, action, selectedFiles, onClos
   useEffect(() => {
     if (!action || !definition) return;
     const remembered = readRememberedOptions(projectName, action);
-    const initial = remembered?.schemaVersion === definition.schemaVersion
-      ? { ...definition.defaults, ...remembered.value }
-      : { ...definition.defaults };
-    if (action !== 'test' && selectedFiles.length > 0) initial.files = [...selectedFiles].sort();
+    let initial = remembered?.schemaVersion === definition.schemaVersion
+      ? { ...remembered.value }
+      : {};
+    if (action === 'commit') initial = withoutRemovedAIOptions(initial);
+    if (action !== 'test') delete initial.files;
     setValue(initial);
     setRunError('');
+  }, [action, definition, projectName]);
+
+  useEffect(() => {
+    if (!action || action === 'test' || !definition) return;
+    setValue(current => {
+      const next = { ...current };
+      delete next.files;
+      if (selectedFiles.length > 0) next.files = [...selectedFiles].sort();
+      return next;
+    });
   }, [action, definition, projectName, selectedFiles]);
 
   const run = async () => {
@@ -61,8 +93,11 @@ export function ProjectActionDialog({ projectName, action, selectedFiles, onClos
     setRunning(true);
     setRunError('');
     try {
-      await onRun(action, value);
-      rememberOptions(projectName, action, definition.schemaVersion, value);
+      const options = action === 'commit' ? withoutRemovedAIOptions(value) : value;
+      await onRun(action, options);
+      const remembered = { ...options };
+      if (action !== 'test') delete remembered.files;
+      rememberOptions(projectName, action, definition.schemaVersion, remembered);
       onClose();
     } catch (cause) {
       setRunError(cause instanceof Error ? cause.message : `Failed to start ${action}`);
@@ -89,16 +124,21 @@ export function ProjectActionDialog({ projectName, action, selectedFiles, onClos
     >
       {loading && <div className="py-8 text-center text-sm text-muted-foreground">Loading options…</div>}
       {!loading && definition && (
-        <JsonSchemaForm
-          schema={definition.schema}
-          value={value}
-          onChange={setValue}
-          size="sm"
-          inline
-          idPrefix={`project-${projectName}-${action}`}
-          showPreferencesMenu={false}
-          persistPreferences={false}
-        />
+        <fieldset disabled={running} className="min-w-0 space-y-4">
+          {action === 'commit' && <RuntimeOptions value={value} onChange={setValue} />}
+          <JsonSchemaForm
+            schema={definition.schema}
+            value={value}
+            onChange={setValue}
+            applyDefaults={false}
+            pre={action === 'commit' ? commitExtensions : formExtensions}
+            size="sm"
+            layout={{ mode: 'stacked' }}
+            idPrefix={`project-${projectName}-${action}`}
+            showPreferencesMenu={false}
+            persistPreferences={false}
+          />
+        </fieldset>
       )}
     </Modal>
   );

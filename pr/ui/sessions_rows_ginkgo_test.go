@@ -172,3 +172,48 @@ var _ = Describe("buildSessionRows", func() {
 		Expect(titles(rows)).To(Equal([]string{"Fix the sniffer", untitledSession}))
 	})
 })
+
+var _ = Describe("attachSubagentRows", func() {
+	str := func(s string) *string { return &s }
+	at := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	agent := func(title string, parent uuid.UUID, mutate ...func(*captaindb.SessionListSummary)) captaindb.SessionListSummary {
+		o := captaindb.SessionListSummary{
+			ID: uuid.New(), Source: "claude", Title: str(title), LifecycleStatus: "succeeded", ActivityState: "idle",
+			ParentSessionID: &parent, ParentRelation: captaindb.SessionParentRelationAgent, ActivityAt: at, CWD: str("/src/acme"),
+		}
+		for _, fn := range mutate {
+			fn(&o)
+		}
+		return o
+	}
+	type family struct{ Title, ParentID string }
+	families := func(rows []sessionRow) []family {
+		out := make([]family, len(rows))
+		for i, row := range rows {
+			out[i] = family{row.Title, row.ParentID}
+		}
+		return out
+	}
+
+	It("nests listed sessions' subagents, and theirs, under their parent and drops every other row", func() {
+		root := sessionRow{ID: uuid.NewString(), Title: "root"}
+		rootID := uuid.MustParse(root.ID)
+		child := agent("child", rootID)
+		grandchild := agent("grandchild", child.ID)
+		rows := attachSubagentRows([]sessionRow{root}, []captaindb.SessionListSummary{
+			grandchild,
+			child,
+			agent("unlisted parent's subagent", uuid.New()),
+			agent("transcript child", rootID, func(o *captaindb.SessionListSummary) {
+				o.ParentRelation = captaindb.SessionParentRelationTranscript
+			}),
+			agent("gavel agent row", rootID, func(o *captaindb.SessionListSummary) { o.Source = "gavel" }),
+		}, nil)
+
+		Expect(families(rows)).To(Equal([]family{
+			{"root", ""},
+			{"child", root.ID},
+			{"grandchild", child.ID.String()},
+		}))
+	})
+})

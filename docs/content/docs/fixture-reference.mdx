@@ -1,0 +1,137 @@
+---
+title: Fixture file reference
+description: Complete Markdown frontmatter, command expectations, and test/lint fence schemas.
+order: 16
+parent: fixtures-overview
+---
+
+import { SchemaViewer } from "@flanksource/clicky-ui/data";
+import schema from "../../src/data/fixtures.schema.json";
+import schemaUrl from "../../src/data/fixtures.schema.json?url";
+import FixtureExample from "../../src/components/site/FixtureExample";
+
+Fixture files have their own schema, separate from `.gavel.yaml`. YAML and JSON use a typed `kind: Fixture` document with ordered steps. Markdown combines frontmatter, headings, tables, executable fences, and assertions. Both lower into the fixture runner's result tree; the examples default to YAML.
+
+<a href={schemaUrl} download="fixtures.schema.json">Download the complete fixture schema bundle</a>
+
+This site bundles the output of `gavel fixtures --schema`, containing `frontmatter`, `document`, `fences`, and help metadata. Generate a bundle from your installed Gavel when its version differs:
+
+```bash
+mkdir -p .tmp
+gavel fixtures --schema > .tmp/fixtures.schema.json
+jq '.frontmatter' .tmp/fixtures.schema.json > .tmp/fixture-frontmatter.schema.json
+jq '.document' .tmp/fixtures.schema.json > .tmp/fixture-document.schema.json
+jq '.fences.test.schema' .tmp/fixtures.schema.json > .tmp/fixture-test.schema.json
+```
+
+The bundle is a container of schemas. Give an editor the extracted schema for the surface being edited. `.frontmatter` validates the YAML header of Markdown, `.document` validates a whole YAML/JSON fixture, and `.fences.<kind>.schema` validates that fence's configuration.
+
+## Markdown frontmatter
+
+The YAML variant writes each command and its expectation as a step. The Markdown variant shares a command template in frontmatter and varies its input in table rows:
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: CLI checks
+steps:
+  - name: Default message
+    exec: printf
+    args: ["%s\n", "ready"]
+    timeout: 30s
+    cel: stdout.trim() == "ready"
+  - name: Row override
+    exec: printf
+    args: ["%s\n", "done"]
+    timeout: 30s
+    cel: stdout.trim() == "done"
+```
+
+````markdown
+---
+cwd: .
+exec: bash
+args: ["-c", "printf '%s\\n' '{{.message}}'"]
+message: ready
+timeout: 30s
+---
+
+# CLI checks
+
+| Name | message | Exit Code | CEL Validation |
+| --- | --- | --- | --- |
+| Default message | | 0 | stdout.trim() == "ready" |
+| Row override | done | 0 | stdout.trim() == "done" |
+````
+
+</FixtureExample>
+
+Frontmatter establishes defaults for the document. Unknown keys become template metadata, and table values can override them. `setup` prepares a shared environment before `build`; a `daemon` starts after the build and is stopped after execution. Tests in the same Markdown file share the setup, so use separate files when environments need isolation.
+
+A setup that reads `{{.params.…}}`, or computes a value with `{$cel: …}`, is prepared after the `params` form answers rather than before `build`, so a run can pick its own cluster or credentials. Its environment then reaches every later step, and its connection references resolve through the same catalog a `format: connection` picker lists: the host, then the shared and gavel layers, then the fixture directory's `.connections/`. Because it is prepared after `build`, such a setup cannot declare `checkout:` or `cwd:`, and a fixture without `params:` cannot read them.
+
+Under `connections:`, a string names that kind's connection, so `kubernetes: connection://acme` is `kubernetes: {connection: connection://acme}`. A picker commits exactly such a `connection://` reference. CEL is nil-safe, so a `$cel` reading an unanswered param is null, and a null connection is not configured at all. That is different from `kubernetes: {}`, which means the ambient cluster:
+
+```yaml
+kind: Fixture
+params:
+  type: object
+  properties:
+    scale: {type: boolean, default: true}
+  allOf:
+    - if: {properties: {scale: {const: true}}, required: [scale]}
+      then:
+        required: [k8s]
+        properties:
+          k8s: {type: string, format: connection, x-connection-types: [kubernetes]}
+setup:
+  connections:
+    kubernetes: {$cel: "params.k8s"}   # null when scale is off: no cluster is configured
+steps:
+  - {id: nodes, kind: exec, if: params.scale, script: kubectl get nodes}   # the picked cluster's KUBECONFIG
+```
+
+Download a runnable <a href="/examples/smoke.fixture.yaml" download>YAML example</a> or <a href="/examples/smoke.fixture.md" download>Markdown example</a>. The Markdown download includes the table above and a JSON command assertion. Both run with Bash and `printf`.
+
+Expand nested objects and lists to inspect their fields. Paths use `[]` for arrays and `<name>` for maps. Referenced Captain types open below the frontmatter hierarchy. For practical format choices, see [Fixture formats](/docs/fixture-formats).
+
+<div id="fixture-frontmatter">
+  <SchemaViewer schema={schema.frontmatter} />
+</div>
+
+## Command expectations
+
+Command blocks may carry YAML configuration before an executable fence; fence attributes override that configuration. Expected `stdout` and `stderr` values can use `@path` golden-file references. In table fixtures, `exit code: -` disables exit-code checking; otherwise a successful exit is expected by default.
+
+`contains:`, `regex:`, `not:`, and `cel:` bullets become assertions. Use `json` for parsed JSON output, `stdout` and `stderr` for streams, and `exitCode` for process status. PTY mode merges stdout and stderr; use it when terminal rendering or ANSI behavior is the subject of the check.
+
+<div id="fixture-exec">
+  <SchemaViewer schema={schema.fences.exec.schema} />
+</div>
+
+## Test runner fence
+
+Use `kind: test` in a YAML document or `yaml test` in a Markdown fence to invoke Gavel's test engine. Keys use CLI spelling such as `test-timeout`, with `paths` replacing positional CLI arguments. UI/detach options are excluded and fixture discovery does not recurse from these embedded steps. [Runner steps](/docs/fixture-runner-steps) shows both formats.
+
+<div id="fixture-test">
+  <SchemaViewer schema={schema.fences.test.schema} />
+</div>
+
+## Lint runner fence
+
+Use `kind: lint` in YAML or `yaml lint` in Markdown to invoke the lint engine. `files` replaces positional arguments. These steps report evidence inside the fixture tree; interactive triage and source-repair options are excluded from the embedded runner contract.
+
+<div id="fixture-lint">
+  <SchemaViewer schema={schema.fences.lint.schema} />
+</div>
+
+## AI prompt fence
+
+Use `kind: ai` with `prompt` and `criteria` in YAML. In Markdown, the first `prompt` or `ai` fence supplies reviewer instructions; `ai` frontmatter configures the grader and task-list items supply the checklist. See [AI review fixtures](/docs/fixture-ai-review) for both formats and grader configuration.
+
+<div id="fixture-ai">
+  <SchemaViewer schema={schema.fences.ai.schema} />
+</div>
+
+The [Fixture step reference](/docs/fixture-step-reference) covers whole YAML/JSON documents and every registered step kind, including services, browsers, TODO operations, wait policies, retries, and exports.

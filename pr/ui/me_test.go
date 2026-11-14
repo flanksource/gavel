@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -42,19 +41,28 @@ func TestAuthConfig(t *testing.T) {
 		getJSON(t, srv.handleAuthConfig, req))
 }
 
-func TestMeWithoutALocalLogin(t *testing.T) {
+// isolateUserConfig points os.UserConfigDir at a fresh directory on every OS:
+// macOS reads $HOME/Library/Application Support and ignores XDG_CONFIG_HOME.
+func isolateUserConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+}
+
+func TestMeWithoutALocalLogin(t *testing.T) {
+	isolateUserConfig(t)
 	body := getJSON(t, (&Server{}).handleMe, httptest.NewRequest(http.MethodGet, "/api/me", nil))
 	assert.Equal(t, map[string]any{"user": nil, "org": localOrgJSON, "orgs": []any{localOrgJSON}}, body)
 }
 
 func TestMeWithALocalLogin(t *testing.T) {
-	config := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", config)
+	isolateUserConfig(t)
+	path, err := api.CredentialPath()
+	require.NoError(t, err)
 	clerk := clerktest.New(t, "cli", clerktest.User{ID: "user_123", Name: "Ada Lovelace", Email: "ada@example.com"})
 	session := &api.Session{Config: api.AuthConfig{Issuer: clerk.URL, ClientID: "cli"}, IDToken: clerk.IDToken(time.Now().Add(time.Hour)),
 		Token: &oauth2.Token{AccessToken: "access", RefreshToken: "refresh"}}
-	require.NoError(t, api.SaveSession(filepath.Join(config, "gavel", "clerk-session.json"), session))
+	require.NoError(t, api.SaveSession(path, session))
 	clerk.Close()
 
 	body := getJSON(t, (&Server{}).handleMe, httptest.NewRequest(http.MethodGet, "/api/me", nil))

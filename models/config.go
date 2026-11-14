@@ -414,9 +414,6 @@ func (qc *QualityConfig) ApplyDefaults() {
 	if qc.CommentAnalysis.WordLimit == 0 {
 		qc.CommentAnalysis.WordLimit = 10
 	}
-	if qc.CommentAnalysis.AIModel == "" {
-		qc.CommentAnalysis.AIModel = "claude-3-haiku-20240307"
-	}
 	if qc.CommentAnalysis.MinDescriptiveScore == 0 {
 		qc.CommentAnalysis.MinDescriptiveScore = 0.7
 	}

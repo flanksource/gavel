@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/status"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/repomap"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
@@ -914,7 +915,7 @@ func chipsFor(f status.FileStatus) string {
 		parts = append(parts, delta)
 	}
 	if !f.ModifiedAt.IsZero() {
-		if age := status.HumanAge(time.Since(f.ModifiedAt)); age != "" {
+		if age := utils.HumanAge(time.Since(f.ModifiedAt)); age != "" {
 			parts = append(parts, styled(age+" ago", styleMuted))
 		}
 	}

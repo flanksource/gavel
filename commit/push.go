@@ -14,6 +14,17 @@ import (
 	"github.com/flanksource/gavel/pr/model"
 )
 
+// PushMode selects the commits --push publishes and seeds the PR from.
+type PushMode string
+
+const (
+	// PushModeCommits publishes the commits ahead of the branch's upstream.
+	PushModeCommits PushMode = ""
+	// PushModeBranch publishes the whole branch: every commit ahead of the
+	// default branch, so an already-pushed branch can still get its PR.
+	PushModeBranch PushMode = "branch"
+)
+
 // pushTargetKind tags how we arrived at the chosen branch to push to.
 type pushTargetKind int
 
@@ -130,7 +141,8 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 		return fmt.Errorf("cannot push from detached HEAD")
 	}
 
-	if len(result.Commits) == 0 {
+	prSeed := result
+	if len(result.Commits) == 0 || opts.PushMode == PushModeBranch {
 		base, baseErr := deps.defaultBranch(ghOpts)
 		if baseErr != nil {
 			return fmt.Errorf("resolve default branch: %w", baseErr)
@@ -139,19 +151,28 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 		if base != "" {
 			baseRef = "origin/" + base
 		}
-		ahead, aErr := deps.aheadCommits(opts.WorkDir, branch, baseRef)
+		// An empty branch makes the ahead base the default branch rather
+		// than the branch's own upstream.
+		aheadBranch := branch
+		if opts.PushMode == PushModeBranch {
+			aheadBranch = ""
+		}
+		ahead, aErr := deps.aheadCommits(opts.WorkDir, aheadBranch, baseRef)
 		if aErr != nil {
 			return fmt.Errorf("read ahead commits: %w", aErr)
 		}
 		if len(ahead) == 0 {
 			return ErrNothingToPush
 		}
-		result.Commits = ahead
-		// In dry-run mode, runSingleCommit/runCommitAll would have printed
-		// the commit preview; here we print it ourselves so the user sees
-		// what's about to be pushed before the "would push ..." line.
-		if opts.DryRun {
-			printDryRunPreview(result)
+		prSeed = &Result{Commits: ahead}
+		if len(result.Commits) == 0 {
+			result.Commits = ahead
+			// In dry-run mode, runSingleCommit/runCommitAll would have printed
+			// the commit preview; here we print it ourselves so the user sees
+			// what's about to be pushed before the "would push ..." line.
+			if opts.DryRun {
+				printDryRunPreview(result)
+			}
 		}
 	}
 
@@ -188,7 +209,7 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 		}
 		return executeExistingPRPush(opts, deps, target.pr, "ancestor-match")
 	case pushTargetNewPR:
-		return executeNewPRPush(ctx, opts, ghOpts, deps, branch, result)
+		return executeNewPRPush(ctx, opts, ghOpts, deps, branch, prSeed)
 	}
 	return nil
 }

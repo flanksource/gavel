@@ -9,7 +9,7 @@ import type {
   Test,
   TestEditRequest,
 } from '../types';
-import { isLintOnlyPhase } from '../utils';
+import { isLintOnlyPhase, isLintOnlyRun, lintStatusCounts } from '../utils';
 
 // useTestRun is the reusable client for gavel's testrunner HTTP handlers. It is
 // SSE-first: it subscribes to /api/tests/stream (event: message / event: done)
@@ -27,6 +27,7 @@ import { isLintOnlyPhase } from '../utils';
 // clicky-ui's React context.
 export interface EventSourceLike {
   addEventListener(type: string, listener: EventListenerOrEventListenerObject): void;
+  removeEventListener(type: string, listener: EventListenerOrEventListenerObject): void;
   close(): void;
   onerror: ((event: Event) => void) | null;
 }
@@ -106,45 +107,54 @@ function hasEventSource(): boolean {
   return typeof globalThis !== 'undefined' && typeof globalThis.EventSource !== 'undefined';
 }
 
-function deriveStatusText(snap: Snapshot): string {
+export function deriveStatusText(snap: Snapshot): string {
   const status = snap.status || IDLE_STATUS;
+  const tests = snap.tests || [];
   if (!status.running) {
     if (status.stopped) return status.stop_message || 'Stopped by user';
-    return snap.metadata?.kind === 'rerun' ? 'Rerun complete' : 'Test run complete';
+    if (snap.metadata?.kind === 'rerun') return 'Rerun complete';
+    if (isLintOnlyRun(tests, !!status.lint_run)) {
+      const { done, failed } = lintStatusCounts(snap.lint);
+      return `Lint run complete (${done} done · ${failed} failed)`;
+    }
+    return 'Test run complete';
   }
   if (snap.metadata?.kind === 'rerun') {
     return `Running rerun #${snap.metadata.sequence || 1}...`;
   }
   // A fixture benchmark or profile run has no lint phase.
   if (snap.performance) return 'Running fixtures...';
-  if (isLintOnlyPhase(snap.tests || [], status.running, !!status.lint_run)) {
-    return 'Running linters...';
+  if (isLintOnlyPhase(tests, status.running)) {
+    if (!snap.lint?.length) return 'Running linters...';
+    const { running, done, failed } = lintStatusCounts(snap.lint);
+    return `Running linters... (${running} running · ${done} done · ${failed} failed)`;
   }
   return 'Running tests...';
 }
 
-/** Polls `${base}/api/tests` until the run is no longer running; the returned function stops polling. */
+/** Polls `${base}/api/tests` until the run is no longer running; the returned function stops polling and aborts the request in flight. */
 function pollSnapshots(base: string, pollMs: number, onSnapshot: (snap: Snapshot) => void, onError: () => void): () => void {
-  let stopped = false;
+  const controller = new AbortController();
+  const { signal } = controller;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const tick = async () => {
     try {
-      const res = await fetch(`${base}/api/tests`, { headers: { Accept: 'application/json' } });
-      if (stopped) return;
+      const res = await fetch(`${base}/api/tests`, { headers: { Accept: 'application/json' }, signal });
+      if (signal.aborted) return;
       if (res.ok) {
         const snap = (await res.json()) as Snapshot;
-        if (stopped) return;
+        if (signal.aborted) return;
         onSnapshot(snap);
         if (!snap.status?.running) return; // terminal: stop polling
       }
     } catch {
-      if (!stopped) onError();
+      if (!signal.aborted) onError();
     }
-    if (!stopped) timer = setTimeout(tick, pollMs);
+    if (!signal.aborted) timer = setTimeout(tick, pollMs);
   };
   void tick();
   return () => {
-    stopped = true;
+    controller.abort();
     clearTimeout(timer);
   };
 }
@@ -218,22 +228,26 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
       .catch(() => {});
 
     const es = createEventSourceRef.current(`${base}/api/tests/stream`);
-    es.addEventListener('message', (e) => {
+    const onMessage = (e: Event) => {
       const snap = JSON.parse((e as MessageEvent).data) as Snapshot;
       apply(snap);
       if (!snap.status?.running) es.close();
-    });
-    es.addEventListener('done', () => {
+    };
+    const onDone = () => {
       doneRef.current = true;
       setDone(true);
       setSnapshot((prev) => (prev ? { ...prev, status: { ...prev.status, running: false } } : prev));
       es.close();
-    });
+    };
+    es.addEventListener('message', onMessage);
+    es.addEventListener('done', onDone);
     es.onerror = () => {
       if (!doneRef.current) setError('Connection lost — retrying...');
     };
     return () => {
       closed = true;
+      es.removeEventListener('message', onMessage);
+      es.removeEventListener('done', onDone);
       es.close();
     };
   }, [base, enabled, pollMs, forcePoll, streamToken, apply]);

@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -18,6 +20,7 @@ import (
 // depsService is a deps catalog service started with its own StateDir under
 // the step's TmpDir, so its data, logs and state never touch ~/.deps.
 type depsService struct {
+	borrowed *sql.DB
 	catalog  string
 	stateDir string
 }
@@ -26,6 +29,9 @@ type depsService struct {
 // deps/start reports it ready. Docker and helm runtimes get an ephemeral
 // volume; the binary runtime keeps its data dir inside StateDir.
 func startDeps(ctx context.Context, step *fixtures.StepContext, entry Entry) (*depsService, map[string]any, error) {
+	if svc, outputs, err := existingConnection(ctx, step, entry); err != nil || svc != nil {
+		return svc, outputs, err
+	}
 	port, err := freePort()
 	if err != nil {
 		return nil, nil, fmt.Errorf("entry %q: allocate port: %w", entry.Name, err)
@@ -35,7 +41,11 @@ func startDeps(ctx context.Context, step *fixtures.StepContext, entry Entry) (*d
 	if err != nil {
 		return nil, nil, errors.Join(fmt.Errorf("entry %q: deps start %s: %w", entry.Name, entry.Deps, err), svc.stopIfStarted(ctx))
 	}
-	return svc, depsOutputs(entry, instance, port), nil
+	outputs, err := depsOutputs(entry, instance, port)
+	if err != nil {
+		return nil, nil, errors.Join(err, svc.stop(ctx))
+	}
+	return svc, outputs, nil
 }
 
 // depsOptions are the deps/start options of an entry. A service deps runs as a
@@ -46,7 +56,7 @@ func depsOptions(step *fixtures.StepContext, entry Entry, stateDir string, port 
 	digest := sha256.Sum256([]byte(stateDir))
 	opts := []start.Option{
 		start.WithStateDir(stateDir), start.WithInstanceID(hex.EncodeToString(digest[:8])), start.WithPort(port),
-		start.WithBindAddress("127.0.0.1"), start.WithHostEnv(step.ChildEnv()),
+		start.WithHostEnv(step.ChildEnv()),
 	}
 	if entry.Version != "" {
 		opts = append(opts, start.WithVersion(entry.Version))
@@ -70,8 +80,12 @@ func depsOptions(step *fixtures.StepContext, entry Entry, stateDir string, port 
 	return opts
 }
 
-func depsOutputs(entry Entry, instance *start.Instance, port int) map[string]any {
+func depsOutputs(entry Entry, instance *start.Instance, port int) (map[string]any, error) {
 	conn := instance.Connection
+	endpoint, err := url.Parse(conn.URL)
+	if err != nil || endpoint.Hostname() == "" {
+		return nil, fmt.Errorf("entry %q: deps returned an invalid connection endpoint", entry.Name)
+	}
 	properties := map[string]any{}
 	for k, v := range conn.Properties {
 		properties[k] = v
@@ -80,13 +94,20 @@ func depsOutputs(entry Entry, instance *start.Instance, port int) map[string]any
 		"url": conn.URL, "type": conn.Type, "username": conn.Username, "password": conn.Password, "properties": properties,
 	}
 	return map[string]any{
-		"type": "deps", "ready": true, "url": conn.URL, "port": port, "host": "127.0.0.1",
+		"type": "deps", "source": "provisioned", "ready": true, "url": conn.URL, "port": port, "host": endpoint.Hostname(),
 		"username": conn.Username, "password": conn.Password, "connection": connection,
 		"runtime": string(instance.Runtime), "log": instance.State.LogFile, "env": stringMap(entry.Env),
-	}
+	}, nil
 }
 
 func (s *depsService) observe(ctx context.Context) map[string]any {
+	if s.borrowed != nil {
+		err := s.borrowed.PingContext(ctx)
+		if err != nil {
+			return map[string]any{"ready": false, "error": err.Error()}
+		}
+		return map[string]any{"ready": true}
+	}
 	status, err := start.Status(ctx, s.catalog, start.WithStateDir(s.stateDir))
 	observed := map[string]any{"ready": err == nil && status == state.StatusRunning, "status": string(status)}
 	if err != nil {
@@ -96,6 +117,9 @@ func (s *depsService) observe(ctx context.Context) map[string]any {
 }
 
 func (s *depsService) stop(ctx context.Context) error {
+	if s.borrowed != nil {
+		return s.borrowed.Close()
+	}
 	if err := start.Stop(ctx, s.catalog, start.WithStateDir(s.stateDir)); err != nil {
 		return fmt.Errorf("stop deps service %s: %w", s.catalog, err)
 	}

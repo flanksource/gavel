@@ -2,12 +2,13 @@ package commands
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strconv"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/formatters/excel"
 	"github.com/flanksource/gavel/externalissues/jira"
 	"github.com/spf13/cobra"
 )
@@ -24,9 +25,29 @@ func (o externalIssueRef) one() (string, error) {
 }
 
 type externalIssueList struct {
-	JQL   string `flag:"jql" required:"true" help:"Jira JQL query"`
-	Limit int    `flag:"limit" help:"Maximum number of issues"`
-	After string `flag:"after" help:"Pagination cursor"`
+	JQL    string `flag:"jql" required:"true" help:"Jira JQL query"`
+	Limit  int    `flag:"limit" help:"Maximum number of issues"`
+	After  string `flag:"after" help:"Pagination cursor"`
+	Fields string `flag:"fields" help:"Comma-separated Jira fields to include"`
+}
+
+type externalIssueGet struct {
+	externalIssueRef
+	Full    bool   `flag:"full" default:"true" help:"Render the complete description, attachments and comments"`
+	TTL     string `flag:"ttl" default:"24h" help:"Reuse synced issues for this duration; zero always syncs"`
+	SyncDir string `flag:"sync-dir" help:"Cache base directory containing domain/project-code folders"`
+}
+
+type externalIssueSync struct {
+	Since       string   `flag:"since" help:"Sync issues updated since a duration (7d), ISO date, or RFC3339 timestamp"`
+	Statuses    []string `flag:"status" split:"false" help:"Status name patterns, with commons wildcards and ! exclusions"`
+	Filters     []string `flag:"filter" split:"false" help:"Repeatable FIELD=PATTERNS issue filters; field ID or display name"`
+	IDs         []string `args:"true" clicky:"cli-file-read" help:"Project keys, issue keys/IDs, APP-10..APP-50 ranges, or @issues.xlsx:[Sheet!]Column / @issues.csv:Column"`
+	From        string   `flag:"from" help:"Resync a saved Markdown file in place using its frontmatter"`
+	Force       bool     `flag:"force" help:"Refresh downloads and extraction without reusing cached artifacts"`
+	SyncDir     string   `flag:"sync-dir" help:"Cache base directory (default XDG_CACHE_HOME/.gavel/jira)"`
+	Attachments *bool    `flag:"attachments" help:"Download attachments and link to local files"`
+	Extract     *bool    `flag:"extract" help:"Download attachments and include PDF/DOCX Markdown with images in attachments/cas (requires uvx)"`
 }
 
 type externalCommentCreate struct {
@@ -49,106 +70,143 @@ type externalAttachmentDownload struct {
 	Output string `flag:"output" required:"true" help:"Destination file path"`
 }
 
-func decodeExternalJSON(raw json.RawMessage) (any, error) {
-	if len(raw) > 0 && raw[0] == '[' {
-		var items []json.RawMessage
-		if err := json.Unmarshal(raw, &items); err != nil {
-			return nil, fmt.Errorf("decode Jira response: %w", err)
-		}
-		return items, nil
-	}
-	var result any
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, fmt.Errorf("decode Jira response: %w", err)
-	}
-	return result, nil
-}
-
 func Register(rootCmd *cobra.Command) {
+	excel.Use()
 	root := &cobra.Command{Use: "external-issues", Short: "Work with issues in external systems"}
-	provider := &cobra.Command{Use: "jira", Short: "Work with Jira issues using twg"}
+	provider := &cobra.Command{Use: "jira", Short: "Work with Jira through its REST API"}
 	root.AddCommand(provider)
 	rootCmd.AddCommand(root)
 	var site, profile string
-	provider.PersistentFlags().StringVar(&site, "site", "", "Atlassian site")
-	provider.PersistentFlags().StringVar(&profile, "profile", "", "twg authentication profile")
-	client := func() jira.Client { return jira.Client{Site: site, Profile: profile} }
-	clicky.AddNamedCommandWithContext("get", provider, externalIssueRef{}, func(ctx context.Context, opts externalIssueRef) (jira.Issue, error) {
+	var noCache bool
+	provider.PersistentFlags().StringVar(&site, "site", "", "Jira site URL or Atlassian site prefix")
+	provider.PersistentFlags().StringVar(&profile, "profile", "", "TWG credential profile")
+	provider.PersistentFlags().BoolVar(&noCache, "no-cache", false, "Rebuild the Jira field metadata cache")
+	client := func(ctx context.Context) (*jira.Client, error) {
+		return newJiraClient(ctx, jira.ClientOptions{Site: site, Profile: profile})
+	}
+	store := func() jira.CatalogStore { return jira.CatalogStore{Dir: os.Getenv("GAVEL_JIRA_CACHE_DIR")} }
+	syncCmd := clicky.AddNamedCommandWithContext("sync", provider, externalIssueSync{}, func(ctx context.Context, opts externalIssueSync) (jira.SyncResults, error) {
+		options := jira.SyncOptions{Keys: opts.IDs, Dir: opts.SyncDir, From: opts.From, Force: opts.Force, NoCache: noCache, Store: store(), Since: opts.Since, Statuses: opts.Statuses, Filters: opts.Filters}
+		resolved, selectedSite, err := jira.ResolveSyncFile(options, site)
+		if err != nil {
+			return nil, err
+		}
+		options = resolved
+		if opts.Attachments != nil {
+			options.Attachments = *opts.Attachments
+		}
+		if opts.Extract != nil {
+			options.Extract = *opts.Extract
+		}
+		if options.Extract && opts.Attachments != nil && !*opts.Attachments {
+			return nil, fmt.Errorf("extraction requires attachments; disable extraction as well")
+		}
+		if err := options.Validate(); err != nil {
+			return nil, err
+		}
+		c, err := newJiraClient(ctx, jira.ClientOptions{Site: selectedSite, Profile: profile, Credentials: jira.Credentials{CloudID: options.CloudID}})
+		if err != nil {
+			return nil, err
+		}
+		return c.Sync(ctx, options)
+	})
+	syncCmd.Use = "sync [project|id|APP-10..APP-50...]"
+	syncCmd.Short = "Sync Jira issues to local Markdown files"
+	syncCmd.Long = "Sync Jira issues to local Markdown files. Combine project keys, issue keys or IDs, and inclusive same-project ranges (APP-10..APP-50). --since selects updated issues; --status and --filter FIELD=PATTERNS select issues using commons matching. Read issue keys or IDs from an Excel column with @file.xlsx:Column, @file.xlsx:Sheet!Column, or @file.xlsx:#2!Column. Column is the header text, and worksheet positions start at one. Quote the entire argument when it contains spaces or !. Empty cells are skipped."
+	syncCmd.Example = `  # Combine projects and inclusive issue ranges with selection filters
+  gavel external-issues jira sync APP OPS APP-10..APP-50 --since 7d --status '!Done,!Closed' --filter 'Priority=High*,Critical'
+
+  # Read the Issue Key column from the first worksheet
+  gavel external-issues jira sync '@issues.xlsx:Issue Key'
+
+  # Select a named worksheet or the second worksheet
+  gavel external-issues jira sync '@issues.xlsx:Sprint Backlog!Issue Key'
+  gavel external-issues jira sync '@issues.xlsx:#2!Issue Key'
+
+  # Use a workbook path with spaces and download attachments
+  gavel external-issues jira sync '@./exports/Sprint issues.xlsx:Issue Key' --attachments
+
+  # Extract PDF/DOCX attachments into Markdown under a custom directory
+  gavel external-issues jira sync '@issues.xlsx:Sprint Backlog!Issue Key' --extract --sync-dir ./issues
+
+  # Combine an Excel column with another workbook and an explicit issue key
+  gavel external-issues jira sync '@issues.xlsx:Issue Key' '@follow-up.xlsx:Issue Key' EXAMPLE-99
+
+  # Read a CSV column instead
+  gavel external-issues jira sync '@issues.csv:Issue Key'`
+	clicky.AddNamedCommandWithContext("get", provider, externalIssueGet{}, func(ctx context.Context, opts externalIssueGet) (jira.Issue, error) {
 		id, err := opts.one()
 		if err != nil {
 			return jira.Issue{}, err
 		}
-		raw, err := client().Get(ctx, id)
+		ttl, err := time.ParseDuration(opts.TTL)
+		if err != nil {
+			return jira.Issue{}, fmt.Errorf("invalid --ttl %q: %w", opts.TTL, err)
+		}
+		options, err := jiraClientOptions(ctx, jira.ClientOptions{Site: site, Profile: profile})
 		if err != nil {
 			return jira.Issue{}, err
 		}
-		return jira.ParseIssue(raw)
+		return jira.Read(ctx, jira.ReadOptions{Key: id, Full: opts.Full, TTL: ttl, Dir: opts.SyncDir, NoCache: noCache, Store: store(), Client: options})
 	})
-	clicky.AddNamedCommandWithContext("list", provider, externalIssueList{}, func(ctx context.Context, opts externalIssueList) (any, error) {
-		args := []string{"jira", "workitem", "query", "--jql", opts.JQL}
-		if opts.Limit > 0 {
-			args = append(args, "--limit", strconv.Itoa(opts.Limit))
-		}
-		if opts.After != "" {
-			args = append(args, "--after", opts.After)
-		}
-		raw, err := client().Call(ctx, args...)
+	clicky.AddNamedCommandWithContext("list", provider, externalIssueList{}, func(ctx context.Context, opts externalIssueList) ([]jira.Issue, error) {
+		c, err := client(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return jira.ParseList(raw)
+		var fields []string
+		if opts.Fields != "" {
+			fields = strings.Split(opts.Fields, ",")
+		}
+		return c.List(ctx, jira.SearchOptions{JQL: opts.JQL, Limit: opts.Limit, After: opts.After, Fields: fields, NoCache: noCache, Store: store()})
 	})
 	comments := &cobra.Command{Use: "comment", Short: "Read or create issue comments"}
 	provider.AddCommand(comments)
-	clicky.AddNamedCommandWithContext("list", comments, externalIssueRef{}, func(ctx context.Context, opts externalIssueRef) (any, error) {
+	clicky.AddNamedCommandWithContext("list", comments, externalIssueRef{}, func(ctx context.Context, opts externalIssueRef) (jira.Comments, error) {
 		id, err := opts.one()
 		if err != nil {
 			return nil, err
 		}
-		raw, err := client().Get(ctx, id)
+		c, err := client(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return jira.ParseComments(raw)
+		return c.Comments(ctx, id)
 	})
 	clicky.AddNamedCommandWithContext("create", comments, externalCommentCreate{}, func(ctx context.Context, opts externalCommentCreate) (any, error) {
 		id, err := opts.one()
 		if err != nil {
 			return nil, err
 		}
-		raw, err := client().Call(ctx, "jira", "workitem", "comment", "create", "--issue-id", id, "--body", opts.Body, "--body-format", "markdown")
+		c, err := client(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return decodeExternalJSON(raw)
+		return c.CreateComment(ctx, jira.CommentOptions{Key: id, Body: opts.Body})
 	})
 	attachments := &cobra.Command{Use: "attachment", Short: "Manage issue attachments"}
 	provider.AddCommand(attachments)
-	clicky.AddNamedCommandWithContext("list", attachments, externalIssueRef{}, func(ctx context.Context, opts externalIssueRef) (any, error) {
+	clicky.AddNamedCommandWithContext("list", attachments, externalIssueRef{}, func(ctx context.Context, opts externalIssueRef) ([]jira.Attachment, error) {
 		id, err := opts.one()
 		if err != nil {
 			return nil, err
 		}
-		raw, err := client().Call(ctx, "jira", "workitem", "attachment", "query", "--issue-id", id)
+		c, err := client(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return jira.ParseAttachments(raw)
+		return c.Attachments(ctx, id)
 	})
-	clicky.AddNamedCommandWithContext("upload", attachments, externalAttachmentUpload{}, func(ctx context.Context, opts externalAttachmentUpload) (any, error) {
+	clicky.AddNamedCommandWithContext("upload", attachments, externalAttachmentUpload{}, func(ctx context.Context, opts externalAttachmentUpload) ([]jira.Attachment, error) {
 		id, err := opts.one()
 		if err != nil {
 			return nil, err
 		}
-		args := []string{"jira", "workitem", "attachment", "upload", "--issue-id", id}
-		for _, file := range opts.Files {
-			args = append(args, "--file", file)
-		}
-		raw, err := client().Call(ctx, args...)
+		c, err := client(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return decodeExternalJSON(raw)
+		return c.UploadAttachments(ctx, jira.UploadOptions{Key: id, Files: opts.Files})
 	})
 	clicky.AddNamedCommandWithContext("delete", attachments, externalAttachmentDelete{}, func(ctx context.Context, opts externalAttachmentDelete) (any, error) {
 		id, err := opts.one()
@@ -158,18 +216,22 @@ func Register(rootCmd *cobra.Command) {
 		if !opts.Yes {
 			return nil, fmt.Errorf("attachment deletion is permanent; pass --yes to confirm")
 		}
-		raw, err := client().Call(ctx, "jira", "workitem", "attachment", "delete", "--attachment-id", id, "--yes")
+		c, err := client(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return decodeExternalJSON(raw)
+		return nil, c.DeleteAttachment(ctx, id)
 	})
 	clicky.AddNamedCommandWithContext("download", attachments, externalAttachmentDownload{}, func(ctx context.Context, opts externalAttachmentDownload) (any, error) {
 		id, err := opts.one()
 		if err != nil {
 			return nil, err
 		}
-		_, err = client().Call(ctx, "jira", "workitem", "attachment", "download", "--attachment-id", id, "--output-path", opts.Output)
+		c, err := client(ctx)
+		if err != nil {
+			return nil, err
+		}
+		_, err = c.DownloadAttachment(ctx, jira.DownloadOptions{ID: id, Output: opts.Output})
 		return nil, err
 	})
 }

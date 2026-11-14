@@ -1,4 +1,5 @@
 export const queryKeys = {
+  config: () => ['dashboard', 'config'] as const,
   me: () => ['me'] as const,
   sshKeys: () => ['ssh-keys'] as const,
   modelKeys: () => ['model-keys'] as const,
@@ -13,6 +14,9 @@ export const queryKeys = {
   todoPRLinks: (dir: string, ref: string) => ['todos', 'pr-links', { dir: dir.trim(), ref }] as const,
   prLinkedTodos: (url: string) => ['prs', 'todos', url] as const,
   prSearch: (query: string, repo: string) => ['prs', 'search', { query, repo }] as const,
+  filters: () => ['filters'] as const,
+  filter: (name: string) => ['filters', name] as const,
+  orgs: () => ['orgs'] as const,
   projects: () => ['projects'] as const,
   projectBranches: (projectName: string) => ['projects', projectName, 'branches'] as const,
   projectStatusScope: (projectName: string) => ['projects', projectName, 'status'] as const,

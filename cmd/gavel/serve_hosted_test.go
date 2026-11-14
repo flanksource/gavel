@@ -421,9 +421,11 @@ func TestHostedDashboardServesTodosInTheOrgsRepositories(t *testing.T) {
 	gitIn(t, work, "clone", "-q", "--bare", work, filepath.Join(f.opts.DataDir, "repos", org.ID.String(), repo.ID.String()+".git"))
 	workspace := "repo:" + repo.ID.String()
 
-	status, body = do(http.MethodGet, "/api/projects", "")
-	require.Equal(t, http.StatusOK, status, body)
-	assert.Contains(t, body, `"dir":"`+workspace+`"`)
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		status, body = do(http.MethodGet, "/api/projects", "")
+		assert.Equal(collect, http.StatusOK, status, body)
+		assert.Contains(collect, body, `"dir":"`+workspace+`"`)
+	}, 5*time.Second, 20*time.Millisecond)
 
 	status, body = do(http.MethodPost, "/api/todos", `{"dir":"`+workspace+`","title":"Fix the build"}`)
 	require.Equal(t, http.StatusCreated, status, body)

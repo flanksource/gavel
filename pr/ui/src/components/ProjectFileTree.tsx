@@ -3,6 +3,8 @@ import { Tree } from '@flanksource/clicky-ui/data';
 import { UiEyeClosed } from '@flanksource/clicky-ui/icons';
 import type { ProjectFileStatus, FileState } from './ProjectStatusView';
 import { ProjectFileIcon } from '../icons/ProjectFileIcon';
+import { isProjectFileCommittable } from './projectFileSelection';
+import { ProjectLinkedDepsBadge } from './ProjectLinkedDepsBadge';
 import { buildFileTree, filesBelow, findFileTreeNode, sortedChildren, type FileTreeNode } from './fileTree';
 
 interface ProjectFileTreeProps {
@@ -74,7 +76,7 @@ export function ProjectFileTree({
           onIgnore={onIgnore}
         />
       )}
-      rowClass={(_node, isSelected) => `group min-h-8 border-l-2 py-1 pr-3 ${
+      rowClass={(_node, isSelected) => `group min-h-11 border-l-2 py-1 pr-3 md:min-h-8 ${
         isSelected
           ? 'border-primary bg-primary/10'
           : 'border-transparent hover:border-primary/40 hover:bg-muted/40'
@@ -108,7 +110,7 @@ function ProjectFileTreeRow({
   onIgnore: (path: string, directory: boolean) => void;
 }) {
   const descendants = filesBelow(node);
-  const selectable = descendants.filter(file => file.state !== 'conflict' && !locked.has(file.path));
+  const selectable = descendants.filter(file => isProjectFileCommittable(file) && !locked.has(file.path));
   const selectedCount = selectable.filter(file => selected.has(file.path)).length;
   const ignorable = descendants.length > 0 && descendants.every(file => file.state === 'untracked');
   const file = node.file;
@@ -129,9 +131,10 @@ function ProjectFileTreeRow({
         className={`size-4 shrink-0 ${directory ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}`}
       />
       <span className={`min-w-0 flex-1 ${lockedGroup ? 'opacity-60' : ''}`}>
-        <span className="flex min-w-0 items-center gap-2" data-file-primary>
-          <span className={`truncate text-sm ${directory ? 'font-medium' : 'font-mono'}`} title={node.path}>{node.name}</span>
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1" data-file-primary>
+          <span className={`max-w-full truncate text-sm ${directory ? 'font-medium' : 'font-mono'}`} title={node.path}>{node.name}</span>
           {file && <StateBadge state={file.state} />}
+          {file && <ProjectLinkedDepsBadge file={file} />}
           {lockedGroup && (
             <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
               queued in group {lockedGroup}
@@ -196,6 +199,7 @@ function SelectionCheckbox({ label, checked, partial, disabled, onChange }: {
 }
 
 function DiffSummary({ file }: { file: ProjectFileStatus }) {
+  if (file.adds === 0 && file.dels === 0) return null;
   return (
     <span className="flex shrink-0 gap-1 text-[11px]">
       <span className="text-green-600">+{file.adds}</span>

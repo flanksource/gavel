@@ -1,0 +1,14 @@
+kind: Fixture
+name: Catalog PostgreSQL
+steps:
+  - id: resources
+    kind: services
+    services:
+      postgres:
+        deps: postgres
+        version: '17'
+        runtime: binary
+  - id: query
+    kind: exec
+    script: psql "$POSTGRES_URL" -XAtc "SELECT 'catalog connection'"
+    stdout: "catalog connection\n"

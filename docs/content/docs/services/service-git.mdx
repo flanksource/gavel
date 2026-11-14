@@ -1,0 +1,48 @@
+---
+title: "Disposable git repositories"
+parent: fixture-kind-services
+order: 16
+---
+
+import Prerequisites from "../../../src/components/site/Prerequisites";
+
+Use `git` to seed a fixture-owned repository. Files are written as declared under the fixture temporary directory. An optional initial commit allows commands under test to inspect history, tracked files, and diffs without changing the source checkout.
+
+## A complete repository example
+
+<Prerequisites>
+
+- Git on `PATH`.
+
+</Prerequisites>
+
+The <a href="/examples/services/git.fixture.yaml" download>git fixture</a> creates a README and configuration file, commits them, exports the repository directory, then verifies the initial commit count and file contents. No remote, credentials, or network connection is required.
+
+```bash
+./.bin/gavel fixtures outline docs/content/public/examples/services/git.fixture.yaml
+./.bin/gavel fixtures docs/content/public/examples/services/git.fixture.yaml
+```
+
+Expected results: `WORKSPACE` points to the disposable repository, the commit count is `1`, the README contains `fixture workspace`, and the working tree is clean. Cleanup removes the fixture's temporary repository.
+
+## Configuration
+
+| Setting | Meaning |
+| --- | --- |
+| `git.files` | Map of relative file paths to verbatim file content |
+| `git.commit` | Whether to record files in an initial commit; defaults to false |
+| `export` | Environment mappings such as `WORKSPACE: "{{.outputs.dir}}"` |
+
+Paths must stay inside the repository. Absolute paths and parent-directory traversal fail. A requested commit needs at least one file. File content is not templated, so source code containing `$`, `{{...}}`, or shell expressions is preserved.
+
+## Use the seeded repository
+
+Outputs include `dir`, `ready`, and `type: git`; a committed seed also includes `commit`. Git has no URL or port, so it does not create the default URL/port exports. Export the directory explicitly, then use it in command arguments or as a later service's `cwd`.
+
+The <a href="/examples/services/exec.fixture.yaml" download>exec example</a> demonstrates a second entry consuming `{{.services.content.dir}}` while the services step is still starting. A later step can use `{{.steps.resources.workspace.dir}}` or the exported `WORKSPACE` variable.
+
+## Reproducibility and troubleshooting
+
+The seed uses an isolated fixture commit identity and disables hooks, commit signing, system git configuration, and interactive credential prompts. It does not need your personal git identity. If a seed fails, check the relative file paths and whether Git is available.
+
+A seeded repository is different from `setup.checkout`: use a seed for a small, explicit test workspace and checkout/worktree setup for an existing project. Repository contents survive until the fixture finishes. Declare consumers after the git entry so their services stop before fixture temporary files are removed.

@@ -51,6 +51,13 @@ func projectGitOpenAPIPaths() map[string]any {
 		"/api/projects/{name}/branch/pr": map[string]any{
 			"post": projectLifecycleOp("projects_branch_pr", "Open a pull request carrying a branch's commits", "200", "ProjectBranchPRResponse", jsonRequestBody("ProjectBranchPRRequest")),
 		},
+		"/api/projects/{name}/branch/rebase": map[string]any{
+			"get":  projectLifecycleOp("projects_branch_rebase_context", "Get rebase targets and a worktree's recoverable operation", "200", "ProjectRebaseContext", map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam())}),
+			"post": projectLifecycleOp("projects_branch_rebase", "Rebase a checked-out branch and restore its saved local edits", "200", "ProjectRebaseOperation", jsonRequestBody("ProjectRebaseRequest")),
+		},
+		"/api/projects/{name}/branch/rebase/abort": map[string]any{
+			"post": projectLifecycleOp("projects_branch_rebase_abort", "Abort an owned rebase and restore its saved local edits", "200", "ProjectRebaseOperation", jsonRequestBody("ProjectRebaseRequest")),
+		},
 		"/api/git/stream": map[string]any{"get": map[string]any{
 			"operationId": "git_stream",
 			"summary":     "Stream {project: generation} for every tracked project whenever a repository's git state changes",
@@ -95,18 +102,23 @@ func projectGitOpenAPISchemas() map[string]any {
 		"worktree": typed("string"), "diff": diffStat, "lastCommitAt": dateTime,
 	})
 	summary := objectSchema([]string{"name", "base", "adds", "dels", "worktrees", "branches", "uncommittedBranches"}, map[string]any{
-		"name": typed("string"), "base": typed("string"), "adds": typed("integer"), "dels": typed("integer"),
+		"name": typed("string"), "base": typed("string"),
+		"adds":      map[string]any{"type": "integer", "description": "Lines added by the primary checkout's uncommitted changes"},
+		"dels":      map[string]any{"type": "integer", "description": "Lines removed by the primary checkout's uncommitted changes"},
 		"worktrees": map[string]any{"type": "integer", "description": "Linked worktrees, the primary checkout excluded"},
 		"branches":  typed("integer"), "error": typed("string"),
 		"uncommittedBranches": map[string]any{"type": "integer", "minimum": 0, "description": "Distinct named branches with uncommitted files in live worktrees, including the primary checkout and base branch; detached and prunable worktrees excluded"},
 	})
-	return map[string]any{
+	schemas := map[string]any{
 		"ProjectGitSummaries": map[string]any{"type": "array", "items": summary},
-		"ProjectGit": objectSchema([]string{"base", "baseSha", "currentBranch", "baseCheckedOut", "worktrees", "branches", "computedAt", "generation"}, map[string]any{
+		"ProjectGit": objectSchema([]string{"base", "baseSha", "currentBranch", "baseCheckedOut", "upstreamAhead", "upstreamBehind", "worktrees", "branches", "computedAt", "generation"}, map[string]any{
 			"base": typed("string"), "baseSha": typed("string"), "currentBranch": typed("string"), "baseCheckedOut": typed("boolean"),
-			"worktrees":  map[string]any{"type": "array", "items": worktree},
-			"branches":   map[string]any{"type": "array", "items": branch},
-			"computedAt": dateTime, "generation": typed("integer"), "error": typed("string"),
+			"upstream":       map[string]any{"type": "string", "description": "Ref the primary checkout tracks (e.g. origin/main); absent when it tracks none"},
+			"upstreamAhead":  map[string]any{"type": "integer", "description": "Primary checkout commits not in its upstream"},
+			"upstreamBehind": map[string]any{"type": "integer", "description": "Upstream commits not in the primary checkout"},
+			"worktrees":      map[string]any{"type": "array", "items": worktree},
+			"branches":       map[string]any{"type": "array", "items": branch},
+			"computedAt":     dateTime, "generation": typed("integer"), "error": typed("string"),
 		}),
 		"ProjectGitGenerations": map[string]any{"type": "object", "additionalProperties": typed("integer")},
 		"GitFocusRequest": objectSchema([]string{"project"}, map[string]any{
@@ -137,4 +149,8 @@ func projectGitOpenAPISchemas() map[string]any {
 			"number": typed("integer"), "url": typed("string"), "topicBranch": typed("string"),
 		}),
 	}
+	for name, schema := range projectRebaseOpenAPISchemas() {
+		schemas[name] = schema
+	}
+	return schemas
 }

@@ -4,6 +4,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/exec"
+	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
@@ -43,6 +44,7 @@ type BuildTagsMapper interface {
 
 type Package string
 type TestRun struct {
+	Slots      slots.Limits
 	Framework  parsers.Framework
 	Package    Package
 	Parser     parsers.ResultParser

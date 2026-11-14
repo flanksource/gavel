@@ -132,6 +132,20 @@ var _ = Describe("ListBranches", func() {
 			{Name: "solo", Head: r.soloHead, LastCommitAt: committedAt(r.root, r.soloHead)},
 		}))
 	})
+
+	It("names the upstream ref of a branch that tracks one", func() {
+		r := newWorktreeRepo()
+		runGit(r.root, "branch", "--set-upstream-to=solo", "merged")
+
+		branches, err := gavelgit.ListBranches(r.root)
+
+		Expect(err).NotTo(HaveOccurred())
+		upstreams := map[string]string{}
+		for _, branch := range branches {
+			upstreams[branch.Name] = branch.Upstream
+		}
+		Expect(upstreams).To(Equal(map[string]string{"feature": "", "main": "", "merged": "refs/heads/solo", "solo": ""}))
+	})
 })
 
 var _ = Describe("CompareRange", func() {

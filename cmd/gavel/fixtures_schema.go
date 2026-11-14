@@ -8,8 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	flagmeta "github.com/flanksource/clicky/flags"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -96,8 +98,8 @@ func fixturesSchemaDocument() (map[string]any, error) {
 			"yes":                   true,
 		},
 	})
-	addStepDisplaySchema(testSchema)
-	addStepDisplaySchema(lintSchema)
+	addRunnerStepSchema(testSchema)
+	addRunnerStepSchema(lintSchema)
 	document, err := fixtureDocumentSchema(testSchema, lintSchema)
 	if err != nil {
 		return nil, err
@@ -179,11 +181,18 @@ func commandSchema(cmd *cobra.Command, positionalName string, opts commandSchema
 		order = append(order, positionalName)
 	}
 
-	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+	flags := pflag.NewFlagSet(cmd.Name(), pflag.ContinueOnError)
+	flags.AddFlagSet(cmd.Flags())
+	for parent := cmd; parent != nil; parent = parent.Parent() {
+		flags.AddFlagSet(parent.PersistentFlags())
+	}
+	flags.VisitAll(func(flag *pflag.Flag) {
 		if flag.Hidden || opts.Exclude[flag.Name] {
 			return
 		}
-		properties[flag.Name] = propertyFromFlag(flag)
+		prop := propertyFromFlag(flag)
+		prop["x-cli-group"] = commandFlagCategory(cmd, flag)
+		properties[flag.Name] = prop
 		order = append(order, flag.Name)
 	})
 
@@ -197,7 +206,19 @@ func commandSchema(cmd *cobra.Command, positionalName string, opts commandSchema
 	}
 }
 
-func addStepDisplaySchema(schema fixtureJSONSchema) {
+func commandFlagCategory(cmd *cobra.Command, flag *pflag.Flag) string {
+	if category := flagmeta.Category(flag); category != "" {
+		return category
+	}
+	for parent := cmd; parent != nil; parent = parent.Parent() {
+		if parent.PersistentFlags().Lookup(flag.Name) == flag {
+			return "Global flags"
+		}
+	}
+	return "Command flags"
+}
+
+func addRunnerStepSchema(schema fixtureJSONSchema) {
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		return
@@ -213,8 +234,12 @@ func addStepDisplaySchema(schema fixtureJSONSchema) {
 			"fixtures --help",
 		),
 	}
+	// Runner steps decode onto testrunner.RunOptions / lint.Options, whose
+	// `runtime` process options are YAML-only (no CLI flag), so commandSchema
+	// never sees them.
+	properties["runtime"] = verify.RuntimeSchema()
 	if order, ok := schema["x-order"].([]string); ok {
-		schema["x-order"] = append(order, "show-failed")
+		schema["x-order"] = append(order, "show-failed", "runtime")
 	}
 }
 
@@ -268,7 +293,7 @@ func applyKnownFlagHints(name string, prop fixtureSchemaProperty) {
 		prop["x-array-display"] = "filter-pills"
 		prop["items"] = fixtureSchemaProperty{
 			"type": "string",
-			"enum": frameworkSchemaValues(),
+			"enum": parsers.FrameworkNames(),
 		}
 		prop["description"] = "Restrict test discovery to selected frameworks. Leave empty to enable every detected framework."
 		prop["x-help"] = fixtureHelpBlock("Common test keys", "Restrict to jest, vitest, playwright, go test, or ginkgo.", "fixtures --help")
@@ -304,14 +329,6 @@ func applyKnownFlagHints(name string, prop fixtureSchemaProperty) {
 		prop["examples"] = []any{"30s", "2m", "5m"}
 		prop["x-help"] = fixtureHelpBlock("Execution", "Duration string for per-step or whole-run deadlines.", "fixtures --help")
 	}
-}
-
-func frameworkSchemaValues() []string {
-	values := make([]string, 0, len(parsers.AllFrameworks))
-	for _, framework := range parsers.AllFrameworks {
-		values = append(values, string(framework))
-	}
-	return values
 }
 
 func linterSchemaValues() []string {

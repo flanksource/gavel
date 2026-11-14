@@ -59,14 +59,14 @@ describe('ProjectGitBadges', () => {
     render(<ProjectGitBadges state={{ status: 'ready', summary }} />);
 
     expect(screen.getByText('+120').className).toContain('text-green');
-    expect(screen.getByText('+120').getAttribute('title')).toBe('120 lines added vs main');
+    expect(screen.getByText('+120').getAttribute('title')).toBe('120 lines added by uncommitted changes in the checkout');
     expect(screen.getByText('−34').className).toContain('text-red');
-    expect(screen.getByText('−34').getAttribute('title')).toBe('34 lines removed vs main');
+    expect(screen.getByText('−34').getAttribute('title')).toBe('34 lines removed by uncommitted changes in the checkout');
     expect(screen.getByLabelText('3 linked worktrees').getAttribute('title')).toBe('3 linked worktrees');
     expect(screen.getByLabelText('2 unmerged branches').getAttribute('title')).toBe('2 branches with commits not in main');
   });
 
-  it('omits the line numbers when there is no unmerged work but keeps the counts', () => {
+  it('omits the line numbers when the checkout has no uncommitted lines but keeps the counts', () => {
     render(<ProjectGitBadges state={{ status: 'ready', summary: { ...summary, adds: 0, dels: 0 } }} />);
 
     expect(screen.queryByText(/^\+/)).toBeNull();

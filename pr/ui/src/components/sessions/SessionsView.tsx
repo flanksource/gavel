@@ -5,6 +5,7 @@ import type { AgentSessionsResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { SessionDetail, type SessionDetailProps } from './SessionDetail';
 import { SessionList } from './SessionList';
+import { sessionFamilies } from './sessionView';
 import { captainSessionUrl } from '../todos/TodoSessionDetail';
 
 export interface SessionsQueryView {
@@ -27,13 +28,10 @@ export function SessionsSidebar({ query, selectedId, scopeProject, onSelect }: {
   scopeProject: string;
   onSelect: (id: string) => void;
 }) {
-  const sessions = useMemo(
-    () => (query.data?.sessions ?? []).filter(session => !scopeProject || session.project === scopeProject),
+  // A subagent stays with its parent, so the project scope applies to the family's root.
+  const families = useMemo(
+    () => sessionFamilies(query.data?.sessions ?? []).filter(family => !scopeProject || family.session.project === scopeProject),
     [query.data, scopeProject],
-  );
-  const projects = useMemo(
-    () => [...new Set(sessions.map(session => session.project).filter((name): name is string => !!name))].sort(),
-    [sessions],
   );
   if (query.error && !query.data) {
     return <div role="alert" className="p-3 text-xs text-red-600 whitespace-pre-wrap">{query.error.message}</div>;
@@ -45,7 +43,7 @@ export function SessionsSidebar({ query, selectedId, scopeProject, onSelect }: {
     <div className="flex h-full min-h-0 flex-col">
       <ProjectErrors errors={query.data.errors} />
       <div className="min-h-0 flex-1">
-        <SessionList sessions={sessions} projects={projects} selectedId={selectedId} onSelect={onSelect} />
+        <SessionList families={families} selectedId={selectedId} onSelect={onSelect} />
       </div>
     </div>
   );

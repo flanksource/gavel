@@ -173,7 +173,7 @@ func RunGitIgnoreCheck(ctx context.Context, p CheckParams) (CheckOutcome, error)
 	if plan.cancelled {
 		return CheckOutcome{Cancelled: true}, nil
 	}
-	return applyPlan(p, plan)
+	return applyPlan(ctx, p, plan)
 }
 
 // iterateDecisions walks the remaining violations one decision at a time and,
@@ -361,7 +361,7 @@ func formatViolationsError(violations []Violation) error {
 	return errors.New(strings.Join(lines, "\n"))
 }
 
-func applyPlan(p CheckParams, plan decisionPlan) (CheckOutcome, error) {
+func applyPlan(ctx context.Context, p CheckParams, plan decisionPlan) (CheckOutcome, error) {
 	var outcome CheckOutcome
 
 	gitRoot := p.GitRoot
@@ -374,7 +374,7 @@ func applyPlan(p CheckParams, plan decisionPlan) (CheckOutcome, error) {
 		if err != nil {
 			return CheckOutcome{}, fmt.Errorf("append .gitignore: %w", err)
 		}
-		if err := resetFiles(p.WorkDir, plan.unstage); err != nil {
+		if err := resetFiles(ctx, p.WorkDir, plan.unstage); err != nil {
 			return CheckOutcome{}, fmt.Errorf("unstage: %w", err)
 		}
 		outcome.Unstaged = plan.unstage

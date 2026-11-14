@@ -147,7 +147,7 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 // pointer file is a few hundred bytes, but the run it names carries the whole
 // test tree and lint violation set, and there is one per project per request.
 func collectTestRuns(ctx context.Context) ([]projectRuns, error) {
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := visibleProjects(ctx, nil)
 	if err != nil {
 		return nil, err
 	}

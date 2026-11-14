@@ -10,8 +10,9 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -56,7 +57,7 @@ func (p *stubRunTodoProvider) Get(_ context.Context, ref string) (*types.TODO, e
 
 // stubTodoRunSeams replaces run.Resolve and run.Start with recorders returning
 // resolution, so a dispatch can be asserted without standing up an agent.
-func stubTodoRunSeams(t testing.TB, resolution *lifecycle.Resolution, step, reason string) *[]run.Request {
+func stubTodoRunSeams(t testing.TB, resolution *lifecycle1.Resolution, step, reason string) *[]run.Request {
 	t.Helper()
 	var started []run.Request
 	oldResolve, oldStart := run.Resolve, run.Start
@@ -207,7 +208,7 @@ func TestRunTodosRunStartsOneRunPerTodoNamingTheStep(t *testing.T) {
 	workingDirFor(t, isolatedTodosRun(t, ""))
 	first, second := runTodo("aaaaaaaa-0000-4000-8000-000000000001", "First"), runTodo("aaaaaaaa-0000-4000-8000-000000000002", "Second")
 	stubTodoBacklog(t, first, second)
-	started := stubTodoRunSeams(t, &lifecycle.Resolution{Prompt: "prompt body"}, "plan", "applies: subject.status == 'pending'")
+	started := stubTodoRunSeams(t, &lifecycle1.Resolution{Prompt: "prompt body"}, "plan", "applies: subject.status == 'pending'")
 	out := captureStdout(t, func() {
 		if err := runTodosRun(TodosRunOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{first.ID, second.ID}}, Step: "plan", Resume: true, Commit: true}); err != nil {
 			t.Fatalf("runTodosRun: %v", err)
@@ -221,7 +222,7 @@ func TestRunTodosRunStartsOneRunPerTodoNamingTheStep(t *testing.T) {
 		if req.Options.Step != "plan" {
 			t.Errorf("run %d step = %q, want plan", i, req.Options.Step)
 		}
-		if req.Options.Host != lifecycle.HostCLI {
+		if req.Options.Host != lifecycle1.HostCLI {
 			t.Errorf("run %d host = %q, want the CLI host", i, req.Options.Host)
 		}
 		if !req.Options.Resume {
@@ -249,7 +250,7 @@ func TestRunTodosRunStartsOneRunPerTodoNamingTheStep(t *testing.T) {
 func TestRunTodosRunDryRunPrintsPromptAndTraceWithoutDispatching(t *testing.T) {
 	workingDirFor(t, isolatedTodosRun(t, ""))
 	stubTodoBacklog(t, runTodo("aaaaaaaa-0000-4000-8000-000000000003", "Previewable"))
-	resolution := &lifecycle.Resolution{
+	resolution := &lifecycle1.Resolution{
 		Prompt: "IMPLEMENT-THIS-TODO",
 		Spec:   api.Spec{Model: api.Model{Name: "claude-sonnet-5"}, Budget: api.Budget{MaxTurns: 9}},
 		Trace: []api.SpecLayer{
@@ -287,7 +288,7 @@ func TestRunTodosRunDryRunPrintsPromptAndTraceWithoutDispatching(t *testing.T) {
 func TestRunTodosRunForceDispatchesConcurrently(t *testing.T) {
 	workingDirFor(t, isolatedTodosRun(t, ""))
 	stubTodoBacklog(t, runTodo("aaaaaaaa-0000-4000-8000-000000000004", "Forced"))
-	started := stubTodoRunSeams(t, &lifecycle.Resolution{}, "run", "always applies (no `when` predicate)")
+	started := stubTodoRunSeams(t, &lifecycle1.Resolution{}, "run", "always applies (no `when` predicate)")
 	captureStdout(t, func() {
 		if err := runTodosRun(TodosRunOptions{TodoTargetOptions: TodoTargetOptions{IDs: []string{"aaaaaaaa-0000-4000-8000-000000000004"}}, Force: true, Commit: true}); err != nil {
 			t.Fatalf("runTodosRun --force: %v", err)
@@ -305,7 +306,7 @@ func TestRunTodosRunForceDispatchesConcurrently(t *testing.T) {
 func TestAssertRunCommitPolicyRefusesASilentlyCommittingRun(t *testing.T) {
 	committing := &run.Prepared{
 		Step: lifecycle.Step{Name: "run"},
-		Resolution: &lifecycle.Resolution{Spec: api.Spec{Workflow: &api.Workflow{
+		Resolution: &lifecycle1.Resolution{Spec: api.Spec{Workflow: &api.Workflow{
 			Commits: []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesFull}},
 		}}},
 	}
@@ -321,7 +322,7 @@ func TestAssertRunCommitPolicyRefusesASilentlyCommittingRun(t *testing.T) {
 
 	if err := assertRunCommitPolicy(&run.Prepared{
 		Step:       lifecycle.Step{Name: "plan"},
-		Resolution: &lifecycle.Resolution{},
+		Resolution: &lifecycle1.Resolution{},
 	}, false); err != nil {
 		t.Fatalf("--commit=false rejected a run that commits nothing: %v", err)
 	}

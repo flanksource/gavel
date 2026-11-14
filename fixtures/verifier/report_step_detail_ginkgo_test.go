@@ -183,7 +183,7 @@ var _ = Describe("verifier.Report typed step detail", func() {
 		Expect(scrubVolatile(string(raw))).To(MatchJSON(`{
 			"step": {"id": "stack", "kind": "services"},
 			"outputs": {"services": {"api": ` + entry + `}, "api": ` + entry + `, "ready": true},
-			"exports": {}, "background": false
+			"exports": {}, "background": false, "cleanup": true
 		}`))
 	})
 })

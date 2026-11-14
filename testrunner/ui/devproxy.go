@@ -33,7 +33,7 @@ func (s *Server) serveDev(w http.ResponseWriter, r *http.Request, proxy http.Han
 		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("no API route for %s %s", r.Method, r.URL.Path)}) //nolint:errcheck
 		return
 	}
-	if req, ok := parseRouteRequest(r); ok && req.IsExport && req.Tab != viewTabProcesses {
+	if req, ok := parseRouteRequest(r); ok && req.IsExport && exportableTab(req.Tab) {
 		s.handleExport(w, r, req)
 		return
 	}

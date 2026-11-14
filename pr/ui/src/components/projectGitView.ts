@@ -13,12 +13,15 @@ function basename(path: string): string {
 /**
  * What an entry holds beyond its base: commits ahead, uncommitted files, and
  * the line counts — of the uncommitted files for a checkout, of the commits
- * for a branch. lines is absent when there is nothing to count.
+ * for a branch. lines is absent when there is nothing to count. upstream is
+ * the main checkout's commits ahead of and behind the ref it tracks, absent
+ * for every other entry and when it tracks none.
  */
 export interface ProjectRefStats {
   commits: number;
   uncommitted: number;
   lines?: { adds: number; dels: number };
+  upstream?: { name: string; ahead: number; behind: number };
 }
 
 function worktreeStats(changes: GitWorktreeChanges, commits: number): ProjectRefStats {
@@ -60,13 +63,14 @@ function worktreeEntry(worktree: GitWorktree): ProjectRefEntry {
  */
 export function projectRefEntries(git: ProjectGit): ProjectRefEntry[] {
   const main = git.worktrees.find(worktree => worktree.primary);
+  const mainStats = main ? worktreeStats(main.changes, 0) : { commits: 0, uncommitted: 0 };
   return [
     {
       value: '',
       group: 'Checkout',
       label: git.currentBranch || '(detached)',
       title: main?.path ?? '',
-      stats: main ? worktreeStats(main.changes, 0) : { commits: 0, uncommitted: 0 },
+      stats: git.upstream ? { ...mainStats, upstream: { name: git.upstream, ahead: git.upstreamAhead, behind: git.upstreamBehind } } : mainStats,
       lastCommitAt: main?.lastCommitAt ?? '',
       touchedAt: main?.touchedAt,
     },

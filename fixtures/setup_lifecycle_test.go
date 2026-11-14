@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	flanksourceContext "github.com/flanksource/commons/context"
+	"github.com/flanksource/gavel/sdk/status"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -55,7 +56,7 @@ func seedRepo(t *testing.T) string {
 }
 
 // newRunnerForFixture parses a markdown body written into dir and returns a
-// Runner holding its tree, ready for prepareSetups.
+// Runner holding its tree, ready for setups.prepare.
 func newRunnerForFixture(t *testing.T, dir, body string) *Runner {
 	t.Helper()
 	path := filepath.Join(dir, "lifecycle.fixture.md")
@@ -102,11 +103,11 @@ args: ["-c", "true"]
 	// untracked entry is part of the baseline rather than a false positive.
 	before := git(t, repo, "status", "--porcelain")
 
-	require.NoError(t, runner.prepareSetups(testContext()))
-	require.Len(t, runner.setups, 1)
+	require.NoError(t, runner.setups.prepare(testContext(), runner.tree.Children))
+	require.Len(t, runner.setups.prepared, 1)
 
 	var prepared *PreparedSetup
-	for _, ps := range runner.setups {
+	for _, ps := range runner.setups.prepared {
 		prepared = ps
 	}
 	require.NotEmpty(t, prepared.Cwd)
@@ -128,7 +129,7 @@ args: ["-c", "true"]
 		assert.Equalf(t, want, string(content), "%s has the wrong content in the worktree", name)
 	}
 
-	runner.cleanupSetups()
+	runner.setups.cleanup()
 	assert.NoDirExists(t, prepared.Cwd, "worktree survived cleanup")
 	assert.Equal(t, before, git(t, repo, "status", "--porcelain"),
 		"preparing a worktree mutated the source repository")
@@ -159,11 +160,11 @@ args: ["-c", "true"]
 `+"```bash\ntrue\n```"+`
 `)
 
-	require.NoError(t, runner.prepareSetups(testContext()))
-	defer runner.cleanupSetups()
+	require.NoError(t, runner.setups.prepare(testContext(), runner.tree.Children))
+	defer runner.setups.cleanup()
 
 	var prepared *PreparedSetup
-	for _, ps := range runner.setups {
+	for _, ps := range runner.setups.prepared {
 		prepared = ps
 	}
 	require.NotNil(t, prepared)
@@ -195,11 +196,11 @@ args: ["-c", "true"]
 `+"```bash\ntrue\n```"+`
 `)
 
-	require.NoError(t, runner.prepareSetups(testContext()))
-	defer runner.cleanupSetups()
+	require.NoError(t, runner.setups.prepare(testContext(), runner.tree.Children))
+	defer runner.setups.cleanup()
 
 	var prepared *PreparedSetup
-	for _, ps := range runner.setups {
+	for _, ps := range runner.setups.prepared {
 		prepared = ps
 	}
 	require.NotNil(t, prepared)
@@ -228,7 +229,7 @@ args: ["-c", "true"]
 `+"```bash\ntrue\n```"+`
 `)
 
-	err := runner.prepareSetups(testContext())
+	err := runner.setups.prepare(testContext(), runner.tree.Children)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "needs a database")
 	assert.Contains(t, err.Error(), "lifecycle.fixture.md", "the error does not name the offending file")
@@ -277,8 +278,8 @@ args: ["-c", "true"]
 `)
 
 	ctx := testContext()
-	require.NoError(t, runner.prepareSetups(ctx))
-	defer runner.cleanupSetups()
+	require.NoError(t, runner.setups.prepare(ctx, runner.tree.Children))
+	defer runner.setups.cleanup()
 
 	buildCmd, buildSetup := runner.getBuildCommand()
 	require.Equal(t, "pwd > built-in.txt", buildCmd)
@@ -310,8 +311,8 @@ args: ["-c", "true"]
 `+"```bash\ntrue\n```"+`
 `)
 
-	require.NoError(t, runner.prepareSetups(testContext()))
-	assert.Empty(t, runner.setups)
+	require.NoError(t, runner.setups.prepare(testContext(), runner.tree.Children))
+	assert.Empty(t, runner.setups.prepared)
 
 	buildCmd, buildSetup := runner.getBuildCommand()
 	assert.Empty(t, buildCmd)
@@ -329,7 +330,7 @@ func TestSetupBaseDirIsStablePerFileAndDistinctBetweenFiles(t *testing.T) {
 	assert.Equal(t, first, again, "the same fixture file got a different base dir on a second run")
 	assert.NotEqual(t, first, second, "two fixture files share a base dir and would fight over one worktree")
 
-	cache, err := os.UserCacheDir()
+	cache, err := status.CacheDir()
 	require.NoError(t, err)
-	assert.True(t, strings.HasPrefix(first, filepath.Join(cache, "gavel", "fixtures")), "base dir escaped the user cache: %s", first)
+	assert.True(t, strings.HasPrefix(first, filepath.Join(cache, "fixtures")), "base dir escaped the user cache: %s", first)
 }

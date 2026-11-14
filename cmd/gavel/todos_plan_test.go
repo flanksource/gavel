@@ -6,8 +6,9 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -199,7 +200,10 @@ func TestTodosPlanReviseResumesOnThePlanRunRuntime(t *testing.T) {
 	oldResolve, oldStart := run.Resolve, run.Start
 	run.Resolve = func(_ context.Context, req run.Request) (*run.Prepared, error) {
 		got = req
-		return &run.Prepared{Step: lifecycle.Step{Name: req.Options.Step}, Resolution: &lifecycle.Resolution{}}, nil
+		// The fold of the inherited codex runtime, which the revision checks can
+		// continue the codex session before resuming it.
+		resolved := api.Spec{Model: api.Model{Name: "gpt-5.6-sol", Mode: api.ModeAgent, Provider: api.OpenAI}}
+		return &run.Prepared{Step: lifecycle.Step{Name: req.Options.Step}, Resolution: &lifecycle1.Resolution{Spec: resolved}}, nil
 	}
 	run.Start = func(run.Request) (run.StartResult, error) { return run.StartResult{Status: "started"}, nil }
 	t.Cleanup(func() { run.Resolve, run.Start = oldResolve, oldStart })

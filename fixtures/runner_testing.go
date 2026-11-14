@@ -103,11 +103,7 @@ func (r *Runner) RegisterGinkgoSpecs() {
 				ginkgo.Fail(err.Error(), 1)
 			}
 			for _, file := range scopes {
-				var setup *PreparedSetup
-				if file.file.Origin != nil {
-					setup = r.setups[file.file.Origin.File]
-				}
-				file.scope = NewStepScope(scopeSeed(setup, firstFrontMatter([]*FixtureNode{file.file}), r.fileTraceEnv(file.file)))
+				file.scope = NewStepScope(scopeSeed(r.setups.get(nodeFile(file.file)), firstFrontMatter([]*FixtureNode{file.file}), r.fileTraceEnv(file.file)))
 			}
 		})
 		ginkgo.AfterAll(func() {
@@ -124,7 +120,7 @@ func (r *Runner) RegisterGinkgoSpecs() {
 					}
 				}
 			}
-			teardownErr = errors.Join(teardownErr, r.closeTraces(), r.stopDaemon(), r.cleanupSetups())
+			teardownErr = errors.Join(teardownErr, r.closeTraces(), r.stopDaemon(), r.setups.cleanup())
 			if teardownErr != nil {
 				ginkgo.Fail(teardownErr.Error(), 1)
 			}
@@ -182,7 +178,7 @@ func (r *Runner) setupGinkgoRun() error {
 	ctx := flanksourceContext.NewContext(context.Background())
 	// Same ordering as executeFixtures: setup before build, so a build that a
 	// setup relocated does not build the tree the tests aren't running in.
-	if err := r.prepareSetups(ctx); err != nil {
+	if err := r.setups.prepare(ctx, r.tree.Children); err != nil {
 		return err
 	}
 

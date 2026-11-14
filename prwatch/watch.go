@@ -18,6 +18,8 @@ type WatchOptions struct {
 	FetchSnapshot func(context.Context, WatchOptions) (*PRWatchResult, error)
 	github.Options
 	PRNumber int
+	RunID    int64
+	JobID    int64
 	Interval time.Duration
 	Follow   bool
 	// FailFast stops --follow at the first definitive failure instead of waiting
@@ -33,6 +35,10 @@ type WatchOptions struct {
 }
 
 func Run(opts WatchOptions) (*PRWatchResult, int) {
+	if opts.RunID != 0 && (opts.PRNumber != 0 || opts.WholePR || len(opts.Comments) > 0) {
+		fmt.Fprintln(os.Stderr, "Error: an Actions run target cannot be combined with a PR number, --whole-pr or --comments")
+		return nil, 1
+	}
 	if opts.WholePR && (len(opts.Actions) > 0 || len(opts.Comments) > 0) {
 		fmt.Fprintln(os.Stderr, "Error: --whole-pr cannot be scoped to selected checks or comments")
 		return nil, 1
@@ -43,6 +49,9 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 	fetch := opts.FetchSnapshot
 	if fetch == nil {
 		fetch = fetchGitHubSnapshot
+		if opts.RunID != 0 {
+			fetch = fetchActionsSnapshot
+		}
 	}
 	logger.Debugf("starting watch (pr=%d, interval=%s, follow=%t)", opts.PRNumber, opts.Interval, opts.Follow)
 
@@ -57,7 +66,7 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		}
 		result, err := fetch(opts.Context, opts)
 		if err != nil {
-			if opts.WholePR || !opts.Follow || opts.FetchSnapshot != nil {
+			if opts.WholePR || !opts.Follow || opts.FetchSnapshot != nil || opts.RunID != 0 {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				return nil, 1
 			}
@@ -68,11 +77,15 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			continue
 		}
 
-		if result == nil || result.PR == nil {
-			fmt.Fprintln(os.Stderr, "Error: PR provider returned no PR snapshot")
+		if result == nil || result.PR == nil && len(result.Runs) == 0 {
+			fmt.Fprintln(os.Stderr, "Error: provider returned no PR or Actions snapshot")
 			return nil, 1
 		}
 		pr, runs := result.PR, result.Runs
+		if opts.WholePR && pr == nil {
+			fmt.Fprintln(os.Stderr, "Error: --whole-pr requires a PR snapshot")
+			return nil, 1
+		}
 		unresolved := result.UnresolvedComments()
 		if opts.WholePR {
 			unresolved = 0
@@ -82,7 +95,7 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 				}
 			}
 		}
-		if opts.ExpectedHead != "" && pr.HeadRefOID != opts.ExpectedHead {
+		if opts.ExpectedHead != "" && pr != nil && pr.HeadRefOID != opts.ExpectedHead {
 			fmt.Fprintf(os.Stderr, "Error: PR head %s does not match expected pushed head %s\n", pr.HeadRefOID, opts.ExpectedHead)
 			return result, 1
 		}
@@ -92,7 +105,10 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		}
 		filters := newResultFilters(opts.Comments, opts.Actions)
 
-		preChecks := len(pr.StatusCheckRollup)
+		preChecks := 0
+		if pr != nil {
+			preChecks = len(pr.StatusCheckRollup)
+		}
 		preRuns := len(runs)
 		preComments := len(result.Comments)
 		var selectorOptions []string
@@ -115,8 +131,8 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		// to a selector that pruned a non-empty set down to nothing, so a PR
 		// whose checks or comments have not appeared yet still keeps polling.
 		if filters.noActionMatch(preChecks, preRuns, result) {
-			fmt.Fprintf(os.Stderr, "Error: --actions %s matched no checks or workflows on PR #%d.\nAvailable selectors: %s\n",
-				strings.Join(opts.Actions, ","), opts.PRNumber, strings.Join(selectorOptions, ", "))
+			fmt.Fprintf(os.Stderr, "Error: --actions %s matched no checks or workflows.\nAvailable selectors: %s\n",
+				strings.Join(opts.Actions, ","), strings.Join(selectorOptions, ", "))
 			return nil, 1
 		}
 		if filters.noCommentMatch(preComments, result) {
@@ -248,6 +264,13 @@ func followDone(filters resultFilters, result *PRWatchResult, failFast bool) boo
 func statusExitCode(result *PRWatchResult) int {
 	if result == nil {
 		return 0
+	}
+	if result.PR == nil {
+		for _, run := range result.Runs {
+			if run != nil && (actionsConclusionFailed(run.Conclusion) || strings.EqualFold(run.Conclusion, "CANCELLED") || model.RunNeedsJobLogs(run)) {
+				return 1
+			}
+		}
 	}
 	if result.PR != nil && result.PR.Provider == "azuredevops" {
 		if result.PR.State == "OPEN" && (result.PR.MergeReadiness == nil || result.PR.MergeReadiness.State != "ready") {

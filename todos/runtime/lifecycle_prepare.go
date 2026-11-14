@@ -57,6 +57,9 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		if err != nil {
 			return todos.RunAdmission{}, err
 		}
+		if err := checkResumeProvider(previousRun, preparation.Requested); err != nil {
+			return todos.RunAdmission{}, err
+		}
 		if !terminalPromptRun(previousRun.State) {
 			return p.resumeInPlace(ctx, todo, launch, previousRun)
 		}
@@ -65,6 +68,22 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		placement = promptrun.Placement{SessionID: previousRun.SessionID}
 	}
 	return p.admitLaunch(ctx, launch, placement)
+}
+
+// checkResumeProvider refuses a resume whose run resolved a provider family
+// other than the one holding the conversation it continues: the previous
+// provider session id is meaningless to any other family's agent.
+func checkResumeProvider(previousRun *captaindb.PromptRun, requested captaindb.PromptRunRuntimeSelection) error {
+	prior := previousRun.Runtime.Resolved
+	same, err := todos.SameProviderFamily(prior.Provider, requested.Provider)
+	if err != nil {
+		return fmt.Errorf("resume Captain prompt run %s: %w", previousRun.ID, err)
+	}
+	if !same {
+		return fmt.Errorf("%w: Captain prompt run %s ran %s/%s; a %s/%s run cannot resume it",
+			todos.ErrRunResumeProviderMismatch, previousRun.ID, prior.Provider, prior.Model, requested.Provider, requested.Model)
+	}
+	return nil
 }
 
 // planLaunch resolves the step and identity a dispatch runs under, settling an

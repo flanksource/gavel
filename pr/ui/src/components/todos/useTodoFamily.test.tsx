@@ -1,6 +1,7 @@
 import { renderHook } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import type { TodoItem, TodoListResponse } from '../../types';
+import type { SelectedTodo } from './todoSelection';
 import { useParentTitles, useTodoFamily } from './useTodoFamily';
 
 const DIR = '/repos/billing';
@@ -19,11 +20,11 @@ const byDir: Record<string, TodoListResponse> = {
   '/repos/other': { dir: '/repos/other', counts: {} as TodoListResponse['counts'], items: [todo('foreign')] },
 };
 
-type Listing = { listReady: boolean; error: string; errorsByDir: Record<string, { code: string; message: string }> };
-const loaded: Listing = { listReady: true, error: '', errorsByDir: {} };
+type Listing = { listReady: boolean; error: string };
+const loaded: Listing = { listReady: true, error: '' };
 
 function family(detail: TodoItem | null, { select = vi.fn(), listing = loaded, lists = byDir }: {
-  select?: ReturnType<typeof vi.fn>;
+  select?: Mock<(next: SelectedTodo | null) => void>;
   listing?: Listing;
   lists?: Record<string, TodoListResponse>;
 } = {}) {
@@ -72,35 +73,17 @@ describe('useTodoFamily', () => {
     const placeholder = { [DIR]: { dir: DIR, counts: {} as TodoListResponse['counts'], items: [] } };
 
     it('reports loading rather than an empty family', () => {
-      const { result } = family(parent, { listing: { listReady: false, error: '', errorsByDir: {} }, lists: placeholder });
+      const { result } = family(parent, { listing: { listReady: false, error: '' }, lists: placeholder });
 
       expect(result.current.familyStatus).toEqual({ state: 'loading' });
       expect(result.current.childTodos).toEqual([]);
     });
 
-    it('reports the batch failure when nothing ever arrived', () => {
-      const { result } = family(parent, { listing: { listReady: false, error: 'batch unreachable', errorsByDir: {} }, lists: placeholder });
+    it('reports the list failure when nothing ever arrived', () => {
+      const { result } = family(parent, { listing: { listReady: false, error: 'list unreachable' }, lists: placeholder });
 
-      expect(result.current.familyStatus).toEqual({ state: 'error', message: 'batch unreachable' });
+      expect(result.current.familyStatus).toEqual({ state: 'error', message: 'list unreachable' });
     });
-  });
-
-  it('reports the failure of this workspace\'s own list even though the batch answered', () => {
-    const listing: Listing = {
-      listReady: true,
-      error: 'db down',
-      errorsByDir: { [DIR]: { code: 'db', message: 'db down' }, '/repos/other': { code: 'x', message: 'elsewhere' } },
-    };
-    const { result } = family(parent, { listing });
-
-    expect(result.current.familyStatus).toEqual({ state: 'error', message: 'db down' });
-  });
-
-  it('ignores a failure in a different workspace', () => {
-    const listing: Listing = { listReady: true, error: 'elsewhere', errorsByDir: { '/repos/other': { code: 'x', message: 'elsewhere' } } };
-    const { result } = family(parent, { listing });
-
-    expect(result.current.familyStatus).toEqual({ state: 'ready' });
   });
 });
 

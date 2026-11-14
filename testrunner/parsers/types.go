@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -37,22 +38,40 @@ func (f Framework) String() string {
 // stable so help text and error messages read the same on every invocation.
 var AllFrameworks = []Framework{GoTest, Ginkgo, Jest, Vitest, Playwright}
 
+// frameworkNames maps every spelling ParseFramework accepts to its Framework.
+var frameworkNames = map[string]Framework{
+	"go test": GoTest, "go": GoTest, "gotest": GoTest, "go-test": GoTest, "go_test": GoTest,
+	"ginkgo":     Ginkgo,
+	"jest":       Jest,
+	"vitest":     Vitest,
+	"playwright": Playwright,
+}
+
+// FrameworkNames lists every spelling ParseFramework accepts, canonical names
+// first in AllFrameworks order, then the aliases sorted, so schemas can offer
+// exactly what the parser takes.
+func FrameworkNames() []string {
+	names := make([]string, 0, len(frameworkNames))
+	for _, framework := range AllFrameworks {
+		names = append(names, string(framework))
+	}
+	aliases := make([]string, 0, len(frameworkNames))
+	for name, framework := range frameworkNames {
+		if name != string(framework) {
+			aliases = append(aliases, name)
+		}
+	}
+	slices.Sort(aliases)
+	return append(names, aliases...)
+}
+
 // ParseFramework resolves a user-supplied name to a known Framework. It
 // accepts the canonical value ("go test", "ginkgo", ...) and the tolerant
 // forms users type at the CLI ("go", "gotest", "go-test"). Returns an error
 // listing known names when the input is unrecognized.
 func ParseFramework(name string) (Framework, error) {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "go", "gotest", "go-test", "go_test", "go test":
-		return GoTest, nil
-	case "ginkgo":
-		return Ginkgo, nil
-	case "jest":
-		return Jest, nil
-	case "vitest":
-		return Vitest, nil
-	case "playwright":
-		return Playwright, nil
+	if framework, ok := frameworkNames[strings.ToLower(strings.TrimSpace(name))]; ok {
+		return framework, nil
 	}
 	known := make([]string, len(AllFrameworks))
 	for i, f := range AllFrameworks {
@@ -77,7 +96,10 @@ type Test struct {
 	EndLine   int           `json:"end_line,omitempty"`
 	Framework Framework     `json:"framework,omitempty"`
 	Duration  time.Duration `json:"duration,omitempty"`
-	Skipped   bool          `json:"skipped,omitempty"`
+	// Started is when a still-running node began, so a UI can show live
+	// elapsed time without the payload carrying a clock-derived value.
+	Started *time.Time `json:"started,omitempty"`
+	Skipped bool       `json:"skipped,omitempty"`
 	// Aborted marks a test that never ran because the run stopped after an earlier failure — distinct from an intentional Skipped.
 	Aborted bool `json:"aborted,omitempty"`
 	Failed  bool `json:"failed,omitempty"`
@@ -94,6 +116,7 @@ type Test struct {
 	// terminal Passed/Failed/Skipped transition; renderers show Running with
 	// an active spinner and Pending with a static hollow icon.
 	Running  bool   `json:"running,omitempty"`
+	Waiting  bool   `json:"waiting,omitempty"`   // A running node blocked on a person answering a form (a fixture form step); renderers show it amber
 	Cached   bool   `json:"cached,omitempty"`    // True when this result came from gavel's run-cache, not a fresh run
 	TimedOut bool   `json:"timed_out,omitempty"` // True when the test package subprocess was killed by the --test-timeout or --timeout supervisor
 	TaskID   string `json:"task_id,omitempty"`

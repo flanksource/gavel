@@ -1,4 +1,6 @@
 import type { PRItem, PRComment, CheckSummary, GavelResultsSummary, Project, ProcStatus, ProcProcess } from './types';
+import type { Filters } from './components/FilterBar';
+import { prAgeBucket } from './prAge';
 
 // prKey mirrors the Go-side poller.prKey() so the unread map keys match.
 export function prKey(pr: { repo: string; number: number }): string {
@@ -377,17 +379,14 @@ function checkCategories(pr: PRItem): string[] {
 
 export function filterPRs(
   prs: PRItem[],
-  stateFilter: FacetModes,
-  checksFilter: FacetModes,
-  repoFilter: FacetModes,
-  authorFilter: FacetModes,
-  viewer: string,
+  { filters, viewer, now = Date.now() }: { filters: Filters; viewer: string; now?: number },
 ): PRItem[] {
   return prs.filter(pr =>
-    passFacet(stateFilter, stateCategories(pr)) &&
-    passFacet(checksFilter, checkCategories(pr)) &&
-    passFacet(repoFilter, [pr.repo]) &&
-    passFacet(authorFilter, authorCategories(pr, viewer)),
+    passFacet(filters.state, stateCategories(pr)) &&
+    passFacet(filters.checks, checkCategories(pr)) &&
+    passFacet(filters.repos, [pr.repo]) &&
+    passFacet(filters.authors, authorCategories(pr, viewer)) &&
+    passFacet(filters.age, [prAgeBucket(pr.updatedAt, now)]),
   );
 }
 

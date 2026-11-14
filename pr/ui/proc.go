@@ -27,14 +27,15 @@ type projectInfo struct {
 	Name string `json:"name"`
 	// Short is the slug a TODO list is filtered by and names its project with,
 	// and the id the generated project entity addresses the project by.
-	Short       string      `json:"short"`
-	Dir         string      `json:"dir"`
-	Repos       []string    `json:"repos"`
-	HasProcfile bool        `json:"hasProcfile"`
-	TodoBackend string      `json:"todoBackend"`
-	TodoCounts  *todoCounts `json:"todoCounts,omitempty"`
-	Hidden      bool        `json:"hidden,omitempty"`
-	Error       string      `json:"error,omitempty"`
+	Short         string      `json:"short"`
+	Dir           string      `json:"dir"`
+	Repos         []string    `json:"repos"`
+	ReposInferred bool        `json:"reposInferred,omitempty"`
+	HasProcfile   bool        `json:"hasProcfile"`
+	TodoBackend   string      `json:"todoBackend"`
+	TodoCounts    *todoCounts `json:"todoCounts,omitempty"`
+	Hidden        bool        `json:"hidden,omitempty"`
+	Error         string      `json:"error,omitempty"`
 }
 
 // procStatus is the wire shape for /api/proc/status. hasProcfile=false is the
@@ -69,7 +70,7 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.lastProcPoll = time.Now()
 	s.mu.Unlock()
-	ps, err := LoadProjects(LoadProjectsOptions{})
+	ps, err := visibleProjects(r.Context(), s)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -111,7 +112,7 @@ func procStatusByKey(ctx gavelctx.Context, projects []Project) map[string]procSt
 // streamProcStatusByKey is procStatusByKey projected for the SSE stream — see
 // leanProcStatus for why the resource fields are dropped.
 func streamProcStatusByKey(ctx gavelctx.Context) (map[string]procStatus, error) {
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := visibleProjects(ctx, nil)
 	if err != nil {
 		return nil, err
 	}

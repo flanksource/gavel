@@ -3,8 +3,9 @@ package run
 import (
 	"errors"
 
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -15,25 +16,25 @@ import (
 var _ = ginkgo.Describe("settling a finished run", func() {
 	var (
 		steps     []string
-		outcome   *lifecycle.StepOutcome
+		outcome   *lifecycle1.StepOutcome
 		reported  string
 		reportErr error
 	)
 	ginkgo.BeforeEach(func() {
 		steps, reported, reportErr = nil, "", nil
-		outcome = &lifecycle.StepOutcome{
+		outcome = &lifecycle1.StepOutcome{
 			Status:    string(lifecycle.OutcomeKeep),
 			Execution: &todos.ExecutionResult{Summary: "Triaged it."},
 		}
 	})
 
-	report := func(_ *lifecycle.StepOutcome, status string, err error) {
+	report := func(_ *lifecycle1.StepOutcome, status string, err error) {
 		steps = append(steps, "report")
 		reported, reportErr = status, err
 	}
 
 	ginkgo.It("reports before it persists", func() {
-		Expect(settleOutcome(outcome, nil, report, func(*lifecycle.StepOutcome, string) error {
+		Expect(settleOutcome(outcome, nil, report, func(*lifecycle1.StepOutcome, string) error {
 			steps = append(steps, "persist")
 			return nil
 		})).To(Succeed())
@@ -46,7 +47,7 @@ var _ = ginkgo.Describe("settling a finished run", func() {
 	ginkgo.It("still reports when persistence fails, and joins the write's error", func() {
 		writeFailed := errors.New("persist TODO attempt: connection reset")
 
-		err := settleOutcome(outcome, nil, report, func(*lifecycle.StepOutcome, string) error { return writeFailed })
+		err := settleOutcome(outcome, nil, report, func(*lifecycle1.StepOutcome, string) error { return writeFailed })
 
 		Expect(steps).To(Equal([]string{"report"}))
 		Expect(err).To(MatchError(writeFailed))
@@ -56,7 +57,7 @@ var _ = ginkgo.Describe("settling a finished run", func() {
 		outcome.Status = ""
 		runFailed := errors.New("agent exited 1")
 
-		err := settleOutcome(outcome, runFailed, report, func(*lifecycle.StepOutcome, string) error { return nil })
+		err := settleOutcome(outcome, runFailed, report, func(*lifecycle1.StepOutcome, string) error { return nil })
 
 		Expect(reported).To(Equal(lifecycle.OutcomeKeep), "an unclassified failure keeps the todo's status")
 		Expect(reportErr).To(MatchError(runFailed))
@@ -66,7 +67,7 @@ var _ = ginkgo.Describe("settling a finished run", func() {
 	ginkgo.It("persists a run with no reporter", func() {
 		persisted := false
 
-		Expect(settleOutcome(outcome, nil, nil, func(*lifecycle.StepOutcome, string) error {
+		Expect(settleOutcome(outcome, nil, nil, func(*lifecycle1.StepOutcome, string) error {
 			persisted = true
 			return nil
 		})).To(Succeed())
