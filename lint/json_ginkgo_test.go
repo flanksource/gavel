@@ -2,8 +2,8 @@ package lint
 
 import (
 	"context"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,7 +100,7 @@ var _ = Describe("JSON lint integration", func() {
 
 	DescribeTable("applies the remote schema policy through configuration and CLI options", func(config, schema string, remote, expectedFetch bool) {
 		var requests atomic.Int32
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			requests.Add(1)
 			_, err := w.Write([]byte(`false`))
 			Expect(err).NotTo(HaveOccurred())

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
 	"net/http"
 	"sync/atomic"
 
@@ -53,7 +54,7 @@ var _ = Describe("Editor HTTP API", func() {
 	DescribeTable("enforces remote-schema opt-in at the HTTP boundary", func(configured, explicit, allow bool) {
 		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		var requests atomic.Int32
-		remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		remote := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			requests.Add(1)
 			_, err := w.Write([]byte(`{"type":"object"}`))
 			Expect(err).NotTo(HaveOccurred())

@@ -3,6 +3,7 @@ package jsonlint
 import (
 	"context"
 	"encoding/json"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,7 +16,7 @@ import (
 var _ = Describe("Editor schemas", func() {
 	It("refuses remote document declarations without sending a request", func() {
 		var requests atomic.Int32
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			requests.Add(1)
 			_, err := w.Write([]byte(`true`))
 			Expect(err).NotTo(HaveOccurred())

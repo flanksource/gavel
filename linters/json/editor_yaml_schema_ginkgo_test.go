@@ -3,6 +3,7 @@ package jsonlint
 import (
 	"context"
 	"encoding/json"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,7 +27,7 @@ var _ = Describe("Editor YAML schemas", func() {
 	})
 
 	It("loads extensionless remote YAML schemas by content type", func() {
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 			_, err := w.Write([]byte("type: object\nproperties:\n  name:\n    type: string\n"))
 			Expect(err).NotTo(HaveOccurred())

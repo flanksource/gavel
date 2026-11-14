@@ -2,6 +2,7 @@ package jsonlint
 
 import (
 	"context"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ var _ = Describe("YAML schemas", func() {
 	}, Entry("yaml", ".yaml"), Entry("yml", ".yml"))
 
 	It("loads remote YAML references and preserves exact numbers", func() {
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/yaml")
 			if r.URL.Path == "/schema.yaml" {
 				_, err := w.Write([]byte("$ref: types.yaml\n"))

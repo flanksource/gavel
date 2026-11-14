@@ -2,6 +2,7 @@ package jsonlint
 
 import (
 	"context"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -48,7 +49,7 @@ var _ = Describe("Remote schema destinations", func() {
 
 	It("follows redirects between public destinations", func() {
 		var requests atomic.Int32
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requests.Add(1)
 			if r.URL.Path == "/redirect" {
 				http.Redirect(w, r, "/schema.json", http.StatusFound)
@@ -72,7 +73,7 @@ var _ = Describe("Remote schema destinations", func() {
 			Expect(err).NotTo(HaveOccurred())
 		}))
 		DeferCleanup(private.Close)
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if redirect {
 				http.Redirect(w, r, private.URL, http.StatusFound)
 				return
@@ -87,7 +88,7 @@ var _ = Describe("Remote schema destinations", func() {
 	}, Entry("redirect", true), Entry("reference", false))
 
 	It("disables proxies that could bypass address validation", func() {
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, err := w.Write([]byte(`true`))
 			Expect(err).NotTo(HaveOccurred())
 		}))

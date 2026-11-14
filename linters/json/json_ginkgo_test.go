@@ -2,6 +2,7 @@ package jsonlint
 
 import (
 	"context"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -186,7 +187,7 @@ var _ = Describe("JSON linter", func() {
 
 	It("loads remote schemas and references once per run", func() {
 		var requests atomic.Int32
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requests.Add(1)
 			if r.URL.Path == "/schema.json" {
 				_, err := w.Write([]byte(`{"$ref":"types.json"}`))
@@ -208,7 +209,7 @@ var _ = Describe("JSON linter", func() {
 
 	DescribeTable("warns once without fetching remote declarations or references by default", func(name, contents string, local bool) {
 		var requests atomic.Int32
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			requests.Add(1)
 			_, err := w.Write([]byte(`{"required":["name"]}`))
 			Expect(err).NotTo(HaveOccurred())
@@ -237,7 +238,7 @@ var _ = Describe("JSON linter", func() {
 
 	It("fetches and validates remote declarations when enabled", func() {
 		var requests atomic.Int32
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			requests.Add(1)
 			_, err := w.Write([]byte(`{"required":["name"]}`))
 			Expect(err).NotTo(HaveOccurred())
@@ -267,7 +268,7 @@ var _ = Describe("JSON linter", func() {
 	}, Entry("FTP", "ftp://example.com/schema.json"), Entry("data", "data:application/json,true"))
 
 	It("surfaces HTTP failures", func() {
-		server := servePublicSchema(http.NotFoundHandler())
+		server := jsonlinttest.ServePublicSchema(http.NotFoundHandler())
 		DeferCleanup(server.Close)
 		adapter.Schema = server.URL + "/schema.json"
 		adapter.SchemaExplicit = true
@@ -276,7 +277,7 @@ var _ = Describe("JSON linter", func() {
 	})
 
 	It("cancels an in-flight remote schema request", func() {
-		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 		DeferCleanup(server.Close)
 		adapter.Schema = server.URL + "/schema.json"
 		adapter.SchemaExplicit = true
