@@ -41,8 +41,12 @@ jobs:
       - name: Install Task
         uses: ./.github/actions/setup-task
 
+      # Docs specs shell out to `gavel` (e.g. `gavel fixtures outline`), so the
+      # binary under test must be the one on PATH.
       - name: Build gavel
-        run: task build:prod
+        run: |
+          task build:prod
+          echo "$PWD/.bin" >> "$GITHUB_PATH"
 
       - name: Check editor frontend
         working-directory: editor/ui
