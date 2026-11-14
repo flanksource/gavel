@@ -66,6 +66,22 @@ it.each([
   expect(root?.assignee).toEqual(expected);
 });
 
+it("carries a reply's proposed patch, converting who decided it into an author", () => {
+  const proposal = { ref: "refs/gavel/proposals/c-1/m-2", base: "abc123", commit: "def456", files: [{ path: "src/app.ts", additions: 3, deletions: 1 }], state: "proposed" as const };
+  const decided = { ...proposal, state: "rejected" as const, decidedBy: { kind: "user", id: "u-1", label: "Ada" }, decidedAt: "2026-11-01T10:09:00Z", feedback: "Too broad" };
+  const [, plain, open, rejected] = project({
+    ...native,
+    messages: [
+      { id: "m-1", bodyMarkdown: "No patch", author: { kind: "agent", id: "claude" }, createdAt: "2026-11-01T10:06:00Z", content: { playground: { page: "https://example.com/" } } },
+      { id: "m-2", bodyMarkdown: "Proposed", author: { kind: "agent", id: "claude", label: "Claude" }, createdAt: "2026-11-01T10:07:00Z", content: { proposal } },
+      { id: "m-3", bodyMarkdown: "Proposed again", author: { kind: "agent", id: "claude", label: "Claude" }, createdAt: "2026-11-01T10:08:00Z", content: { proposal: decided } },
+    ],
+  }, { attachmentUrl });
+  expect(plain?.proposal).toBeUndefined();
+  expect(open).toMatchObject({ id: "m-2", author: { id: "claude", name: "Claude", kind: "agent" }, proposal });
+  expect(rejected?.proposal).toEqual({ ...proposal, state: "rejected", decidedBy: { id: "u-1", name: "Ada", kind: "user" }, decidedAt: "2026-11-01T10:09:00Z", feedback: "Too broad" });
+});
+
 it("keeps an empty body empty and names rating-only comments", () => {
   expect(bodyFor({ id: "x", body: "", createdAt: "", author: null, rating: "positive" })).toBe("Positive feedback");
   expect(bodyFor({ id: "x", body: "", createdAt: "", author: null })).toBe("Negative feedback");

@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
+import type { GitDiffPayload } from "@flanksource/clicky-ui/data";
 import type { StoredComment } from "../contracts/comments-store";
 import type { GavelClient } from "./gavel-client";
 import { useGavelComments } from "./useGavelComments";
@@ -19,6 +20,7 @@ function fakeClient(overrides: Record<string, unknown> = {}) {
     create: vi.fn(async () => root),
     deliver: vi.fn(async () => root),
     deliverBatch: vi.fn(async (): Promise<StoredComment[]> => []),
+    proposalDiff: vi.fn(async (): Promise<GitDiffPayload> => ({ diff: "" })),
     streamEvents: vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<void>(resolve => signal.addEventListener("abort", () => resolve()))),
     ...overrides,
   };
@@ -59,6 +61,31 @@ it("replies on the thread root and deletes a reply through its root", async () =
   expect(calls.batch).toHaveBeenCalledWith([{ id: "c-1", expectedVersion: 4, action: "delete-reply", messageId: "m-1" }]);
   await act(() => result.current.remove("c-1"));
   expect(calls.act).toHaveBeenLastCalledWith({ id: "c-1", version: 4, action: "delete" });
+});
+
+it("decides a proposed patch through the thread root at the version it last saw, then refreshes", async () => {
+  const { client, calls } = fakeClient();
+  const { result } = await loaded(client);
+  await act(() => result.current.applyProposal("m-1", "stage"));
+  expect(calls.act).toHaveBeenLastCalledWith({ id: "c-1", version: 4, action: "accept-proposal", messageId: "m-1", mode: "stage" });
+  await act(() => result.current.rejectProposal("m-1", "Too broad"));
+  expect(calls.act).toHaveBeenLastCalledWith({ id: "c-1", version: 4, action: "reject-proposal", messageId: "m-1", bodyMarkdown: "Too broad" });
+  await act(() => result.current.rejectProposal("m-1"));
+  expect(calls.act).toHaveBeenLastCalledWith({ id: "c-1", version: 4, action: "reject-proposal", messageId: "m-1" });
+  await act(() => result.current.requestRevision("m-1", "Keep the API"));
+  expect(calls.act).toHaveBeenLastCalledWith({ id: "c-1", version: 4, action: "request-revision", messageId: "m-1", bodyMarkdown: "Keep the API" });
+  expect(calls.list).toHaveBeenCalledTimes(5);
+});
+
+it("loads a proposal's diff for its reply and refuses a proposal decision on a comment that is not a loaded reply", async () => {
+  const payload = { diff: "diff --git a/x b/x\n", commit: "def456" };
+  const { client, calls } = fakeClient({ proposalDiff: vi.fn(async () => payload) });
+  const { result } = await loaded(client);
+  expect(await result.current.loadProposalDiff("m-1")).toEqual(payload);
+  expect(calls.proposalDiff).toHaveBeenCalledWith("c-1", "m-1");
+  expect(() => result.current.applyProposal("c-1", "apply")).toThrow(/not a reply/);
+  expect(() => result.current.rejectProposal("missing")).toThrow(/not loaded/);
+  expect(() => result.current.loadProposalDiff("missing")).toThrow(/not loaded/);
 });
 
 it("assigns a thread with the assignee as gavel's actor, or clears it", async () => {

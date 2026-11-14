@@ -1,4 +1,4 @@
-import type { StoredAgentRun, StoredAuthor, StoredComment } from "../contracts/comments-store";
+import type { StoredAgentRun, StoredAuthor, StoredComment, StoredProposal } from "../contracts/comments-store";
 
 /*
  * Pure projection between gavel's native comments and the playground's comment
@@ -19,8 +19,11 @@ type NativeMessage = {
   bodyMarkdown: string;
   author: Actor;
   createdAt: string;
-  content?: Content;
+  /** An agent's reply may carry only `proposal`; the playground fields are the web UI's own. */
+  content?: Partial<Content> & { proposal?: NativeProposal };
 };
+/** A patch an agent proposed in a reply, as gavel stores it under the message's `content.proposal`. */
+export type NativeProposal = Omit<StoredProposal, "decidedBy"> & { decidedBy?: Actor };
 /** The hand-off gavel records under `content.agentRun`, in clicky-ui's CommentAgentRun shape. */
 export type NativeAgentRun = {
   sessionId?: string;
@@ -60,6 +63,8 @@ export type Action = {
   content?: Content;
   target?: Target;
   assignee?: Actor | null;
+  /** `accept-proposal`: apply the proposed patch to the working tree or stage it in the index. */
+  mode?: "apply" | "stage";
 };
 
 const AGENT_RUN_STATES: readonly StoredAgentRun["state"][] = ["queued", "sent", "done", "error"];
@@ -99,6 +104,10 @@ function authorFor(actor: Actor): StoredAuthor {
     name: actor.label ?? actor.id,
     kind: actor.kind === "agent" ? "agent" : "user",
   };
+}
+function proposalFor(proposal: NativeProposal): StoredProposal {
+  const { decidedBy, ...rest } = proposal;
+  return { ...rest, ...(decidedBy ? { decidedBy: authorFor(decidedBy) } : {}) };
 }
 /** The first reply an agent wrote in the thread at or after the hand-off was requested. */
 function firstAgentReply(messages: NativeMessage[], requestedAt: string): string | undefined {
@@ -168,11 +177,12 @@ export function project(
     root,
     ...(c.messages ?? []).map((m) => ({
       ...m.content?.playground,
+      ...(m.content?.proposal ? { proposal: proposalFor(m.content.proposal) } : {}),
       id: m.id,
       rootId: c.id,
       version: c.version,
       body: m.bodyMarkdown,
-      author: m.content?.playground.author ?? authorFor(m.author),
+      author: m.content?.playground?.author ?? authorFor(m.author),
       createdAt: new Date(m.createdAt).toISOString(),
       parentId: c.id,
       anchor: root.anchor ?? null,

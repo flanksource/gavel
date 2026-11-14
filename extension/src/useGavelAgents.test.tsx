@@ -74,6 +74,31 @@ it("re-saves the agent when the run target changes while auto-run is on, and not
   expect(off.calls.saveCommentAgent).not.toHaveBeenCalled();
 });
 
+it("reads how the page's agent edits and defaults to direct edits", async () => {
+  const proposing = await loaded(fakeClient({ initial: { enabled: true, edits: "propose" } }).client);
+  expect(proposing.result.current.edits).toBe("propose");
+  const unset = await loaded(fakeClient({ initial: { enabled: true } }).client);
+  expect(unset.result.current.edits).toBe("direct");
+});
+
+it("saves the run-derived agent with the chosen edit mode, and keeps it when the run target changes", async () => {
+  const next = { ...run, runOptions: { spec: { model: "codex-example" } } };
+  const { client, calls } = fakeClient({ initial: { enabled: true, prompt: "editor-comments", group: "g-1" }, saves: [{ enabled: true, edits: "propose" }, { enabled: true, edits: "propose" }] });
+  const { result, rerender } = await loaded(client);
+  await act(() => result.current.setEdits("propose"));
+  expect(calls.saveCommentAgent).toHaveBeenLastCalledWith({ page, layer: project, agent: { enabled: true, prompt: "editor-comments", group: "g-1", edits: "propose" } });
+  expect(result.current.edits).toBe("propose");
+  rerender({ run: next });
+  await waitFor(() => expect(calls.saveCommentAgent).toHaveBeenLastCalledWith({ page, layer: project, agent: { enabled: true, prompt: "editor-comments", group: "g-1", spec: { model: "codex-example" }, edits: "propose" } }));
+});
+
+it("refuses to choose an edit mode while auto-run is off, since saving would turn it on", async () => {
+  const { client, calls } = fakeClient({ initial: {} });
+  const { result } = await loaded(client);
+  await expect(result.current.setEdits("propose")).rejects.toThrow(/auto-run is off/);
+  expect(calls.saveCommentAgent).not.toHaveBeenCalled();
+});
+
 it("reports a failed save and keeps the previous state", async () => {
   const { client, calls } = fakeClient({ initial: {} });
   calls.saveCommentAgent.mockRejectedValueOnce(new Error("403 only humans can change comment agents"));

@@ -134,6 +134,27 @@ it("sends lifecycle actions with the expected version and reports gavel's refusa
   expect((failure as GavelError).message).toContain("/api/v1/comments/c-1/close");
 });
 
+it.each([
+  { name: "applying", extra: { action: "accept-proposal", messageId: "m-2", mode: "apply" as const }, body: { expectedVersion: 2, messageId: "m-2", mode: "apply" } },
+  { name: "rejecting with a reason", extra: { action: "reject-proposal", messageId: "m-2", bodyMarkdown: "Too broad" }, body: { expectedVersion: 2, messageId: "m-2", bodyMarkdown: "Too broad" } },
+  { name: "requesting a revision", extra: { action: "request-revision", messageId: "m-2", bodyMarkdown: "Keep the API" }, body: { expectedVersion: 2, messageId: "m-2", bodyMarkdown: "Keep the API" } },
+])("posts a proposal decision to the thread root when $name", async ({ extra, body }) => {
+  const { calls, client } = fakeDashboard(json(native({ version: 3 })));
+  await client.act({ id: "c-1", version: 2, ...extra });
+  expect(calls[0]?.method).toBe("POST");
+  expect(calls[0]?.url.pathname).toBe(`/api/v1/comments/c-1/${extra.action}`);
+  expect(calls[0]?.body).toEqual(body);
+});
+
+it("fetches a proposal's diff for a reply on a thread and reports gavel's refusal", async () => {
+  const diff = { diff: "diff --git a/x b/x\n", commit: "def456" };
+  const { calls, client } = fakeDashboard(json(diff), json({ error: "proposal not found" }, 404));
+  expect(await client.proposalDiff("c-1", "m 2")).toEqual(diff);
+  expect(calls[0]?.method).toBe("GET");
+  expect(calls[0]?.url.pathname).toBe("/api/v1/comments/c-1/proposals/m%202/diff");
+  await expect(client.proposalDiff("c-1", "m-9")).rejects.toMatchObject({ status: 404, message: expect.stringContaining("proposal not found") });
+});
+
 it("replies on the thread root with the reply stored as the playground shape", async () => {
   const { calls, client } = fakeDashboard(json(native({ version: 2, messages: [{ id: "m-1", bodyMarkdown: "Fixed", author: { kind: "user", id: "u-1" }, createdAt: "2026-11-01T10:01:00Z", content: { playground: { page: pageKey(page.url) } } }] })));
   const thread = await client.reply({ page, root: "c-1", version: 1, body: "Fixed" });

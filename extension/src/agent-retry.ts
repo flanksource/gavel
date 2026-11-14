@@ -1,5 +1,5 @@
 import type { CommentAgentRun } from "@flanksource/clicky-ui/comments";
-import type { DeliverTarget } from "../comments/gavel-delivery";
+import type { CommentEdits, DeliverTarget } from "../comments/gavel-delivery";
 
 type RunTarget = Extract<DeliverTarget, { kind: "run" }>;
 
@@ -11,6 +11,11 @@ type RunTarget = Extract<DeliverTarget, { kind: "run" }>;
 export function retryTarget(options: { run: CommentAgentRun; delivery: DeliverTarget }): DeliverTarget {
   const { run, delivery } = options;
   return delivery.kind === "session" ? { kind: "session", sessionId: run.sessionId ?? delivery.sessionId } : delivery;
+}
+
+/** `target` carrying the page rule's edits policy, so a manual hand-off honours a proposal-only rule like auto-run does. */
+export function withEdits(target: DeliverTarget, edits: CommentEdits | undefined): DeliverTarget {
+  return edits ? { ...target, edits } : target;
 }
 
 /** The run target that skips the group's recorded session and starts a new one. */

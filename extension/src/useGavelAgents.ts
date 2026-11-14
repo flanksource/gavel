@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Comment } from "@flanksource/clicky-ui";
 import type { RuntimeCatalog } from "../agents/runtime-families";
-import { commentAgentFor, fetchRuntimeCatalog, pageTargetUri, type AgentSession, type GavelClient, type PageRef, type RunTarget } from "./gavel-client";
+import { commentAgentFor, fetchRuntimeCatalog, pageTargetUri, type AgentSession, type CommentAgentSettings, type CommentEdits, type GavelClient, type PageRef, type RunTarget } from "./gavel-client";
 
 const SESSION_POLL_MS = 5000;
 
@@ -112,7 +112,8 @@ export function useAutoRun(options: { client: GavelClient; page: PageRef | undef
   const { client, page, run } = options;
   const prefix = page ? pageTargetUri(client.scope, page) : undefined;
   const runKey = JSON.stringify(run ?? null);
-  const [enabled, setEnabled] = useState(false);
+  const [agent, setAgent] = useState<CommentAgentSettings["agent"]>();
+  const enabled = agent?.agent.enabled === true;
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const synced = useRef(runKey);
@@ -121,11 +122,11 @@ export function useAutoRun(options: { client: GavelClient; page: PageRef | undef
     if (!page) return;
     let cancelled = false;
     setReady(false);
-    setEnabled(false);
+    setAgent(undefined);
     client.commentAgent(page).then(
       settings => {
         if (cancelled) return;
-        setEnabled(settings.agent.agent.enabled === true);
+        setAgent(settings.agent);
         setError(null);
         setReady(true);
       },
@@ -134,17 +135,24 @@ export function useAutoRun(options: { client: GavelClient; page: PageRef | undef
     return () => { cancelled = true; };
   }, [client, prefix]);
 
-  const set = useCallback(async (on: boolean) => {
+  const edits = agent?.agent.edits ?? "direct";
+  const set = useCallback(async (on: boolean, chosenEdits: CommentEdits | undefined = agent?.agent.edits) => {
     if (!page || !run) throw new Error("The grabber has not reported the page yet");
     try {
-      let saved = await client.saveCommentAgent({ page, layer: PROJECT_LAYER, agent: on ? commentAgentFor(run) : null });
+      let saved = await client.saveCommentAgent({ page, layer: PROJECT_LAYER, agent: on ? { ...commentAgentFor(run), ...(chosenEdits ? { edits: chosenEdits } : {}) } : null });
       if (!on && saved.agent.agent.enabled === true) saved = await client.saveCommentAgent({ page, layer: PROJECT_LAYER, agent: { enabled: false } });
-      setEnabled(saved.agent.agent.enabled === true);
+      setAgent(saved.agent);
       setError(null);
     } catch (cause) {
       setError(describe(cause));
     }
-  }, [client, page, run]);
+  }, [client, page, run, agent]);
+
+  /** How an enabled page's agent changes the project: edits it directly or proposes patches. Saving while off would turn auto-run on. */
+  const setEdits = useCallback(async (next: CommentEdits) => {
+    if (!enabled) throw new Error("Cannot choose how the agent edits while auto-run is off; turn auto-run on first");
+    await set(true, next);
+  }, [enabled, set]);
 
   useEffect(() => {
     if (synced.current === runKey) return;
@@ -152,5 +160,5 @@ export function useAutoRun(options: { client: GavelClient; page: PageRef | undef
     if (enabled && ready) void set(true);
   }, [runKey]);
 
-  return { enabled, ready, error, set };
+  return { agent, enabled, edits, ready, error, set, setEdits };
 }

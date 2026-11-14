@@ -1,4 +1,4 @@
-import type { ContextMenuActionContext, ReactGrabAPI } from "@flanksource/react-grab";
+import type { ContextMenuActionContext, ReactGrabAPI } from "@flanksource/clicky-ui/react-grab";
 
 /*
  * The grabbed-element todo formatting of gavel's React Grab bookmarklet, ported

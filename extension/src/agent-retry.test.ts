@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CommentAgentRun } from "@flanksource/clicky-ui/comments";
 import type { DeliverTarget } from "../comments/gavel-delivery";
-import { freshTarget, retryTarget } from "./agent-retry";
+import { freshTarget, retryTarget, withEdits } from "./agent-retry";
 
 const GROUP = "gavel://project/demo/pages/https%3A%2F%2Fexample.test%2Fapp";
 const RUN_TARGET: DeliverTarget = { kind: "run", prompt: "editor-comments", groupKey: GROUP, runOptions: { spec: { model: "example-model" } } };
@@ -23,6 +23,17 @@ describe("retryTarget", () => {
 
   it("re-delivers a failed run to the same run target and group, never marking it fresh", () => {
     expect(retryTarget({ run: failed("managed-1"), delivery: RUN_TARGET })).toEqual(RUN_TARGET);
+  });
+});
+
+describe("withEdits", () => {
+  it("carries a proposal-only rule onto a session and a run target", () => {
+    expect(withEdits({ kind: "session", sessionId: "chosen" }, "propose")).toEqual({ kind: "session", sessionId: "chosen", edits: "propose" });
+    expect(withEdits(RUN_TARGET, "propose")).toEqual({ ...RUN_TARGET, edits: "propose" });
+  });
+
+  it("leaves the target as is when the page has no rule", () => {
+    expect(withEdits(RUN_TARGET, undefined)).toEqual(RUN_TARGET);
   });
 });
 

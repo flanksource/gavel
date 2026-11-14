@@ -9,7 +9,9 @@
       "@flanksource/clicky-ui/icons": ["../../clicky-ui/packages/ui/dist/icons.d.ts"],
       "@flanksource/clicky-ui/ai": ["../../clicky-ui/packages/ui/dist/ai.d.ts"],
       "@flanksource/clicky-ui/chat": ["../../clicky-ui/packages/ui/dist/chat.d.ts"],
-      "@flanksource/clicky-ui/data": ["../../clicky-ui/packages/ui/dist/data.d.ts"]
+      "@flanksource/clicky-ui/data": ["../../clicky-ui/packages/ui/dist/data.d.ts"],
+      "@flanksource/clicky-ui/react-grab": ["../../clicky-ui/packages/ui/dist/react-grab/index.d.ts"],
+      "@flanksource/clicky-ui/react-grab/core": ["../../clicky-ui/packages/ui/dist/react-grab/core/index.d.ts"]
     }
   }
 }

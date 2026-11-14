@@ -3,6 +3,7 @@ import { Badge, Button, SegmentedControl, Switch } from "@flanksource/clicky-ui"
 import { SpecRuntimeBar } from "@flanksource/clicky-ui/ai";
 import { AgentIdentity } from "@flanksource/clicky-ui/chat";
 
+import type { CommentEdits } from "../comments/gavel-delivery";
 import type { AgentSessionGrouping, AgentSessionRuntime } from "../contracts/agent-session-store";
 import { RuntimeIdentity } from "./RuntimeIdentity";
 import { runtimeOfSpecValue, specValueOfRuntime, type RuntimeCatalog } from "./runtime-families";
@@ -44,6 +45,8 @@ export type AgentPickerProps = {
     clearLabel?: string | undefined;
   } | undefined;
   autoRun?: { checked: boolean; onChange: (enabled: boolean) => void; disabled?: boolean; title?: string; label?: string } | undefined;
+  /** How the auto-run agent changes the project: it edits files itself, or answers with a patch a human accepts. */
+  edits?: { value: CommentEdits; onChange: (edits: CommentEdits) => void; disabled?: boolean; title?: string } | undefined;
   /** Omitted where only the settings are edited. */
   sessions?: {
     items: AgentPickerSession[];
@@ -124,7 +127,7 @@ function SessionRow({ session, label, pressed, onSelect, assignAll }: { session:
  * feed it their own sources and decide what choosing something does.
  */
 export function AgentPicker(props: AgentPickerProps) {
-  const { heading, busy = false, notice, error, grouping, runtime, autoRun, sessions } = props;
+  const { heading, busy = false, notice, error, grouping, runtime, autoRun, edits, sessions } = props;
   const [expanded, setExpanded] = useState(false);
   const inline = runtime !== undefined && runtime.onChoose === undefined;
   const newSelected = sessions?.onNew !== undefined && sessions.selectedId === undefined;
@@ -186,6 +189,21 @@ export function AgentPicker(props: AgentPickerProps) {
           {...(autoRun.title ? { title: autoRun.title } : {})}
           onChange={autoRun.onChange}
         />
+      )}
+      {edits && (
+        <div className="flex flex-wrap items-center justify-between gap-2" {...(edits.title ? { title: edits.title } : {})}>
+          <span>Agent edits</span>
+          <SegmentedControl
+            size="sm"
+            aria-label="Agent edits"
+            value={edits.value}
+            options={[
+              { id: "direct", label: "Edit directly", disabled: busy || edits.disabled === true },
+              { id: "propose", label: "Propose patches", disabled: busy || edits.disabled === true },
+            ]}
+            onChange={edits.onChange}
+          />
+        </div>
       )}
       {notice}
       {error && (

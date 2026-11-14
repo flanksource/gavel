@@ -1,5 +1,6 @@
 import type { RuntimeCatalogFamily } from "@flanksource/clicky-ui/ai";
 import type { ChatModel } from "@flanksource/clicky-ui/chat";
+import type { GitDiffPayload } from "@flanksource/clicky-ui/data";
 import type { AgentSessionGrouping, AgentSessionRuntime } from "../contracts/agent-session-store";
 import type { StoredComment } from "../contracts/comments-store";
 import { agentRuntimeFamilies, type RuntimeCatalog } from "../agents/runtime-families";
@@ -18,6 +19,7 @@ import {
   DEFAULT_RUN_PROMPT,
   type CommentAgent,
   type CommentAgentSettings,
+  type CommentEdits,
   type DeliverBatchRequest,
   type DeliverTarget,
   type GavelAgentSession,
@@ -32,7 +34,7 @@ import {
  * delivery; this file only shapes requests and projects responses.
  */
 
-export { DEFAULT_RUN_PROMPT, type CommentAgent, type CommentAgentSettings, type DeliverBatchRequest, type DeliverTarget, type SettingsRef, type GavelAgentSession as AgentSession };
+export { DEFAULT_RUN_PROMPT, type CommentAgent, type CommentAgentSettings, type CommentEdits, type DeliverBatchRequest, type DeliverTarget, type SettingsRef, type GavelAgentSession as AgentSession };
 export type RunTarget = Extract<DeliverTarget, { kind: "run" }>;
 const PNG_PREFIX = "data:image/png;base64,";
 const PAGE_SIZE = 200;
@@ -253,7 +255,7 @@ export class GavelClient {
   }
 
   /** Creates a thread root. A captured screenshot is uploaded as an attachment; if that fails the incomplete thread is removed. */
-  async create(options: { page: PageRef; comment: StoredComment; selection?: Selection }): Promise<StoredComment> {
+  async create(options: { page: PageRef; comment: StoredComment; selection?: Selection; deliver?: DeliverTarget }): Promise<StoredComment> {
     const { page, selection } = options;
     let comment = options.comment;
     let screenshot: Uint8Array<ArrayBuffer> | undefined;
@@ -269,6 +271,7 @@ export class GavelClient {
       workflowId: "human-review",
       requestId: comment.id,
       content,
+      ...(options.deliver ? { deliver: options.deliver } : {}),
     });
     if (screenshot) {
       try {
@@ -290,6 +293,13 @@ export class GavelClient {
     const { id, version, action, ...extra } = options;
     const updated = await this.post<NativeComment>(`/${encodeURIComponent(id)}/${action}`, { expectedVersion: version, ...extra });
     return project(updated, { attachmentUrl: this.attachmentUrl })[0]!;
+  }
+
+  /** The unified diff of the patch proposed in reply `replyId` on thread `rootId`. */
+  async proposalDiff(rootId: string, replyId: string): Promise<GitDiffPayload> {
+    const diff = await this.json<GitDiffPayload>(this.url(`/${encodeURIComponent(rootId)}/proposals/${encodeURIComponent(replyId)}/diff`));
+    if (typeof diff?.diff !== "string") throw new Error(`Gavel returned an invalid proposal diff for reply ${replyId}`);
+    return diff;
   }
 
   async batch(actions: Action[]): Promise<NativeComment[]> {

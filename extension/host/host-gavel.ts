@@ -1,4 +1,4 @@
-import type { ActionContext, ContextMenuActionContext, PluginConfig, ReactGrabAPI } from "@flanksource/react-grab";
+import type { ActionContext, ContextMenuActionContext, PluginConfig, ReactGrabAPI } from "@flanksource/clicky-ui/react-grab";
 import type { CommentScreenshotCapture } from "../contracts/comments-model";
 import { writeClipboard } from "../comments/clipboard";
 import {

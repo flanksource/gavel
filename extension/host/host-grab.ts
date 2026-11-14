@@ -1,5 +1,5 @@
-import { init } from "@flanksource/react-grab/core";
-import type { ReactGrabAPI } from "@flanksource/react-grab";
+import { init } from "@flanksource/clicky-ui/react-grab/core";
+import type { ReactGrabAPI } from "@flanksource/clicky-ui/react-grab";
 
 /**
  * The picker the grabber host drives: the page's own react-grab when it has one,

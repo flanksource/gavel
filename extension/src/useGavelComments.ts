@@ -6,8 +6,9 @@ import {
   type CommentCreateInput,
   type CommentReplyInput,
 } from "@flanksource/clicky-ui/comments";
+import type { GitDiffPayload } from "@flanksource/clicky-ui/data";
 import type { StoredComment } from "../contracts/comments-store";
-import { commentActor, localUser } from "../comments/gavel-projection";
+import { commentActor, localUser, type Action } from "../comments/gavel-projection";
 import type { Selection } from "../host/model";
 import type { DeliverTarget, GavelClient, PageRef } from "./gavel-client";
 
@@ -48,12 +49,19 @@ export type GavelComments = {
   loading: boolean;
   /** A broken backend or event stream must never look like "no comments". */
   error: string | null;
-  create: (input: CommentCreateInput, selection: Selection) => Promise<void>;
+  /** Creates a thread root, handed to `deliver` instead of the page's comment agent when set, and returns its id once gavel has stored it. */
+  create: (input: CommentCreateInput, selection: Selection, deliver?: DeliverTarget) => Promise<string>;
   reply: (input: CommentReplyInput) => Promise<void>;
   updateStatus: (id: string, status: string) => Promise<void>;
   acknowledge: (id: string) => Promise<void>;
   assign: (id: string, assignee: CommentAuthor | null) => Promise<void>;
   close: (id: string) => Promise<void>;
+  /** Applies the patch proposed in reply `id` to the working tree, or stages it in the index. */
+  applyProposal: (id: string, mode: "apply" | "stage") => Promise<void>;
+  rejectProposal: (id: string, reason?: string) => Promise<void>;
+  /** Asks the proposer to revise; gavel hands the thread back to its agent session. */
+  requestRevision: (id: string, feedback: string) => Promise<void>;
+  loadProposalDiff: (id: string) => Promise<GitDiffPayload>;
   remove: (id: string) => Promise<void>;
   /** Hands a thread to an agent and returns gavel's recorded hand-off. */
   deliver: (id: string, target: DeliverTarget) => Promise<StoredComment>;
@@ -149,16 +157,25 @@ export function useGavelComments(options: { client: GavelClient; page: PageRef |
     if (!pageRef.current) throw new Error("The grabber has not reported the page yet");
     return pageRef.current;
   };
-  const act = (id: string, action: string, extra: { assignee?: ReturnType<typeof commentActor> | null } = {}) => {
+  const act = (id: string, action: string, extra: Pick<Action, "assignee" | "mode" | "messageId" | "bodyMarkdown"> = {}) => {
     const comment = root(id);
     return mutate(() => client.act({ id, version: comment.version!, action, ...extra }));
   };
+  /** The loaded reply `id` and the thread root a proposal decision is addressed to. */
+  const proposalReply = (id: string) => {
+    const reply = latest.current.find(entry => entry.id === id);
+    if (!reply) throw new Error(`Comment ${id} is not loaded; refresh and try again`);
+    if (!reply.parentId) throw new Error(`Comment ${id} is not a reply, so it carries no proposal`);
+    return { rootId: reply.rootId ?? reply.parentId };
+  };
+  const decideProposal = (id: string, action: string, extra: Pick<Action, "mode" | "bodyMarkdown"> = {}) =>
+    act(proposalReply(id).rootId, action, { messageId: id, ...extra });
 
   return {
     comments: stored,
     loading,
     error: error ?? streamError,
-    create: async (input, selection) => {
+    create: async (input, selection, deliver) => {
       const comment: StoredComment = {
         id: crypto.randomUUID(),
         body: input.body,
@@ -168,7 +185,8 @@ export function useGavelComments(options: { client: GavelClient; page: PageRef |
         ...(input.rating ? { rating: input.rating } : {}),
         ...(input.assignee ? { assignee: input.assignee } : {}),
       };
-      await mutate(() => client.create({ page: requirePage(), comment, selection }));
+      await mutate(() => client.create({ page: requirePage(), comment, selection, ...(deliver ? { deliver } : {}) }));
+      return comment.id;
     },
     reply: async input => {
       const parent = latest.current.find(entry => entry.id === input.parentId);
@@ -185,6 +203,10 @@ export function useGavelComments(options: { client: GavelClient; page: PageRef |
     acknowledge: id => act(id, "acknowledge"),
     assign: (id, assignee) => act(id, "assign", { assignee: assignee ? commentActor(assignee) : null }),
     close: id => act(id, "close"),
+    applyProposal: (id, mode) => decideProposal(id, "accept-proposal", { mode }),
+    rejectProposal: (id, reason) => decideProposal(id, "reject-proposal", reason ? { bodyMarkdown: reason } : {}),
+    requestRevision: (id, feedback) => decideProposal(id, "request-revision", { bodyMarkdown: feedback }),
+    loadProposalDiff: id => client.proposalDiff(proposalReply(id).rootId, id),
     remove: async id => {
       const comment = latest.current.find(entry => entry.id === id);
       if (!comment) throw new Error(`Comment ${id} is not loaded; refresh and try again`);

@@ -11,12 +11,10 @@ export function developmentAliases(root: string): Alias[] {
     const source = target?.match(/^\.\/dist\/(.*)\.js$/)?.[1];
     if (!source) continue;
     const name = key === "." ? "@flanksource/clicky-ui" : `@flanksource/clicky-ui/${key.slice(2)}`;
-    aliases.push({ find: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}$`), replacement: resolve(ui, `src/${source}.ts`) });
+    aliases.push({ find: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}$`), replacement: resolve(ui, key.startsWith("./react-grab") ? `dist/${source}.js` : `src/${source}.ts`) });
   }
   return [
     ...aliases,
     { find: /^@flanksource\/page-runtime\/(.*)$/, replacement: resolve(root, "../../clicky-ui/packages/page-runtime/src/$1.ts") },
-    { find: /^@flanksource\/react-grab\/core$/, replacement: resolve(root, "../../clicky-ui/packages/react-grab/dist/core/index.js") },
-    { find: /^@flanksource\/react-grab$/, replacement: resolve(root, "../../clicky-ui/packages/react-grab/dist/index.js") },
   ];
 }

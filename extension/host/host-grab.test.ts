@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { ReactGrabAPI } from "@flanksource/react-grab";
+import type { ReactGrabAPI } from "@flanksource/clicky-ui/react-grab";
 
 const created = { dispose: vi.fn() } as unknown as ReactGrabAPI;
 const init = vi.fn(() => created);
-vi.mock("@flanksource/react-grab/core", () => ({ init }));
+vi.mock("@flanksource/clicky-ui/react-grab/core", () => ({ init }));
 
 afterEach(() => {
   delete window.__REACT_GRAB__;

@@ -19,9 +19,9 @@ await mkdir(outDir, { recursive: true });
 await build({
   configFile: false, root, publicDir: false, logLevel: "warn",
   define: { "process.env.NODE_ENV": JSON.stringify("production") },
-  resolve: { alias },
+  resolve: { dedupe: ["react", "react-dom"], alias },
   build: {
-    outDir, emptyOutDir: false,
+    outDir, emptyOutDir: false, sourcemap: true,
     lib: { entry: resolve(root, "src/grabber.ts"), name: "GavelGrabber", formats: ["iife"], fileName: () => "grabber.js" },
     rolldownOptions: { output: { codeSplitting: false } },
   },
@@ -31,7 +31,7 @@ for (const entry of ["background", "bridge", "early"]) {
   await build({
     configFile: false, root, publicDir: false, logLevel: "warn",
     ...(entry === "early" ? { define: { __INSTALL_REACT_DEVTOOLS_HOOK__: hook } } : {}),
-    build: { outDir, emptyOutDir: false, lib: { entry: resolve(root, `src/${entry}.ts`), name: `GavelGrabber_${entry}`, formats: ["iife"], fileName: () => `${entry}.js` } },
+    build: { outDir, emptyOutDir: false, sourcemap: true, lib: { entry: resolve(root, `src/${entry}.ts`), name: `GavelGrabber_${entry}`, formats: ["iife"], fileName: () => `${entry}.js` } },
   });
 }
 await build({
@@ -40,7 +40,7 @@ await build({
   define: { "process.env.NODE_ENV": JSON.stringify("production") },
   resolve: { dedupe: ["react", "react-dom"], alias },
   build: {
-    outDir, emptyOutDir: false,
+    outDir, emptyOutDir: false, sourcemap: true,
     rolldownOptions: { input: Object.fromEntries(["popup", "panel", "todo-relay"].map(page => [page, resolve(root, `src/${page}.html`)])) },
   },
 });

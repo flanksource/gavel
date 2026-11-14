@@ -145,6 +145,19 @@ describe("AgentPicker settings", () => {
     expect(screen.getByRole("switch", { name: "Auto-run new comments on this page" }).hasAttribute("disabled")).toBe(true);
   });
 
+  it("reports whether the agent edits directly or proposes patches, and disables the choice when unavailable", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<AgentPicker edits={{ value: "direct", onChange }} />);
+    expect(screen.getByRole("radio", { name: "Edit directly" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "Propose patches" }));
+    expect(onChange).toHaveBeenCalledWith("propose");
+    rerender(<AgentPicker edits={{ value: "propose", onChange, disabled: true, title: "Turn on auto-run first" }} />);
+    expect(screen.getByRole("radio", { name: "Propose patches" }).getAttribute("aria-checked")).toBe("true");
+    onChange.mockClear();
+    fireEvent.click(screen.getByRole("radio", { name: "Edit directly" }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("hands the model choice to the host's chooser when it has one", () => {
     const onChoose = vi.fn();
     render(<AgentPicker runtime={{ value: RUNTIME, onChoose, ariaLabel: "Choose playground model" }} />);

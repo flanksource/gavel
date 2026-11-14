@@ -22,6 +22,9 @@ export type RunOptions = {
   instructions?: string;
 };
 
+/** How a comment agent changes the project (`verify.CommentAgent.Edits`). */
+export type CommentEdits = "direct" | "propose";
+
 export type DeliverTarget =
   | { kind: "session"; sessionId: string }
   | {
@@ -51,6 +54,8 @@ export type CommentAgent = {
   instructions?: string;
   /** The delivery group key: runs of one group reuse its recorded live session. */
   group?: string;
+  /** `direct` (default when unset): the agent edits the project's files; `propose`: it answers with a patch a human accepts or rejects. */
+  edits?: CommentEdits;
 };
 
 /** One settings layer: a position (`user`, `parent`, `project`, `path`) and its file ("" for the database layer). */

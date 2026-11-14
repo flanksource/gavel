@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ContextMenuAction, ContextMenuActionContext, Plugin, ReactGrabAPI } from "@flanksource/react-grab";
+import type { ContextMenuAction, ContextMenuActionContext, Plugin, ReactGrabAPI } from "@flanksource/clicky-ui/react-grab";
 import { SIDEBAR_PLUGIN_NAME, grabberPlugin, registerGrabberPlugin, sidebarButtonPlugin, type GavelTodoActions, type GrabberPluginOptions } from "./react-grab-actions";
 import { writeClipboard } from "./clipboard";
 import { copyContextMarkdown } from "./copy-context";

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ContextMenuActionContext, PluginConfig, ReactGrabAPI } from "@flanksource/react-grab";
+import type { ContextMenuActionContext, PluginConfig, ReactGrabAPI } from "@flanksource/clicky-ui/react-grab";
 import { writeClipboard } from "../comments/clipboard";
 import { buildBody, buildTodoUrl } from "../comments/gavel-todo";
 import { gavelTodoActions, type GavelTodoOptions } from "./host-gavel";

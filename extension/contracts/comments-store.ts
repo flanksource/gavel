@@ -90,6 +90,23 @@ export type StoredStyleEdit = {
   };
 };
 
+export type ProposalState = "proposed" | "applied" | "staged" | "rejected" | "revision_requested" | "superseded";
+
+/** A patch an agent proposed in a reply, held by gavel as `commit` on `ref` (off `base`). */
+export type StoredProposal = {
+  ref: string;
+  base: string;
+  commit: string;
+  files: { path: string; additions: number; deletions: number }[];
+  state: ProposalState;
+  /** Who applied, staged, rejected or asked for revisions. */
+  decidedBy?: StoredAuthor;
+  /** ISO-8601 time of that decision. */
+  decidedAt?: string;
+  /** The rejection reason or revision request. */
+  feedback?: string;
+};
+
 export type StoredComment = {
   id: string;
   version?: number;
@@ -120,4 +137,6 @@ export type StoredComment = {
   lint?: { violations: Violation[] };
   /** The refused visual style edit this comment asks an agent to make. */
   styleEdit?: StoredStyleEdit;
+  /** The patch this reply proposes; replies only. */
+  proposal?: StoredProposal;
 };

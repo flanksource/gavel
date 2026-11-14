@@ -19,7 +19,7 @@ Site settings use the page's `flanksource.grabber` localStorage entry. Previous 
 
 ## Development
 
-Normal builds resolve installed packages without sibling source aliases. The migration needs Clicky UI 0.3.60 or later containing the current comment/session APIs and a release of `@flanksource/react-grab` 0.1.50. Clicky UI 0.3.59 does not contain those APIs, and an unpublished dependency cannot support a clean install. Until those releases exist, dependency installation, lockfile generation and the normal Make targets remain blocked; the explicit development checks below validate the local source only.
+Normal builds resolve installed packages without sibling source aliases. The migration needs a Clicky UI release containing the current comment/session APIs and the React picker at `@flanksource/clicky-ui/react-grab`. The picker ships within Clicky UI. Clicky UI 0.3.59 does not contain those APIs, and an unpublished dependency cannot support a clean install. Until that release exists, dependency installation, lockfile generation and the normal Make targets remain blocked; the explicit development checks below validate the local source only. Build the local picker with `pnpm --filter @flanksource/clicky-ui build:react-grab` in the Clicky UI checkout before development checks.
 
 With a built sibling `clicky-ui` checkout and development dependencies installed, use explicit development mode:
 

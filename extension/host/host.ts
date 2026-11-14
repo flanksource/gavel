@@ -1,6 +1,6 @@
 import { startPageAgent, validateHostMessage } from "@flanksource/page-runtime/frame/agent";
 import type { AgentFrameMessage, AgentSelection } from "@flanksource/page-runtime/schema";
-import type { ContextMenuActionContext } from "@flanksource/react-grab";
+import type { ContextMenuActionContext } from "@flanksource/clicky-ui/react-grab";
 import type { CommentScreenshotCapture } from "../contracts/comments-model";
 import { SIDEBAR_PLUGIN_NAME, grabberPlugin, registerGrabberPlugin, sidebarButtonPlugin } from "../comments/react-grab-actions";
 import type { ScreenshotTarget } from "../comments/screenshot-viewport";
@@ -8,7 +8,7 @@ import { bridgeMessage, envelope, externalTitle, panelMode, type HostMessage, ty
 import { hoverSize } from "./host-hover-resize";
 import { mountHost } from "./host-dom";
 import { withOverlaysHidden } from "./host-capture";
-import { commentPlugin } from "@flanksource/react-grab/core";
+import { commentPlugin } from "@flanksource/clicky-ui/react-grab/core";
 import { GAVEL_SVG, GAVEL_FILLED_SVG } from "./gavel-icon";
 import { gavelTodoActions, type GavelTodoOptions } from "./host-gavel";
 import { acquireGrab } from "./host-grab";

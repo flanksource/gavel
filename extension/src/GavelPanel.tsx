@@ -12,23 +12,26 @@ import {
   useCommentContext,
   useCommentRailWidth,
   type Comment,
+  type CommentConfig,
   type CommentCreateInput,
   type CommentScrollOptions,
   type DropdownMenuItem,
 } from "@flanksource/clicky-ui";
-import type { CommentAgentRun } from "@flanksource/clicky-ui/comments";
+import { CommentCapture, type CommentAgentRun } from "@flanksource/clicky-ui/comments";
+import { AgentIdentityProvider } from "@flanksource/clicky-ui/chat";
 import { UiLayoutWindow, UiMinus, UiRobotAi, UiSidebar } from "@flanksource/clicky-ui/icons";
 import type { AgentPin } from "@flanksource/page-runtime/schema";
 import type { AgentPickerProps } from "../agents/AgentPicker";
 import { commentPins } from "../comments/comment-pins";
 import { AgentRunActions } from "./AgentRunActions";
-import { freshTarget, retryTarget } from "./agent-retry";
+import { freshTarget, retryTarget, withEdits } from "./agent-retry";
 import { FloatingDraft } from "../host/FloatingDraft";
-import { externalUrl, type AnchorState, type HostState, type Presentation } from "../host/model";
+import { externalUrl, type AnchorState, type HostState, type Presentation, type Selection } from "../host/model";
 import { requestPanelMode, sendToHost, useHostBridge } from "../host/useHostBridge";
 import { useHostDialog } from "../host/useHostDialog";
 import { RunAgentDialog } from "../agents/RunAgentDialog";
 import { agentAssignItems, assignAllItems } from "./assign-items";
+import { commentTargets, defaultDelivery, targetDelivery } from "./comment-targets";
 import { GavelClient, fetchRuntimeCatalog, type AgentSession, type DeliverTarget } from "./gavel-client";
 import { EventSourceProvider } from "@flanksource/clicky-ui/hooks";
 import { gavelEventHub } from "./gavel-streams";
@@ -56,14 +59,6 @@ function describe(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-/** The hand-off gavel recorded for a thread, as a one-line status. */
-function agentRunNote(run: CommentAgentRun): string {
-  const where = run.target?.label ?? run.sessionId ?? "an agent session";
-  if (run.state === "error") return `Agent hand-off failed: ${run.error ?? "no reason recorded"}`;
-  if (run.state === "done") return `Handled by ${where}`;
-  return run.state === "queued" ? `Queued for ${where}` : `Sent to ${where}`;
-}
-
 export function GavelPanel({ target }: { target: PanelTarget }) {
   const client = useMemo(() => new GavelClient({ server: target.server, project: target.project }), [target.server, target.project]);
   // Every SSE stream the panel's components open (the session transcript's live follow) shares one hub connection to gavel.
@@ -78,6 +73,7 @@ export function GavelPanel({ target }: { target: PanelTarget }) {
   const [agentSession, setAgentSession] = useState(target.agentSession);
   const [deliveryError, setDeliveryError] = useState("");
   const { sessions, error: sessionsError, refresh: refreshSessions } = useAgentSessions(client);
+  const identities = useMemo(() => Object.fromEntries((sessions ?? []).map(session => [session.id, { sessionName: session.title, ...(session.model ? { model: session.model } : {}) }])), [sessions]);
   // The runtime for new sessions starts as the one the grabber was opened with; changing it here applies to this panel until it is closed.
   const [runtime, setRuntime] = useState(target.runtime);
   const { catalog, error: catalogError } = useRuntimeCatalog(target.server);
@@ -110,7 +106,7 @@ export function GavelPanel({ target }: { target: PanelTarget }) {
     setDeliveryError("");
     setHandingOff(true);
     try {
-      const next = choose();
+      const next = withEdits(choose(), autoRun.agent?.agent.edits);
       if (next.kind === "run") adoption.watch(ids);
       await send(next);
     } catch (cause) {
@@ -133,20 +129,53 @@ export function GavelPanel({ target }: { target: PanelTarget }) {
     return freshTarget(runDelivery);
   });
   const retry = (comment: Comment, run: CommentAgentRun) => deliverTo(comment, () => retryTarget({ run, delivery: currentDelivery() }));
+  const families = catalog?.families;
+  // Unset until the page's rule has loaded, so the composer never claims a comment is (not) delivered before gavel says so.
+  const rule = autoRun.ready ? autoRun.agent : undefined;
+  const config = useMemo<CommentConfig>(() => ({
+    ...GAVEL_COMMENT_CONFIG,
+    targets: commentTargets(families),
+    ...(rule ? { defaultDelivery: defaultDelivery(rule) } : {}),
+  }), [families, rule]);
+  /**
+   * Creates the thread handed to the target the composer addressed it to, in
+   * place of the page's comment agent rule, so gavel delivers it exactly once.
+   * An unresolvable target fails the create before anything is posted.
+   */
+  const create = async (input: CommentCreateInput, selection: Selection) => {
+    const addressed = input.target;
+    const deliver = addressed ? withEdits(targetDelivery({
+      target: addressed,
+      families,
+      session: currentDelivery(),
+      runTarget: chosen => {
+        if (!page) throw pageNotReported();
+        return client.runTarget({ page, grouping: target.grouping, runtime: chosen });
+      },
+      presets: runtime?.presets,
+    }), autoRun.agent?.agent.edits) : undefined;
+    const id = await comments.create(input, selection, deliver);
+    if (deliver?.kind === "run") adoption.watch([id]);
+    if (deliver) void refreshSessions();
+  };
   const renderRunDetails = (comment: Comment) => {
     const run = comment.agentRun;
-    if (!run) return null;
+    const capture = comments.comments.find(entry => entry.id === comment.id)?.element;
     return (
       <>
-        <p role="status" className="px-1 text-xs text-muted-foreground">{agentRunNote(run)}</p>
-        <AgentRunActions
-          state={run.state}
-          {...(comment.status !== undefined ? { status: comment.status } : {})}
-          busy={handingOff}
-          onRetry={() => void retry(comment, run)}
-          onRetryFresh={() => void sendFresh(comment)}
-          onSendFresh={() => void sendFresh(comment)}
-        />
+        {capture && <CommentCapture capture={capture} />}
+        {run?.state === "error" && (
+          <>
+            <p role="alert" className="px-1 text-xs text-destructive">{run.error ?? "Agent hand-off failed without an error message."}</p>
+            <AgentRunActions
+              state={run.state}
+              {...(comment.status !== undefined ? { status: comment.status } : {})}
+              busy={handingOff}
+              onRetry={() => void retry(comment, run)}
+              onRetryFresh={() => void sendFresh(comment)}
+            />
+          </>
+        )}
       </>
     );
   };
@@ -160,6 +189,12 @@ export function GavelPanel({ target }: { target: PanelTarget }) {
       label: "Auto-run new comments on this page",
       title: "Gavel starts a new agent run for each new comment on this page, using the model above. Runs never go to the session chosen below; that one is used by Send to agent.",
       onChange: enabled => void autoRun.set(enabled),
+    },
+    edits: {
+      value: autoRun.edits,
+      disabled: !autoRun.ready || !autoRun.enabled,
+      title: "Whether the auto-run agent edits this project's files itself or proposes patches you accept or reject. Applies while auto-run is on.",
+      onChange: next => void autoRun.setEdits(next),
     },
     sessions: {
       items: pickerSessions({ sessions, selectedId: agentSession }),
@@ -180,6 +215,7 @@ export function GavelPanel({ target }: { target: PanelTarget }) {
   return (
     <ThemeProvider>
       <EventSourceProvider value={streams}>
+      <AgentIdentityProvider identities={identities}>
       <DensityProvider>
         <main className="flex h-dvh min-h-0 flex-col bg-background text-foreground">
           {!bridge.state && (
@@ -192,6 +228,8 @@ export function GavelPanel({ target }: { target: PanelTarget }) {
             <GavelRail
               state={bridge.state}
               comments={comments}
+              config={config}
+              create={create}
               floating={bridge.floating}
               presentation={bridge.presentation}
               anchors={bridge.anchors}
@@ -239,6 +277,7 @@ export function GavelPanel({ target }: { target: PanelTarget }) {
           }}
         />
       </DensityProvider>
+      </AgentIdentityProvider>
       </EventSourceProvider>
     </ThemeProvider>
   );
@@ -256,6 +295,10 @@ function Alerts({ messages }: { messages: string[] }) {
 type RailProps = {
   state: HostState;
   comments: GavelComments;
+  /** The comment config with this panel's targets. */
+  config: CommentConfig;
+  /** Creates a thread and delivers it to the target its composer chose. */
+  create: (input: CommentCreateInput, selection: Selection) => Promise<void>;
   floating: boolean;
   presentation: Presentation;
   anchors: AnchorState[];
@@ -279,13 +322,13 @@ function GavelRail(props: RailProps) {
     <CommentProvider
       persistenceKey={`gavel:${externalUrl(state.url).base}`}
       comments={comments.comments}
-      config={GAVEL_COMMENT_CONFIG}
+      config={props.config}
       initialRailMode="all"
       onCreate={async input => {
         const selection = state.selection;
         if (!selection || input.anchor !== selection.anchor || externalUrl(selection.element.pageUrl ?? "").url !== externalUrl(state.url).url)
           throw new Error("Select an element or Comment on page on the current URL before posting this draft");
-        await comments.create(input, selection);
+        await props.create(input, selection);
       }}
       onReply={comments.reply}
       onUpdateStatus={comments.updateStatus}
@@ -293,6 +336,10 @@ function GavelRail(props: RailProps) {
       onAcknowledge={comments.acknowledge}
       onAssign={comments.assign}
       onDelete={comments.remove}
+      onApplyProposal={comments.applyProposal}
+      onRejectProposal={comments.rejectProposal}
+      onRequestRevision={comments.requestRevision}
+      loadProposalDiff={comments.loadProposalDiff}
       onScrollToAnchor={navigate}
       getAnchorTop={anchor => anchors.find(value => value.anchor === anchor && value.available)?.top ?? null}
     >
@@ -305,7 +352,7 @@ function readTab(): PanelTab {
   return localStorage.getItem(TAB_KEY) === "session" ? "session" : "comments";
 }
 
-function RailContents({ state, comments, floating, presentation, anchors, focus, alerts, renderRunDetails, session, extraAssignItems, assignAll }: RailProps) {
+function RailContents({ state, comments, config, create, floating, presentation, anchors, focus, alerts, renderRunDetails, session, extraAssignItems, assignAll }: RailProps) {
   const ctx = useCommentContext();
   const [tab, setTab] = useState<PanelTab>(readTab);
   const [snapshot] = useState(() => pageSnapshot({ requestPage: () => sendToHost({ type: "page" }), timeoutMs: PAGE_SNAPSHOT_TIMEOUT_MS }));
@@ -339,7 +386,7 @@ function RailContents({ state, comments, floating, presentation, anchors, focus,
   const openThreads = comments.comments.filter(comment => !comment.parentId && isUnresolved(GAVEL_COMMENT_CONFIG, comment.status)).length;
   const postPageComment = async (input: CommentCreateInput) => {
     const selection = await snapshot.request();
-    await comments.create({ ...input, anchor: DOCUMENT_ANCHOR }, selection);
+    await create({ ...input, anchor: DOCUMENT_ANCHOR }, selection);
   };
   const rail = presentation === "rail";
   return (
@@ -397,13 +444,18 @@ function RailContents({ state, comments, floating, presentation, anchors, focus,
               formatAnchorLabel={anchor => anchor}
               extraAssignItems={extraAssignItems}
               renderRootDetails={renderRunDetails}
+              detailTabs={[{
+                id: "capture",
+                label: "Capture",
+                render: thread => <CommentCapture capture={comments.comments.find(comment => comment.id === thread[0]?.id)?.element} expanded />,
+              }]}
             />
             {anchors.some(anchor => !anchor.available) && (
               <p role="status" className="mt-3 text-xs text-muted-foreground">Some anchors are unavailable. Their comments are retained.</p>
             )}
           </div>
           <PanelComposer
-            config={GAVEL_COMMENT_CONFIG}
+            config={config}
             onPost={postPageComment}
             onPick={({ screenshot }) => sendToHost({ type: "pick", ...(screenshot ? { screenshot } : {}) })}
           />
