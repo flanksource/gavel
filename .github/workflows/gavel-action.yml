@@ -63,6 +63,23 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/golangci-lint" version
 
+      # .uir.yaml enables the uir linter. uir publishes no release binaries and
+      # its go.mod has a replace directive (so `go install …@version` is refused);
+      # build the pinned tag's CLI instead. web/dist only feeds `uir serve`'s
+      # embedded UI, which linting never uses, so an empty placeholder suffices.
+      - name: Install uir
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=v1.13.0
+          src="$(mktemp -d)"
+          trap 'rm -rf "$src"' EXIT
+          git clone --quiet --depth 1 --branch "$version" https://github.com/flanksource/uir.git "$src"
+          mkdir -p "$src/web/dist" "$HOME/.local/bin"
+          touch "$src/web/dist/.keep"
+          (cd "$src" && GOWORK=off go build -o "$HOME/.local/bin/uir" ./cmd/uir)
+          "$HOME/.local/bin/uir" --version
+
       - name: Build gavel from source
         run: |
           task build:prod
