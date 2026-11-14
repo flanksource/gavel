@@ -79,4 +79,20 @@ var _ = Describe("file scope", func() {
 		Expect(os.Remove(filepath.Join(workDir, fileB))).To(Succeed())
 		Expect(scopeOf(fileA, fileB)).To(Equal(fileScope{Paths: []string{fileA, fileB}, Exact: true}))
 	})
+
+	DescribeTable("rejects paths escaping the review workspace", func(kind string) {
+		outside := GinkgoT().TempDir()
+		path := filepath.Join(outside, "deleted.go")
+		switch kind {
+		case "relative":
+			var err error
+			path, err = filepath.Rel(workDir, path)
+			Expect(err).NotTo(HaveOccurred())
+		case "symlink":
+			Expect(os.Symlink(outside, filepath.Join(workDir, "escape"))).To(Succeed())
+			path = "escape"
+		}
+		_, err := newFileScope(workDir, []string{path})
+		Expect(err).To(HaveOccurred())
+	}, Entry("absolute", "absolute"), Entry("relative", "relative"), Entry("symlink", "symlink"))
 })

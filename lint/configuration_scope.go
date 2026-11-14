@@ -1,11 +1,14 @@
 package lint
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"time"
 
+	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/utils"
@@ -144,7 +147,11 @@ func FilterConfiguredViolations(results []*linters.LinterResult, workDir string)
 		for _, violation := range result.Violations {
 			dir := root
 			if violation.File != "" {
-				dir = configDir(filepath.Dir(resolveLintPath(root, violation.File)))
+				var err error
+				dir, err = configDir(root, filepath.Dir(violation.File))
+				if err != nil {
+					return err
+				}
 			}
 			cfg, exists := configs[dir]
 			if !exists {
@@ -168,15 +175,22 @@ func FilterConfiguredViolations(results []*linters.LinterResult, workDir string)
 // configDir is the directory whose .gavel.yaml chain governs dir: dir itself,
 // or for a deleted or virtual path its nearest existing ancestor, since a
 // directory that does not exist declares no configuration of its own.
-func configDir(dir string) string {
+func configDir(root, dir string) (string, error) {
+	local, err := safefs.LocalPath(root, dir)
+	if err != nil {
+		return "", err
+	}
 	for {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			return dir
+		info, err := safefs.Stat(root, local)
+		if err == nil {
+			if !info.IsDir() {
+				return "", fmt.Errorf("lint configuration path %q is not a directory", dir)
+			}
+			return filepath.Join(root, local), nil
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return dir
+		if !errors.Is(err, os.ErrNotExist) || local == "." {
+			return "", err
 		}
-		dir = parent
+		local = filepath.Dir(local)
 	}
 }
