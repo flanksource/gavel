@@ -13,9 +13,11 @@ import { UiAdd, type IconProps } from '@flanksource/clicky-ui/icons';
 // closed DropdownMenu renders only its trigger — mirror that so hidden menu items
 // stay out of the DOM.
 vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => {
-  const { Button } = await importOriginal<typeof import('@flanksource/clicky-ui/components')>();
+  const { Button, SegmentedControl, Switch } = await importOriginal<typeof import('@flanksource/clicky-ui/components')>();
   return {
   Button,
+  SegmentedControl,
+  Switch,
   SplitButton: ({ label, onClick, title, disabled, items }: { label: ReactNode; onClick?: () => void; title?: string; disabled?: boolean; items?: Array<{ label: ReactNode; onSelect?: () => void }> }) => (
     <div><Button onClick={onClick} title={title} disabled={disabled}>{label}</Button>
       {/* react-doctor-disable-next-line react-doctor/no-array-index-as-key -- test stub renders a fixed menu list */}
@@ -103,11 +105,11 @@ describe('PRActions responsive collapse', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderActions({ pr: makePR({ number: 27, repo: 'acme/product/service', url }), detail: { pr: { provider: 'azuredevops', state: 'OPEN', headRefOid: 'reviewed-head' } } as PRDetail });
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Enable auto-merge (rebase)' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Update branch' })).toBeNull();
     expect((screen.getByRole('button', { name: 'Merge' }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('switch', { name: /Auto-merge/ })).toBeNull();
     fireEvent.click(screen.getAllByRole('button', { name: 'Merge' }).at(-1)!);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/prs/merge', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -115,11 +117,23 @@ describe('PRActions responsive collapse', () => {
     }));
   });
 
-  it('names rebase, squash and merge-commit strategies on demand', () => {
-    renderActions();
-    for (const label of ['Rebase and merge', 'Squash and merge', 'Create a merge commit']) {
-      expect(screen.getByRole('button', { name: label })).toBeTruthy();
-    }
+  it('offers one Merge button and picks the method and auto-merge in its confirmation', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"status":"ok"}'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderActions({ detail: { pr: { nodeId: 'PR_node_7', state: 'OPEN', headRefOid: 'head-1' } } as PRDetail });
+    expect(screen.getAllByRole('button', { name: /merge/i }).map(button => button.textContent)).toEqual(['Merge']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    const dialog = screen.getByRole('dialog', { name: 'Merge pull request' });
+    expect(Array.from(dialog.querySelectorAll('[role="radio"]')).map(radio => radio.textContent)).toEqual(['Rebase', 'Squash', 'Merge commit']);
+    fireEvent.click(screen.getByRole('radio', { name: /Squash/ }));
+    fireEvent.click(screen.getByRole('switch', { name: /Auto-merge/ }));
+    expect(dialog.textContent).toContain('Once all required checks pass, acme/widget#7 merges: it squashes its commits into one commit on main.');
+    fireEvent.click(screen.getByRole('button', { name: 'Enable auto-merge' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/prs/merge', expect.objectContaining({
+      body: JSON.stringify({ url: 'https://github.com/acme/widget/pull/7', method: 'squash', auto: true, headSha: 'head-1' }),
+    })));
   });
   it('renders every action inline when not collapsed', () => {
     renderActions({ detail: null, collapsed: false, extras: [newTodo] });

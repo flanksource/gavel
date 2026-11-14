@@ -41,3 +41,11 @@ describe('PRRow gavel failed badge', () => {
     expect(screen.getAllByTitle(title).length).toBeGreaterThan(0);
   });
 });
+
+describe('PRRow title', () => {
+  it('renders the PR name at normal weight', () => {
+    render(<PRRow pr={pr} selected={false} onClick={() => {}} />);
+
+    expect(screen.getByText(pr.title).className.split(' ')).toEqual(expect.arrayContaining(['font-normal']));
+  });
+});

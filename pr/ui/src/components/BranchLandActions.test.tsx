@@ -10,8 +10,14 @@ import { BranchLandActions, branchAIMergeBlockedReason, branchLandBlockedReasons
 /* oxlint-disable clicky-ui/prefer-clicky-components --
    These raw elements ARE the test doubles for clicky-ui's Button/SplitButton/InputField:
    the real SplitButton mounts floating-ui, which crashes under vitest. The SplitButton
-   double renders its menu items inline so the secondary entries are reachable. */
-vi.mock('@flanksource/clicky-ui/components', () => ({
+   double renders its menu items inline so the secondary entries are reachable; the Modal
+   double renders in place instead of in a portal. */
+vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => ({
+  SegmentedControl: (await importOriginal<typeof import('@flanksource/clicky-ui/components')>()).SegmentedControl,
+  Modal: ({ children, footer, title }: { children: ReactNode; footer: ReactNode; title: string }) => (
+    // oxlint-disable-next-line clicky-ui/no-adhoc-overlay -- this IS the stub standing in for clicky's Modal.
+    <div role="dialog" aria-label={title}>{children}{footer}</div>
+  ),
   Button: ({ children, variant: _variant, size: _size, loading, disabled, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string; loading?: boolean }) => (
     <button type="button" disabled={disabled || loading} {...props}>{children}</button>
   ),
@@ -147,16 +153,26 @@ describe('branchLandBlockedReasons', () => {
   });
 });
 
+// The merge is confirmed in a dialog that picks the method; these drive it.
+function openMergeDialog() {
+  fireEvent.click(screen.getByRole('button', { name: /Merge into main/ }));
+  return screen.getByRole('dialog', { name: `Merge ${BRANCH} into main` });
+}
+const confirmButton = (name: RegExp) => screen.getByRole('button', { name }) as HTMLButtonElement;
+
 describe('BranchLandActions', () => {
-  it('squash-merges by default without a message and refreshes git, status and summary', async () => {
+  it('squash-merges from the dialog by default without a message, closes it and refreshes git, status and summary', async () => {
     const fetchMock = stubLand(200, mergeResult);
     const { invalidate, onMerged } = renderActions();
 
-    fireEvent.click(screen.getByRole('button', { name: /Squash & merge into main/ }));
+    openMergeDialog();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(confirmButton(/^Squash & merge$/));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(posted(fetchMock, 'merge')).toEqual({ branch: BRANCH, mode: 'squash' });
     await waitFor(() => expect(onMerged).toHaveBeenCalledWith(mergeResult));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.projectGitSummary() });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.projectGit(PROJECT) });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.projectStatusScope(PROJECT) });
@@ -166,30 +182,36 @@ describe('BranchLandActions', () => {
     const fetchMock = stubLand(200, mergeResult);
     const { onMerged, unmount } = renderActions();
 
-    fireEvent.click(screen.getByRole('button', { name: /Squash & merge into main/ }));
+    openMergeDialog();
+    fireEvent.click(confirmButton(/^Squash & merge$/));
     unmount();
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(onMerged).toHaveBeenCalledWith(mergeResult));
   });
 
-  it('sends the trimmed squash message', async () => {
+  it('sends the trimmed squash message typed in the dialog', async () => {
     const fetchMock = stubLand(200, mergeResult);
     renderActions();
 
+    openMergeDialog();
     fireEvent.change(screen.getByRole('textbox', { name: 'Squash commit message' }), { target: { value: '  feat: git panel  ' } });
-    fireEvent.click(screen.getByRole('button', { name: /Squash & merge into main/ }));
+    fireEvent.click(confirmButton(/^Squash & merge$/));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(posted(fetchMock, 'merge')).toEqual({ branch: BRANCH, mode: 'squash', message: 'feat: git panel' });
   });
 
-  it('merges incrementally from the menu and never sends the squash message', async () => {
+  it('picks each-commit in the dialog, hides the squash message and never sends it', async () => {
     const fetchMock = stubLand(200, { ...mergeResult, mode: 'incremental' });
     renderActions();
 
+    const dialog = openMergeDialog();
+    expect(Array.from(dialog.querySelectorAll('[role="radio"]')).map(radio => radio.textContent)).toEqual(['Squash', 'Each commit', 'With AI']);
     fireEvent.change(screen.getByRole('textbox', { name: 'Squash commit message' }), { target: { value: 'ignored' } });
-    fireEvent.click(screen.getByRole('button', { name: /Merge each commit/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /Each commit/ }));
+    expect(screen.queryByRole('textbox', { name: 'Squash commit message' })).toBeNull();
+    fireEvent.click(confirmButton(/^Merge each commit$/));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(posted(fetchMock, 'merge')).toEqual({ branch: BRANCH, mode: 'incremental' });
@@ -211,19 +233,21 @@ describe('BranchLandActions', () => {
     expect(onMerged).not.toHaveBeenCalled();
   });
 
-  it('lists the conflicting paths of a 409 and keeps the actions', async () => {
+  it('keeps the dialog open on a 409, listing the conflicting paths', async () => {
     stubLand(409, { error: 'squash of feat/git-panel onto main conflicts', conflicts: ['a.txt', 'dir/b.txt'] });
     renderActions();
 
-    fireEvent.click(screen.getByRole('button', { name: /Squash & merge into main/ }));
+    const dialog = openMergeDialog();
+    fireEvent.click(confirmButton(/^Squash & merge$/));
 
     const alert = await screen.findByRole('alert');
+    expect(dialog.contains(alert)).toBe(true);
     expect(alert.textContent).toContain('conflicts');
     expect(Array.from(alert.querySelectorAll('li')).map(item => item.textContent)).toEqual(['a.txt', 'dir/b.txt']);
-    expect(screen.getByRole('button', { name: /Squash & merge into main/ })).toBeTruthy();
+    expect(confirmButton(/^Squash & merge$/).disabled).toBe(false);
   });
 
-  it('shows a 409 without conflicts as a plain error', async () => {
+  it('shows a refused PR inline as a plain error', async () => {
     stubLand(409, { error: 'worktree is dirty' });
     renderActions();
 
@@ -235,28 +259,30 @@ describe('BranchLandActions', () => {
   });
 
   it.each([
-    ['ahead', { ahead: 0 }, /no commits ahead/],
-    ['dirty', { dirtyCount: 3 }, /3 uncommitted changes/],
-  ])('disables merge and PR for a branch that is %s-blocked, saying why', (_label, overrides, reason) => {
+    ['ahead', { ahead: 0 }, 'The branch has no commits ahead of main.'],
+    ['dirty', { dirtyCount: 3 }, '3 uncommitted changes in the worktree: commit or discard them before landing.'],
+  ])('says in the dialog, not inline, why a %s-blocked branch cannot merge, and disables PR', (_label, overrides, reason) => {
     const fetchMock = stubLand(200, mergeResult);
     renderActions(overrides);
 
-    const merge = screen.getByRole('button', { name: /Squash & merge into main/ }) as HTMLButtonElement;
-    expect(merge.disabled).toBe(true);
+    expect(screen.queryByText(reason)).toBeNull();
     expect((screen.getByRole('button', { name: /^Create PR$/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect(merge.closest('[title]')?.getAttribute('title')).toMatch(reason);
-    fireEvent.click(merge);
+    const dialog = openMergeDialog();
+    expect(dialog.textContent).toContain(reason);
+    expect(confirmButton(/^Squash & merge$/).disabled).toBe(true);
+    fireEvent.click(confirmButton(/^Squash & merge$/));
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('disables only the merge when the main checkout is off the base branch', () => {
+  it('refuses only the merge when the main checkout is off the base branch', () => {
     renderActions({ baseCheckedOut: false });
 
-    expect((screen.getByRole('button', { name: /Squash & merge into main/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: /Merge each commit/ }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: /^Create PR$/ }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.getByRole('button', { name: /Squash & merge into main/ }).closest('[title]')?.getAttribute('title')).toMatch(/not on main/);
+    openMergeDialog();
     expect(screen.getByText('The main checkout is not on main: check out main there before merging.')).toBeTruthy();
+    expect(confirmButton(/^Squash & merge$/).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: /Each commit/ }));
+    expect(confirmButton(/^Merge each commit$/).disabled).toBe(true);
   });
 });
 
@@ -274,7 +300,12 @@ describe('branchAIMergeBlockedReason', () => {
 describe('BranchLandActions AI merge', () => {
   const RUN = 'run-1';
   const SESSION = 'session-1';
-  const aiMergeItem = () => screen.getByRole('button', { name: /Merge with AI/ }) as HTMLButtonElement;
+  // Opens the dialog on the AI method and returns its confirm button.
+  const chooseAIMerge = () => {
+    openMergeDialog();
+    fireEvent.click(screen.getByRole('radio', { name: /With AI/ }));
+    return () => confirmButton(/^Merge with AI$/);
+  };
 
   function startedRun(fetchMock: ReturnType<typeof stubLand>, call = 0) {
     const [url, init] = fetchMock.mock.calls[call] as unknown as [string, RequestInit];
@@ -283,13 +314,14 @@ describe('BranchLandActions AI merge', () => {
     return JSON.parse(String(init.body)).variables;
   }
 
-  it('runs the branch-merge prompt from the menu, tails its session and reports the landed merge', async () => {
+  it('runs the branch-merge prompt from the dialog, tails its session and reports the landed merge', async () => {
     const fetchMock = stubLand(200, { runId: RUN, status: 'running' });
     const { onMerged } = renderActions({ worktreePath: WORKTREE });
 
-    await waitFor(() => expect(aiMergeItem().disabled).toBe(false));
+    const aiMerge = chooseAIMerge();
+    await waitFor(() => expect(aiMerge().disabled).toBe(false));
     fireEvent.change(screen.getByRole('textbox', { name: 'Squash commit message' }), { target: { value: ' feat: git panel ' } });
-    fireEvent.click(aiMergeItem());
+    fireEvent.click(aiMerge());
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(startedRun(fetchMock)).toEqual({
@@ -300,7 +332,8 @@ describe('BranchLandActions AI merge', () => {
 
     emit('run', { runId: RUN, sessionId: SESSION });
     expect(screen.getByTestId('session-tail').textContent).toBe(`/api/captain/sessions/${SESSION}`);
-    expect((screen.getByRole('button', { name: /Squash & merge into main/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(aiMerge().disabled).toBe(true);
+    expect(screen.getByRole('button', { name: /Merging with AI/ })).toBeTruthy();
 
     emit('done', { runId: RUN, sessionId: SESSION, success: true });
     expect(onMerged).toHaveBeenCalledWith({
@@ -314,7 +347,9 @@ describe('BranchLandActions AI merge', () => {
     const fetchMock = stubLand(409, { error: 'cherry-pick of feat/git-panel onto main conflicts', conflicts: ['a.txt'] });
     renderActions({ worktreePath: WORKTREE });
 
-    fireEvent.click(screen.getByRole('button', { name: /Merge each commit/ }));
+    openMergeDialog();
+    fireEvent.click(screen.getByRole('radio', { name: /Each commit/ }));
+    fireEvent.click(confirmButton(/^Merge each commit$/));
     const resolve = await screen.findByRole('button', { name: /Resolve with AI & merge each commit/ });
     await waitFor(() => expect((resolve as HTMLButtonElement).disabled).toBe(false));
     fetchMock.mockImplementationOnce(async () => json(200, { runId: RUN, status: 'running' }));
@@ -325,16 +360,20 @@ describe('BranchLandActions AI merge', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: /Resolve with AI/ })).toBeNull());
   });
 
-  it('shows a failed run inline and reports no merge', async () => {
+  it('shows a failed run and reports no merge, also once the dialog is closed', async () => {
     stubLand(200, { runId: RUN, status: 'running' });
     const { onMerged } = renderActions({ worktreePath: WORKTREE });
 
-    await waitFor(() => expect(aiMergeItem().disabled).toBe(false));
-    fireEvent.click(aiMergeItem());
+    const aiMerge = chooseAIMerge();
+    await waitFor(() => expect(aiMerge().disabled).toBe(false));
+    fireEvent.click(aiMerge());
     await waitFor(() => expect(streams).toHaveLength(1));
     emit('error', { runId: RUN, success: false, error: 'workflow.after[0] "git merge --squash" failed' });
 
     expect((await screen.findByRole('alert')).textContent).toContain('AI merge failed: workflow.after[0]');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain('AI merge failed: workflow.after[0]');
     expect(onMerged).not.toHaveBeenCalled();
     expect(streams[0]?.closed).toBe(true);
   });
@@ -343,8 +382,9 @@ describe('BranchLandActions AI merge', () => {
     const fetchMock = stubLand(200, { runId: RUN, status: 'running' });
     renderActions({ worktreePath: WORKTREE });
 
-    await waitFor(() => expect(aiMergeItem().disabled).toBe(false));
-    fireEvent.click(aiMergeItem());
+    const aiMerge = chooseAIMerge();
+    await waitFor(() => expect(aiMerge().disabled).toBe(false));
+    fireEvent.click(aiMerge());
     await waitFor(() => expect(streams).toHaveLength(1));
     fetchMock.mockImplementationOnce(async () => new Response('unknown run', { status: 404 }));
     act(() => streams[0]?.listeners.get('error')?.(new Event('error')));
@@ -354,13 +394,14 @@ describe('BranchLandActions AI merge', () => {
     expect(streams[0]?.closed).toBe(true);
   });
 
-  it('disables the AI merge for a branch without a worktree, saying why', async () => {
+  it('disables the AI merge for a branch without a worktree, saying why in the dialog', async () => {
     const fetchMock = stubLand(200, { runId: RUN });
     renderActions();
 
-    await waitFor(() => expect(aiMergeItem().getAttribute('title')).toMatch(/has none/));
-    expect(aiMergeItem().disabled).toBe(true);
-    fireEvent.click(aiMergeItem());
+    const aiMerge = chooseAIMerge();
+    await waitFor(() => expect(screen.getByRole('dialog').textContent).toMatch(/has none/));
+    expect(aiMerge().disabled).toBe(true);
+    fireEvent.click(aiMerge());
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

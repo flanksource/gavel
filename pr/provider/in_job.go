@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/flanksource/gavel/pr/blame"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/sandbox/runclient"
 )
@@ -52,6 +53,10 @@ func InJob() bool { return inJob() != nil }
 type jobClient struct{ api RunAPI }
 
 func (c jobClient) Kind() string { return "github" }
+
+func (c jobClient) RecommendReviewers(blame.Request) (*blame.Recommendations, error) {
+	return nil, errInJob("recommending PR reviewers from local history")
+}
 
 func (c jobClient) Status(ctx context.Context, number int, opts model.StatusOptions) (*model.StatusSnapshot, error) {
 	query := url.Values{

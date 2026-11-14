@@ -12,7 +12,6 @@ import {
   UiFolderGit2,
   UiGitBranch,
   UiGitCommit,
-  UiGitMerge,
   UiGitPr,
   UiRobotAi,
   type IconProps,
@@ -56,7 +55,7 @@ function WorkRow({ icon: Icon, label, tone, children }: {
   children: ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-start gap-2 border-b border-border px-3 py-2 last:border-b-0 max-sm:grid-cols-1 max-sm:gap-1">
+    <div className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-start gap-2 border-b border-border px-3 py-2 last:border-b-0 max-sm:grid-cols-1 max-sm:!gap-1">
       <span className={cn(
         'inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground',
         tone === 'warning' && 'text-amber-700 dark:text-amber-400',
@@ -71,13 +70,34 @@ function WorkRow({ icon: Icon, label, tone, children }: {
   );
 }
 
+/** Merge into base and Create PR for the session's branch, at the header's right while it is unmerged. */
+function SessionLandActions({ session }: { session: AgentSession }) {
+  const queryClient = useQueryClient();
+  const { worktree, git, pr, project } = session;
+  if (!project || !worktree?.branch || !git || pr?.state === 'merged') return null;
+  return (
+    <div className="shrink-0">
+      <BranchLandActions
+        projectName={project}
+        branch={worktree.branch}
+        base={worktree.base || 'base'}
+        ahead={git.ahead}
+        dirtyCount={sessionDirtyCount(session)}
+        baseCheckedOut={git.baseCheckedOut}
+        worktreePath={worktree.path}
+        onMerged={() => { void queryClient.invalidateQueries({ queryKey: queryKeys.agentSessions() }); }}
+      />
+    </div>
+  );
+}
+
 function SessionHeader({ session, onOpenTodo }: { session: AgentSession; onOpenTodo: (id: string) => void }) {
   const reasons = attentionReasons(session);
   return (
-    <header className="shrink-0 border-b border-border bg-background px-4 py-2 max-md:px-3">
-      <div className="flex min-w-0 items-center gap-2">
+    <header className="shrink-0 border-b border-border bg-background px-4 py-2 max-md:!px-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <SessionActivityIcon session={session} />
-        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground" title={session.title}>{session.title}</h2>
+        <h2 className="min-w-0 flex-1 basis-40 truncate text-sm font-semibold text-foreground" title={session.title}>{session.title}</h2>
         {session.context ? (
           <ContextMeter
             mode="bar"
@@ -93,6 +113,7 @@ function SessionHeader({ session, onOpenTodo }: { session: AgentSession; onOpenT
             cost={{ total: session.costUsd }}
           />
         ) : null}
+        <SessionLandActions session={session} />
       </div>
       <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
         <span className="font-medium text-foreground">{activityLabel(session)}</span>
@@ -120,7 +141,6 @@ function SessionHeader({ session, onOpenTodo }: { session: AgentSession; onOpenT
 }
 
 function WorkStatePanel({ session, onOpenWorktree }: { session: AgentSession; onOpenWorktree: SessionDetailProps['onOpenWorktree'] }) {
-  const queryClient = useQueryClient();
   const { worktree, git, pr, project } = session;
   const base = worktree?.base || 'base';
   const dirty = sessionDirtyCount(session);
@@ -166,20 +186,6 @@ function WorkStatePanel({ session, onOpenWorktree }: { session: AgentSession; on
           <WorkRow icon={UiGitCommit} label="Unmerged" tone={git.ahead > 0 ? undefined : 'ok'}>
             <span className="tabular-nums">{git.ahead} ahead · {git.behind} behind {base}</span>
           </WorkRow>
-          {project && worktree?.branch && pr?.state !== 'merged' ? (
-            <WorkRow icon={UiGitMerge} label={`Merge → ${base}`}>
-              <BranchLandActions
-                projectName={project}
-                branch={worktree.branch}
-                base={base}
-                ahead={git.ahead}
-                dirtyCount={dirty}
-                baseCheckedOut={git.baseCheckedOut}
-                worktreePath={worktree.path}
-                onMerged={() => { void queryClient.invalidateQueries({ queryKey: queryKeys.agentSessions() }); }}
-              />
-            </WorkRow>
-          ) : null}
         </>
       ) : null}
       <WorkRow icon={UiGitPr} label="Pull request">
@@ -246,8 +252,10 @@ export function SessionDetail({ session, onOpenTodo, onOpenWorktree }: SessionDe
     <div className="flex h-full min-h-0 flex-col bg-background">
       <SessionHeader session={session} onOpenTodo={onOpenTodo} />
       {/* Narrow screens collapse the work state to one line so the transcript keeps the screen.
-          The wrapper carries the breakpoint: clicky-ui's styles.css would override one on the Button. */}
-      <div className="hidden shrink-0 border-b border-border bg-muted/20 max-md:block">
+          A plain wrapper with no display class carries the breakpoint: clicky-ui's styles.css
+          re-emits base utilities (hidden, inline-flex) after this app's variants, so a variant
+          that overrides one of them on the same element never applies. */}
+      <div className="shrink-0 border-b border-border bg-muted/20 md:hidden">
         <Button
           variant="ghost"
           type="button"
@@ -264,7 +272,7 @@ export function SessionDetail({ session, onOpenTodo, onOpenWorktree }: SessionDe
       <div
         id={workStateId}
         className={cn(
-          'shrink-0 border-b border-border bg-muted/20 p-3 max-md:max-h-[50dvh] max-md:overflow-y-auto max-md:p-2',
+          'shrink-0 border-b border-border bg-muted/20 p-3 max-md:max-h-[50dvh] max-md:overflow-y-auto max-md:!p-2',
           !workOpen && 'max-md:hidden',
         )}
       >
@@ -280,7 +288,7 @@ export function SessionDetail({ session, onOpenTodo, onOpenWorktree }: SessionDe
             aria-pressed={active === key}
             onClick={() => setTab(key)}
             className={cn(
-              'h-9 shrink-0 gap-1.5 rounded-none border-b-2 px-2.5 text-[11px] max-md:h-10',
+              'h-9 shrink-0 gap-1.5 rounded-none border-b-2 px-2.5 text-[11px] max-md:!h-10',
               active === key ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
             )}
           >

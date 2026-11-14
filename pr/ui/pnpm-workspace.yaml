@@ -6,6 +6,7 @@ packages:
 allowBuilds:
   "@parcel/watcher": true
   esbuild: true
+  sharp: true
 catalog:
   "@ai-sdk/react": ^3.0.201
   "@codemirror/autocomplete": ^6.20.3

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -70,8 +71,32 @@ func OpenComments(ctx context.Context) (*comments.Service, error) {
 			return nil, err
 		}
 		options.Routes = agents.ProjectRoutes(catalog, configured)
+		options.Locate = func(ctx context.Context, path string) (comments.Location, error) {
+			return LocateCommentPath(ctx, catalog, path)
+		}
+		options.Proposals = CommentProposals{}
 	}
 	return comments.New(options)
+}
+
+// LocateCommentPath lists a file's threads exactly, a directory's by prefix and
+// a project root's whole scope.
+func LocateCommentPath(ctx context.Context, catalog projects.Service, path string) (comments.Location, error) {
+	target, err := agents.ProjectPathTarget(ctx, catalog, path)
+	if errors.Is(err, projects.ErrNotFound) {
+		return comments.Location{}, fmt.Errorf("%w: %s is not inside a gavel project", comments.ErrInvalid, path)
+	}
+	if err != nil {
+		return comments.Location{}, err
+	}
+	switch {
+	case target.URI == "":
+		return comments.Location{ScopeURI: target.Scope}, nil
+	case target.IsDir:
+		return comments.Location{ScopeURI: target.Scope, TargetPrefix: target.URI + "/"}, nil
+	default:
+		return comments.Location{ScopeURI: target.Scope, TargetURI: target.URI}, nil
+	}
 }
 
 // CommentWorkdir is the directory of the project a gavel://project/<name> target belongs to.

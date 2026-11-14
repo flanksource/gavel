@@ -158,7 +158,7 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
         >
           #{pr.number}
         </a>
-        <span className="text-sm truncate min-w-0 flex-1 font-medium text-foreground">{pr.title}</span>
+        <span className="text-sm truncate min-w-0 flex-1 font-normal text-foreground">{pr.title}</span>
         {hasConflict && (
           <span className="text-xs text-red-500" title="Merge conflicts">
             <UiGitMerge className="text-red-500" />

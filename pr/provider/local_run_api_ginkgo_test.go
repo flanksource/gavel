@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/pr/blame"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/sandbox/runclient"
 	. "github.com/onsi/ginkgo/v2"
@@ -21,7 +22,10 @@ type localPR struct {
 	resolved []string
 }
 
-func (p *localPR) Kind() string                    { return "github" }
+func (p *localPR) Kind() string { return "github" }
+func (p *localPR) RecommendReviewers(blame.Request) (*blame.Recommendations, error) {
+	return nil, errInJob("reviewer recommendations")
+}
 func (p *localPR) Preflight(context.Context) error { return nil }
 func (p *localPR) DefaultBranch(context.Context) (string, error) {
 	return "main", nil

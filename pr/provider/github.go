@@ -4,10 +4,15 @@ import (
 	"context"
 	"fmt"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/blame"
 	"github.com/flanksource/gavel/pr/model"
 )
 
 type gitHubClient struct{ opts github.Options }
+
+func (c gitHubClient) RecommendReviewers(input blame.Request) (*blame.Recommendations, error) {
+	return github.RecommendReviewers(c.opts, input)
+}
 
 func (c gitHubClient) Kind() string { return "github" }
 

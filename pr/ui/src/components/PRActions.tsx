@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { SessionTail } from '@flanksource/clicky-ui/ai';
-import { Button, SplitButton, DropdownMenu, Modal, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
+import { Button, DropdownMenu, Modal, SegmentedControl, Switch, type DropdownMenuItem, type SegmentedOption } from '@flanksource/clicky-ui/components';
 import { UiCheck, UiEllipsis, UiGitGraph, UiGitMerge, UiGitPr, UiRocket, UiSparkles, UiSync } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { ComponentType } from 'react';
@@ -43,13 +43,24 @@ export interface ExtraAction {
   disabled?: boolean;
 }
 
-// Pending is the action awaiting confirmation in the modal. method is unused for
-// approvals; for auto-merge it is the method GitHub applies once checks pass.
+// Pending is the action awaiting confirmation in the modal. A merge's method, and
+// whether GitHub applies it automatically once checks pass, are chosen in the modal.
 type Pending =
-  | { type: 'merge'; method: MergeMethod }
-  | { type: 'automerge'; method: MergeMethod }
+  | { type: 'merge'; method: MergeMethod; auto: boolean }
   | { type: 'approve' }
   | { type: 'update-branch' };
+
+const MERGE_METHODS: SegmentedOption<MergeMethod>[] = [
+  { id: 'rebase', label: 'Rebase', icon: UiGitMerge, title: 'Rebase and merge' },
+  { id: 'squash', label: 'Squash', icon: UiGitPr, title: 'Squash and merge' },
+  { id: 'merge', label: 'Merge commit', icon: UiGitGraph, title: 'Create a merge commit' },
+];
+
+const MERGE_METHOD_EFFECT: Record<MergeMethod, string> = {
+  rebase: 'replays its commits onto',
+  squash: 'squashes its commits into one commit on',
+  merge: 'adds a merge commit to',
+};
 
 // menuLabel pairs an icon component with text, rendered inside the label of a
 // Button/SplitButton/DropdownMenuItem (rather than via their `icon` prop) so the
@@ -138,31 +149,8 @@ export function PRActions({
         ? 'Resolve merge conflicts before merging'
         : undefined;
 
-  // The default click rebases; the menu names every strategy explicitly.
-  const mergeMethods: DropdownMenuItem[] = [
-    {
-      label: menuLabel(UiGitMerge, 'Rebase and merge'),
-      onSelect: () => open({ type: 'merge', method: 'rebase' }),
-    },
-    {
-      label: menuLabel(UiGitPr, 'Squash and merge'),
-      onSelect: () => open({ type: 'merge', method: 'squash' }),
-    },
-    {
-      label: menuLabel(UiGitGraph, 'Create a merge commit'),
-      onSelect: () => open({ type: 'merge', method: 'merge' }),
-    },
-    ...(!azure ? [{
-      label: menuLabel(UiRocket, 'Enable auto-merge (rebase)'),
-      title: 'Merge automatically once all required checks pass',
-      onSelect: () => open({ type: 'automerge', method: 'rebase' }),
-    },
-    {
-      label: menuLabel(UiSync, 'Update branch'),
-      title: `Rebase this PR's branch onto ${base} to bring it up to date`,
-      onSelect: () => open({ type: 'update-branch' }),
-    }] : []),
-  ];
+  // Merging opens one confirmation that picks the method; rebase is the default.
+  const openMerge = () => open({ type: 'merge', method: 'rebase', auto: false });
 
   const extraItems: DropdownMenuItem[] = extras.map(x => ({
     label: menuLabel(x.icon, x.label),
@@ -185,8 +173,7 @@ export function PRActions({
             label: menuLabel(UiGitMerge, 'Merge'),
             title: mergeDisabledReason ?? 'Merge options',
             disabled: mergeDisabled,
-            onSelect: () => {},
-            children: mergeMethods,
+            onSelect: openMerge,
           },
           ...(!azure && behind > 0
             ? [
@@ -204,7 +191,7 @@ export function PRActions({
   ];
 
   function open(p: Pending) {
-    if (loading || (p.type !== 'update-branch' && p.type !== 'approve' && mergeDisabled)) return;
+    if (loading || (p.type === 'merge' && mergeDisabled)) return;
     actionMutation.reset();
     setComment('');
     setPending(p);
@@ -251,7 +238,7 @@ export function PRActions({
       open
       onClose={cancel}
       title={copy.title}
-      size="sm"
+      size="lg"
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={cancel} disabled={actionMutation.isPending}>{rebase.active ? 'Close' : 'Cancel'}</Button>
@@ -289,6 +276,25 @@ export function PRActions({
         )}
         {rebase.state.status === 'failed' && (
           <div role="alert" className="whitespace-pre-wrap text-sm text-destructive">AI rebase failed: {rebase.state.error}</div>
+        )}
+        {pending.type === 'merge' && (
+          <div className="space-y-2">
+            <SegmentedControl
+              aria-label="Merge method"
+              size="sm"
+              value={pending.method}
+              options={MERGE_METHODS}
+              onChange={method => setPending({ ...pending, method })}
+            />
+            {!azure && (
+              <Switch
+                checked={pending.auto}
+                disabled={busy}
+                onChange={auto => setPending({ ...pending, auto })}
+                label={<span className="inline-flex items-center gap-1.5 text-sm"><UiRocket className="text-xs" />Auto-merge</span>}
+              />
+            )}
+          </div>
         )}
         {pending.type === 'approve' && (
           <textarea
@@ -349,15 +355,16 @@ export function PRActions({
           </Button>}
 
           <span title={mergeDisabledReason}>
-            <SplitButton
+            <Button
               variant="outline"
               size="sm"
-              label={menuLabel(UiGitMerge, 'Merge')}
-              title="Merge options"
+              className="h-7 shrink-0 gap-1 px-2 text-xs"
               disabled={mergeDisabled}
-              onClick={() => open({ type: 'merge', method: 'rebase' })}
-              items={mergeMethods}
-            />
+              onClick={openMerge}
+            >
+              <UiGitMerge className="text-xs" />
+              Merge
+            </Button>
           </span>
 
           {!azure && behind > 0 && (
@@ -425,7 +432,7 @@ function submitAction(pr: PRItem, nodeId: string | undefined, headSha: string | 
     body: {
       url: pr.url,
       method: request.pending.method,
-      auto: request.pending.type === 'automerge',
+      auto: request.pending.auto,
       headSha,
     },
     context: 'Merge pull request',
@@ -439,14 +446,10 @@ function modalCopy(pending: Pending | null, pr: PRItem, base: string): { title: 
     case 'merge':
       return {
         title: 'Merge pull request',
-        confirmLabel: 'Merge',
-        description: `Merge ${ref} into ${base} using a ${pending.method} merge. This cannot be undone.`,
-      };
-    case 'automerge':
-      return {
-        title: 'Enable auto-merge',
-        confirmLabel: 'Enable auto-merge',
-        description: `Auto-merge ${ref} into ${base} with a ${pending.method} merge once all required checks pass.`,
+        confirmLabel: pending.auto ? 'Enable auto-merge' : 'Merge',
+        description: pending.auto
+          ? `Once all required checks pass, ${ref} merges: it ${MERGE_METHOD_EFFECT[pending.method]} ${base}.`
+          : `Merge ${ref}: it ${MERGE_METHOD_EFFECT[pending.method]} ${base}. This cannot be undone.`,
       };
     case 'approve':
       return {
