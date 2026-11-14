@@ -18,7 +18,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
-	github.com/flanksource/captain v0.0.82-0.20261113122120-f56e4a91f2c9
+	github.com/flanksource/captain v0.0.83-0.20261114185106-3bbb9e2bd4e5
 	github.com/flanksource/clicky v1.21.95
 	github.com/flanksource/clicky/aichat v1.21.95
 	github.com/flanksource/commons v1.64.2
