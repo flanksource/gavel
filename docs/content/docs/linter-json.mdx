@@ -31,6 +31,8 @@ gavel lint json config.yaml --schema https://example.com/schema.json
 
 The editor applies the same policy when bundling schemas: it uses the JSON linter's configured remote-fetch option, or an explicit remote `gavel edit --schema` URL. Blocked remote schemas surface as errors in the editor instead of fetching them in the browser. Remote fetching accepts HTTP(S) only; other network schemes are refused.
 
+Remote fetching permits public destinations only, including redirects and nested schema references. Loopback, private, link-local, metadata and other reserved destinations, URLs with credentials, and proxies are refused. Use local schema files for schemas hosted on a private network.
+
 For YAML, put the schema declaration in a leading comment. Relative paths resolve from the YAML file:
 
 ```yaml

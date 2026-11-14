@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	commonshttp "github.com/flanksource/commons/http"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
@@ -141,7 +143,12 @@ func (l schemaLoader) Load(location string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	response, err := http.DefaultClient.Do(request)
+	client := &http.Client{
+		Transport: commonshttp.Defensive(commonshttp.DefensiveOptions{Public: true, Redirect: true})(http.DefaultTransport),
+		Timeout:   2 * time.Minute,
+	}
+	defer client.CloseIdleConnections()
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}

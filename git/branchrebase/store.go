@@ -2,17 +2,37 @@ package branchrebase
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
+	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/gofrs/flock"
 )
+
+var commitIDPattern = regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`)
+
+func validateTarget(ref string) error {
+	if ref == "refs/remotes/origin/main" {
+		return nil
+	}
+	if !strings.HasPrefix(ref, "refs/heads/") {
+		return errors.New("target must be origin/main or a local branch ref")
+	}
+	return gavelgit.ValidateBranchName(strings.TrimPrefix(ref, "refs/heads/"))
+}
+
+func validateCommitID(sha string) error {
+	if !commitIDPattern.MatchString(sha) {
+		return fmt.Errorf("invalid rebase commit ID %q", sha)
+	}
+	return nil
+}
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
 	if strings.TrimSpace(dir) == "" {
@@ -65,12 +85,15 @@ func load(dir string) (*Operation, error) {
 	if op.ID == "" || op.Worktree != dir {
 		return nil, errors.New("invalid rebase recovery metadata")
 	}
+	if err := validateTarget(op.Target); err != nil {
+		return nil, fmt.Errorf("invalid rebase recovery target: %w", err)
+	}
 	for _, sha := range []string{op.OriginalHead, op.TargetSHA, op.StashSHA} {
 		if sha == "" {
 			continue
 		}
-		if _, err := hex.DecodeString(sha); err != nil || len(sha) != 40 && len(sha) != 64 {
-			return nil, errors.New("invalid rebase recovery commit ID")
+		if err := validateCommitID(sha); err != nil {
+			return nil, fmt.Errorf("invalid rebase recovery commit ID: %w", err)
 		}
 	}
 	return &op, nil

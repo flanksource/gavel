@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -16,11 +15,12 @@ import (
 var _ = Describe("Editor schemas", func() {
 	It("refuses remote document declarations without sending a request", func() {
 		var requests atomic.Int32
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			requests.Add(1)
 			_, err := w.Write([]byte(`true`))
 			Expect(err).NotTo(HaveOccurred())
 		}))
+
 		DeferCleanup(server.Close)
 		_, err := EditorSchema(context.Background(), EditorSchemaOptions{Data: []byte(`{"$schema":"` + server.URL + `/schema"}`), Path: "config.json", Override: ""})
 		Expect(err).To(MatchError(ContainSubstring("not fetched")))

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 
@@ -27,11 +26,12 @@ var _ = Describe("Editor YAML schemas", func() {
 	})
 
 	It("loads extensionless remote YAML schemas by content type", func() {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 			_, err := w.Write([]byte("type: object\nproperties:\n  name:\n    type: string\n"))
 			Expect(err).NotTo(HaveOccurred())
 		}))
+
 		DeferCleanup(server.Close)
 		_, err := EditorSchema(context.Background(), EditorSchemaOptions{Data: []byte("name: example"), Path: "config.yaml", Override: server.URL + "/schema", RemoteSchemas: true})
 		Expect(err).NotTo(HaveOccurred())

@@ -109,6 +109,22 @@ var _ = Describe("Rebase and keep", func() {
 		Expect(err).To(HaveOccurred())
 	}, Entry("empty", "empty"), Entry("file", "file"))
 
+	DescribeTable("rejects invalid targets in recovery metadata before resuming", func(target string) {
+		state := branchrebase.Operation{ID: "recovery", Worktree: worktree, Branch: "topic", OriginalHead: head, Target: target, TargetSHA: head, Phase: "rebase"}
+		raw, err := json.Marshal(state)
+		Expect(err).NotTo(HaveOccurred())
+		path := git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "gavel-rebase.json")
+		Expect(os.WriteFile(path, raw, 0600)).To(Succeed())
+		_, err = branchrebase.Inspect(context.Background(), worktree)
+		Expect(err).To(HaveOccurred())
+		Expect(git(worktree, "rev-parse", "HEAD")).To(Equal(head))
+	},
+		Entry("option", "--exec=unexpected"),
+		Entry("revision expression", "refs/heads/main^{commit}"),
+		Entry("control character", "refs/heads/main\n--exec=unexpected"),
+		Entry("unapproved remote", "refs/remotes/other/main"),
+	)
+
 	It("rejects option-like targets before changing the worktree", func() {
 		opts.Target = "--exec=unexpected"
 		_, err := branchrebase.Run(context.Background(), opts)

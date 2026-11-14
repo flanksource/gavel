@@ -3,7 +3,6 @@ package jsonlint
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 
@@ -23,7 +22,7 @@ var _ = Describe("YAML schemas", func() {
 	}, Entry("yaml", ".yaml"), Entry("yml", ".yml"))
 
 	It("loads remote YAML references and preserves exact numbers", func() {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := servePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/yaml")
 			if r.URL.Path == "/schema.yaml" {
 				_, err := w.Write([]byte("$ref: types.yaml\n"))
@@ -33,6 +32,7 @@ var _ = Describe("YAML schemas", func() {
 			_, err := w.Write([]byte("type: object\nrequired: [name]\nproperties:\n  name:\n    type: string\n"))
 			Expect(err).NotTo(HaveOccurred())
 		}))
+
 		DeferCleanup(server.Close)
 		schema, err := newValidator(schemaLoader{ctx: context.Background(), remoteSchemas: true}).compile(server.URL+"/schema.yaml", ".")
 		Expect(err).NotTo(HaveOccurred())
