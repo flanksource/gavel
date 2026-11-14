@@ -3901,6 +3901,40 @@
                   "type": "string",
                   "x-cli-group": "Tasks"
                 },
+                "runtime": {
+                  "additionalProperties": false,
+                  "description": "Process settings inherited by all linter and test types. Within each config file, global defaults precede category and type overrides; later files and explicit caller options win.",
+                  "properties": {
+                    "cpu": {
+                      "description": "Aggregate sustained CPU percentage across descendants. 100 is one core; 0 disables the cap. Sampled every 2s, terminating after 18 consecutive high samples.",
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "description": "Environment value.",
+                        "type": "string"
+                      },
+                      "description": "Child environment variables. Keys merge; an empty value clears an inherited value.",
+                      "type": "object"
+                    },
+                    "mem": {
+                      "description": "Aggregate RSS cap, e.g. 2GiB or 512MB. Empty disables the cap. Includes descendants and is sampled immediately, then every 2s.",
+                      "type": "string"
+                    },
+                    "nice": {
+                      "description": "Child niceness adjustment, from -20 to 19. Increasing priority requires OS permission.",
+                      "maximum": 19,
+                      "minimum": -20,
+                      "type": "integer"
+                    },
+                    "timeout": {
+                      "description": "Positive Go duration for each invocation, e.g. 5m. Empty disables the inherited per-invocation deadline. Separate from the whole-run deadline.",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
                 "sandbox": {
                   "description": "Sandbox for the run: off|native|docker|git-agent|substrate, or a configured Docker, Git Agent or substrate backend",
                   "title": "Sandbox",
@@ -6923,7 +6957,11 @@
                       "ginkgo",
                       "jest",
                       "vitest",
-                      "playwright"
+                      "playwright",
+                      "go",
+                      "go-test",
+                      "go_test",
+                      "gotest"
                     ],
                     "type": "string"
                   },
@@ -7190,6 +7228,40 @@
                   "title": "Retry Delay",
                   "type": "string",
                   "x-cli-group": "Tasks"
+                },
+                "runtime": {
+                  "additionalProperties": false,
+                  "description": "Process settings inherited by all linter and test types. Within each config file, global defaults precede category and type overrides; later files and explicit caller options win.",
+                  "properties": {
+                    "cpu": {
+                      "description": "Aggregate sustained CPU percentage across descendants. 100 is one core; 0 disables the cap. Sampled every 2s, terminating after 18 consecutive high samples.",
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "description": "Environment value.",
+                        "type": "string"
+                      },
+                      "description": "Child environment variables. Keys merge; an empty value clears an inherited value.",
+                      "type": "object"
+                    },
+                    "mem": {
+                      "description": "Aggregate RSS cap, e.g. 2GiB or 512MB. Empty disables the cap. Includes descendants and is sampled immediately, then every 2s.",
+                      "type": "string"
+                    },
+                    "nice": {
+                      "description": "Child niceness adjustment, from -20 to 19. Increasing priority requires OS permission.",
+                      "maximum": 19,
+                      "minimum": -20,
+                      "type": "integer"
+                    },
+                    "timeout": {
+                      "description": "Positive Go duration for each invocation, e.g. 5m. Empty disables the inherited per-invocation deadline. Separate from the whole-run deadline.",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
                 },
                 "show-failed": {
                   "default": true,
@@ -10736,6 +10808,40 @@
             "type": "string",
             "x-cli-group": "Tasks"
           },
+          "runtime": {
+            "additionalProperties": false,
+            "description": "Process settings inherited by all linter and test types. Within each config file, global defaults precede category and type overrides; later files and explicit caller options win.",
+            "properties": {
+              "cpu": {
+                "description": "Aggregate sustained CPU percentage across descendants. 100 is one core; 0 disables the cap. Sampled every 2s, terminating after 18 consecutive high samples.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "env": {
+                "additionalProperties": {
+                  "description": "Environment value.",
+                  "type": "string"
+                },
+                "description": "Child environment variables. Keys merge; an empty value clears an inherited value.",
+                "type": "object"
+              },
+              "mem": {
+                "description": "Aggregate RSS cap, e.g. 2GiB or 512MB. Empty disables the cap. Includes descendants and is sampled immediately, then every 2s.",
+                "type": "string"
+              },
+              "nice": {
+                "description": "Child niceness adjustment, from -20 to 19. Increasing priority requires OS permission.",
+                "maximum": 19,
+                "minimum": -20,
+                "type": "integer"
+              },
+              "timeout": {
+                "description": "Positive Go duration for each invocation, e.g. 5m. Empty disables the inherited per-invocation deadline. Separate from the whole-run deadline.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "sandbox": {
             "description": "Sandbox for the run: off|native|docker|git-agent|substrate, or a configured Docker, Git Agent or substrate backend",
             "title": "Sandbox",
@@ -10890,7 +10996,8 @@
           "tree",
           "work-dir",
           "yaml",
-          "show-failed"
+          "show-failed",
+          "runtime"
         ]
       }
     },
@@ -11060,7 +11167,11 @@
                 "ginkgo",
                 "jest",
                 "vitest",
-                "playwright"
+                "playwright",
+                "go",
+                "go-test",
+                "go_test",
+                "gotest"
               ],
               "type": "string"
             },
@@ -11262,6 +11373,40 @@
             "title": "Retry Delay",
             "type": "string",
             "x-cli-group": "Tasks"
+          },
+          "runtime": {
+            "additionalProperties": false,
+            "description": "Process settings inherited by all linter and test types. Within each config file, global defaults precede category and type overrides; later files and explicit caller options win.",
+            "properties": {
+              "cpu": {
+                "description": "Aggregate sustained CPU percentage across descendants. 100 is one core; 0 disables the cap. Sampled every 2s, terminating after 18 consecutive high samples.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "env": {
+                "additionalProperties": {
+                  "description": "Environment value.",
+                  "type": "string"
+                },
+                "description": "Child environment variables. Keys merge; an empty value clears an inherited value.",
+                "type": "object"
+              },
+              "mem": {
+                "description": "Aggregate RSS cap, e.g. 2GiB or 512MB. Empty disables the cap. Includes descendants and is sampled immediately, then every 2s.",
+                "type": "string"
+              },
+              "nice": {
+                "description": "Child niceness adjustment, from -20 to 19. Increasing priority requires OS permission.",
+                "maximum": 19,
+                "minimum": -20,
+                "type": "integer"
+              },
+              "timeout": {
+                "description": "Positive Go duration for each invocation, e.g. 5m. Empty disables the inherited per-invocation deadline. Separate from the whole-run deadline.",
+                "type": "string"
+              }
+            },
+            "type": "object"
           },
           "show-failed": {
             "default": true,
@@ -11519,7 +11664,8 @@
           "uir-test-coverage",
           "work-dir",
           "yaml",
-          "show-failed"
+          "show-failed",
+          "runtime"
         ]
       }
     }
