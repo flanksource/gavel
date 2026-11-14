@@ -2,6 +2,7 @@ package branchrebase
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,16 @@ import (
 )
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	if strings.TrimSpace(dir) == "" {
+		return "", errors.New("git requires a worktree directory")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", fmt.Errorf("open git worktree: %w", err)
+	}
+	defer root.Close()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = root.Name()
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -54,6 +64,14 @@ func load(dir string) (*Operation, error) {
 	}
 	if op.ID == "" || op.Worktree != dir {
 		return nil, errors.New("invalid rebase recovery metadata")
+	}
+	for _, sha := range []string{op.OriginalHead, op.TargetSHA, op.StashSHA} {
+		if sha == "" {
+			continue
+		}
+		if _, err := hex.DecodeString(sha); err != nil || len(sha) != 40 && len(sha) != 64 {
+			return nil, errors.New("invalid rebase recovery commit ID")
+		}
 	}
 	return &op, nil
 }
