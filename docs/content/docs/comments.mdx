@@ -5,9 +5,20 @@ description: Send comment threads to Claude and Codex sessions, and send new com
 
 Gavel stores comments made in `gavel edit`, the dashboard, `gavel launch serve` and the playground grabber. Each comment lives under a scope, such as `gavel://project/<name>` for a project, and its target URI sits beneath that scope (`.../files/<path>` for a file, `.../pages/<url>` for a web page).
 
-Any open thread can be handed to an agent. Gavel assigns the thread to the agent, acknowledges it as the agent, and delivers it with the commands the agent uses to reply and resolve it. The hand-off is recorded on the thread as its `agentRun`: the session, when it was requested, its state (`queued`, `sent`, or `error` with the error), and where it went.
+## List comments for a file or directory
+
+```bash
+gavel comments list                      # every comment in the current directory's project
+gavel comments list editor/store.go      # comments on one file
+gavel comments list --path editor        # comments on every file under a directory
+gavel comments list --scope gavel://project/gavel --target gavel://project/gavel/files/go.mod
+```
+
+The path is either a positional argument or `--path`, not both. Gavel resolves it to the most specific project holding it: a file lists its own threads, a directory lists the threads of every file beneath it, and the project root lists the whole scope. With neither a path nor `--scope`, the current directory is used. A path outside every project fails with `is not inside a gavel project`. `--phase`, `--unread`, `--limit` and `--offset` still apply. Over HTTP, pass `scope` (and optionally `target`); listing by path only works for the local tenant.
 
 ## Send a thread to an agent
+
+Any open thread can be handed to an agent. Gavel assigns the thread to the agent, acknowledges it as the agent, and delivers it with the commands the agent uses to reply and resolve it. The hand-off is recorded on the thread as its `agentRun`: the session, when it was requested, its state (`queued`, `sent`, or `error` with the error), and where it went.
 
 There are two kinds of target:
 
@@ -51,6 +62,8 @@ Layers merge field by field, ancestors first, and within a layer its `default` t
 
 A delivery never gets in the way of the comment's author: attaching a screenshot right after creating the comment, with the version the create returned, succeeds while the agent picks the thread up.
 
+A comment can also name where it goes when it is created: `deliver` on the create request is a delivery target (see [HTTP API](#http-api)) that replaces the comment agent for that comment, including its `assign`. The thread is delivered there once, in the background, even on a file no comment agent covers, and an invalid target fails the create before anything is stored. In the Gavel extension, the composer's target chip previews the page's comment agent while no target is chosen: **Auto: &lt;agent&gt;** when new comments are delivered to it, **Not delivered** when they are only posted. Pick `@session`, `@claude` or `@codex`, or type one in the comment, to send it elsewhere.
+
 ```sh
 gavel comments agents set slides/16-security.mdx --layer slides --file .gavel.agents.yaml --page --prompt editor-comments --enabled
 gavel comments agents set slides/16-security.mdx --layer project --file .gavel.yaml --enabled=false
@@ -59,6 +72,48 @@ gavel comments agents delete slides/16-security.mdx --layer slides --file .gavel
 ```
 
 `--layer` is `user`, `project`, a folder relative to the project, or an absolute directory above it. `--file` names the config file to write (created when absent), or `--db` writes the database layer. `--page` edits the layer's entry for the file instead of its default. `get` prints every layer and the agent that applies, each field traced to the layer that set it. For a web project, pass `--scope <scope-uri>` and the page key instead of a file path.
+
+## Proposals
+
+A reply can carry a proposed change instead of edits to your working tree, as Edit-tool-style `--edits` or a unified diff `--patch`. Gavel builds a commit on the repository's `HEAD` itself, in a temporary index that leaves your working tree and index untouched, and keeps it at `refs/gavel/comments/<thread>/<reply>`; the reply shows its state (`proposed`, `applied`, `staged`, `rejected`, `revision_requested` or `superseded`) and the files it changes. A newer proposal on the same thread supersedes the earlier one.
+
+```sh
+gavel comments reply <id> --expectedVersion <v> --bodyMarkdown 'Rename load to read' \
+  --edits '[{"path":"src/app.go","oldString":"func load(","newString":"func read("}]'
+gavel comments reply <id> --expectedVersion <v> --bodyMarkdown 'Rename load to read' --patch change.patch
+git diff | gavel comments reply <id> --expectedVersion <v> --bodyMarkdown 'Rename load to read' --patch -
+gavel comments accept-proposal <id> --expectedVersion <v> --messageId <reply> --mode apply
+gavel comments reject-proposal <id> --expectedVersion <v> --messageId <reply> --bodyMarkdown 'Keep the old name'
+gavel comments request-revision <id> --expectedVersion <v> --messageId <reply> --bodyMarkdown 'Keep the old name as an alias'
+```
+
+`--edits` is a JSON array applied in order, each edit one of:
+
+| Edit | Effect |
+| --- | --- |
+| `{path, oldString, newString, replaceAll?}` | Replaces `oldString`, which must match the file exactly (whitespace included) once, or every match with `replaceAll` |
+| `{path, content}` | Writes the whole file, creating it when missing |
+| `{path, delete: true}` | Deletes the file |
+
+Paths are relative to the repository root and cannot leave it or reach `.git`. Edits to one path apply to its content as the earlier ones left it, and a file keeps its mode (a new file is `100644`). A replacement that matches zero or several times, an edit of a missing file, or edits that change nothing are refused, naming the path. `--patch` takes a unified diff file instead, or `-` for stdin, whose `a/` and `b/` paths are relative to the repository root; a reply carries one or the other. `accept-proposal --mode apply` writes the patch into the working tree; `--mode stage` also stages it. A patch that no longer applies is a conflict. Asking for revisions sends the feedback back to the agent, which sees its earlier proposals and their feedback in the thread. `gavel comments list` shows `proposal: <state> · <n> files` under each reply that carries one.
+
+Proposals are local only: a host without a local repository refuses them.
+
+### Edits allowed or proposal-only
+
+A comment agent's `edits` decides whether its agent may edit files:
+
+```yaml
+comments:
+  agents:
+    default:
+      enabled: true
+      edits: propose
+```
+
+`direct`, the default, lets the agent edit the project's files, reply and resolve the thread. `propose` tells the agent not to create or modify any file, not even scratch copies: it reads the files and replies with `--edits` (a managed session uses its `propose_change` tool, which takes the same `edits`), gavel builds the commit, and the agent is not offered a resolve command or tool, because a person accepts the proposal. While a thread's delivery is `propose`, an agent's resolve is refused until a proposal is accepted. The delivery records the policy as `edits` in the thread's `agentRun`.
+
+Set it with `gavel comments agents set <path> ... --edits propose`, or for one delivery with `gavel comments deliver <id> --edits propose`. A managed run in propose mode cannot edit files: gavel denies its `Edit`, `Write`, `MultiEdit` and `NotebookEdit` tools over whatever the prompt allows (its shell stays available, under the same instruction). A live session is only instructed not to edit files: nothing stops it from doing so.
 
 ## HTTP API
 
@@ -71,8 +126,9 @@ Every host that serves `/api/v1/comments` also serves:
 | `POST /api/v1/comments/{id}/deliver/preview` | `{target}` | The resolved run and its tools, without starting it |
 | `GET /api/v1/comments/agent?scope=&uri=` | | The target's comment agent: `{settings, agent}` |
 | `PUT /api/v1/comments/agent` | `{target: {scopeUri, uri}, layer, page, agent}` | Saves the agent at a layer (a null `agent` removes the entry) and answers `{settings, agent}`; only a person can save one |
+| `GET /api/v1/comments/{id}/proposals/{replyId}/diff` | | The reply's proposed patch: `{diff, commit, truncated?, binary?}` |
 
-A target is `{kind: "session", sessionId}` or `{kind: "run", prompt, runOptions?, groupKey?, fresh?}`; `fresh` on a session target answers 400. Retrying a hand-off is another `deliver` with the thread's latest version and a new `requestId`. With `scope`, the session listing shows only sessions working in that scope's project directory; `all=1` lists every live session.
+A target is `{kind: "session", sessionId}` or `{kind: "run", prompt, runOptions?, groupKey?, fresh?}`, either with `edits?` (`direct` or `propose`); `fresh` on a session target answers 400. Over HTTP an action's `patch` is the diff text itself, and its `edits` the same JSON array `--edits` takes. Retrying a hand-off is another `deliver` with the thread's latest version and a new `requestId`. With `scope`, the session listing shows only sessions working in that scope's project directory; `all=1` lists every live session.
 
 In the comment agent answer, `settings` is the target's layers and the positions of its chain (what can be saved where), and `agent` is the resolved agent, `{agent, provenance, found}`, with each field traced to the layer that set it. `layer` is `{kind: "user"|"parent"|"project"|"path", path?, file?}`; without `file` it saves the database layer. A host without settings-based comment agents answers 501, and a target its settings do not cover answers 400. On a project scope, both its files (`<scope>/files/<path>`) and its dashboard pages (`<scope>/pages/<page key>`) have comment agents; a page's agents live in the project's database layers (a page entry keyed `pages/<page key>` at the project layer), not in its `.gavel.yaml` files.
 

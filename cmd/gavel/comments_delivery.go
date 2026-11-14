@@ -24,8 +24,8 @@ import (
 
 // deliverTargetFlags choose a delivery target: a live session, or a new run of a prompt.
 type deliverTargetFlags struct {
-	session, prompt, group, runOptions string
-	fresh                              bool
+	session, prompt, group, runOptions, edits string
+	fresh                                     bool
 }
 
 func (f *deliverTargetFlags) register(cmd *cobra.Command) {
@@ -34,6 +34,7 @@ func (f *deliverTargetFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.group, "group", "", "Reuse the live session recorded for this group key (with --prompt)")
 	cmd.Flags().StringVar(&f.runOptions, "run-options", "", "Run options as JSON: presets, spec, variables, instructions (with --prompt)")
 	cmd.Flags().BoolVar(&f.fresh, "fresh", false, "Always start a new managed session, which becomes the --group's session (with --prompt)")
+	cmd.Flags().StringVar(&f.edits, "edits", "", "direct (default) lets the agent edit files; propose has it answer with a proposed patch")
 	cmd.MarkFlagsMutuallyExclusive("session", "prompt")
 	cmd.MarkFlagsOneRequired("session", "prompt")
 }
@@ -43,9 +44,10 @@ func (f deliverTargetFlags) target() (comments.DeliverTarget, error) {
 		if f.group != "" || f.runOptions != "" || f.fresh {
 			return comments.DeliverTarget{}, errors.New("--group, --run-options and --fresh apply to --prompt only")
 		}
-		return comments.DeliverTarget{Kind: "session", SessionID: f.session}, nil
+		target := comments.DeliverTarget{Kind: "session", SessionID: f.session, Edits: f.edits}
+		return target, target.Validate()
 	}
-	target := comments.DeliverTarget{Kind: "run", Prompt: f.prompt, GroupKey: f.group, Fresh: f.fresh}
+	target := comments.DeliverTarget{Kind: "run", Prompt: f.prompt, GroupKey: f.group, Fresh: f.fresh, Edits: f.edits}
 	if f.runOptions != "" {
 		target.RunOptions = json.RawMessage(f.runOptions)
 	}
@@ -263,9 +265,9 @@ func parseLayerRef(layer string) (settings.Ref, error) {
 
 // agentFieldFlags are the comment agent fields a set writes.
 type agentFieldFlags struct {
-	prompt, instructions, runOptions string
-	presets                          []string
-	enabled, assign                  bool
+	prompt, instructions, runOptions, edits string
+	presets                                 []string
+	enabled, assign                         bool
 }
 
 func (f *agentFieldFlags) register(cmd *cobra.Command) {
@@ -275,10 +277,14 @@ func (f *agentFieldFlags) register(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.enabled, "enabled", false, "Hand new human threads to the agent; --enabled=false opts the file(s) out")
 	cmd.Flags().BoolVar(&f.assign, "assign", false, "Make the agent the thread's assignee as soon as it is created")
 	cmd.Flags().StringVar(&f.runOptions, "run-options", "", "Run options as JSON: spec, variables")
+	cmd.Flags().StringVar(&f.edits, "edits", "", "direct lets the agent edit files; propose has it answer with a proposed patch a person accepts")
 }
 
 func (f agentFieldFlags) agent(cmd *cobra.Command) (*verify.CommentAgent, error) {
-	agent := &verify.CommentAgent{Prompt: f.prompt, Presets: f.presets, Instructions: f.instructions}
+	agent := &verify.CommentAgent{Prompt: f.prompt, Presets: f.presets, Instructions: f.instructions, Edits: f.edits}
+	if err := agent.Validate(); err != nil {
+		return nil, fmt.Errorf("--edits: %w", err)
+	}
 	if cmd.Flags().Changed("enabled") {
 		agent.Enabled = &f.enabled
 	}

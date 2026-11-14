@@ -64,7 +64,7 @@ var _ = Describe("comments agents", func() {
 			Expect(json.Unmarshal(stdout.Bytes(), &shown)).To(Succeed())
 			return shown
 		}
-		run("set", page, "--layer", "slides", "--file", ".gavel.agents.yaml", "--page", "--prompt", "security-review", "--enabled")
+		run("set", page, "--layer", "slides", "--file", ".gavel.agents.yaml", "--page", "--prompt", "security-review", "--enabled", "--edits", verify.CommentEditsPropose)
 		shown := run("get", page)
 
 		saved, err := verify.LoadSingleGavelConfig(filepath.Join(slides, ".gavel.agents.yaml"))
@@ -72,10 +72,10 @@ var _ = Describe("comments agents", func() {
 		layer := filepath.Join(slides, ".gavel.agents.yaml")
 		source := verify.CommentAgentSource{Layer: layer, Page: "16-security.mdx"}
 		Expect([]any{saved.Comments.Agents, shown.Agent}).To(Equal([]any{
-			verify.CommentAgentsConfig{Pages: map[string]verify.CommentAgent{"16-security.mdx": {Enabled: ptrTo(true), Prompt: "security-review"}}},
+			verify.CommentAgentsConfig{Pages: map[string]verify.CommentAgent{"16-security.mdx": {Enabled: ptrTo(true), Prompt: "security-review", Edits: verify.CommentEditsPropose}}},
 			verify.ResolvedCommentAgent{
-				Agent:      verify.CommentAgent{Enabled: ptrTo(true), Prompt: "security-review"},
-				Provenance: map[string]verify.CommentAgentSource{"enabled": source, "prompt": source},
+				Agent:      verify.CommentAgent{Enabled: ptrTo(true), Prompt: "security-review", Edits: verify.CommentEditsPropose},
+				Provenance: map[string]verify.CommentAgentSource{"enabled": source, "prompt": source, "edits": source},
 				Found:      true,
 			},
 		}))

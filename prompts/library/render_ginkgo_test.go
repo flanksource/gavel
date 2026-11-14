@@ -28,6 +28,20 @@ var _ = Describe("Render", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.User).To(Equal("Reviewer: {{unexpanded}} <tag>"))
 	})
+	DescribeTable("tells an editor-comments session whether to edit or propose",
+		func(propose bool, says string, omits ...string) {
+			got, err := library.Render(context.Background(), library.RenderOptions{Directory: GinkgoT().TempDir(), Name: "editor-comments", System: true, Data: map[string]any{"dir": "/repo", "propose": propose, "message": "thread"}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.System).To(ContainSubstring(says))
+			for _, text := range omits {
+				Expect(got.System).NotTo(ContainSubstring(text))
+			}
+		},
+		Entry("direct edits resolve the thread", false, "then resolve it with resolve_thread", "propose_change"),
+		Entry("proposals write no file, propose edits and never resolve", true,
+			"Do not create or modify any file, not even scratch copies: read the files under /repo to understand them, then offer the scoped change the thread asks for with propose_change as edits",
+			"resolve it with resolve_thread", ".tmp", "unified diff"),
+	)
 	It("reports invalid workspace overrides", func() {
 		dir := GinkgoT().TempDir()
 		prompts := filepath.Join(dir, ".captain", "prompts")

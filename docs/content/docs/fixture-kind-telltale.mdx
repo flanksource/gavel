@@ -1,0 +1,54 @@
+---
+title: Telltale
+description: Invoke JVM diagnostics and own trace captures through a running Telltale server.
+parent: fixture-step-reference
+order: 13
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+
+The `telltale` step calls a running Telltale server directly over HTTP. It supports every live JVM or extension operation, including Groovy, OGNL, JMX, compilation and bytecode patching. Start the server and attach its Java agent before invoking the step.
+
+```yaml
+kind: Fixture
+env:
+  TELLTALE_URL: http://127.0.0.1:8080
+params:
+  type: object
+  required: [agent]
+  properties:
+    agent: {type: string, title: Connected Java agent ID}
+steps:
+  - id: script
+    kind: telltale
+    agent: '{{.params.agent}}'
+    operation: jvm.groovy.eval
+    allowMutation: true
+    params:
+      source: 'println "hello"; return 3 + 4'
+    cel: json.value == 7 && json.stdout.contains("hello")
+  - id: redefine
+    kind: telltale
+    agent: '{{.params.agent}}'
+    capture: jvm_redefine
+    duration: 2s
+    allowMutation: true
+    params:
+      class: example.Worker
+      method: compute
+      source: 'public static double compute(long value) { return 7.0; }'
+    wait:
+      until: status == "succeeded"
+      failWhen: status == "failed"
+      timeout: 15s
+```
+
+Set `server` explicitly or export `TELLTALE_URL` from an earlier services step. `token` optionally supplies an API bearer token. `agent` is the connected agent ID, including hub IDs containing slashes. The agent must already permit mutation; `allowMutation: true` supplies the separate per-call consent.
+
+Choose exactly one of `operation` and `capture`. Operation `params` are sent as JSON without floating-point conversion of request integers. Results expose `json`, the original JSON `stdout`, and `exitCode: 0` for fixture CEL and exports. HTTP errors, invalid JSON and cancellation fail the step with context.
+
+Captures require a positive `duration` and use the existing run API. Their `params` are the capture kind's native options; `target` and `enabled` belong to the step and cannot be overridden. Outputs additionally include `runId` and `status`. A `wait` polls the owned run; without one, the capture remains active while subsequent steps execute. Teardown stops any still-running capture, waits for completion/restoration and reports capture failures. Register the server's service before capture steps so reverse cleanup releases captures while the server is still alive.
+
+The runnable interactive example in Telltale is `examples/jvm-diagnostics.fixture.yaml`: it provisions its own JVM, invokes Groovy, watch/trace, compile-preview, redefinition and OGNL, then waits at an Exit form with the live UI available.
+
+<FixtureKindReference kind="telltale" />

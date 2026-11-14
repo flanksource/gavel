@@ -26,7 +26,17 @@ var _ = Describe("comments CLI registration", func() {
 		Expect(publish.Flags().Lookup("expectedVersion").Value.Type()).To(Equal("int64"))
 	})
 
-	Describe("deliver --fresh", func() {
+	It("parses a reply's --edits as strict FileEdit JSON", func() {
+		reply, _, err := rootCmd.Find([]string{"comments", "reply"})
+		Expect(err).NotTo(HaveOccurred())
+		edits := reply.Flags().Lookup("edits")
+		Expect(edits).NotTo(BeNil())
+		DeferCleanup(func() { Expect(edits.Value.Set("null")).To(Succeed()) })
+		Expect(edits.Value.Set(`[{"path":"a.go","oldString":"x","newString":"y","replaceAll":true},{"path":"b.go","delete":true}]`)).To(Succeed())
+		Expect(edits.Value.Set(`[{"path":"a.go","old":"x"}]`)).To(MatchError(ContainSubstring(`unknown field "old"`)))
+	})
+
+	Describe("deliver target flags", func() {
 		targetOf := func(args ...string) (comments.DeliverTarget, error) {
 			var flags deliverTargetFlags
 			cmd := &cobra.Command{Use: "deliver"}
@@ -42,6 +52,15 @@ var _ = Describe("comments CLI registration", func() {
 		It("is rejected with --session", func() {
 			_, err := targetOf("--session", "live-1", "--fresh")
 			Expect(err).To(MatchError(ContainSubstring("--fresh")))
+		})
+		It("carries --edits propose to a live session target", func() {
+			target, err := targetOf("--session", "live-1", "--edits", comments.EditsPropose)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(target).To(Equal(comments.DeliverTarget{Kind: "session", SessionID: "live-1", Edits: comments.EditsPropose}))
+		})
+		It("rejects an --edits policy other than direct or propose", func() {
+			_, err := targetOf("--prompt", "editor-comments", "--edits", "rewrite")
+			Expect(err).To(MatchError(ContainSubstring("edits must be")))
 		})
 	})
 

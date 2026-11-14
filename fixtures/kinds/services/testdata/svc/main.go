@@ -19,6 +19,7 @@ func main() {
 	termFile := flag.String("term-file", "", "file the label is appended to on SIGTERM")
 	delay := flag.Duration("delay", 0, "wait before listening")
 	termDelay := flag.Duration("term-delay", 0, "wait after SIGTERM before writing --term-file and exiting")
+	termExit := flag.Int("term-exit", 0, "exit code used by the SIGTERM handler")
 	flag.Parse()
 	if *addr == "" {
 		fmt.Fprintln(os.Stderr, "--addr is required")
@@ -39,7 +40,7 @@ func main() {
 			fmt.Fprintln(f, *label)
 			_ = f.Close()
 		}
-		os.Exit(0)
+		os.Exit(*termExit)
 	}()
 
 	fmt.Printf("%s booting, upstream=%q\n", *label, os.Getenv("UPSTREAM"))

@@ -101,6 +101,48 @@ gavel pr status 42 --ai-fix --worktree   # fix in an isolated worktree at the PR
 | `--comments` | Filter review comments by MatchItem patterns over comment ID and `@author`/`@bot` tokens |
 | `--actions` | Filter workflow actions by MatchItem patterns over run/workflow ID, YAML path, workflow name, or job/check name |
 
+## Recommend reviewers
+
+Use `pr blame` to identify reviewers based on ownership rules and the people who previously changed the affected code:
+
+```bash
+gavel pr blame
+gavel pr blame 42
+gavel pr blame 42 --since 90d
+gavel pr blame acme/widgets#42 --json
+gavel pr blame https://github.com/acme/widgets/pull/42 --limit 10
+gavel pr blame https://dev.azure.com/acme/product/_git/service/pullrequest/27
+gavel pr blame 27 --repo https://dev.azure.com/acme/product/_git/service --json
+gavel pr blame 42 --history-limit 50 --exclude former-maintainer
+```
+
+Run from a GitHub or hosted Azure DevOps checkout with a remote pointing at the PR's base repository and full Git history. With no argument, the command selects the current branch's PR. Modern `dev.azure.com` and legacy `visualstudio.com` PR URLs are supported. It fetches missing PR commits without changing the working tree, index, branches, or remote-tracking refs. Fork heads are fetched from the source repository. Shallow history is rejected because it would produce incomplete recommendations.
+
+Each recommendation includes the affected files and its supporting evidence:
+
+- **ADO reviewer policies:** automatically included reviewers from native policy evaluations for the selected PR. Required and optional rules are distinguished, groups stay groups, and the policy ID, evaluation status and configured path filters appear as PR-level evidence. Queued human reviews remain recommendations. Rules that ADO marks inapplicable, disabled or deleted are excluded. Broken evaluations and stale merge snapshots produce an error.
+- **CODEOWNERS:** effective owners from the base branch tip. Gavel searches `.github/CODEOWNERS`, `CODEOWNERS`, then `docs/CODEOWNERS`, taking the first existing file and the last matching rule for each path. Rules with no owners clear earlier ownership. Invalid ownership syntax is reported as an error.
+- **Changed lines:** authors of replaced or deleted lines at the PR's merge base.
+- **Insertion context:** authors of the existing lines immediately adjacent to pure insertions, counted separately from changed lines.
+- **File history:** historical author contributions to each changed file, following renames. The default is the most recent 100 commits per file, ending at the merge base.
+
+Candidates rank by required policies, applicable policies, owned files, changed lines, adjacent lines, file commits, and file coverage, in that order. Stable identity ordering breaks ties. A commit touching several changed files contributes once per file. The PR's own commits are excluded from the historical evidence. New files use ownership rules; binary files and pure renames can use file history without line blame.
+
+Use `--since 90d`, `--since now-30d` or `--since 2026-01-01` to count only historical contributions committed on or after the cutoff. This filters file commits, changed-line blame and insertion context by committer date. CODEOWNERS and native ADO reviewer policies remain applicable. `--history-limit` caps the matching file commits after filtering by date. JSON output includes the resolved UTC cutoff as `since`.
+
+Git authors are resolved to GitHub accounts and combined with matching ownership entries. Authors without a linked GitHub account retain their Git name and email. The PR author, accounts marked `[bot]`, and explicit exclusions are omitted. Teams remain team recommendations; Gavel does not expand their membership or validate reviewer permissions. The command only recommends reviewers and sends no review requests.
+
+For ADO, Git authors retain their names and email addresses; matching policy identities are combined by email. ADO uses its native branch policies for ownership enforcement. A CODEOWNERS file in an ADO repo is supplementary repository convention and does not represent an ADO-enforced policy. Authentication uses `AZURE_DEVOPS_EXT_PAT` when configured, otherwise the existing Azure CLI login.
+
+| Flag | Description |
+|------|-------------|
+| `-R` / `--repo` | GitHub `owner/repo` or hosted ADO repository URL; requires a matching local remote |
+| `--limit` | Maximum recommendations to return (default: `5`) |
+| `--history-limit` | Maximum historical commits per changed file (default: `100`) |
+| `--since` | Inclusive date or duration cutoff for historical contributions; ownership rules still apply |
+| `--exclude` | Additional logins, email addresses or ADO identity IDs to omit |
+| `--json` | Include candidate totals, compared commits, and per-file evidence in structured output |
+
 ## List and dashboard
 
 List pull requests with filtering, a live browser dashboard, and macOS menu bar indicator.

@@ -79,7 +79,8 @@ var _ = Describe("JSON linter", func() {
 		violations, err := run(name, contents)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(violations).To(HaveExactElements(And(HaveField("Line", line), HaveField("Source", "json"), HaveField("Rule.Method", "schema"))))
-		Expect(*violations[0].Message).To(ContainSubstring("/name"))
+		Expect(*violations[0].Message).To(HavePrefix("/name: "))
+		Expect(violations[0].Path).To(Equal("/name"))
 	},
 		Entry("JSON source location", "data.json", "{\n  \"name\": 123\n}", 2),
 		Entry("YAML source location", "data.yaml", "# example\nname: 123\n", 2),

@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -22,7 +25,7 @@ func EditorSchema(ctx context.Context, data []byte, path, override string) (map[
 		if reference == "" {
 			var value any
 			if err := yaml.Unmarshal(data, &value); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("read the $schema declaration of %s: %w", filepath.Base(path), yamlSourceError(err, data, path))
 			}
 			reference, err = schemaDeclaration(value)
 			if err != nil {
@@ -111,6 +114,10 @@ func EditorSchema(ctx context.Context, data []byte, path, override string) (map[
 						return nil, fmt.Errorf("named schema anchors are not supported by the editor: %s", ref)
 					}
 					node[key] = "#/$defs/" + name + fragment
+				} else if key == "x-clicky-extensions" {
+					if err := resolveExtensionRefs(child, base); err != nil {
+						return nil, err
+					}
 				} else {
 					next, err := rewrite(child, base)
 					if err != nil {
@@ -141,4 +148,60 @@ func EditorSchema(ctx context.Context, data []byte, path, override string) (map[
 		return nil, err
 	}
 	return map[string]any{"$ref": "#/$defs/" + name + fragment, "$defs": resources}, nil
+}
+
+// resolveExtensionRefs makes each `{ref}` source of a schema's
+// x-clicky-extensions absolute against the schema that declares it, since the
+// editor bundles every schema into one document and a relative ref would lose
+// its base. Inline `{tsx}` sources are left as they are.
+func resolveExtensionRefs(value any, base *url.URL) error {
+	sources, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("x-clicky-extensions must be an array of { tsx, name? } or { ref } sources")
+	}
+	for i, item := range sources {
+		source, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("x-clicky-extensions[%d] must be an object", i)
+		}
+		raw, has := source["ref"]
+		if !has {
+			continue
+		}
+		ref, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("x-clicky-extensions[%d].ref must be a string", i)
+		}
+		parsed, err := url.Parse(ref)
+		if err != nil {
+			return fmt.Errorf("x-clicky-extensions[%d].ref: %w", i, err)
+		}
+		source["ref"] = base.ResolveReference(parsed).String()
+	}
+	return nil
+}
+
+var (
+	yamlLineError = regexp.MustCompile(`^yaml: line (\d+): (.*)$`)
+	markdownPath  = regexp.MustCompile(`(?i)\.mdx?$`)
+)
+
+// yamlSourceError quotes the line a YAML syntax error points at. The editor
+// sends only a Markdown file's frontmatter, so there the line is also given as
+// a file line, one below the opening "---".
+func yamlSourceError(err error, data []byte, path string) error {
+	match := yamlLineError.FindStringSubmatch(err.Error())
+	if match == nil {
+		return err
+	}
+	line, _ := strconv.Atoi(match[1])
+	lines := strings.Split(string(data), "\n")
+	if line < 1 || line > len(lines) {
+		return err
+	}
+	where := "line " + match[1]
+	if markdownPath.MatchString(path) {
+		where = fmt.Sprintf("frontmatter line %d (file line %d)", line, line+1)
+	}
+	return fmt.Errorf("yaml: %s: %s: %q", where, match[2], strings.TrimRight(lines[line-1], "\r"))
 }

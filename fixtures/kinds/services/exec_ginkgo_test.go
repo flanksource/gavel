@@ -21,6 +21,21 @@ import (
 func processAlive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
 var _ = Describe("services kind: exec entries", func() {
+	It("accepts a runtime's SIGTERM exit code only when teardown requested it", func() {
+		step := newStep("runtime", fmt.Sprintf(`{"services":{"jvm":{"exec":"exec %s --term-exit 143 --addr 127.0.0.1:{{.port}}","ready":{"http":"http://127.0.0.1:{{.port}}/healthz"}}}}`, svcBin))
+		outcome, err := execute(step)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(outcome.Cleanup(context.Background())).To(Succeed())
+	})
+	It("reports a runtime that exited with 143 before teardown", func() {
+		step := newStep("runtime", fmt.Sprintf(`{"services":{"jvm":{"exec":"exec %s --term-exit 143 --addr 127.0.0.1:{{.port}}","ready":{"http":"http://127.0.0.1:{{.port}}/healthz"}}}}`, svcBin))
+		outcome, err := execute(step)
+		Expect(err).NotTo(HaveOccurred())
+		pid := entryOutputs(outcome, "jvm")["pid"].(int)
+		Expect(syscall.Kill(pid, syscall.SIGTERM)).To(Succeed())
+		Eventually(func() bool { return processAlive(pid) }).Should(BeFalse())
+		Expect(outcome.Cleanup(context.Background())).To(MatchError(ContainSubstring("143")))
+	})
 	It("starts an exec entry on an allocated port, waits for http readiness and exports API_URL/API_PORT", func() {
 		step := newStep("stack", fmt.Sprintf(`{"services": {"api": {
 			"exec": "%s --label api --addr 127.0.0.1:{{.port}}",

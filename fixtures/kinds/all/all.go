@@ -15,6 +15,7 @@ import (
 	_ "github.com/flanksource/gavel/fixtures/kinds/query"
 	// services
 	_ "github.com/flanksource/gavel/fixtures/kinds/services"
+	_ "github.com/flanksource/gavel/fixtures/kinds/telltale"
 	// todo, todo_prompt
 	_ "github.com/flanksource/gavel/fixtures/kinds/todo"
 	// exec, test, lint, ai

@@ -19,12 +19,16 @@ const (
 )
 
 type Violation struct {
-	File             string            `json:"file,omitempty"`
-	Line             int               `json:"line,omitempty"`
-	Column           int               `json:"column,omitempty"`
-	EndLine          int               `json:"end_line,omitempty"`
-	EndColumn        int               `json:"end_column,omitempty"`
-	Message          *string           `json:"message,omitempty"`
+	File      string  `json:"file,omitempty"`
+	Line      int     `json:"line,omitempty"`
+	Column    int     `json:"column,omitempty"`
+	EndLine   int     `json:"end_line,omitempty"`
+	EndColumn int     `json:"end_column,omitempty"`
+	Message   *string `json:"message,omitempty"`
+	// Path is the JSON Pointer of the document value a schema violation is
+	// about. Message still begins with "<Path>: " so it reads on its own; a view
+	// that shows the violation at that value drops the prefix.
+	Path             string            `json:"path,omitempty"`
 	Source           string            `json:"source,omitempty"`
 	Rule             *Rule             `json:"rule,omitempty"`
 	Severity         ViolationSeverity `json:"severity,omitempty" yaml:"severity,omitempty"`

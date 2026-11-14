@@ -30,6 +30,7 @@ into the AI. Reserve raw gh for actions gavel does not cover.
 
 Subcommands:
   status   Show PR checks and pipeline jobs for GitHub or Azure DevOps
+  blame    Recommend reviewers from CODEOWNERS, changed-line blame and file history
   create   Cherry-pick a commit into a fresh worktree and open a PR (AI title/body/branch)
   list     List PRs, optionally with CI status or a live browser dashboard (--ui)
   close    Close a PR without merging it (replaces gh pr close)
@@ -38,6 +39,7 @@ Subcommands:
 
 Examples:
   gavel pr status                 # current branch's PR + checks
+  gavel pr blame 123              # recommended reviewers with supporting evidence
   gavel pr status 123 --logs      # PR #123 with failed and cancelled job logs
   gavel pr status --follow        # block until what you filtered on settles
   gavel pr status <actions job URL>   # that job, including runs without a PR

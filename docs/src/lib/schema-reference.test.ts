@@ -35,6 +35,7 @@ describe("schema reference pages", () => {
     ["fixture-runner-steps", "fixture-document-schema"],
     ["fixture-ai-review", "fixture-document-schema"],
     ["fixture-kind-services", "fixture-kind-services"],
+    ["fixture-kind-telltale", "fixture-kind-telltale"],
     ["fixture-reference", "fixture-frontmatter"],
     ["fixture-step-reference", "fixture-document"],
     ["framework-go", "framework-go"],

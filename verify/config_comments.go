@@ -49,6 +49,23 @@ type CommentAgent struct {
 	// Group is the delivery group key: the threads delivered in one group
 	// reuse the live session recorded for it, instead of each starting a run.
 	Group string `yaml:"group,omitempty" json:"group,omitempty"`
+	// Edits is CommentEditsDirect (the default when empty), letting the agent
+	// edit files, or CommentEditsPropose: it answers with a proposed patch.
+	Edits string `yaml:"edits,omitempty" json:"edits,omitempty"`
+}
+
+// Comment agent edits policies; the values of comments.EditsDirect/EditsPropose.
+const (
+	CommentEditsDirect  = "direct"
+	CommentEditsPropose = "propose"
+)
+
+// Validate rejects an edits policy other than direct or propose.
+func (a CommentAgent) Validate() error {
+	if a.Edits != "" && a.Edits != CommentEditsDirect && a.Edits != CommentEditsPropose {
+		return fmt.Errorf("edits must be %q or %q, not %q", CommentEditsDirect, CommentEditsPropose, a.Edits)
+	}
+	return nil
 }
 
 // PromptOrDefault is the prompt the agent's run starts.
@@ -140,9 +157,17 @@ func relativeTo(dir, file string) (string, bool) {
 // Validate rejects a page key that does not name a file beneath the
 // .gavel.yaml's directory, so an entry can never route threads elsewhere.
 func (c CommentAgentsConfig) Validate() error {
-	for key := range c.Pages {
+	if c.Default != nil {
+		if err := c.Default.Validate(); err != nil {
+			return fmt.Errorf("comments.agents.default: %w", err)
+		}
+	}
+	for key, agent := range c.Pages {
 		if !IsCommentPageKey(key) {
 			return fmt.Errorf("comments.agents.pages: %q must be a relative file path beneath the .gavel.yaml directory", key)
+		}
+		if err := agent.Validate(); err != nil {
+			return fmt.Errorf("comments.agents.pages.%s: %w", key, err)
 		}
 	}
 	return nil
@@ -157,6 +182,11 @@ func IsCommentPageKey(key string) bool {
 // Set makes agent the layer's default (page empty) or its entry for page, or
 // removes that entry when agent is nil.
 func (c *CommentAgentsConfig) Set(page string, agent *CommentAgent) error {
+	if agent != nil {
+		if err := agent.Validate(); err != nil {
+			return err
+		}
+	}
 	switch {
 	case page == "":
 		c.Default = agent
@@ -177,6 +207,8 @@ func (c *CommentAgentsConfig) Set(page string, agent *CommentAgent) error {
 }
 
 func commentsSchema(specSchema map[string]any) map[string]any {
+	edits := stringWithDefault("direct lets the agent edit the project's files; propose has it answer with a proposed patch a person accepts, rejects or asks to revise.", CommentEditsDirect)
+	edits["enum"] = []any{CommentEditsDirect, CommentEditsPropose}
 	agent := object("A captain run that new human comment threads are handed to.", map[string]any{
 		"enabled":      boolProp("Hand new human threads on these pages to the agent. false opts the pages out of an agent inherited from a .gavel.yaml further up."),
 		"assign":       boolProp("Make the agent the thread's assignee as soon as the thread is created."),
@@ -186,6 +218,7 @@ func commentsSchema(specSchema map[string]any) map[string]any {
 		"variables":    mapObject("Prompt template variables, below the ones the host sets.", map[string]any{}),
 		"instructions": stringProp("Instructions appended to the thread the session is given."),
 		"group":        stringProp("Delivery group: threads delivered in the same group reuse the group's live session instead of each starting a new run."),
+		"edits":        edits,
 	})
 	return object("Comment thread settings for the files beneath this .gavel.yaml's directory.", map[string]any{
 		"agents": object("Which agent works new comment threads. The nearest .gavel.yaml wins, and a page entry wins over its directory's default.", map[string]any{

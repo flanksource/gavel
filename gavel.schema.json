@@ -2044,6 +2044,15 @@
                   "description": "Make the agent the thread's assignee as soon as the thread is created.",
                   "type": "boolean"
                 },
+                "edits": {
+                  "default": "direct",
+                  "description": "direct lets the agent edit the project's files; propose has it answer with a proposed patch a person accepts, rejects or asks to revise.",
+                  "enum": [
+                    "direct",
+                    "propose"
+                  ],
+                  "type": "string"
+                },
                 "enabled": {
                   "description": "Hand new human threads on these pages to the agent. false opts the pages out of an agent inherited from a .gavel.yaml further up.",
                   "type": "boolean"
@@ -2206,6 +2215,15 @@
                   "assign": {
                     "description": "Make the agent the thread's assignee as soon as the thread is created.",
                     "type": "boolean"
+                  },
+                  "edits": {
+                    "default": "direct",
+                    "description": "direct lets the agent edit the project's files; propose has it answer with a proposed patch a person accepts, rejects or asks to revise.",
+                    "enum": [
+                      "direct",
+                      "propose"
+                    ],
+                    "type": "string"
                   },
                   "enabled": {
                     "description": "Hand new human threads on these pages to the agent. false opts the pages out of an agent inherited from a .gavel.yaml further up.",
