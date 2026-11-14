@@ -46,5 +46,8 @@ export default defineConfig(({ command }) => {
       ],
     },
     build: { outDir: "dist" },
+    // Vitest leaves node_modules unbundled, so floating-ui and radix would import their
+    // own React past the aliases above; inlining them resolves the copy the build pins.
+    test: { server: { deps: { inline: [/@floating-ui\//, /@radix-ui\//] } } },
   };
 });

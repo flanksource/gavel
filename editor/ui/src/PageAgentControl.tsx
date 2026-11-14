@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { PromptRunEditor, type AIPromptRunValue } from "@flanksource/clicky-ui/ai";
-import { Button, Field, InputField, Modal, Select, Switch } from "@flanksource/clicky-ui/components";
+import { Button, Field, InputField, Modal, SegmentedControl, Select, Switch } from "@flanksource/clicky-ui/components";
 import { Badge } from "@flanksource/clicky-ui/data";
 import { UiRobotAi } from "@flanksource/clicky-ui/icons";
 import { request } from "./api";
@@ -22,6 +22,7 @@ import {
   snippetNameProblem,
   type AgentField,
   type CommentAgent,
+  type CommentEdits,
   type EffectiveField,
   type FileSettings,
   type LayerRef,
@@ -190,6 +191,7 @@ function AgentForm({
   const seedRun = runOf(seed);
   const [enabled, setEnabled] = useState(seed.enabled ?? !settings.agent.found);
   const [assign, setAssign] = useState(seed.assign ?? false);
+  const [edits, setEdits] = useState<CommentEdits>(seed.edits ?? "direct");
   const [promptId, setPromptId] = useState(seedRun.prompt);
   // Only touched fields are written, so a field nobody set here keeps inheriting; a first agent is enabled.
   const [touched, setTouched] = useState<ReadonlySet<AgentField>>(new Set(!existing && !settings.agent.found ? ["enabled"] : []));
@@ -244,7 +246,7 @@ function AgentForm({
       setSaving(false);
     }
   };
-  const saved = built.run && savedAgentOf({ entry: existing, form: { enabled, assign, ...built.run }, touched, cleared });
+  const saved = built.run && savedAgentOf({ entry: existing, form: { enabled, assign, edits, ...built.run }, touched, cleared });
   const save = () => void act({ layer: layer!, page, agent: saved! });
   const changeValue = (next: AIPromptRunValue) => {
     touch(...(["presets", "spec", "variables"] as const).filter((field) => JSON.stringify(next[field] ?? null) !== JSON.stringify(value[field] ?? null)));
@@ -281,6 +283,28 @@ function AgentForm({
         />
         {fieldState("assign")}
       </div>
+      <Field
+        label="Agent edits"
+       
+        helper={edits === "propose" ? "The agent must not edit project files: it answers with a patch you apply, stage, reject or ask to revise." : "The agent edits the project's files itself."}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <SegmentedControl<CommentEdits>
+            size="sm"
+            aria-label="Agent edits"
+            value={edits}
+            options={[
+              { id: "direct", label: "Edit directly" },
+              { id: "propose", label: "Propose patches" },
+            ]}
+            onChange={(next) => {
+              setEdits(next);
+              touch("edits");
+            }}
+          />
+          {fieldState("edits")}
+        </div>
+      </Field>
       {!models.data || !families.data || !context.data || !prompt ? (
         !failure && <p className="text-sm text-muted-foreground">Loading prompts and AI options…</p>
       ) : (

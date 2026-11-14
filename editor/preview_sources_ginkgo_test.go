@@ -2,6 +2,7 @@ package editor
 
 import (
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -33,6 +34,34 @@ var _ = Describe("Preview project sources", func() {
 		Expect(result.Paths).To(ContainElements("title.jsx", "page.css", "page.mdx"))
 		Expect(result.Dependencies).To(HaveKeyWithValue("@flanksource/facet", "^0.1.74"))
 		Expect(store.Files()).To(HaveLen(1))
+	})
+	It("serves a schema's form extension refs as paths in the document's preview root", func() {
+		root := GinkgoT().TempDir()
+		Expect(os.MkdirAll(filepath.Join(root, "schemas", "extensions"), 0700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "schemas", "extensions", "pickers.tsx"), []byte("export default {}"), 0600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "product.yaml"), []byte("name: example\n"), 0600)).To(Succeed())
+		store, err := NewStore([]string{filepath.Join(root, "product.yaml")})
+		Expect(err).NotTo(HaveOccurred())
+		fileURL := func(path string) string { return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String() }
+		schema := map[string]any{"$defs": map[string]any{"resource0": map[string]any{"x-clicky-extensions": []any{
+			map[string]any{"ref": fileURL(filepath.Join(root, "schemas", "extensions", "pickers.tsx"))},
+			map[string]any{"tsx": "export default {}"},
+		}}}}
+		Expect(store.PreviewExtensionRefs(store.Files()[0].ID, schema)).To(Succeed())
+		Expect(schema).To(Equal(map[string]any{"$defs": map[string]any{"resource0": map[string]any{"x-clicky-extensions": []any{
+			map[string]any{"ref": "schemas/extensions/pickers.tsx"},
+			map[string]any{"tsx": "export default {}"},
+		}}}}))
+
+		outside := filepath.Join(GinkgoT().TempDir(), "pickers.tsx")
+		for ref, message := range map[string]string{
+			fileURL(outside):                         "is outside the preview root",
+			"https://example.com/pickers.tsx":        "must be a file in the project",
+			fileURL(filepath.Join(root, "gone.tsx")): "is not a previewable project source",
+		} {
+			err := store.PreviewExtensionRefs(store.Files()[0].ID, map[string]any{"x-clicky-extensions": []any{map[string]any{"ref": ref}}})
+			Expect(err).To(MatchError(ContainSubstring(message)), ref)
+		}
 	})
 	It("rejects source traversal and symlinks outside the project", func() {
 		root := GinkgoT().TempDir()

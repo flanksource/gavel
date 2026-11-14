@@ -2,10 +2,31 @@
 packages:
   - "."
   - "../../../clicky-ui/packages/ui"
+  - "../../../clicky-ui/packages/page-runtime"
+  - "../../../facet"
 allowBuilds:
   "@parcel/watcher": true
   esbuild: true
+  puppeteer: false
 catalog:
+  "@babel/core": ^7.29.0
+  "@babel/preset-typescript": ^7.28.5
+  "@types/babel__core": ^7.20.5
+  "babel-preset-solid": ^1.9.12
+  "solid-js": ^1.9.12
+  "@flanksource/facet": 0.1.74
+  "@mdx-js/mdx": ^3.1.1
+  "@tailwindcss/node": ^4.3.3
+  "@tailwindcss/oxide": ^4.3.3
+  "es-module-lexer": ^3.0.0
+  "fake-indexeddb": ^6.0.1
+  "rehype-raw": ^7.0.0
+  "remark-frontmatter": ^5.0.0
+  "remark-gfm": ^4.0.0
+  "remark-github-blockquote-alert": ^2.1.0
+  "rolldown": ~1.2.14
+  "sucrase": ^3.35.1
+  "tsx": ^4.7.0
   "@ai-sdk/react": ^3.0.201
   "@codemirror/autocomplete": ^6.20.3
   "@codemirror/commands": ^6.10.4
@@ -109,6 +130,7 @@ enableGlobalVirtualStore: true
 
 # Keep shared peer types on React 19; the test-runner workspace uses React 18.
 overrides:
+  "@flanksource/page-runtime": "workspace:*"
   "@types/react": ^19.2.17
   "@types/react-dom": ^19.2.3
   brace-expansion: ^5.0.6

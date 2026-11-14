@@ -45,6 +45,9 @@ type entry struct {
 type Store struct {
 	mu    sync.Mutex
 	files map[string]entry
+	// roots are the directories files may be created in or moved within: each
+	// selected folder, and the folder of each selected file.
+	roots []editRoot
 }
 
 func NewStore(paths []string) (*Store, error) {
@@ -75,7 +78,13 @@ func NewStore(paths []string) (*Store, error) {
 				return nil, fmt.Errorf("unsupported file: %s", path)
 			}
 			s.add(entry{File: File{Path: display, Kind: kind}, root: filepath.Dir(canonical), name: filepath.Base(canonical)})
+			if err := s.addRoot(filepath.Dir(display)); err != nil {
+				return nil, err
+			}
 			continue
+		}
+		if err := s.addRoot(display); err != nil {
+			return nil, err
 		}
 		matches, err := utils.GlobFilesBounded(canonical, supportedGlobs())
 		if err != nil {
@@ -106,12 +115,15 @@ func NewStore(paths []string) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) add(file entry) {
+// add lists file under the id of its canonical path, keeping an entry already
+// listed there, and returns the id.
+func (s *Store) add(file entry) string {
 	id := fmt.Sprintf("%x", sha256.Sum256([]byte(filepath.Join(file.root, file.name))))
 	if _, ok := s.files[id]; !ok {
 		file.ID = id
 		s.files[id] = file
 	}
+	return id
 }
 
 // kindOf classifies path by extension, and is false for an unsupported file.
@@ -133,6 +145,8 @@ func supportedGlobs() []string {
 	return globs
 }
 func (s *Store) Files() []File {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	files := make([]File, 0, len(s.files))
 	for _, e := range s.files {
 		files = append(files, e.File)

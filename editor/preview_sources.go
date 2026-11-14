@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -155,4 +157,82 @@ func (s *Store) previewSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeContent(w, r, name, info.ModTime(), file)
+}
+
+// PreviewExtensionRefs rewrites every absolute file `ref` in a schema's
+// x-clicky-extensions (as jsonlint.EditorSchema resolves them) into a path
+// inside the document's preview root, the path the runtime's source provider
+// serves. A ref outside that root, or to a file the root does not index,
+// fails rather than leaving the form without its extension.
+func (s *Store) PreviewExtensionRefs(id string, schema any) error {
+	var preview *PreviewContext
+	var root string
+	var walk func(any) error
+	walk = func(value any) error {
+		switch node := value.(type) {
+		case map[string]any:
+			for key, child := range node {
+				if key != "x-clicky-extensions" {
+					if err := walk(child); err != nil {
+						return err
+					}
+					continue
+				}
+				sources, _ := child.([]any)
+				for _, item := range sources {
+					source, _ := item.(map[string]any)
+					ref, ok := source["ref"].(string)
+					if !ok {
+						continue
+					}
+					if preview == nil {
+						var err error
+						if root, _, err = s.previewRoot(id); err != nil {
+							return err
+						}
+						context, err := s.Preview(id)
+						if err != nil {
+							return err
+						}
+						preview = &context
+					}
+					path, err := previewExtensionPath(ref, root, preview.Paths)
+					if err != nil {
+						return err
+					}
+					source["ref"] = path
+				}
+			}
+		case []any:
+			for _, child := range node {
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(schema)
+}
+
+func previewExtensionPath(ref, root string, paths []string) (string, error) {
+	parsed, err := url.Parse(ref)
+	if err != nil {
+		return "", fmt.Errorf("form extension %s: %w", ref, err)
+	}
+	if parsed.Scheme != "file" {
+		return "", fmt.Errorf("form extension %s must be a file in the project", ref)
+	}
+	rel, err := filepath.Rel(root, filepath.FromSlash(parsed.Path))
+	if err != nil {
+		return "", fmt.Errorf("form extension %s: %w", ref, err)
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", fmt.Errorf("form extension %s is outside the preview root %s", ref, root)
+	}
+	if !slices.Contains(paths, rel) {
+		return "", fmt.Errorf("form extension %s is not a previewable project source under %s", ref, root)
+	}
+	return rel, nil
 }

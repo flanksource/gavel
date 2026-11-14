@@ -1,0 +1,15 @@
+import { Section, StatCard } from '@flanksource/facet';
+
+export default function Page() {
+  return (
+    <main className="p-6">
+      <h1 className="text-2xl font-semibold">Page</h1>
+      <Section title="Summary">
+        <div className="grid grid-cols-2 gap-4">
+          <StatCard label="Passed" value="42" color="green" />
+          <StatCard label="Failed" value="1" color="red" />
+        </div>
+      </Section>
+    </main>
+  );
+}

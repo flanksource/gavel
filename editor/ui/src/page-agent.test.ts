@@ -93,6 +93,16 @@ describe("effectiveFieldsOf", () => {
     ]);
   });
 
+  it("shows whether the agent edits directly or proposes patches, badged with the layer that set it", () => {
+    const proposing = settings({
+      agent: { agent: { enabled: true, edits: "propose" }, provenance: { enabled: { layer: projectLayer.location }, edits: { layer: folderLayer.location, page: "16-security.mdx" } }, found: true },
+    });
+    expect(effectiveFieldsOf(proposing)).toEqual([
+      { field: "enabled", value: "on", badge: ".gavel.agents.yaml @0123456", title: `${root}/.gavel.agents.yaml` },
+      { field: "edits", value: "propose", badge: ".gavel.yaml (page)", title: `${root}/slides/arb/.gavel.yaml` },
+    ]);
+  });
+
   it("is empty when no layer configures the page", () => {
     const none = settings({ agent: { agent: {}, provenance: {}, found: false } });
     expect(effectiveFieldsOf(none)).toEqual([]);
@@ -240,6 +250,13 @@ describe("savedAgentOf", () => {
     expect(savedAgentOf({ entry: undefined, form, touched: new Set<AgentField>(["enabled"]), cleared: none })).toEqual({ enabled: true });
   });
 
+  it("writes the edit mode only once it is touched, and drops it when cleared so it inherits again", () => {
+    const withEdits: CommentAgent = { ...form, edits: "propose" };
+    expect(savedAgentOf({ entry, form: withEdits, touched: none, cleared: none })).toEqual({ prompt: "slides-review" });
+    expect(savedAgentOf({ entry, form: withEdits, touched: new Set<AgentField>(["edits"]), cleared: none })).toEqual({ prompt: "slides-review", edits: "propose" });
+    expect(savedAgentOf({ entry: { ...entry, edits: "propose" }, form: withEdits, touched: none, cleared: new Set<AgentField>(["edits"]) })).toEqual({ prompt: "slides-review" });
+  });
+
   it("drops a cleared field so it inherits again, and keeps the entry's others", () => {
     const both: CommentAgent = { enabled: false, prompt: "slides-review", presets: ["fast"] };
     expect(savedAgentOf({ entry: both, form, touched: none, cleared: new Set<AgentField>(["enabled", "presets"]) })).toEqual({ prompt: "slides-review" });
@@ -273,6 +290,16 @@ describe("runOf and deliverTargetOf", () => {
       { kind: "run", prompt: "editor-comments" },
       { kind: "run", prompt: "slides-review" },
       { kind: "run", prompt: "slides-review", runOptions: { presets: ["fast"], spec: { model: "opus" }, variables: { tone: "dry" }, instructions: "Keep the tables" } },
+    ]);
+  });
+
+  it("hands the page agent's edit mode to a manual delivery so a proposing agent never edits directly", () => {
+    expect([
+      deliverTargetOf({ enabled: true, edits: "propose" }),
+      deliverTargetOf({ enabled: true, edits: "direct", prompt: "slides-review" }),
+    ]).toEqual([
+      { kind: "run", prompt: "editor-comments", edits: "propose" },
+      { kind: "run", prompt: "slides-review", edits: "direct" },
     ]);
   });
 

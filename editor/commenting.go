@@ -113,7 +113,10 @@ func (s *Server) OpenComments(ctx context.Context) (*comments.Service, error) {
 		return nil, err
 	}
 	host := commentHost{store: s.Store}
-	return comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 10 << 20, Routes: agents.ProjectRoutes(catalog, configured), Delivery: delivery})
+	locate := func(ctx context.Context, path string) (comments.Location, error) {
+		return ui.LocateCommentPath(ctx, catalog, path)
+	}
+	return comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 10 << 20, Routes: agents.ProjectRoutes(catalog, configured), Delivery: delivery, Proposals: ui.CommentProposals{}, Locate: locate})
 }
 
 // me serves GET /api/me: the actor this editor authors comments as.

@@ -75,12 +75,17 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/files", func(w http.ResponseWriter, r *http.Request) { respond(w, s.Store.Files(), nil) })
+	mux.HandleFunc("POST /api/files", s.createFile)
+	mux.HandleFunc("GET /api/templates", s.templates)
+	mux.HandleFunc("POST /api/file/{id}/rename", s.renameFile)
+	mux.HandleFunc("DELETE /api/file/{id}", s.deleteFile)
 	mux.HandleFunc("GET /api/file/{id}/preview", s.previewContext)
 	mux.HandleFunc("GET /api/preview/runtimes", s.previewCatalog)
 	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/file/{id}/comments", s.listComments)
 	mux.HandleFunc("POST /api/file/{id}/comments/read", s.markFileCommentsRead)
 	mux.HandleFunc("GET /api/comments", s.commentSummary)
+	mux.HandleFunc("GET /api/comments/projects", s.commentProjects)
 	mux.HandleFunc("POST /api/projects", s.createProject)
 	mux.HandleFunc("GET /api/file/{id}/agent-run/context", s.agentRunContextOf)
 	mux.HandleFunc("GET /api/file/{id}/settings", s.fileSettingsOf)
@@ -161,7 +166,7 @@ func respond(w http.ResponseWriter, value any, err error) {
 		if errors.Is(err, os.ErrNotExist) {
 			status = http.StatusNotFound
 		}
-		if errors.Is(err, ErrConflict) {
+		if errors.Is(err, ErrConflict) || errors.Is(err, ErrExists) {
 			status = http.StatusConflict
 		}
 		http.Error(w, err.Error(), status)
@@ -220,6 +225,9 @@ func (s *Server) schema(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	schema, err := jsonlint.EditorSchema(ctx, []byte(input.Source), doc.Path, override)
+	if err == nil && schema != nil {
+		err = s.Store.PreviewExtensionRefs(r.PathValue("id"), schema)
+	}
 	respond(w, schema, err)
 }
 func (s *Server) startLint(w http.ResponseWriter, r *http.Request) {

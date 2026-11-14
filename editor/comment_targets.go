@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -16,13 +15,7 @@ import (
 
 // fileTarget is where a file's threads live: under the scope of the project
 // holding it, as pr/ui's comment host and `gavel comments` address them.
-type fileTarget struct {
-	Project string
-	// Dir is the project's root, where an agent working the thread runs.
-	Dir   string
-	Scope string
-	URI   string
-}
+type fileTarget = agents.PathTarget
 
 // NoProjectError is a file outside every configured project: its threads have
 // no scope until a project is created for it, as Suggestion proposes.
@@ -35,35 +28,17 @@ func (e NoProjectError) Error() string {
 	return fmt.Sprintf("%s is not inside a gavel project; create one for %s to comment on it", e.Path, e.Suggestion.Dir)
 }
 
-func projectScope(name string) string { return "gavel://project/" + url.PathEscape(name) }
-
 // targetOf resolves the most specific project holding path, as ProjectForDir does for every gavel surface.
 func targetOf(ctx context.Context, path string) (fileTarget, error) {
 	catalog, err := projects.Shared(ctx)
 	if err != nil {
 		return fileTarget{}, err
 	}
-	project, err := catalog.ForDir(ctx, filepath.Dir(path))
+	target, err := agents.ProjectPathTarget(ctx, catalog, path)
 	if errors.Is(err, projects.ErrNotFound) {
 		return fileTarget{}, NoProjectError{Path: path, Suggestion: suggestProject(ctx, path)}
 	}
-	if err != nil {
-		return fileTarget{}, err
-	}
-	root, err := projects.CanonicalPath(project.ResolvedDir())
-	if err != nil {
-		return fileTarget{}, fmt.Errorf("resolve project %q directory: %w", project.Name, err)
-	}
-	resolved, err := projects.CanonicalPath(path)
-	if err != nil {
-		return fileTarget{}, fmt.Errorf("resolve %s: %w", path, err)
-	}
-	rel, err := filepath.Rel(root, resolved)
-	if err != nil {
-		return fileTarget{}, fmt.Errorf("place %s under project %q: %w", path, project.Name, err)
-	}
-	scope := projectScope(project.Name)
-	return fileTarget{Project: project.Name, Dir: root, Scope: scope, URI: scope + "/files/" + filepath.ToSlash(rel)}, nil
+	return target, err
 }
 
 // suggestProject proposes the file's git work tree, named after its directory,
@@ -110,9 +85,9 @@ func (s *Store) editedFile(ctx context.Context, scope, uri string) (Document, er
 	if err != nil {
 		return Document{}, err
 	}
-	for _, file := range s.files {
-		if filepath.Join(file.root, file.name) == path {
-			return s.Read(file.ID)
+	for id, canonical := range s.Paths() {
+		if canonical == path {
+			return s.Read(id)
 		}
 	}
 	return Document{}, fmt.Errorf("%w: %s is not one of the edited files", errInvalidTarget, path)

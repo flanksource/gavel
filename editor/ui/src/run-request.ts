@@ -45,7 +45,13 @@ export type RunRequest = {
 };
 
 /** A run delivery target of the shared comments API (POST /api/v1/comments/{id}/deliver and /deliver/preview). */
-export type RunTarget = { kind: "run"; prompt: string; runOptions?: Omit<RunRequest, "prompt"> };
+export type RunTarget = {
+  kind: "run";
+  prompt: string;
+  runOptions?: Omit<RunRequest, "prompt">;
+  /** `propose`: the agent must answer with a patch instead of editing the project's files; unset or `direct` lets it edit. */
+  edits?: "direct" | "propose";
+};
 
 /** The dialog's run as a delivery target: the prompt, and every other choice as its runOptions. */
 export function runTargetOf(run: RunRequest): RunTarget {

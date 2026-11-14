@@ -19,7 +19,12 @@ export type CommentAgent = {
   spec?: AISpecRuntimeSpec;
   variables?: Record<string, unknown>;
   instructions?: string;
+  /** `direct` (default when unset): the agent edits the project's files; `propose`: it answers with a patch a human accepts or rejects. */
+  edits?: CommentEdits;
 };
+
+/** How a comment agent changes the project (verify.CommentAgent.Edits). */
+export type CommentEdits = "direct" | "propose";
 
 /** What a settings layer position is to the file's project (settings.Kind). */
 export type SettingsKind = "user" | "parent" | "project" | "path";
@@ -76,7 +81,7 @@ export function layerLabelOf(layer: SettingsLayer): string {
   return layer.file ? layer.location : `db:${layer.kind}:${layer.path ?? ""}`;
 }
 
-const AGENT_FIELDS = ["enabled", "assign", "prompt", "presets", "spec", "variables", "instructions"] as const;
+const AGENT_FIELDS = ["enabled", "assign", "edits", "prompt", "presets", "spec", "variables", "instructions"] as const;
 
 /** A field of CommentAgent. */
 export type AgentField = (typeof AGENT_FIELDS)[number];
@@ -87,6 +92,8 @@ function fieldValue(agent: CommentAgent, field: AgentField): string {
       return agent.enabled ? "on" : "off";
     case "assign":
       return agent.assign ? "yes" : "no";
+    case "edits":
+      return agent.edits ?? "direct";
     case "prompt":
       return agent.prompt ?? DEFAULT_AGENT_PROMPT;
     case "presets":
@@ -252,9 +259,9 @@ export function runOf(agent: CommentAgent): RunRequest {
   };
 }
 
-/** The delivery target "Send to page agent" hands a thread to, as the server builds it from the agent. */
+/** The delivery target "Send to page agent" hands a thread to, as the server builds it from the agent, including how it edits. */
 export function deliverTargetOf(agent: CommentAgent): RunTarget {
-  return runTargetOf(runOf(agent));
+  return { ...runTargetOf(runOf(agent)), ...(agent.edits ? { edits: agent.edits } : {}) };
 }
 
 /** A viewer's own hand-off choice for a page: a new run of the page's configured agent, or a live session. */

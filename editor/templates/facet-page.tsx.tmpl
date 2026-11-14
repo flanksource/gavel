@@ -1,0 +1,27 @@
+import { BulletList, Section, StatCard } from '@flanksource/facet';
+
+type Metric = { label: string; value: string };
+
+const metrics: Metric[] = [
+  { label: 'Response time', value: '< 2min' },
+  { label: 'Uptime', value: '99.99%' },
+  { label: 'Incidents resolved', value: '1,247' },
+];
+
+export default function Page() {
+  return (
+    <main className="p-6">
+      <h1 className="text-2xl font-semibold">Datasheet</h1>
+      <Section title="Key metrics">
+        <div className="grid grid-cols-3 gap-4">
+          {metrics.map((metric) => (
+            <StatCard key={metric.label} label={metric.label} value={metric.value} />
+          ))}
+        </div>
+      </Section>
+      <Section title="Key features">
+        <BulletList items={['Real-time detection', 'Automated runbooks', 'Multi-cloud observability']} />
+      </Section>
+    </main>
+  );
+}

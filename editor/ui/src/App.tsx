@@ -8,7 +8,7 @@ import {
   type DropdownMenuItem,
   type JsonSchemaObject,
 } from "@flanksource/clicky-ui/components";
-import { UiChatDots, UiDotsVertical, UiFolder, UiListChecks } from "@flanksource/clicky-ui/icons";
+import { UiChatDots, UiDotsVertical, UiFilePlus, UiFolder, UiListChecks } from "@flanksource/clicky-ui/icons";
 import gavelLockup from "../../../assets/brand/gavel-logo-mono.svg";
 import {
   DocumentForm,
@@ -41,9 +41,11 @@ import {
 } from "@flanksource/clicky-ui/data";
 import { useEventSourceFactory } from "@flanksource/clicky-ui/hooks";
 import { createAutosave, type Autosave } from "./autosave";
-import { request, type FileEntry, type Document } from "./api";
+import { ApiError, request, type FileEntry, type Document } from "./api";
 import { commonRoot, editorFindingRef, nodePath, relativeToFile } from "./paths";
-import { taskRunFromHref } from "./routes";
+import { commentsRouteFrom, NO_COMMENTS_FILTERS, taskRunFromHref, writeCommentsRoute, type CommentsFilters } from "./routes";
+import { CommentsPage, type OpenThread } from "./CommentsPage";
+import { useCommentProjects, useProjectUnread } from "./project-comments";
 import { commentCountsAt, useCommentSummary } from "./comment-summary";
 import { RecentComments } from "./RecentComments";
 import { useFileComments } from "./file-comments";
@@ -52,6 +54,8 @@ import { CurrentUser } from "./CurrentUser";
 import { NewAgentSessionDialog } from "./NewAgentSessionDialog";
 import { PageAgentControl } from "./PageAgentControl";
 import { FacetPreview } from "./FacetPreview";
+import { previewExtensionForm } from "./SchemaExtensionForm";
+import { FileOperationDialog, type FileOperation, type FileOperationHandlers } from "./FileOperationDialog";
 
 // The problems shown for the edited files: recorded lint violations and failed tests
 // (GET /api/lint, streamed from /api/lint/stream), and gavel runs in progress.
@@ -84,39 +88,43 @@ function recordedLabel(recorded: string): string {
   return new Date(recorded).toLocaleString();
 }
 // The open node is named by its path in the tree (relative to the edited files' common root).
-// `tasks` (present, "" for the list or a run id) shows the full task manager instead.
-type Route = { selection: FileTreeSelection | null; view: FileReviewView; line?: number; tasks?: string };
+// `tasks` (present, "" for the list or a run id) shows the full task manager instead;
+// `comments` (present) shows every thread in the edited files' projects, under its filters.
+type Route = { selection: FileTreeSelection | null; view: FileReviewView; line?: number; tasks?: string; comments?: CommentsFilters };
 
 function readRoute(): Route {
   const params = new URLSearchParams(location.search);
   const line = Number(params.get("line"));
   const file = params.get("file");
   const folder = params.get("folder");
+  const comments = commentsRouteFrom(params);
   return {
     selection: file ? { kind: "file", ref: { file } } : folder !== null ? { kind: "folder", ref: { file: folder } } : null,
     view: params.get("view") ?? "preview",
     ...(line > 0 ? { line } : {}),
     ...(params.has("tasks") ? { tasks: params.get("tasks")! } : {}),
+    ...(comments ? { comments } : {}),
   };
 }
 
 type CommentFilter = "unread" | "all";
 // The tree's comment filter lives in the URL beside the route but outlives navigation.
-const readCommentFilter = (): CommentFilter => (new URLSearchParams(location.search).get("comments") === "unread" ? "unread" : "all");
+const readCommentFilter = (): CommentFilter => (new URLSearchParams(location.search).get("tree") === "unread" ? "unread" : "all");
 
 function writeCommentFilter(filter: CommentFilter) {
   const url = new URL(location.href);
-  if (filter === "unread") url.searchParams.set("comments", "unread");
-  else url.searchParams.delete("comments");
+  if (filter === "unread") url.searchParams.set("tree", "unread");
+  else url.searchParams.delete("tree");
   history.replaceState(null, "", url);
 }
 
-/** The page URL of a route, keeping the comment filter that outlives navigation. */
+/** The page URL of a route, keeping the tree's comment filter that outlives navigation. */
 function routeHref(route: Route): string {
   const url = new URL(location.href);
-  const comments = url.searchParams.get("comments");
+  const tree = url.searchParams.get("tree");
   url.search = "";
-  if (comments) url.searchParams.set("comments", comments);
+  if (tree) url.searchParams.set("tree", tree);
+  if (route.comments) writeCommentsRoute(url.searchParams, route.comments);
   const facet = route.selection?.kind === "file" && new URLSearchParams(location.search).get("file") === route.selection.ref.file ? new URLSearchParams(location.search).get("facet") : null;
   if (facet) url.searchParams.set("facet", facet);
   if (route.tasks !== undefined) url.searchParams.set("tasks", route.tasks);
@@ -127,6 +135,8 @@ function routeHref(route: Route): string {
 }
 
 const writeRoute = (route: Route) => history.pushState(null, "", routeHref(route));
+/** The tree folder holding a tree path, with its trailing slash; "" at the root. */
+const parentFolder = (path: string) => path.slice(0, path.lastIndexOf("/") + 1);
 
 export function App() {
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -134,6 +144,7 @@ export function App() {
   const [filters, setFilters] = useState<ProblemFilters>(emptyProblemFilters);
   const [comparison, setComparison] = useState<string | null>(null);
   const [palette, setPalette] = useState(false);
+  const [fileOperation, setFileOperation] = useState<FileOperation | null>(null);
   const [error, setError] = useState("");
   const [run, setRun] = useState<Run | null>(null);
   const [schema, setSchema] = useState<JsonSchemaObject | null>(null);
@@ -164,6 +175,7 @@ export function App() {
   const openFile = (entry: FileEntry, view: FileReviewView) =>
     navigate({ selection: { kind: "file", ref: { file: relativePath(entry) } }, view });
   const active = route.selection?.kind === "file" ? byRef.get(fileRefKey(route.selection.ref)) : undefined;
+  const ExtensionForm = useMemo(() => (active ? previewExtensionForm(active.id) : undefined), [active?.id]);
   const activeRef = active ? { file: relativePath(active) } : null;
   const draft = active ? queues.current.get(active.id)?.state() : undefined;
   const { comments, missingProject, createProject, newSession, pageAgent } = useFileComments({
@@ -188,6 +200,17 @@ export function App() {
     [files, root, summary],
   );
   const unreadComments = Object.values(summary.files).reduce((sum, counts) => sum + counts.unread, 0);
+  const commentProjects = useCommentProjects(useMemo(() => files.map((file) => file.id).join("\n"), [files]));
+  const projectUnread = useProjectUnread(commentProjects.projects, setError);
+  const openThread = (thread: OpenThread) => {
+    const entry = files.find((file) => file.id === thread.fileId);
+    if (!entry) return setError(`comment on ${thread.label}, which is not one of the edited files`);
+    navigate({
+      selection: { kind: "file", ref: { file: relativePath(entry) } },
+      view: thread.view === "source" ? "source" : route.view,
+      ...(thread.line ? { line: thread.line } : {}),
+    });
+  };
   // The open file's threads are in front of the reader, so they are read, including ones they just wrote.
   const activeUnread = active ? (summary.files[active.id]?.unread ?? 0) : 0;
   useEffect(() => {
@@ -274,9 +297,9 @@ export function App() {
               setSchemaError("");
             }
           })
-          .catch((cause) => !cancelled && setSchemaError(String(cause)));
+          .catch((cause) => !cancelled && setSchemaError(`Form schema unavailable: ${cause instanceof ApiError ? cause.body.trim() : String(cause)}`));
       } catch (cause) {
-        setSchemaError(String(cause));
+        setSchemaError(`Form schema unavailable: ${String(cause)}`);
       }
     }, 600);
     return () => {
@@ -310,6 +333,43 @@ export function App() {
       setError(String(cause));
     }
   };
+
+  // After a file operation the list, and so the tree root, is re-read: `open` (an absolute
+  // path) is reopened under the new root, null closes the open file, undefined keeps the route.
+  const refreshFiles = async (open: string | null | undefined) => {
+    const next = await request<FileEntry[]>("/api/files");
+    setFiles(next);
+    setFileOperation(null);
+    if (open) navigate({ selection: { kind: "file", ref: { file: open.slice(commonRoot(next.map((file) => file.path)).length) } }, view: route.view });
+    else if (open === null) navigate({ selection: null, view: route.view });
+  };
+  const revisionOf = async (entry: FileEntry) => {
+    if (entry.kind !== "document") return "";
+    return queues.current.get(entry.id)?.state().revision ?? (await request<Document>(`/api/file/${entry.id}`)).revision;
+  };
+  const forget = (entry: FileEntry) => {
+    queues.current.get(entry.id)?.dispose();
+    queues.current.delete(entry.id);
+  };
+  const fileHandlers: FileOperationHandlers = {
+    onCreate: async (path, template) => {
+      const doc = await request<Document>("/api/files", { path: root + path, template });
+      await refreshFiles(doc.path);
+    },
+    onRename: async (entry, path) => {
+      await queues.current.get(entry.id)?.flush();
+      const moved = await request<FileEntry>(`/api/file/${entry.id}/rename`, { path: root + path, revision: await revisionOf(entry) });
+      forget(entry);
+      await refreshFiles(entry.id === active?.id ? moved.path : active?.path);
+    },
+    onDelete: async (entry) => {
+      await request<FileEntry>(`/api/file/${entry.id}`, { revision: await revisionOf(entry) }, "DELETE");
+      forget(entry);
+      await refreshFiles(entry.id === active?.id ? null : active?.path);
+    },
+    onClose: () => setFileOperation(null),
+  };
+  const newFileItem = (folder: string): DropdownMenuItem => ({ label: "New file…", onSelect: () => setFileOperation({ kind: "new", folder }) });
 
   const recover = async (entry: FileEntry, replace: boolean) => {
     try {
@@ -470,6 +530,7 @@ export function App() {
             value={ctx.source}
             onChange={(source) => ctx.onSourceChange?.(source)}
             frontmatterSchema={entry.id === active?.id ? schema : null}
+            {...(ExtensionForm && entry.id === active?.id ? { Form: ExtensionForm } : {})}
             resolveImageUrl={(src) => {
               const path = relativeUrlPath(src);
               return path === null ? src : `/api/file/${entry.id}/image?path=${encodeURIComponent(path)}`;
@@ -482,7 +543,7 @@ export function App() {
         id: "form",
         label: markdown ? "Frontmatter" : "Form",
         render: (ctx) => (
-          <DocumentForm path={ref.file} value={ctx.source} schema={schema} onChange={(source) => ctx.onSourceChange?.(source)} />
+          <DocumentForm path={ref.file} value={ctx.source} schema={schema} onChange={(source) => ctx.onSourceChange?.(source)} {...(ExtensionForm ? { Form: ExtensionForm } : {})} />
         ),
       });
     if (comparison !== null && entry.id === active?.id)
@@ -516,7 +577,7 @@ export function App() {
           style={{ mask: `url("${gavelLockup}") no-repeat left center / contain`, WebkitMask: `url("${gavelLockup}") no-repeat left center / contain` }}
         />
       }
-      // The rail (logo, Files, Tasks) collapses; the breadcrumb stays in the top bar beside it.
+      // The rail (logo, Files, Tasks, Comments) collapses; the breadcrumb stays in the top bar beside it.
       navSections={[
         {
           items: [
@@ -525,8 +586,7 @@ export function App() {
               label: "Files",
               icon: UiFolder,
               to: routeHref({ selection: route.selection, view: route.view, ...(route.line ? { line: route.line } : {}) }),
-              active: route.tasks === undefined,
-              ...(unreadComments ? { badge: unreadComments } : {}),
+              active: route.tasks === undefined && !route.comments,
             },
             {
               key: "tasks",
@@ -534,6 +594,14 @@ export function App() {
               icon: UiListChecks,
               to: routeHref({ selection: null, view: route.view, tasks: "" }),
               active: route.tasks !== undefined,
+            },
+            {
+              key: "comments",
+              label: "Comments",
+              icon: UiChatDots,
+              to: routeHref({ selection: null, view: route.view, comments: route.comments ?? NO_COMMENTS_FILTERS }),
+              active: Boolean(route.comments),
+              ...(projectUnread ? { badge: projectUnread } : {}),
             },
           ],
         },
@@ -572,14 +640,14 @@ export function App() {
         </div>
       }
       nav={
-        route.tasks !== undefined ? (
+        route.tasks !== undefined || route.comments ? (
           <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1 font-mono text-sm">
             <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => navigate({ selection: null, view: route.view })}>
               Files
             </button>
             <span className="text-muted-foreground/60">/</span>
             <span aria-current="page" className="font-medium text-foreground">
-              Tasks
+              {route.comments ? "Comments" : "Tasks"}
             </span>
           </nav>
         ) : crumbs.length > 0 && (
@@ -618,7 +686,20 @@ export function App() {
           {error || schemaError}
         </p>
       )}
-      {route.tasks !== undefined ? (
+      {route.comments ? (
+        <CommentsPage
+          projects={commentProjects.projects}
+          projectsError={commentProjects.error}
+          filters={route.comments}
+          // Filters replace the history entry, as the tree's comment filter does, so Back leaves the page.
+          onFiltersChange={(comments) => {
+            const next = { ...route, comments };
+            setRoute(next);
+            history.replaceState(null, "", routeHref(next));
+          }}
+          onOpen={openThread}
+        />
+      ) : route.tasks !== undefined ? (
         <div className="min-h-0 flex-1 overflow-auto p-4">
           <TaskManager
             basePath="/api/v1"
@@ -661,9 +742,17 @@ export function App() {
         getFindingActions={findingActions}
         getFileActions={(ref) => {
           const entry = byRef.get(fileRefKey(ref));
-          return entry?.kind === "document" ? [lintItem("Lint file", [entry])] : [];
+          if (!entry) return [];
+          const path = relativePath(entry);
+          return [
+            newFileItem(parentFolder(path)),
+            ...(entry.kind === "document" ? [lintItem("Lint file", [entry])] : []),
+            { label: "Rename…", onSelect: () => setFileOperation({ kind: "rename", entry, path }) },
+            { label: "Delete…", onSelect: () => setFileOperation({ kind: "delete", entry, path }) },
+          ];
         }}
         getFolderActions={(folder) => [
+          newFileItem(folder.file),
           lintItem("Lint folder", files.filter((file) => !folder.file || relativePath(file).startsWith(`${folder.file}/`))),
         ]}
         comments={(ref) => (active && fileRefKey(ref) === fileRefKey(activeRef!) ? comments : undefined)}
@@ -696,6 +785,15 @@ export function App() {
                   .join(" · ")}
               </span>
             )}
+            <Button
+              size="sm"
+              variant="ghost"
+              title="New file"
+              aria-label="New file"
+              onClick={() => setFileOperation({ kind: "new", folder: !route.selection ? "" : route.selection.kind === "folder" ? route.selection.ref.file : parentFolder(route.selection.ref.file) })}
+            >
+              <UiFilePlus />
+            </Button>
             <DropdownMenu
               align="right"
               icon={UiDotsVertical}
@@ -704,7 +802,7 @@ export function App() {
               size="sm"
               title="All files actions"
               menuLabel="All files actions"
-              items={[lintItem("Lint all files", files)]}
+              items={[newFileItem(""), lintItem("Lint all files", files)]}
             />
           </div>
         }
@@ -728,6 +826,7 @@ export function App() {
           },
         ]}
       />
+      {fileOperation && <FileOperationDialog operation={fileOperation} {...fileHandlers} />}
       {missingProject && active && skippedProject !== active.id && (
         <CreateProjectDialog missing={missingProject} onCreate={createProject} onClose={() => setSkippedProject(active.id)} />
       )}

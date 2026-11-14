@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SessionInspector, SessionTail } from "@flanksource/clicky-ui/ai";
-import type { Comment, CommentAgentRun, CommentAuthor, CommentCreateInput } from "@flanksource/clicky-ui/comments";
+import type { Comment, CommentAgentRun, CommentAuthor, CommentCreateInput, CommentProposal } from "@flanksource/clicky-ui/comments";
 import { Button, Modal } from "@flanksource/clicky-ui/components";
 import { Badge } from "@flanksource/clicky-ui/data";
 import type { FileReviewComments } from "@flanksource/clicky-ui/file-findings";
 import type { Autosave } from "./autosave";
 import { ApiError, request } from "./api";
 import { sendToItems, useAgentSessions, type AgentSession, type PageAgentHandOff } from "./agent-sessions";
+import { threadCallbacks } from "./comment-actions";
 import { anchorOf, selectorOf, type Selector } from "./comment-anchors";
 import { deliverTargetOf, usePageAgent, type FileSettings, type ViewerChoice } from "./page-agent";
 import { runTargetOf, type RunPreview, type RunRequest, type RunTarget } from "./run-request";
@@ -23,9 +24,11 @@ export type NativeComment = {
   /** Host-owned JSON; the editor keeps a captured-screenshot note and the agent hand-off here. */
   content?: { agentRun?: CommentAgentRun } | null;
   target: { selector: Selector; revision: string };
-  messages?: { id: string; bodyMarkdown: string; createdAt: string; author: Author }[];
+  messages?: { id: string; bodyMarkdown: string; createdAt: string; author: Author; content?: { proposal?: NativeProposal } | null }[];
   attachments?: { id: string; name: string }[];
 };
+/** A patch an agent proposed in a reply, held by gavel under the message's `content.proposal`. */
+export type NativeProposal = Omit<CommentProposal, "decidedBy"> & { decidedBy?: Author };
 /** GET /api/file/{id}/comments: the file's threads under its project scope, and the target new ones use. */
 type Listing = { comments: NativeComment[]; revision: string; scope: string; target: string };
 const EMPTY_LISTING: Listing = { comments: [], revision: "", scope: "", target: "" };
@@ -108,8 +111,13 @@ export function threadItems(row: NativeComment): Comment[] {
       createdAt: message.createdAt,
       anchor,
       author: authorOf(message.author),
+      ...(message.content?.proposal ? { proposal: proposalOf(message.content.proposal) } : {}),
     })),
   ];
+}
+
+function proposalOf({ decidedBy, ...proposal }: NativeProposal): CommentProposal {
+  return { ...proposal, ...(decidedBy ? { decidedBy: authorOf(decidedBy) } : {}) };
 }
 
 const RUN_TONE = { queued: "info", sent: "info", done: "success", error: "danger" } as const;
@@ -184,13 +192,6 @@ export function useFileComments({
     await refresh();
   };
   if (!fileId || !queue || missingProject) return { missingProject, createProject };
-
-  const act = async (id: string, action: string, body: Record<string, unknown> = {}) => {
-    const root = listing.comments.find((row) => row.id === id || row.messages?.some((message) => message.id === id));
-    if (!root) throw new Error("Comment no longer exists; refresh comments");
-    await request(`/api/v1/comments/${root.id}/${action}`, { expectedVersion: root.version, ...body });
-    await refresh();
-  };
 
   // The shared comments delivery: the thread at its current version, to a live session or a new run.
   const deliver = async (commentId: string, target: { kind: "session"; sessionId: string } | RunTarget) => {
@@ -288,15 +289,7 @@ export function useFileComments({
     targets: { element: true, document: true, screenshot: true },
     callbacks: {
       onCreate: create,
-      onReply: (input) => act(input.parentId, "reply", { bodyMarkdown: input.body }),
-      onUpdateStatus: (id, status) => act(id, status === "open" ? "reopen" : status === "resolved" ? "resolve" : status),
-      onClose: (id) => act(id, "close"),
-      onAcknowledge: (id) => act(id, "acknowledge"),
-      onAssign: (id, assignee) =>
-        act(id, "assign", { assignee: assignee && { kind: assignee.kind ?? "user", id: assignee.id, label: assignee.name } }),
-      onDelete: async (id) => {
-        if (window.confirm("Delete this comment and its replies?")) await act(id, "delete");
-      },
+      ...threadCallbacks(listing.comments, refresh),
     },
     extraAssignItems: (comment) => {
       const handOff = pageHandOff(comment.id);
