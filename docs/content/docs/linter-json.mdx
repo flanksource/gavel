@@ -20,6 +20,17 @@ Paths can name individual files, directories, or quoted globs. Gavel applies its
 
 `--schema` accepts a local JSON Schema file or an HTTP(S) URL and overrides declarations in the input. Relative CLI schema paths resolve from the invocation's working directory.
 
+Remote schema fetching is disabled by default. When a document declaration, YAML header, path mapping, or local schema reference reaches an HTTP(S) schema, Gavel makes no request and reports one `schema` warning at line 1 of the input file. The file is not validated, and the warning alone leaves the command's exit status at zero. Built-in schemas and local schema files continue to work.
+
+Enable fetching for a trusted input with `--remote-schemas`, or set `lint.linters.json.options.remote-schemas: true`. Passing an HTTP(S) URL explicitly through `--schema` also authorizes remote fetching for that schema and its references. A configured `options.schema` URL requires the remote-fetch option. An explicit local `--schema` does not authorize remote references.
+
+```sh
+gavel lint json config.yaml --remote-schemas
+gavel lint json config.yaml --schema https://example.com/schema.json
+```
+
+The editor applies the same policy when bundling schemas: it uses the JSON linter's configured remote-fetch option, or an explicit remote `gavel edit --schema` URL. Blocked remote schemas surface as errors in the editor instead of fetching them in the browser. Remote fetching accepts HTTP(S) only; other network schemes are refused.
+
 For YAML, put the schema declaration in a leading comment. Relative paths resolve from the YAML file:
 
 ```yaml
@@ -64,6 +75,7 @@ lint:
     json:
       options:
         schema: ./schemas/config.json
+        remote-schemas: true
       runtime:
         timeout: 30s
 ```

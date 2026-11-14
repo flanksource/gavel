@@ -67,4 +67,5 @@ type Lint struct {
 	AIFixMaxIters *int     `json:"ai-fix-max-iterations,omitempty" yaml:"ai-fix-max-iterations,omitempty" min:"1" scope:"run" help:"Maximum repair iterations."`
 	Yes           *bool    `json:"yes,omitempty" yaml:"yes,omitempty" scope:"run" help:"Accept AI repair without prompting."`
 	Schema        *string  `json:"schema,omitempty" yaml:"schema,omitempty" path:"uri" help:"JSON Schema path or HTTP(S) URL; defaults to document schema declarations."`
+	RemoteSchemas *bool    `json:"remote-schemas,omitempty" yaml:"remote-schemas,omitempty" help:"Allow fetching HTTP(S) schemas and references declared by input files. Disabled by default."`
 }

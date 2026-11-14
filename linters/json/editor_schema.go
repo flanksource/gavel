@@ -11,8 +11,9 @@ import (
 
 // EditorSchema resolves the same declarations as the JSON linter and bundles
 // resources so browser forms do not need filesystem access or cross-origin fetches.
-func EditorSchema(ctx context.Context, data []byte, path, override string) (map[string]any, error) {
-	reference := override
+func EditorSchema(ctx context.Context, options EditorSchemaOptions) (map[string]any, error) {
+	data, path := options.Data, options.Path
+	reference := options.Override
 	if reference == "" {
 		var err error
 		reference, err = yamlHeader(data)
@@ -42,7 +43,8 @@ func EditorSchema(ctx context.Context, data []byte, path, override string) (map[
 	if err != nil {
 		return nil, err
 	}
-	if _, err := newValidator(ctx).compile(location, filepath.Dir(path)); err != nil {
+	loader := schemaLoader{ctx: ctx, remoteSchemas: options.RemoteSchemas}
+	if _, err := newValidator(loader).compile(location, filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	resources := map[string]any{}
@@ -55,7 +57,7 @@ func EditorSchema(ctx context.Context, data []byte, path, override string) (map[
 		}
 		name := fmt.Sprintf("resource%d", len(names))
 		names[location] = name
-		raw, err := (schemaLoader{ctx: ctx}).Load(location)
+		raw, err := loader.Load(location)
 		if err != nil {
 			return "", err
 		}

@@ -201,17 +201,22 @@ func (s *Server) schema(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	override := s.Schema
+	cfg, err := verify.LoadGavelConfig(filepath.Dir(doc.Path))
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	configured := cfg.LintOptionsFor("json")
+	remote := strings.HasPrefix(s.Schema, "http://") || strings.HasPrefix(s.Schema, "https://")
+	if configured.RemoteSchemas != nil && *configured.RemoteSchemas {
+		remote = true
+	}
 	if override == "" {
-		cfg, err := verify.LoadGavelConfig(filepath.Dir(doc.Path))
-		if err != nil {
-			respond(w, nil, err)
-			return
-		}
-		if configured := cfg.LintOptionsFor("json").Schema; configured != nil {
-			override = *configured
+		if configured.Schema != nil {
+			override = *configured.Schema
 		}
 	}
-	schema, err := jsonlint.EditorSchema(ctx, []byte(input.Source), doc.Path, override)
+	schema, err := jsonlint.EditorSchema(ctx, jsonlint.EditorSchemaOptions{Data: []byte(input.Source), Path: doc.Path, Override: override, RemoteSchemas: remote})
 	respond(w, schema, err)
 }
 func (s *Server) startLint(w http.ResponseWriter, r *http.Request) {

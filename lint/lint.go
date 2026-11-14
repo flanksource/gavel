@@ -206,7 +206,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				continue
 			}
 
-			runOpts := linters.RunOptions{Schema: opts.Schema,
+			runOpts := linters.RunOptions{Schema: opts.Schema, RemoteSchemas: opts.RemoteSchemas, SchemaExplicit: opts.OptionFields["schema"],
 				Scopes:               scopes,
 				RuleExclusions:       exclusions,
 				NativeRuleExclusions: exclusions.NativeFor(linter.Name(), len(requestedLinters) == 1),
@@ -491,7 +491,7 @@ func dryRunGroup(opts Options) error {
 				continue
 			}
 
-			runOpts := linters.RunOptions{Schema: opts.Schema,
+			runOpts := linters.RunOptions{Schema: opts.Schema, RemoteSchemas: opts.RemoteSchemas, SchemaExplicit: opts.OptionFields["schema"],
 				Scopes:               scopes,
 				RuleExclusions:       exclusions,
 				NativeRuleExclusions: exclusions.NativeFor(linter.Name(), len(requestedLinters) == 1),

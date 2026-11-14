@@ -22,10 +22,10 @@ type validator struct {
 	schemas  map[string]*jsonschema.Schema
 }
 
-func newValidator(ctx context.Context) *validator {
+func newValidator(loader schemaLoader) *validator {
 	compiler := jsonschema.NewCompiler()
-	compiler.UseLoader(schemaLoader{ctx: ctx})
-	return &validator{ctx: ctx, compiler: compiler, schemas: map[string]*jsonschema.Schema{}}
+	compiler.UseLoader(loader)
+	return &validator{ctx: loader.ctx, compiler: compiler, schemas: map[string]*jsonschema.Schema{}}
 }
 
 // ResolveSchema anchors a schema path before lint invocations change working directories.
@@ -61,6 +61,11 @@ func (v *validator) compile(reference, directory string) (*jsonschema.Schema, er
 	}
 	schema, err := v.compiler.Compile(location)
 	if err != nil {
+		var load *jsonschema.LoadURLError
+		var remote *remoteSchemaDisabledError
+		if errors.As(err, &load) && errors.As(load.Err, &remote) {
+			return nil, remote
+		}
 		var invalid *jsonschema.SchemaValidationError
 		var regex *jsonschema.InvalidRegexError
 		if errors.As(err, &invalid) || errors.As(err, &regex) {
@@ -87,7 +92,21 @@ func (e *uncompilableSchemaError) Error() string {
 
 func (e *uncompilableSchemaError) Unwrap() error { return e.err }
 
-type schemaLoader struct{ ctx context.Context }
+type remoteSchemaDisabledError struct{ location string }
+
+func (e *remoteSchemaDisabledError) Error() string {
+	return fmt.Sprintf("remote schema %s was not fetched, so this file is not validated; enable --remote-schemas or lint.linters.json.options.remote-schemas: true", e.location)
+}
+
+func remoteSchema(reference string) bool {
+	parsed, err := url.Parse(reference)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https")
+}
+
+type schemaLoader struct {
+	ctx           context.Context
+	remoteSchemas bool
+}
 
 func (l schemaLoader) Load(location string) (any, error) {
 	if err := l.ctx.Err(); err != nil {
@@ -114,6 +133,9 @@ func (l schemaLoader) Load(location string) (any, error) {
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported schema URL scheme %q", parsed.Scheme)
+	}
+	if !l.remoteSchemas {
+		return nil, &remoteSchemaDisabledError{location: location}
 	}
 	request, err := http.NewRequestWithContext(l.ctx, http.MethodGet, location, nil)
 	if err != nil {

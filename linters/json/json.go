@@ -2,6 +2,7 @@ package jsonlint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,6 +56,9 @@ func (j *JSON) DryRunCommand() (string, []string) {
 	if j.Schema != "" {
 		args = append(args, "--schema", j.Schema)
 	}
+	if j.RemoteSchemas {
+		args = append(args, "--remote-schemas")
+	}
 	return "gavel", append(args, j.Files...)
 }
 
@@ -72,10 +76,13 @@ func (j *JSON) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Viol
 	if err != nil {
 		return nil, err
 	}
-	validator := newValidator(ctx)
+	validator := newValidator(schemaLoader{ctx: ctx, remoteSchemas: j.RemoteSchemas || j.SchemaExplicit && remoteSchema(j.Schema)})
 	if j.Schema != "" {
 		if _, err := validator.compile(j.Schema, j.WorkDir); err != nil {
-			return nil, err
+			var remote *remoteSchemaDisabledError
+			if !errors.As(err, &remote) {
+				return nil, err
+			}
 		}
 	}
 	var violations []models.Violation

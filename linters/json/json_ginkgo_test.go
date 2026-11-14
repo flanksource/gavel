@@ -186,16 +186,76 @@ var _ = Describe("JSON linter", func() {
 		}))
 		DeferCleanup(server.Close)
 		adapter.Schema = server.URL + "/schema.json"
+		adapter.SchemaExplicit = true
 		violations, err := run("data.ndjson", "{}\n{}\n")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(violations).To(HaveLen(2))
 		Expect(requests.Load()).To(Equal(int32(2)))
 	})
 
+	DescribeTable("warns once without fetching remote declarations or references by default", func(name, contents string, local bool) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			_, err := w.Write([]byte(`{"required":["name"]}`))
+			Expect(err).NotTo(HaveOccurred())
+		}))
+		DeferCleanup(server.Close)
+		reference := server.URL + "/schema.json"
+		if local {
+			write("schema.json", `{"$ref":"`+reference+`"}`)
+			reference = "schema.json"
+		}
+		violations, err := run(name, strings.ReplaceAll(contents, "SCHEMA", reference))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(requests.Load()).To(BeZero())
+		Expect(violations).To(HaveExactElements(And(
+			HaveField("File", filepath.Join(adapter.WorkDir, name)),
+			HaveField("Severity", models.SeverityWarning), HaveField("Rule.Method", "schema"), HaveField("Line", 1),
+		)))
+		Expect(*violations[0].Message).To(And(ContainSubstring("not fetched"), ContainSubstring("not validated"), ContainSubstring("--remote-schemas")))
+	},
+		Entry("JSON declaration", "data.json", `{"$schema":"SCHEMA"}`, false),
+		Entry("YAML header", "data.yaml", "# yaml-language-server: $schema=SCHEMA\n{}\n---\n{}\n", false),
+		Entry("NDJSON records", "data.ndjson", "{\"$schema\":\"SCHEMA\"}\n{\"$schema\":\"SCHEMA\"}\n", false),
+		Entry("local schema with remote reference", "data.json", `{"$schema":"SCHEMA"}`, true),
+	)
+
+	It("fetches and validates remote declarations when enabled", func() {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			_, err := w.Write([]byte(`{"required":["name"]}`))
+			Expect(err).NotTo(HaveOccurred())
+		}))
+		DeferCleanup(server.Close)
+		adapter.RemoteSchemas = true
+		violations, err := run("data.json", `{"$schema":"`+server.URL+`/schema.json"}`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(requests.Load()).To(Equal(int32(1)))
+		Expect(violations).To(HaveExactElements(And(HaveField("Severity", models.SeverityError), HaveField("Rule.Method", "schema"))))
+		Expect(*violations[0].Message).To(ContainSubstring("name"))
+	})
+
+	It("warns for an empty NDJSON file when an explicit local schema reaches a remote reference", func() {
+		adapter.Schema = write("schema.json", `{"$ref":"https://example.com/schema.json"}`)
+		adapter.SchemaExplicit = true
+		violations, err := run("data.ndjson", "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(violations).To(HaveExactElements(And(HaveField("Line", 1), HaveField("Severity", models.SeverityWarning))))
+	})
+
+	DescribeTable("refuses unsupported remote schemes even when fetching is enabled", func(reference string) {
+		adapter.RemoteSchemas = true
+		_, err := run("data.json", `{"$schema":"`+reference+`"}`)
+		Expect(err).To(MatchError(ContainSubstring("unsupported schema URL scheme")))
+	}, Entry("FTP", "ftp://example.com/schema.json"), Entry("data", "data:application/json,true"))
+
 	It("surfaces HTTP failures", func() {
 		server := httptest.NewServer(http.NotFoundHandler())
 		DeferCleanup(server.Close)
 		adapter.Schema = server.URL + "/schema.json"
+		adapter.SchemaExplicit = true
 		_, err := run("data.json", `{}`)
 		Expect(err).To(MatchError(ContainSubstring("404")))
 	})
@@ -204,6 +264,7 @@ var _ = Describe("JSON linter", func() {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 		DeferCleanup(server.Close)
 		adapter.Schema = server.URL + "/schema.json"
+		adapter.SchemaExplicit = true
 		adapter.Files = []string{write("data.json", `{}`)}
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		DeferCleanup(cancel)

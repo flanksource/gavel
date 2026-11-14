@@ -3253,6 +3253,10 @@
                     "not": {},
                     "type": "string"
                   },
+                  "remote-schemas": {
+                    "description": "Allow fetching HTTP(S) schemas and references declared by input files. Disabled by default.",
+                    "type": "boolean"
+                  },
                   "schema": {
                     "description": "JSON Schema path or HTTP(S) URL; defaults to document schema declarations.",
                     "type": "string"
@@ -3429,6 +3433,10 @@
             "pr": {
               "description": "Pull request whose failed lint is selected.",
               "type": "string"
+            },
+            "remote-schemas": {
+              "description": "Allow fetching HTTP(S) schemas and references declared by input files. Disabled by default.",
+              "type": "boolean"
             },
             "schema": {
               "description": "JSON Schema path or HTTP(S) URL; defaults to document schema declarations.",

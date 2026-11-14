@@ -171,6 +171,8 @@ type RunOptions struct {
 	OutputTee            io.Writer
 	Scopes               []string
 	Schema               string
+	RemoteSchemas        bool
+	SchemaExplicit       bool
 }
 
 // WrapWriter returns w wrapped with OutputTee via io.MultiWriter when OutputTee

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
@@ -48,6 +49,38 @@ var _ = Describe("Editor HTTP API", func() {
 		Expect(json.Unmarshal(response.Body.Bytes(), &me)).To(Succeed())
 		Expect(me).To(Equal(author))
 	})
+
+	DescribeTable("enforces remote-schema opt-in at the HTTP boundary", func(configured, explicit, allow bool) {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		var requests atomic.Int32
+		remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			_, err := w.Write([]byte(`{"type":"object"}`))
+			Expect(err).NotTo(HaveOccurred())
+		}))
+		DeferCleanup(remote.Close)
+		if configured {
+			Expect(os.WriteFile(filepath.Join(filepath.Dir(doc.Path), ".gavel.yaml"), []byte("lint: {linters: {json: {options: {remote-schemas: true}}}}"), 0600)).To(Succeed())
+		}
+		server := &Server{Store: store, Context: context.Background()}
+		if explicit {
+			server.Schema = remote.URL + "/schema.json"
+		}
+		body, err := json.Marshal(map[string]string{"source": `{"$schema":"` + remote.URL + `/schema.json"}`})
+		Expect(err).NotTo(HaveOccurred())
+		request := httptest.NewRequest("POST", "/api/schema/"+doc.ID, bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if allow {
+			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+			Expect(response.Body.String()).To(ContainSubstring("$defs"))
+		} else {
+			Expect(response.Code).To(Equal(http.StatusBadRequest), response.Body.String())
+			Expect(response.Body.String()).To(ContainSubstring("not fetched"))
+		}
+		Expect(requests.Load() > 0).To(Equal(allow))
+	}, Entry("default", false, false, false), Entry("configuration", true, false, true), Entry("explicit remote schema", false, true, true))
 	Describe("POST /api/lint/ignore", func() {
 		var server *Server
 		var workDir string
