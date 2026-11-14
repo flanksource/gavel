@@ -1,7 +1,7 @@
 import { Button } from '@flanksource/clicky-ui/components';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TodoItem, TodoRunOptions, TodoSessionDetailResponse } from '../../types';
+import type { TodoItem, TodoSessionDetailResponse } from '../../types';
 import type { RunContext } from './providers';
 import { StatefulTodoDetail } from './todoDetailTestHarness';
 import type { TodoDetailProps } from './TodoDetail';

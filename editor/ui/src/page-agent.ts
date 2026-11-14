@@ -55,7 +55,7 @@ export function routeBodyOf({
 
 /** The run a route starts, in the new-session dialog's request shape. */
 export function runOf(route: CommentRoute): RunRequest {
-  return { prompt: route.target.prompt, ...(route.target.runOptions ?? {}) };
+  return { prompt: route.target.prompt, ...route.target.runOptions };
 }
 
 /** Where the effective route comes from, relative to the page. */
