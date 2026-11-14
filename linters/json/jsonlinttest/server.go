@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	. "github.com/onsi/ginkgo/v2"
+	"github.com/onsi/ginkgo/v2"
 )
 
 // PublicHost is the public host specs fetch schemas from; the test
@@ -35,7 +35,7 @@ func ServePublicSchema(handler http.Handler) SchemaServer {
 	}}
 	previous := http.DefaultTransport
 	http.DefaultTransport = transport
-	DeferCleanup(func() {
+	ginkgo.DeferCleanup(func() {
 		transport.CloseIdleConnections()
 		http.DefaultTransport = previous
 	})
