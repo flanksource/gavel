@@ -34,7 +34,8 @@ type RunOptions struct {
 
 // HostVariables are the template variables every run sets; a run's own
 // variables of the same name are overridden.
-var HostVariables = []string{"dir", "scope", "target", "actor", "gavelExecutable", "message"}
+// propose is true when the delivery's edits policy is comments.EditsPropose.
+var HostVariables = []string{"dir", "scope", "target", "actor", "gavelExecutable", "message", "propose"}
 
 func decodeRunOptions(raw json.RawMessage) (RunOptions, error) {
 	var options RunOptions
@@ -57,19 +58,21 @@ type sessionRequest struct {
 	Agent   comments.Actor
 	Prompt  string
 	Options RunOptions
+	// Edits is the delivery's edits policy: comments.EditsDirect or EditsPropose.
+	Edits string
 }
 
 // launch starts a new managed session for the threads.
 func (d delivery) launch(ctx context.Context, threads []comments.Comment, target comments.DeliverTarget) (AgentRun, error) {
-	run := AgentRun{RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: targetLabel(target)}}
+	run := AgentRun{RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: targetLabel(target)}, Edits: editsOf(target)}
 	session := comments.ManagedSession{ScopeURI: threads[0].Target.ScopeURI, GroupKey: target.GroupKey, Prompt: target.Prompt, RunOptions: target.RunOptions, Label: firstLine(threads[0].Body)}
 	return d.start(ctx, threads, session, run)
 }
 
 // resume restarts an ended managed session with its recorded prompt and run
-// options, resuming its conversation with the threads.
-func (d delivery) resume(ctx context.Context, threads []comments.Comment, session comments.ManagedSession) (AgentRun, error) {
-	run := AgentRun{SessionID: session.ID, RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: session.Label}}
+// options, resuming its conversation with the threads under this delivery's edits policy.
+func (d delivery) resume(ctx context.Context, threads []comments.Comment, session comments.ManagedSession, edits string) (AgentRun, error) {
+	run := AgentRun{SessionID: session.ID, RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: session.Label}, Edits: edits}
 	return d.start(ctx, threads, session, run)
 }
 
@@ -88,7 +91,7 @@ func (d delivery) start(ctx context.Context, threads []comments.Comment, session
 	if threads, err = d.claim(ctx, threads, agent, run); err != nil {
 		return run, err
 	}
-	invocation, err := d.invocation(sessionRequest{Threads: threads, Dir: dir, Agent: agent, Prompt: session.Prompt, Options: options})
+	invocation, err := d.invocation(sessionRequest{Threads: threads, Dir: dir, Agent: agent, Prompt: session.Prompt, Options: options, Edits: run.Edits})
 	if err != nil {
 		return run, err
 	}
@@ -115,7 +118,7 @@ func (d delivery) invocation(session sessionRequest) (captaincli.PromptInvocatio
 	if err != nil {
 		return captaincli.PromptInvocation{}, fmt.Errorf("locate the gavel executable for the session: %w", err)
 	}
-	message, err := sessionMessage(session.Threads, session.Options.Instructions, d.BaseURL)
+	message, err := sessionMessage(session.Threads, messageOptions{BaseURL: d.BaseURL, Edits: session.Edits, Dir: session.Dir, Instructions: session.Options.Instructions})
 	if err != nil {
 		return captaincli.PromptInvocation{}, err
 	}
@@ -127,12 +130,13 @@ func (d delivery) invocation(session sessionRequest) (captaincli.PromptInvocatio
 	maps.Copy(vars, map[string]any{
 		"dir": session.Dir, "scope": lead.ScopeURI, "target": lead.URI,
 		"actor": commentapi.EncodeActor(session.Agent), "gavelExecutable": gavel, "message": message,
+		"propose": session.Edits == comments.EditsPropose,
 	})
 	encoded, err := json.Marshal(vars)
 	if err != nil {
 		return captaincli.PromptInvocation{}, fmt.Errorf("encode the session's variables: %w", err)
 	}
-	options := captaincli.AIPromptOptions{Vars: string(encoded), Spec: session.Options.Spec}
+	options := captaincli.AIPromptOptions{Vars: string(encoded), Spec: runSpec(session.Options.Spec, session.Edits)}
 	if session.Options.Presets != nil {
 		options.Presets, options.PresetsSet = session.Options.Presets, true
 	}
@@ -141,8 +145,30 @@ func (d delivery) invocation(session sessionRequest) (captaincli.PromptInvocatio
 		Reference: prompt, Name: prompt, Options: options,
 		// The session's input is its variables; the host's own stdin is never the prompt's.
 		Stdin: strings.NewReader(""),
-		Tools: threadTools(d.service, session.Threads, session.Agent),
+		Tools: threadTools(d.service, session.Threads, session.Agent, session.Edits),
 	}, nil
+}
+
+// proposeDeniedTools are the file-writing tools a propose-mode run never gets:
+// gavel commits its edits from propose_change itself.
+var proposeDeniedTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+// runSpec is the request layer a session runs with over its prompt's
+// frontmatter: the run's own spec, with proposeDeniedTools denied in propose
+// mode (a request layer's tool keys win over the frontmatter's).
+func runSpec(spec *api.Spec, edits string) *api.Spec {
+	if edits != comments.EditsPropose {
+		return spec
+	}
+	deny := api.Spec{Permissions: api.Permissions{Tools: api.Tools{}}}
+	for _, tool := range proposeDeniedTools {
+		deny.Permissions.Tools[tool] = api.ToolPolicyDeny
+	}
+	if spec == nil {
+		return &deny
+	}
+	merged := spec.Merge(deny)
+	return &merged
 }
 
 // promptRunContext resolves prompts as captain does in dir (the project's

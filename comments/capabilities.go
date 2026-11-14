@@ -59,6 +59,11 @@ func (s *Service) Capabilities(ctx context.Context, id string) (Capabilities, er
 			}
 		}
 	}
+	decisions, err := s.proposalCapabilities(c, p.Actor, w)
+	if err != nil {
+		return out, err
+	}
+	candidates = append(candidates, decisions...)
 	for action := range w.Actions {
 		if _, _, err := w.Apply(c.Status, action, p.Actor); err == nil {
 			candidates = append(candidates, action)
@@ -76,7 +81,7 @@ func (s *Service) Capabilities(ctx context.Context, id string) (Capabilities, er
 		}
 		bound := false
 		for _, b := range out.Bindings {
-			bound = bound || action == "update" || b.ThreadID != "" && (action == "resolve" || action == "close" || action == "reopen")
+			bound = bound || action == "update" || b.ThreadID != "" && (action == "resolve" || action == "close" || action == "reopen" || action == ActionAcceptProposal)
 		}
 		if bound {
 			continue
@@ -93,6 +98,36 @@ func (s *Service) Capabilities(ctx context.Context, id string) (Capabilities, er
 	sort.Strings(out.Providers)
 	return out, nil
 }
+
+// proposalCapabilities are the decisions a human can take on c's open proposal.
+func (s *Service) proposalCapabilities(c Comment, actor Actor, w Workflow) ([]string, error) {
+	if actor.Kind != "user" || c.Phase == Final {
+		return nil, nil
+	}
+	open := false
+	for _, m := range c.Messages {
+		p, err := messageProposal(m)
+		if err != nil {
+			return nil, err
+		}
+		open = open || p != nil && p.State == ProposalProposed
+	}
+	if !open {
+		return nil, nil
+	}
+	actions := []string{ActionRejectProposal}
+	if _, _, err := w.Apply(c.Status, "resolve", actor); err == nil && s.proposals != nil {
+		actions = append(actions, ActionAcceptProposal)
+	}
+	switch _, err := s.revisionTarget(c); {
+	case err == nil:
+		actions = append(actions, ActionRequestRevision)
+	case !errors.Is(err, ErrInvalid) && !errors.Is(err, ErrUnsupported):
+		return nil, err
+	}
+	return actions, nil
+}
+
 func (s *Service) Operation(ctx context.Context, id string) (Operation, error) {
 	p, err := s.principal(ctx)
 	if err != nil {

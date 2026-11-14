@@ -146,6 +146,17 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		Expect(sent[0].Text).To(ContainSubstring("Rename the button"))
 	})
 
+	It("records a propose delivery's edits policy in the agentRun and sends only the propose commands", func(ctx SpecContext) {
+		c := create(ctx, "contact", "Reword the form label")
+		delivered, err := svc.Deliver(ctx, comments.DeliverRequest{CommentID: c.ID, ExpectedVersion: c.Version, RequestID: "send-contact", Target: comments.DeliverTarget{Kind: "session", SessionID: "live-1", Edits: comments.EditsPropose}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(contentOf(delivered).AgentRun.Edits).To(Equal(comments.EditsPropose))
+		sent, _ := bridge.Snapshot()
+		message := sent[len(sent)-1].Text
+		Expect([]any{strings.Contains(message, "Read the files under "+dir), strings.Contains(message, "--edits '"), strings.Contains(message, dir+"/.tmp"), strings.Contains(message, "gavel comments resolve")}).
+			To(Equal([]any{true, true, false, false}))
+	})
+
 	It("records a failed delivery on the thread as an errored agentRun and returns ErrDelivery", func(ctx SpecContext) {
 		bridge.FailDeliver = "socket closed"
 		DeferCleanup(func() { bridge.FailDeliver = "" })
@@ -167,9 +178,9 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, launched := bridge.Snapshot()
 		Expect(launched).To(HaveLen(1))
-		var vars map[string]string
+		var vars map[string]any
 		Expect(json.Unmarshal([]byte(launched[0].Options.Vars), &vars)).To(Succeed())
-		Expect([]any{launched[0].Reference, vars["dir"], vars["scope"], vars["target"]}).To(Equal([]any{"editor-comments", dir, scope, first.Target.URI}))
+		Expect([]any{launched[0].Reference, vars["dir"], vars["scope"], vars["target"], vars["propose"]}).To(Equal([]any{"editor-comments", dir, scope, first.Target.URI, false}))
 		Expect(vars["message"]).To(ContainSubstring("## Additional instructions\n\nKeep the copy short"))
 		run := contentOf(get(ctx, started.ID)).AgentRun
 		Expect([]any{run.State, run.SessionID}).To(Equal([]any{"sent", "managed-1"}))
@@ -248,7 +259,7 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, launched := bridge.Snapshot()
 		resumed := launched[len(launched)-1]
-		var vars map[string]string
+		var vars map[string]any
 		Expect(json.Unmarshal([]byte(resumed.Options.Vars), &vars)).To(Succeed())
 		run := contentOf(get(ctx, second.ID)).AgentRun
 		Expect([]any{resumed.Options.Resume, resumed.Reference, run.SessionID, run.State, run.Target.Label}).To(Equal([]any{session, "editor-comments", session, "sent", "Write the changelog"}))
@@ -288,7 +299,7 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, launched := bridge.Snapshot()
 		Expect(launched).To(HaveLen(len(before) + 1))
-		var vars map[string]string
+		var vars map[string]any
 		Expect(json.Unmarshal([]byte(launched[len(launched)-1].Options.Vars), &vars)).To(Succeed())
 		Expect(vars["message"]).To(And(ContainSubstring("# Thread "+a.ID), ContainSubstring("Fix the logo"), ContainSubstring("# Thread "+b.ID), ContainSubstring("Fix the footer")))
 		session := fmt.Sprintf("managed-%d", len(launched))
@@ -333,6 +344,42 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		byAgent := create(commentapi.WithActor(ctx, comments.Actor{Kind: "agent", ID: "claude:live-1"}), "blog-agent", "Agent note")
 		Consistently(func() []string { return []string{sessionOf(private.ID)(), sessionOf(byAgent.ID)()} }).
 			WithTimeout(time.Second).Should(Equal([]string{"", ""}))
+	})
+
+	It("delivers a root created with an explicit target there, once, instead of through its page's route", func(ctx SpecContext) {
+		explicit := comments.DeliverTarget{Kind: "session", SessionID: "live-2"}
+		before, _ := bridge.Snapshot()
+		createTo := func(page, body string) comments.Comment {
+			c, err := svc.Create(ctx, comments.CreateRequest{
+				Target: comments.Target{URI: scope + "/pages/" + page, ScopeURI: scope, Kind: "web-page", Label: page},
+				Body:   body, WorkflowID: "human-review", RequestID: "create-explicit-" + page,
+				Content: json.RawMessage(`{"page":{"url":"https://example.com/` + page + `"}}`),
+				Deliver: &explicit,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			return c
+		}
+		routed, unrouted := createTo("blog", "Send this to the docs pass"), createTo("private/explicit", "Deliver despite no route")
+		sessionOf := func(id string) string { return contentOf(get(ctx, id)).AgentRun.SessionID }
+		Eventually(func() []string { return []string{sessionOf(routed.ID), sessionOf(unrouted.ID)} }).
+			WithTimeout(10 * time.Second).Should(Equal([]string{"live-2", "live-2"}))
+		Consistently(func() []string {
+			sent, _ := bridge.Snapshot()
+			sessions := []string{}
+			for _, d := range sent[len(before):] {
+				sessions = append(sessions, d.SessionID)
+			}
+			return sessions
+		}).WithTimeout(time.Second).Should(Equal([]string{"live-2", "live-2"}))
+	})
+
+	It("rejects a create whose explicit delivery target is malformed without creating the root", func(ctx SpecContext) {
+		target := comments.Target{URI: scope + "/pages/bad-target", ScopeURI: scope, Kind: "web-page"}
+		_, err := svc.Create(ctx, comments.CreateRequest{Target: target, Body: "Nowhere", WorkflowID: "human-review", RequestID: "create-bad-target", Deliver: &comments.DeliverTarget{Kind: "session"}})
+		Expect(err).To(MatchError(comments.ErrInvalid))
+		listed, err := svc.List(ctx, comments.Filter{ScopeURI: scope, TargetURI: target.URI, Limit: 10})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed).To(BeEmpty())
 	})
 
 	It("lets the creator attach screenshots with its create version while a routed delivery claims and sends the thread", func(ctx SpecContext) {

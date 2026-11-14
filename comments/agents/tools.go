@@ -1,7 +1,9 @@
 package agents
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -15,8 +17,9 @@ import (
 // threadTools are the caller tools every managed session gets, whatever prompt
 // it runs: they read, reply to and resolve the threads on the targets of the
 // threads it was given, in-process, as the session's agent, so the workflow's
-// human-only actions stay refused.
-func threadTools(service *comments.Service, given []comments.Comment, agent comments.Actor) []api.ToolDefinition {
+// human-only actions stay refused. In propose mode (edits) the session gets
+// propose_change in place of resolve_thread: a person accepts its proposal.
+func threadTools(service *comments.Service, given []comments.Comment, agent comments.Actor, edits string) []api.ToolDefinition {
 	threads := threadToolset{service: service, agent: agent}
 	for _, thread := range given {
 		if !slices.ContainsFunc(threads.targets, func(t comments.Target) bool { return t.URI == thread.Target.URI }) {
@@ -24,7 +27,7 @@ func threadTools(service *comments.Service, given []comments.Comment, agent comm
 		}
 	}
 	readOnly := true
-	return []api.ToolDefinition{
+	tools := []api.ToolDefinition{
 		{
 			Name:              "list_threads",
 			Description:       "List the comment threads on this session's target, with their replies and current versions.",
@@ -39,14 +42,23 @@ func threadTools(service *comments.Service, given []comments.Comment, agent comm
 			DefaultPermission: api.ToolPolicyAllow,
 			Handler:           threads.reply,
 		},
-		{
-			Name:              "resolve_thread",
-			Description:       "Resolve a comment thread once its change is made, verified and replied to. A human then reviews it.",
-			InputSchema:       stringsSchema(map[string]string{"id": "The thread's comment id", "summary": "One line on what was done"}),
-			DefaultPermission: api.ToolPolicyAllow,
-			Handler:           threads.resolve,
-		},
 	}
+	if edits == comments.EditsPropose {
+		return append(tools, api.ToolDefinition{
+			Name:              "propose_change",
+			Description:       "Reply to a comment thread with a proposed change instead of editing files: gavel commits the edits (or patch) onto HEAD itself. Edits work like the Edit tool: oldString must match the file exactly once, unless replaceAll. A person accepts, rejects or asks for revisions.",
+			InputSchema:       proposeSchema(),
+			DefaultPermission: api.ToolPolicyAllow,
+			Handler:           threads.propose,
+		})
+	}
+	return append(tools, api.ToolDefinition{
+		Name:              "resolve_thread",
+		Description:       "Resolve a comment thread once its change is made, verified and replied to. A human then reviews it.",
+		InputSchema:       stringsSchema(map[string]string{"id": "The thread's comment id", "summary": "One line on what was done"}),
+		DefaultPermission: api.ToolPolicyAllow,
+		Handler:           threads.resolve,
+	})
 }
 
 // stringsSchema is a JSON Schema object whose properties are all required strings.
@@ -56,6 +68,16 @@ func stringsSchema(properties map[string]string) map[string]any {
 		props[name] = map[string]any{"type": "string", "description": description}
 	}
 	return map[string]any{"type": "object", "properties": props, "required": slices.Sorted(maps.Keys(properties)), "additionalProperties": false}
+}
+
+// proposeSchema is propose_change's input: a thread, a reply body, and edits
+// or a unified diff patch.
+func proposeSchema() map[string]any {
+	schema := stringsSchema(map[string]string{"id": "The thread's comment id", "body": "What the change does and why, in Markdown"})
+	props := schema["properties"].(map[string]any)
+	props["edits"] = comments.FileEditsSchema()
+	props["patch"] = map[string]any{"type": "string", "description": "Instead of edits: a unified diff with a/ and b/ paths relative to the repository root"}
+	return schema
 }
 
 type threadToolset struct {
@@ -82,6 +104,44 @@ func (t threadToolset) reply(ctx context.Context, input map[string]any) (any, er
 		return nil, err
 	}
 	return t.act(ctx, input, comments.ActionRequest{Action: "reply", Body: body})
+}
+
+func (t threadToolset) propose(ctx context.Context, input map[string]any) (any, error) {
+	body, err := requiredString(input, "body")
+	if err != nil {
+		return nil, err
+	}
+	req := comments.ActionRequest{Action: "reply", Body: body}
+	if raw, ok := input["patch"]; ok {
+		if req.Patch, ok = raw.(string); !ok {
+			return nil, fmt.Errorf("patch must be a string, not %T", raw)
+		}
+	}
+	if req.Edits, err = fileEdits(input["edits"]); err != nil {
+		return nil, err
+	}
+	if (req.Patch == "") == (len(req.Edits) == 0) {
+		return nil, fmt.Errorf("propose_change needs edits or a patch, exactly one of them")
+	}
+	return t.act(ctx, input, req)
+}
+
+// fileEdits decodes the edits a tool call passes, refusing unknown fields.
+func fileEdits(raw any) ([]comments.FileEdit, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("edits: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	var edits []comments.FileEdit
+	if err := decoder.Decode(&edits); err != nil {
+		return nil, fmt.Errorf("edits must be an array of {path, oldString, newString, replaceAll?} | {path, content} | {path, delete}: %w", err)
+	}
+	return edits, nil
 }
 
 func (t threadToolset) resolve(ctx context.Context, input map[string]any) (any, error) {

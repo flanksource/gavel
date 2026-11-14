@@ -78,7 +78,7 @@ func (d delivery) Execute(ctx context.Context, op comments.Operation) (json.RawM
 		if run.RequestedAt.IsZero() {
 			run.RequestedAt = time.Now().UTC()
 		}
-		run.State, run.Error = "error", err.Error()
+		run.State, run.Error, run.Edits = "error", err.Error(), editsOf(payload.DeliverTarget)
 		for _, thread := range threads {
 			_, recordErr := setAgentRun(ctx, d.service, thread.ID, run)
 			err = errors.Join(err, recordErr)
@@ -108,7 +108,7 @@ func (d delivery) threads(ctx context.Context, lead string, batch []string) ([]c
 }
 
 func (d delivery) RecordFailure(ctx context.Context, commentID string, target comments.DeliverTarget, cause error) error {
-	run := AgentRun{SessionID: target.SessionID, RequestedAt: time.Now().UTC(), State: "error", Error: cause.Error(), Target: AgentRunTarget{Label: targetLabel(target)}}
+	run := AgentRun{SessionID: target.SessionID, RequestedAt: time.Now().UTC(), State: "error", Error: cause.Error(), Target: AgentRunTarget{Label: targetLabel(target)}, Edits: editsOf(target)}
 	_, err := setAgentRun(ctx, d.service, commentID, run)
 	return err
 }
@@ -117,8 +117,9 @@ func (d delivery) RecordFailure(ctx context.Context, commentID string, target co
 // session, an ended managed session resumed, or a new run. A run target with a
 // group reuses the group's session, live or resumed, unless Fresh.
 func (d delivery) deliver(ctx context.Context, threads []comments.Comment, target comments.DeliverTarget) (AgentRun, error) {
+	edits := editsOf(target)
 	if target.Kind == "session" {
-		return d.toSession(ctx, threads, target.SessionID)
+		return d.toSession(ctx, threads, target.SessionID, edits)
 	}
 	if target.GroupKey == "" || target.Fresh {
 		return d.launch(ctx, threads, target)
@@ -129,23 +130,23 @@ func (d delivery) deliver(ctx context.Context, threads []comments.Comment, targe
 		return d.launch(ctx, threads, target)
 	}
 	if err != nil {
-		return AgentRun{}, fmt.Errorf("read the session of group %s: %w", target.GroupKey, err)
+		return AgentRun{Edits: edits}, fmt.Errorf("read the session of group %s: %w", target.GroupKey, err)
 	}
 	live, err := d.live(ctx, session)
 	if err != nil {
-		return AgentRun{SessionID: session}, err
+		return AgentRun{SessionID: session, Edits: edits}, err
 	}
 	if live != nil {
-		return d.toLive(ctx, threads, *live)
+		return d.toLive(ctx, threads, *live, edits)
 	}
 	managed, err := d.managed(ctx, lead, session)
 	if err != nil {
-		return AgentRun{SessionID: session}, err
+		return AgentRun{SessionID: session, Edits: edits}, err
 	}
 	if managed == nil {
 		return d.launch(ctx, threads, target)
 	}
-	return d.resume(ctx, threads, *managed)
+	return d.resume(ctx, threads, *managed, edits)
 }
 
 func (d delivery) Check(target comments.DeliverTarget) error {

@@ -74,50 +74,93 @@ func decodeOptional(raw json.RawMessage, out any) error {
 	return json.Unmarshal(raw, out)
 }
 
+// messageOptions shape a delivery's message: the agent the threads were
+// acknowledged as (live sessions), the base URL attachment links are made
+// absolute against, the edits policy, the project directory a propose-mode
+// agent must not modify, and a managed run's extra instructions.
+type messageOptions struct {
+	Agent        comments.Actor
+	BaseURL      string
+	Edits        string
+	Dir          string
+	Instructions string
+}
+
+func (o messageOptions) proposes() bool { return o.Edits == comments.EditsPropose }
+
 // threadMessage is what a live session receives for threads (one scope's):
-// what to do, the `gavel comments` commands that reply and resolve as the
-// agent they were acknowledged as (GAVEL_COMMENT_ACTOR), and the threads.
-func threadMessage(threads []comments.Comment, agent comments.Actor, baseURL string) (string, error) {
-	body, err := threadsMarkdown(threads, baseURL)
+// what to do, the `gavel comments` commands that reply and resolve (or, in
+// propose mode, propose) as the agent they were acknowledged as
+// (GAVEL_COMMENT_ACTOR), and the threads.
+func threadMessage(threads []comments.Comment, o messageOptions) (string, error) {
+	body, err := threadsMarkdown(threads, o.BaseURL)
 	if err != nil {
 		return "", err
 	}
-	identity, err := json.Marshal(agent)
+	identity, err := json.Marshal(o.Agent)
 	if err != nil {
 		return "", err
+	}
+	task := "implement the scoped change it asks for and verify it, then reply with what you changed and how you verified it, and resolve the thread,"
+	if o.proposes() {
+		task = fmt.Sprintf("%s A person reviews the proposal and accepts it, rejects it or asks for revisions, so do not resolve the thread. Propose", proposeRule(o.Dir, "`gavel comments reply <id> --expectedVersion <v> --bodyMarkdown '...' --edits '<json>'`"))
 	}
 	const tail = "using the gavel comments CLI (the same commands are `gavel mcp` tools). Each write needs the thread's current version, so read it first:"
 	id := "<thread id>"
-	intro := fmt.Sprintf("Gavel comment %s in %s, sent to this session by gavel. They are already acknowledged for you as %s: do not acknowledge them again. For each thread, implement the scoped change it asks for and verify it, then reply with what you changed and how you verified it, and resolve the thread, %s", threadIDs(threads), threads[0].Target.ScopeURI, identity, tail)
+	intro := fmt.Sprintf("Gavel comment %s in %s, sent to this session by gavel. They are already acknowledged for you as %s: do not acknowledge them again. For each thread, %s %s", threadIDs(threads), threads[0].Target.ScopeURI, identity, task, tail)
 	if len(threads) == 1 {
 		tc, err := readContext(threads[0])
 		if err != nil {
 			return "", err
 		}
 		id = threads[0].ID
-		intro = fmt.Sprintf("Gavel comment thread %s on %s, sent to this session by gavel. It is already acknowledged for you as %s: do not acknowledge it again. Implement the scoped change it asks for and verify it, then reply with what you changed and how you verified it, and resolve the thread, %s", id, location(threads[0], tc), identity, tail)
+		intro = fmt.Sprintf("Gavel comment thread %s on %s, sent to this session by gavel. It is already acknowledged for you as %s: do not acknowledge it again. For this thread, %s %s", id, location(threads[0], tc), identity, task, tail)
 	}
-	commands := strings.Join([]string{
-		"```sh",
-		fmt.Sprintf("export %s=%s", commentapi.ActorEnv, commentapi.EncodeActor(agent)),
-		fmt.Sprintf("gavel comments get %s --json   # the thread and its current version", id),
-		fmt.Sprintf("gavel comments reply %s --expectedVersion <version> --bodyMarkdown '<what you changed and how you verified it>'", id),
-		fmt.Sprintf("gavel comments resolve %s --expectedVersion <version> --summary '<one-line summary>'", id),
-		"```",
-	}, "\n")
-	return strings.Join([]string{intro, commands, body}, "\n\n"), nil
+	return strings.Join([]string{intro, threadCommands(id, o), body}, "\n\n"), nil
 }
 
-// sessionMessage is what a managed session is given: the threads plus the run's extra instructions.
-func sessionMessage(threads []comments.Comment, instructions, baseURL string) (string, error) {
-	message, err := threadsMarkdown(threads, baseURL)
+// threadCommands are the `gavel comments` commands a live session runs for
+// thread id: reply and resolve, or in propose mode reply with edits.
+func threadCommands(id string, o messageOptions) string {
+	lines := []string{
+		"```sh",
+		fmt.Sprintf("export %s=%s", commentapi.ActorEnv, commentapi.EncodeActor(o.Agent)),
+		fmt.Sprintf("gavel comments get %s --json   # the thread and its current version", id),
+	}
+	if o.proposes() {
+		lines = append(lines,
+			fmt.Sprintf("gavel comments reply %s --expectedVersion <version> --bodyMarkdown '<what the change does and why>' --edits '[{\"path\":\"<path>\",\"oldString\":\"<exact text>\",\"newString\":\"<replacement>\"}]'", id),
+			"# each edit: {path, oldString, newString, replaceAll?} | {path, content} to write a whole file | {path, delete: true}",
+		)
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("gavel comments reply %s --expectedVersion <version> --bodyMarkdown '<what you changed and how you verified it>'", id),
+			fmt.Sprintf("gavel comments resolve %s --expectedVersion <version> --summary '<one-line summary>'", id),
+		)
+	}
+	return strings.Join(append(lines, "```"), "\n")
+}
+
+// sessionMessage is what a managed session is given: the threads, in propose
+// mode the proposal-only rule, and the run's extra instructions.
+func sessionMessage(threads []comments.Comment, o messageOptions) (string, error) {
+	message, err := threadsMarkdown(threads, o.BaseURL)
 	if err != nil {
 		return "", err
 	}
-	if instructions = strings.TrimSpace(instructions); instructions != "" {
+	if o.proposes() {
+		message += "\n\n## Proposal only\n\n" + proposeRule(o.Dir, "propose_change") + " A person accepts, rejects or asks for revisions, so never resolve the thread yourself.\n"
+	}
+	if instructions := strings.TrimSpace(o.Instructions); instructions != "" {
 		message += "\n\n## Additional instructions\n\n" + instructions + "\n"
 	}
 	return message, nil
+}
+
+// proposeRule is the propose-mode rule: gavel builds the commit from the
+// agent's edits, sent with via, so the agent writes no file at all.
+func proposeRule(dir, via string) string {
+	return fmt.Sprintf("Do not create or modify any file — not even scratch copies. Read the files under %s to understand them, then propose the change with %s; gavel commits it onto HEAD itself. Edit paths are relative to the repository root, and each oldString must match the file exactly once (include surrounding lines to make it unique, or set replaceAll).", dir, via)
 }
 
 // location is where the thread is: the page it was made on, a file under its
@@ -177,8 +220,42 @@ func threadMarkdown(comment comments.Comment, baseURL string) (string, error) {
 	sections = append(sections, messageMarkdown(comment.Author, comment.Body))
 	for _, message := range comment.Messages {
 		sections = append(sections, messageMarkdown(message.Author, message.Body))
+		proposal, err := proposalMarkdown(message)
+		if err != nil {
+			return "", fmt.Errorf("thread %s reply %s: %w", comment.ID, message.ID, err)
+		}
+		if proposal != "" {
+			sections = append(sections, proposal)
+		}
 	}
 	return strings.Join(sections, "\n\n"), nil
+}
+
+// proposalMarkdown is the patch a reply proposed: its state, the files it
+// changes and the reviewer's feedback, so a revising agent sees what was
+// decided; empty for a reply with no proposal.
+func proposalMarkdown(m comments.Message) (string, error) {
+	var content map[string]json.RawMessage
+	if err := decodeOptional(m.Content, &content); err != nil {
+		return "", fmt.Errorf("content: %w", err)
+	}
+	raw, ok := content[comments.ProposalContentKey]
+	if !ok {
+		return "", nil
+	}
+	var p comments.Proposal
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return "", fmt.Errorf("content.%s: %w", comments.ProposalContentKey, err)
+	}
+	files := make([]string, 0, len(p.Files))
+	for _, f := range p.Files {
+		files = append(files, fmt.Sprintf("`%s` (+%d -%d)", f.Path, f.Additions, f.Deletions))
+	}
+	out := fmt.Sprintf("Proposed patch (%s): %s", p.State, strings.Join(files, ", "))
+	if p.Feedback != "" {
+		out += "\n\nReviewer feedback: " + p.Feedback
+	}
+	return out, nil
 }
 
 // elementSections describe the element the thread is on: the page title, its

@@ -68,7 +68,7 @@ func (s *Service) edit(ctx context.Context, p Principal, c *Comment, req ActionR
 				m.Content = req.Content
 			}
 			c.Messages[i] = m
-			return Change{EditMessage: &m}, true, nil
+			return Change{EditMessages: []Message{m}}, true, nil
 		}
 		return Change{}, true, ErrNotFound
 	default:

@@ -39,8 +39,16 @@ func (s *Service) Page(ctx context.Context, f Filter) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	if f.ScopeURI == "" || f.Limit < 1 || f.Limit > 200 || f.Offset < 0 {
-		return Page{}, ErrInvalid
+	if f, err = s.locatePath(ctx, f); err != nil {
+		return Page{}, err
+	}
+	switch {
+	case f.ScopeURI == "":
+		return Page{}, fmt.Errorf("%w: scope or path is required", ErrInvalid)
+	case f.Limit < 1 || f.Limit > 200:
+		return Page{}, fmt.Errorf("%w: limit must be 1..200, got %d", ErrInvalid, f.Limit)
+	case f.Offset < 0:
+		return Page{}, fmt.Errorf("%w: offset must not be negative, got %d", ErrInvalid, f.Offset)
 	}
 	if err = s.access.Authorize(ctx, p, "list", Target{ScopeURI: f.ScopeURI, URI: f.TargetURI}); err != nil {
 		return Page{}, err
@@ -59,6 +67,28 @@ func (s *Service) Page(ctx context.Context, f Filter) (Page, error) {
 		}
 	}
 	return page, nil
+}
+
+// locatePath narrows f to the scope and targets the host places f.Path at.
+func (s *Service) locatePath(ctx context.Context, f Filter) (Filter, error) {
+	if f.Path == "" {
+		return f, nil
+	}
+	if s.locate == nil {
+		return f, fmt.Errorf("%w: this host cannot list comments by path", ErrInvalid)
+	}
+	if f.TargetURI != "" || f.TargetPrefix != "" {
+		return f, fmt.Errorf("%w: path and target filters are exclusive", ErrInvalid)
+	}
+	l, err := s.locate(ctx, f.Path)
+	if err != nil {
+		return f, err
+	}
+	if f.ScopeURI != "" && f.ScopeURI != l.ScopeURI {
+		return f, fmt.Errorf("%w: %s is in %s, not in scope %s", ErrInvalid, f.Path, l.ScopeURI, f.ScopeURI)
+	}
+	f.ScopeURI, f.TargetURI, f.TargetPrefix = l.ScopeURI, l.TargetURI, l.TargetPrefix
+	return f, nil
 }
 func (s *Service) MarkRead(ctx context.Context, id string, version int64) (ReadMarker, error) {
 	c, err := s.Get(ctx, id)

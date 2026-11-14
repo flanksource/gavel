@@ -41,6 +41,9 @@ func (s *Store) Page(ctx context.Context, p comments.Principal, f comments.Filte
 		if f.TargetURI != "" {
 			q = q.Where("c.target_uri=?", f.TargetURI)
 		}
+		if f.TargetPrefix != "" {
+			q = q.Where("starts_with(c.target_uri, ?)", f.TargetPrefix)
+		}
 		if f.Phase != "" {
 			q = q.Where("c.phase=?", f.Phase)
 		}

@@ -178,13 +178,17 @@ func (s *Store) Mutate(ctx context.Context, tenant, id string, expected int64, f
 		if result.RowsAffected != 1 {
 			return comments.ErrConflict
 		}
-		if change.EditMessage != nil {
-			data, err := json.Marshal(change.EditMessage)
+		for _, m := range change.EditMessages {
+			data, err := json.Marshal(m)
 			if err != nil {
 				return err
 			}
-			if err = tx.Exec("UPDATE comment_messages SET payload=?::jsonb WHERE tenant_id=? AND comment_id=? AND id=?", string(data), tenant, id, change.EditMessage.ID).Error; err != nil {
-				return err
+			updated := tx.Exec("UPDATE comment_messages SET payload=?::jsonb WHERE tenant_id=? AND comment_id=? AND id=?", string(data), tenant, id, m.ID)
+			if updated.Error != nil {
+				return updated.Error
+			}
+			if updated.RowsAffected != 1 {
+				return fmt.Errorf("%w: message %s of comment %s", comments.ErrNotFound, m.ID, id)
 			}
 		}
 		if change.DeleteMessageID != "" {
@@ -221,6 +225,9 @@ func (s *Store) List(ctx context.Context, tenant string, f comments.Filter) ([]c
 	q := s.db.WithContext(ctx).Table("comments").Select("payload").Where("tenant_id = ? AND scope_uri = ? AND payload->>'deletedAt' IS NULL", tenant, f.ScopeURI)
 	if f.TargetURI != "" {
 		q = q.Where("target_uri = ?", f.TargetURI)
+	}
+	if f.TargetPrefix != "" {
+		q = q.Where("starts_with(target_uri, ?)", f.TargetPrefix)
 	}
 	if f.Phase != "" {
 		q = q.Where("phase = ?", f.Phase)

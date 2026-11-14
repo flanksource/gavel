@@ -36,9 +36,15 @@ type DeliverTarget struct {
 	// Fresh always launches a new session, never reusing GroupKey's; the launched
 	// session becomes the group's, so the group's later deliveries reuse it.
 	Fresh bool `json:"fresh,omitempty"`
+	// Edits is EditsDirect (default when empty) or EditsPropose: the agent
+	// answers with a proposed patch and must not edit the project's files.
+	Edits string `json:"edits,omitempty"`
 }
 
 func (t DeliverTarget) Validate() error {
+	if t.Edits != "" && t.Edits != EditsDirect && t.Edits != EditsPropose {
+		return fmt.Errorf("%w: edits must be %q or %q, not %q", ErrInvalid, EditsDirect, EditsPropose, t.Edits)
+	}
 	switch {
 	case t.Kind == "session" && strings.TrimSpace(t.SessionID) != "" && t.Prompt == "" && len(t.RunOptions) == 0 && t.GroupKey == "" && !t.Fresh:
 		return nil

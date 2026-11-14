@@ -18,6 +18,17 @@ type AgentRun struct {
 	State       string         `json:"state"`
 	Error       string         `json:"error,omitempty"`
 	Target      AgentRunTarget `json:"target"`
+	// Edits is the delivery's edits policy, comments.EditsDirect or EditsPropose:
+	// a propose run answers with a proposal and never resolves the thread itself.
+	Edits string `json:"edits,omitempty"`
+}
+
+// editsOf is target's edits policy, EditsDirect when it names none.
+func editsOf(target comments.DeliverTarget) string {
+	if target.Edits == "" {
+		return comments.EditsDirect
+	}
+	return target.Edits
 }
 
 // AgentRunTarget is where the thread went, and the channel captain delivered it through.

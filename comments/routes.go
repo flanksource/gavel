@@ -99,15 +99,16 @@ func (s *Service) SaveCommentAgent(ctx context.Context, req SaveCommentAgentRequ
 	return agents.SaveCommentAgent(ctx, req)
 }
 
-// routeCreated delivers a new human-authored root through its route in the
-// background: the create never waits, and failures land in its agentRun.
-func (s *Service) routeCreated(ctx context.Context, c Comment) {
-	if s.routes == nil || c.Author.Kind != "user" || c.Version != 1 {
+// routeCreated delivers a new root in the background to explicit, or, for a
+// human-authored root without one, through its route: the create never waits,
+// and failures land in its agentRun.
+func (s *Service) routeCreated(ctx context.Context, c Comment, explicit *DeliverTarget) {
+	if c.Version != 1 || (explicit == nil && (s.routes == nil || c.Author.Kind != "user")) {
 		return
 	}
 	go func() {
 		ctx := context.WithoutCancel(ctx)
-		target, err := s.deliverRoute(ctx, c)
+		target, err := s.deliverRoute(ctx, c, explicit)
 		if err == nil {
 			return
 		}
@@ -120,10 +121,14 @@ func (s *Service) routeCreated(ctx context.Context, c Comment) {
 	}()
 }
 
-// deliverRoute delivers c through its route, queued against the thread's
-// latest version: the creator may already have changed it (an attachment
-// upload) by the time the route is resolved.
-func (s *Service) deliverRoute(ctx context.Context, c Comment) (DeliverTarget, error) {
+// deliverRoute delivers c to explicit, or else through its route, queued
+// against the thread's latest version: the creator may already have changed it
+// (an attachment upload) by the time the delivery starts. An explicit target
+// replaces the route entirely, including its assignment.
+func (s *Service) deliverRoute(ctx context.Context, c Comment, explicit *DeliverTarget) (DeliverTarget, error) {
+	if explicit != nil {
+		return *explicit, s.deliverLatest(ctx, c.ID, "create:"+c.ID, *explicit)
+	}
 	r, ok, err := s.routes.RouteFor(ctx, c)
 	if err != nil {
 		return DeliverTarget{}, fmt.Errorf("resolving the route of %s: %w", c.Target.URI, err)
@@ -139,8 +144,12 @@ func (s *Service) deliverRoute(ctx context.Context, c Comment) (DeliverTarget, e
 			return r.Target, fmt.Errorf("assigning comment %s to route %s: %w", c.ID, r.Source, err)
 		}
 	}
-	_, err = s.WithLatest(ctx, c.ID, func(latest Comment) (Comment, error) {
-		return s.Deliver(ctx, DeliverRequest{CommentID: c.ID, ExpectedVersion: latest.Version, RequestID: "route:" + c.ID, Target: r.Target})
+	return r.Target, s.deliverLatest(ctx, c.ID, "route:"+c.ID, r.Target)
+}
+
+func (s *Service) deliverLatest(ctx context.Context, id, requestID string, target DeliverTarget) error {
+	_, err := s.WithLatest(ctx, id, func(latest Comment) (Comment, error) {
+		return s.Deliver(ctx, DeliverRequest{CommentID: id, ExpectedVersion: latest.Version, RequestID: requestID, Target: target})
 	})
-	return r.Target, err
+	return err
 }

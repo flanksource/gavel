@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +23,12 @@ type ActionRequest struct {
 	Assignee        *Actor          `json:"assignee,omitempty"`
 	Target          *Target         `json:"target,omitempty"`
 	MessageID       string          `json:"messageId,omitempty"`
+	// Patch is a unified diff a reply proposes instead of editing files.
+	Patch string `json:"patch,omitempty"`
+	// Edits are Edit-tool-style file changes a reply proposes; exclusive with Patch.
+	Edits []FileEdit `json:"edits,omitempty"`
+	// Mode is ProposalModeApply or ProposalModeStage for ActionAcceptProposal.
+	Mode string `json:"mode,omitempty"`
 }
 
 func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
@@ -32,6 +39,26 @@ func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
 	if req.ExpectedVersion < 1 {
 		return Comment{}, fmt.Errorf("%w: expectedVersion is required", ErrInvalid)
 	}
+	switch {
+	case req.Edits != nil && len(req.Edits) == 0:
+		return Comment{}, fmt.Errorf("%w: edits must list at least one edit", ErrInvalid)
+	case (req.Patch != "" || len(req.Edits) > 0) && req.Action != "reply":
+		return Comment{}, fmt.Errorf("%w: only a reply carries a patch or edits", ErrInvalid)
+	case req.Patch != "" && len(req.Edits) > 0:
+		return Comment{}, fmt.Errorf("%w: a reply carries a patch or edits, not both", ErrInvalid)
+	case req.Mode != "" && req.Action != ActionAcceptProposal:
+		return Comment{}, fmt.Errorf("%w: only %s takes a mode", ErrInvalid, ActionAcceptProposal)
+	case req.Patch != "" || len(req.Edits) > 0:
+		return s.proposeReply(ctx, p, req)
+	case req.Action == ActionRequestRevision:
+		return s.requestRevision(ctx, p, req)
+	}
+	return s.mutate(ctx, p, req, nil)
+}
+
+// mutate applies req to its comment; proposed, when set, is the proposal a
+// reply carries, already stored by the host under the reply's ID.
+func (s *Service) mutate(ctx context.Context, p Principal, req ActionRequest, proposed *proposedReply) (Comment, error) {
 	return s.store.Mutate(ctx, p.TenantID, req.ID, req.ExpectedVersion, func(c Comment) (Change, error) {
 		if err := s.access.Authorize(ctx, p, req.Action, c.Target); err != nil {
 			return Change{}, err
@@ -39,7 +66,7 @@ func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
 		if c.DeletedAt != nil && req.Action != "restore" {
 			return Change{}, ErrNotFound
 		}
-		if req.Action != "reply" && req.Action != "assign" && req.Action != "acknowledge" && req.Action != "metadata" {
+		if !slices.Contains([]string{"reply", "assign", "acknowledge", "metadata", ActionRejectProposal, ActionRequestRevision}, req.Action) {
 			if store, ok := s.store.(ProviderStore); ok {
 				bindings, err := store.Bindings(ctx, p.TenantID, c.ID)
 				if err != nil {
@@ -70,10 +97,14 @@ func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
 			}
 		}
 		now := time.Now().UTC()
-		var msg *Message
-		edit, handled, err := s.edit(ctx, p, &c, req, now)
+		change, handled, err := s.edit(ctx, p, &c, req, now)
 		if err != nil {
 			return Change{}, err
+		}
+		if !handled {
+			if change, handled, err = s.decideProposal(ctx, p.Actor, &c, req, now); err != nil {
+				return Change{}, err
+			}
 		}
 		if !handled {
 			switch req.Action {
@@ -97,26 +128,18 @@ func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
 				}
 				c.Body = req.Body
 			case "reply":
-				if c.Phase == Final || strings.TrimSpace(req.Body) == "" {
-					return Change{}, fmt.Errorf("%w: reply requires an active comment and body", ErrInvalid)
+				if change.Message, change.EditMessages, err = reply(&c, p.Actor, req, proposed, now); err != nil {
+					return Change{}, err
 				}
-				if req.ParentID != "" {
-					found := false
-					for _, m := range c.Messages {
-						found = found || m.ID == req.ParentID
-					}
-					if !found {
-						return Change{}, fmt.Errorf("%w: reply parent belongs to another comment", ErrInvalid)
-					}
-				}
-				if len(req.Content) > 0 && !json.Valid(req.Content) {
-					return Change{}, fmt.Errorf("%w: malformed content", ErrInvalid)
-				}
-				msg = &Message{ID: uuid.NewString(), ParentID: req.ParentID, Body: req.Body, Author: p.Actor, Content: req.Content, CreatedAt: now}
 			default:
 				w, ok := s.workflows[c.WorkflowID]
 				if !ok {
 					return Change{}, fmt.Errorf("%w: unknown workflow %s", ErrInvalid, c.WorkflowID)
+				}
+				if req.Action == "resolve" && p.Actor.Kind == "agent" {
+					if err := requireAcceptedProposal(c); err != nil {
+						return Change{}, err
+					}
 				}
 				status, phase, err := w.Apply(c.Status, req.Action, p.Actor)
 				if err != nil {
@@ -129,14 +152,7 @@ func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
 					actor := p.Actor
 					c.Assignee = &actor
 				}
-				c.Status, c.Phase = status, phase
-				result := &Outcome{Kind: req.Action, Summary: req.Summary, Evidence: req.Evidence, Actor: p.Actor, At: now}
-				if phase == AwaitingOutcome {
-					c.Resolution = result
-				}
-				if phase == Final {
-					c.Outcome = result
-				}
+				settle(&c, status, phase, &Outcome{Kind: req.Action, Summary: req.Summary, Evidence: req.Evidence, Actor: p.Actor, At: now})
 				if req.Action == "reopen" {
 					c.Outcome = nil
 					c.Resolution = nil
@@ -153,8 +169,46 @@ func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
 		if err != nil {
 			return Change{}, err
 		}
-		return Change{Comment: c, Message: msg, EditMessage: edit.EditMessage, DeleteMessageID: edit.DeleteMessageID, Event: Event{CommentID: c.ID, Kind: req.Action, Actor: p.Actor, At: now, Data: data}}, nil
+		change.Comment = c
+		change.Event = Event{CommentID: c.ID, Kind: req.Action, Actor: p.Actor, At: now, Data: data}
+		return change, nil
 	})
+}
+
+// settle moves c to status in phase, recording result as its resolution or outcome.
+func settle(c *Comment, status string, phase Phase, result *Outcome) {
+	c.Status, c.Phase = status, phase
+	if phase == AwaitingOutcome {
+		c.Resolution = result
+	}
+	if phase == Final {
+		c.Outcome = result
+	}
+}
+
+// reply is req's new message on c, carrying proposed when set; a proposal
+// supersedes every earlier one still proposed, answered as edited messages.
+func reply(c *Comment, actor Actor, req ActionRequest, proposed *proposedReply, now time.Time) (*Message, []Message, error) {
+	if c.Phase == Final || strings.TrimSpace(req.Body) == "" {
+		return nil, nil, fmt.Errorf("%w: reply requires an active comment and body", ErrInvalid)
+	}
+	if req.ParentID != "" && !slices.ContainsFunc(c.Messages, func(m Message) bool { return m.ID == req.ParentID }) {
+		return nil, nil, fmt.Errorf("%w: reply parent belongs to another comment", ErrInvalid)
+	}
+	if len(req.Content) > 0 && !json.Valid(req.Content) {
+		return nil, nil, fmt.Errorf("%w: malformed content", ErrInvalid)
+	}
+	msg := &Message{ID: uuid.NewString(), ParentID: req.ParentID, Body: req.Body, Author: actor, Content: req.Content, CreatedAt: now}
+	if proposed == nil {
+		return msg, nil, nil
+	}
+	content, err := proposalContent(req.Content, proposed.Proposal)
+	if err != nil {
+		return nil, nil, err
+	}
+	msg.ID, msg.Content = proposed.ID, content
+	superseded, err := supersede(c)
+	return msg, superseded, err
 }
 func (s *Service) Events(ctx context.Context, scope string, after int64, limit int) ([]Event, error) {
 	p, err := s.principal(ctx)

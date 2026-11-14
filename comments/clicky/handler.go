@@ -38,6 +38,7 @@ func Handler(resolve Resolver) http.Handler {
 	router.Raw("GET /api/v1/comments/{id}/attachments/{attachment}", Attachments(resolve), route.Meta{Entity: "comments", Verb: "download", ReadOnly: true})
 	router.Raw("POST /api/v1/comments/batch", Batch(resolve), route.Meta{Entity: "comments", Verb: "batch"})
 	RegisterDeliveryRoutes(router, resolve)
+	RegisterProposalRoutes(router, resolve)
 	router.MountGenerated("GET /api/v1/comments/openapi.json", OpenAPI(http.HandlerFunc(server.HandleOpenAPIJSON), "/api/v1"))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		router.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), resolverKey{}, resolve)))

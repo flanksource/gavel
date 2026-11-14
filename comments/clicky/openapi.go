@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/flanksource/gavel/comments"
 )
 
 // OpenAPI adds the streaming and binary routes to the generated entity document.
@@ -50,7 +52,7 @@ func HTTPPaths(prefix string) map[string]any {
 		return map[string]any{"200": map[string]any{"description": "Authorized comment response", "content": map[string]any{media: map[string]any{"schema": map[string]string{"type": "string"}}}}}
 	}
 	paths := map[string]any{
-		prefix + "/comments/batch":                         map[string]any{"post": map[string]any{"operationId": "comments-batch", "summary": "Atomically apply versioned comment actions", "requestBody": map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "array", "minItems": 1, "maxItems": 1000, "items": map[string]any{"type": "object", "required": []string{"id", "expectedVersion", "action"}, "properties": map[string]any{"id": map[string]string{"type": "string"}, "expectedVersion": map[string]string{"type": "integer", "format": "int64"}, "action": map[string]string{"type": "string"}, "bodyMarkdown": map[string]string{"type": "string"}, "messageId": map[string]string{"type": "string"}, "parentId": map[string]string{"type": "string"}, "content": map[string]any{}, "target": map[string]string{"type": "object"}, "assignee": map[string]string{"type": "object"}, "summary": map[string]string{"type": "string"}, "evidence": map[string]any{"type": "array", "items": map[string]string{"type": "string"}}}}}}}}, "responses": map[string]any{"200": map[string]any{"description": "Updated comment aggregates in action order"}, "409": map[string]any{"description": "Stale version; no changes committed"}}}},
+		prefix + "/comments/batch":                         map[string]any{"post": map[string]any{"operationId": "comments-batch", "summary": "Atomically apply versioned comment actions", "requestBody": map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "array", "minItems": 1, "maxItems": 1000, "items": map[string]any{"type": "object", "required": []string{"id", "expectedVersion", "action"}, "properties": map[string]any{"id": map[string]string{"type": "string"}, "expectedVersion": map[string]string{"type": "integer", "format": "int64"}, "action": map[string]string{"type": "string"}, "bodyMarkdown": map[string]string{"type": "string"}, "messageId": map[string]string{"type": "string"}, "parentId": map[string]string{"type": "string"}, "content": map[string]any{}, "target": map[string]string{"type": "object"}, "assignee": map[string]string{"type": "object"}, "summary": map[string]string{"type": "string"}, "evidence": map[string]any{"type": "array", "items": map[string]string{"type": "string"}}, "patch": map[string]string{"type": "string", "description": "Unified diff a reply proposes; exclusive with edits"}, "edits": comments.FileEditsSchema(), "mode": map[string]any{"type": "string", "enum": []string{"apply", "stage"}}}}}}}}, "responses": map[string]any{"200": map[string]any{"description": "Updated comment aggregates in action order"}, "409": map[string]any{"description": "Stale version; no changes committed"}}}},
 		prefix + "/comments/events":                        map[string]any{"get": map[string]any{"operationId": "comments-events", "summary": "Follow commit-ordered comment events", "parameters": []any{parameter("scope", "string", true), parameter("after", "integer", false), map[string]any{"name": "Last-Event-ID", "in": "header", "schema": map[string]string{"type": "integer"}}}, "responses": response("text/event-stream")}},
 		prefix + "/comments/{id}/attachments":              map[string]any{"post": map[string]any{"operationId": "comments-upload", "summary": "Attach bounded binary evidence", "parameters": []any{id, parameter("name", "string", true), parameter("expectedVersion", "integer", true), parameter("messageId", "string", false)}, "requestBody": map[string]any{"required": true, "content": map[string]any{"application/octet-stream": map[string]any{"schema": map[string]string{"type": "string", "format": "binary"}}}}, "responses": map[string]any{"200": map[string]any{"description": "Updated comment and attachment metadata"}, "409": map[string]any{"description": "Thread is final, or expectedVersion is newer than the thread; changes since expectedVersion (an agent delivery claiming the thread) do not conflict"}}}},
 		prefix + "/comments/{id}/attachments/{attachment}": map[string]any{"get": map[string]any{"operationId": "comments-download", "summary": "Download authorized attachment bytes", "parameters": []any{id, map[string]any{"name": "attachment", "in": "path", "required": true, "schema": map[string]string{"type": "string"}}}, "responses": response("application/octet-stream")}},
@@ -58,13 +60,28 @@ func HTTPPaths(prefix string) map[string]any {
 	for path, item := range deliveryPaths(id, parameter) {
 		paths[prefix+path] = item
 	}
+	paths[prefix+"/comments/{id}/proposals/{replyId}/diff"] = proposalDiffPath(id)
 	return paths
+}
+
+// proposalDiffPath describes the patch a reply proposes: comments.ProposalDiff.
+func proposalDiffPath(id map[string]any) map[string]any {
+	str := map[string]string{"type": "string"}
+	replyID := map[string]any{"name": "replyId", "in": "path", "required": true, "schema": str}
+	diff := map[string]any{"type": "object", "required": []string{"diff", "commit"}, "properties": map[string]any{
+		"diff": str, "commit": str, "truncated": map[string]string{"type": "boolean"}, "binary": map[string]string{"type": "boolean"},
+	}}
+	return map[string]any{"get": map[string]any{"operationId": "comments-proposal-diff", "summary": "Read the unified diff a reply proposes against its base", "parameters": []any{id, replyID}, "responses": map[string]any{
+		"200": map[string]any{"description": "The proposal's diff", "content": map[string]any{"application/json": map[string]any{"schema": diff}}},
+		"400": map[string]any{"description": "The reply has no proposal, or the host has no repository for proposals"},
+		"404": map[string]any{"description": "No such thread or reply"},
+	}}}
 }
 
 // deliveryPaths are the agent delivery operations RegisterDeliveryRoutes mounts.
 func deliveryPaths(id map[string]any, parameter func(name, kind string, required bool) map[string]any) map[string]any {
 	str := map[string]string{"type": "string"}
-	target := map[string]any{"type": "object", "required": []string{"kind"}, "description": `{kind:"session", sessionId} or {kind:"run", prompt, runOptions?, groupKey?, fresh?}`, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"session", "run"}}, "sessionId": str, "prompt": str, "runOptions": map[string]string{"type": "object"}, "groupKey": str, "fresh": map[string]string{"type": "boolean", "description": "Run targets only: always start a new session instead of reusing groupKey's; it becomes the group's session"}}}
+	target := map[string]any{"type": "object", "required": []string{"kind"}, "description": `{kind:"session", sessionId} or {kind:"run", prompt, runOptions?, groupKey?, fresh?}`, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"session", "run"}}, "sessionId": str, "prompt": str, "runOptions": map[string]string{"type": "object"}, "groupKey": str, "fresh": map[string]string{"type": "boolean", "description": "Run targets only: always start a new session instead of reusing groupKey's; it becomes the group's session"}, "edits": map[string]any{"type": "string", "enum": []string{"direct", "propose"}, "description": "direct (default) lets the agent edit files; propose has it answer with an edits (or patch) reply a person accepts, without file write tools"}}}
 	body := func(schema map[string]any) map[string]any {
 		return map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": schema}}}
 	}

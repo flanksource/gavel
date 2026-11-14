@@ -85,12 +85,24 @@ type Filter struct {
 	Limit     int    `json:"limit" flag:"limit" default:"50"`
 	Offset    int    `json:"offset" flag:"offset"`
 	Unread    bool   `json:"unread,omitempty" flag:"unread"`
+	// Path is a file or directory the host's Locate turns into a scope and target filter.
+	Path string `json:"path,omitempty" flag:"path" help:"File or directory to list comments for (default: the current directory on the CLI)"`
+	// TargetPrefix matches every target URI beneath a directory.
+	TargetPrefix string `json:"targetPrefix,omitempty"`
+}
+
+// Location is where a host places a filesystem path: a file's exact target,
+// a directory's target prefix, or a whole scope.
+type Location struct {
+	ScopeURI     string
+	TargetURI    string
+	TargetPrefix string
 }
 type Change struct {
 	Comment         Comment
 	Message         *Message
 	Attachment      *Attachment
-	EditMessage     *Message
+	EditMessages    []Message
 	DeleteMessageID string
 	Event           Event
 }
@@ -123,4 +135,8 @@ type Options struct {
 	Routes RouteResolver
 	// Delivery builds the host's agent delivery for the constructed service.
 	Delivery func(*Service) Delivery
+	// Proposals stores proposed patches; without it proposing is ErrInvalid.
+	Proposals Proposals
+	// Locate resolves Filter.Path; without it listing by path is ErrInvalid.
+	Locate func(context.Context, string) (Location, error)
 }

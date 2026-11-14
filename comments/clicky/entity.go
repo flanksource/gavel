@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	framework "github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/entity"
@@ -16,26 +17,30 @@ import (
 )
 
 type actionFlags struct {
-	Version   int64            `flag:"expectedVersion" required:"true" help:"Required current comment version"`
-	Body      string           `flag:"bodyMarkdown" help:"Reply or updated Markdown"`
-	Summary   string           `flag:"summary" help:"Resolution or closure summary"`
-	ParentID  string           `flag:"parentId" help:"Local parent reply identity"`
-	Assignee  *comments.Actor  `flag:"assignee" help:"Assignee as JSON; null clears it"`
-	Evidence  []string         `flag:"evidence" help:"Outcome evidence URIs"`
-	Content   json.RawMessage  `flag:"content" help:"Structured reply content as JSON"`
-	Target    *comments.Target `flag:"target" help:"Replacement target within the same scope"`
-	MessageID string           `flag:"messageId" help:"Reply to edit or delete"`
+	Version   int64               `flag:"expectedVersion" required:"true" help:"Required current comment version"`
+	Body      string              `flag:"bodyMarkdown" help:"Reply or updated Markdown"`
+	Summary   string              `flag:"summary" help:"Resolution or closure summary"`
+	ParentID  string              `flag:"parentId" help:"Local parent reply identity"`
+	Assignee  *comments.Actor     `flag:"assignee" help:"Assignee as JSON; null clears it"`
+	Evidence  []string            `flag:"evidence" help:"Outcome evidence URIs"`
+	Content   json.RawMessage     `flag:"content" help:"Structured reply content as JSON"`
+	Target    *comments.Target    `flag:"target" help:"Replacement target within the same scope"`
+	MessageID string              `flag:"messageId" help:"Reply to edit or delete"`
+	Patch     string              `flag:"patch" help:"Unified diff file to propose ('-' reads stdin)"`
+	Edits     []comments.FileEdit `flag:"edits" help:"Edits as JSON: [{path, oldString, newString, replaceAll?} | {path, content} | {path, delete:true}]"`
+	Mode      string              `flag:"mode" help:"apply or stage (accept-proposal)"`
 }
 
 func (actionFlags) ClickyActionFlags() {}
 
 type createFlags struct {
-	Target    comments.Target `flag:"target" required:"true" help:"Captured host target as JSON"`
-	Body      string          `flag:"bodyMarkdown" required:"true" help:"Comment Markdown"`
-	Workflow  string          `flag:"workflowId" required:"true" help:"Registered workflow ID"`
-	RequestID string          `flag:"requestId" required:"true" help:"Stable request identity"`
-	Content   json.RawMessage `flag:"content" help:"Structured comment content"`
-	Links     []comments.Link `flag:"links" help:"Typed resource links as JSON"`
+	Target    comments.Target         `flag:"target" required:"true" help:"Captured host target as JSON"`
+	Body      string                  `flag:"bodyMarkdown" required:"true" help:"Comment Markdown"`
+	Workflow  string                  `flag:"workflowId" required:"true" help:"Registered workflow ID"`
+	RequestID string                  `flag:"requestId" required:"true" help:"Stable request identity"`
+	Content   json.RawMessage         `flag:"content" help:"Structured comment content"`
+	Links     []comments.Link         `flag:"links" help:"Typed resource links as JSON"`
+	Deliver   *comments.DeliverTarget `flag:"deliver" help:"Delivery target as JSON; replaces the page's comment agent route"`
 }
 
 func (createFlags) ClickyActionFlags() {}
@@ -89,7 +94,7 @@ func Register(resolve Resolver) error {
 		if err != nil {
 			return comments.Comment{}, StatusError(err)
 		}
-		req := comments.CreateRequest{Target: flags.Target, Body: flags.Body, WorkflowID: flags.Workflow, RequestID: flags.RequestID, Content: flags.Content, Links: flags.Links}
+		req := comments.CreateRequest{Target: flags.Target, Body: flags.Body, WorkflowID: flags.Workflow, RequestID: flags.RequestID, Content: flags.Content, Links: flags.Links, Deliver: flags.Deliver}
 		if _, ok := rpc.RequestFromContext(ctx); ok {
 			if err := decode(ctx, nil, &req); err != nil {
 				return comments.Comment{}, StatusError(err)
@@ -98,17 +103,19 @@ func Register(resolve Resolver) error {
 		v, err := service.Create(ctx, req)
 		return v, StatusError(err)
 	}).WithOptionalID().WithMethod("POST").WithPath("comments"))
-	for _, action := range []string{"reply", "assign", "acknowledge", "edit", "resolve", "close", "reopen", "metadata", "retarget", "delete", "restore", "edit-reply", "delete-reply"} {
+	for _, action := range []string{"reply", "assign", "acknowledge", "edit", "resolve", "close", "reopen", "metadata", "retarget", "delete", "restore", "edit-reply", "delete-reply", comments.ActionAcceptProposal, comments.ActionRejectProposal, comments.ActionRequestRevision} {
 		builder = builder.WithAction(entity.TypedActionWithContext(action, actionFlags{}, func(ctx context.Context, id string, flags actionFlags) (comments.Comment, error) {
 			service, err := resolve(ctx)
 			if err != nil {
 				return comments.Comment{}, StatusError(err)
 			}
-			req := comments.ActionRequest{ID: id, Action: action, ExpectedVersion: flags.Version, Body: flags.Body, Summary: flags.Summary, Assignee: flags.Assignee, ParentID: flags.ParentID, Evidence: flags.Evidence, Content: flags.Content, Target: flags.Target, MessageID: flags.MessageID}
+			req := comments.ActionRequest{ID: id, Action: action, ExpectedVersion: flags.Version, Body: flags.Body, Summary: flags.Summary, Assignee: flags.Assignee, ParentID: flags.ParentID, Evidence: flags.Evidence, Content: flags.Content, Target: flags.Target, MessageID: flags.MessageID, Edits: flags.Edits, Mode: flags.Mode}
 			if _, ok := rpc.RequestFromContext(ctx); ok {
 				if err := decode(ctx, nil, &req); err != nil {
 					return comments.Comment{}, StatusError(err)
 				}
+			} else if req.Patch, err = readPatch(flags.Patch); err != nil {
+				return comments.Comment{}, StatusError(err)
 			}
 			req.ID = id
 			req.Action = action
@@ -123,6 +130,26 @@ func Register(resolve Resolver) error {
 	builder.Register()
 	return nil
 }
+
+// readPatch reads the CLI's --patch file, or stdin for "-"; over HTTP the
+// body's patch is the diff text itself.
+func readPatch(path string) (string, error) {
+	var data []byte
+	var err error
+	switch path {
+	case "":
+		return "", nil
+	case "-":
+		data, err = io.ReadAll(os.Stdin)
+	default:
+		data, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: read --patch %s: %v", comments.ErrInvalid, path, err)
+	}
+	return string(data), nil
+}
+
 func decode(ctx context.Context, body map[string]any, out any) error {
 	if r, ok := rpc.RequestFromContext(ctx); ok {
 		decoder := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))

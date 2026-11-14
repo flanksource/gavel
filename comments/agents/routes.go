@@ -219,7 +219,7 @@ func WebTarget(ctx context.Context, catalog projects.Service, scope, uri string)
 
 // AgentTarget is the captain run a configured comment agent starts.
 func AgentTarget(agent verify.CommentAgent) (comments.DeliverTarget, error) {
-	target := comments.DeliverTarget{Kind: "run", Prompt: agent.PromptOrDefault(), GroupKey: agent.Group}
+	target := comments.DeliverTarget{Kind: "run", Prompt: agent.PromptOrDefault(), GroupKey: agent.Group, Edits: agent.Edits}
 	options, err := json.Marshal(RunOptions{Presets: agent.Presets, Spec: agent.Spec, Variables: agent.Variables, Instructions: agent.Instructions})
 	if err != nil {
 		return target, fmt.Errorf("encode the comment agent's run options: %w", err)

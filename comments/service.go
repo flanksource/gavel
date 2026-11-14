@@ -24,6 +24,8 @@ type Service struct {
 	attachmentLimit int64
 	routes          RouteResolver
 	delivery        Delivery
+	locate          func(context.Context, string) (Location, error)
+	proposals       Proposals
 }
 
 func New(options Options) (*Service, error) {
@@ -38,7 +40,7 @@ func New(options Options) (*Service, error) {
 	if options.Routes != nil && options.Delivery == nil {
 		return nil, fmt.Errorf("%w: comment routes require agent delivery", ErrInvalid)
 	}
-	s.routes = options.Routes
+	s.routes, s.locate, s.proposals = options.Routes, options.Locate, options.Proposals
 	if options.Delivery != nil {
 		if s.delivery = options.Delivery(s); s.delivery == nil {
 			return nil, fmt.Errorf("%w: delivery constructor returned nil", ErrInvalid)
@@ -66,7 +68,7 @@ func New(options Options) (*Service, error) {
 			}
 		}
 		for action, t := range w.Actions {
-			if slices.Contains([]string{"reply", "assign", "update", "metadata", "retarget", "delete", "restore", "edit-reply", "delete-reply"}, action) || len(t.From) == 0 {
+			if slices.Contains([]string{"reply", "assign", "update", "metadata", "retarget", "delete", "restore", "edit-reply", "delete-reply", ActionAcceptProposal, ActionRejectProposal, ActionRequestRevision}, action) || len(t.From) == 0 {
 				return nil, fmt.Errorf("%w: invalid workflow action %s", ErrInvalid, action)
 			}
 			for _, from := range t.From {
@@ -110,6 +112,9 @@ type CreateRequest struct {
 	RequestID  string          `json:"requestId"`
 	Content    json.RawMessage `json:"content,omitempty"`
 	Links      []Link          `json:"links,omitempty"`
+	// Deliver hands the new root to this target instead of the route its
+	// target resolves to; the create fails when the target is invalid.
+	Deliver *DeliverTarget `json:"deliver,omitempty"`
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Comment, error) {
@@ -138,6 +143,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Comment, error
 	if len(req.Content) > 0 && !json.Valid(req.Content) {
 		return Comment{}, fmt.Errorf("%w: malformed content", ErrInvalid)
 	}
+	if req.Deliver != nil {
+		if err = s.checkTarget(*req.Deliver); err != nil {
+			return Comment{}, err
+		}
+	}
 	identity := p.Actor
 	identity.Label = ""
 	data, err := json.Marshal(struct {
@@ -157,7 +167,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Comment, error
 	if created.DeletedAt != nil {
 		return Comment{}, ErrConflict
 	}
-	s.routeCreated(ctx, created)
+	s.routeCreated(ctx, created, req.Deliver)
 	return created, nil
 }
 func (s *Service) Get(ctx context.Context, id string) (Comment, error) {
