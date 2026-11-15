@@ -19,6 +19,7 @@ import (
 	commentapi "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/editor"
 	editorui "github.com/flanksource/gavel/editor/ui"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/internal/vitedev"
 	jsonlint "github.com/flanksource/gavel/linters/json"
 	"github.com/flanksource/gavel/sdk/status"
@@ -50,6 +51,10 @@ func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 	store, err := editor.NewStore(opts.Paths)
 	if err != nil {
 		return nil, err
+	}
+	store.EnableAccess()
+	if _, err := database.Shared(ctx, database.WithMigrations()); err != nil {
+		return nil, fmt.Errorf("initialize editor database: %w", err)
 	}
 	if opts.Schema != "" {
 		dir, err := getWorkingDir()

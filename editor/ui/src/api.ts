@@ -12,6 +12,9 @@ export class ApiError extends Error {
     readonly body: string,
   ) {
     super(`${status}: ${body}`);
+    if (status === 403 && this.json<{ code?: string }>()?.code === "workspace_access_denied") {
+      this.message = "Workspace access is required for this folder. Your draft is preserved; restore access before saving.";
+    }
   }
 
   /** The body as JSON, or undefined when it is not JSON (plain http.Error text). */

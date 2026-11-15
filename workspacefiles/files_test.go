@@ -2,6 +2,10 @@ package workspacefiles
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,6 +88,30 @@ var _ = Describe("Authorized working tree files", func() {
 		expires := service.leases[lease.ID].Expires
 		service.mu.Unlock()
 		Expect(expires).To(Equal(lease.Expires))
+	})
+	It("closes file streams and releases physical watches when access is revoked", func(ctx SpecContext) {
+		revoked := make(chan struct{})
+		service.options.WatchAccess = func(ctx context.Context, _ string) error {
+			select {
+			case <-revoked:
+				return errors.New("workspace access revoked")
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		lease, err := service.Acquire(ctx, FileRequest{Root: directory, Path: "guide.md"}, "")
+		Expect(err).NotTo(HaveOccurred())
+		server := httptest.NewServer(service.Handler())
+		defer server.Close()
+		client := &http.Client{Timeout: 5 * time.Second}
+		response, err := client.Get(server.URL + "/api/workspace/watch/" + lease.ID + "/stream")
+		Expect(err).NotTo(HaveOccurred())
+		defer response.Body.Close()
+		close(revoked)
+		data, err := io.ReadAll(response.Body)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(ContainSubstring("event: file-error\ndata: {\"error\":\"workspace access revoked\"}"))
+		Expect(service.watchCount()).To(BeZero())
 	})
 	It("does not accept a nested directory as a repository root", func(ctx SpecContext) {
 		nested := filepath.Join(directory, "nested")

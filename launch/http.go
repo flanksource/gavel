@@ -18,6 +18,10 @@ import (
 
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if access := s.options.Workspaces.policy.Access; access != nil {
+		mux.Handle("/api/workspace/access", access.Handler())
+		mux.Handle("/api/workspace/access/", access.Handler())
+	}
 	if s.options.Comments != nil {
 		mux.Handle("/api/v1/comments", s.options.Comments)
 		mux.Handle("/api/v1/comments/", s.options.Comments)

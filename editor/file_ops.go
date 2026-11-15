@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -51,6 +52,11 @@ func (s *Store) place(path string) (editRoot, string, error) {
 			displays = append(displays, root.display)
 		}
 		return editRoot{}, "", fmt.Errorf("%s is outside the edited folders (%s)", path, strings.Join(displays, ", "))
+	}
+	if s.Access != nil {
+		if _, err := s.Access.Authorize(context.Background(), best.canonical); err != nil {
+			return editRoot{}, "", err
+		}
 	}
 	return best, name, nil
 }

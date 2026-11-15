@@ -24,9 +24,11 @@ var ErrConflict = errors.New("file changed on disk; reload before saving")
 var ErrExpired = errors.New("file watch lease expired")
 
 type Options struct {
-	Roots       []string
-	Authorize   func(string) (string, error)
-	IdleTimeout time.Duration
+	WatchAccess  func(context.Context, string) error
+	EnabledRoots func(context.Context) ([]string, error)
+	Roots        []string
+	Authorize    func(string) (string, error)
+	IdleTimeout  time.Duration
 }
 type Service struct {
 	options     Options
@@ -261,8 +263,16 @@ func markdown(path string) bool {
 
 func (s *Service) Directories(path string) ([]DirectoryEntry, error) {
 	if path == "" {
+		roots := s.options.Roots
+		if s.options.EnabledRoots != nil {
+			var err error
+			roots, err = s.options.EnabledRoots(context.Background())
+			if err != nil {
+				return nil, err
+			}
+		}
 		entries := make([]DirectoryEntry, 0, len(s.options.Roots))
-		for _, root := range s.options.Roots {
+		for _, root := range roots {
 			entries = append(entries, DirectoryEntry{Path: root, Name: root, Directory: true, Visible: true})
 		}
 		return entries, nil

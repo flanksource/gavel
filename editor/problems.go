@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/workspace"
+	"github.com/flanksource/gavel/workspaceaccess"
 )
 
 // lintStreamInterval is how often the problems stream rechecks for edits that
@@ -53,6 +54,19 @@ func stateRoots(paths map[string]string) (map[string][]string, error) {
 // A file changed on disk after the run that checked it ended is stale.
 func (s *Server) Reload() error {
 	paths := s.Store.Paths()
+	blocked := []string{}
+	if s.Store.Access != nil {
+		for id, path := range paths {
+			if _, err := s.Store.Access.Authorize(context.Background(), filepath.Dir(path)); err != nil {
+				var denied *workspaceaccess.Denied
+				if !errors.As(err, &denied) {
+					return err
+				}
+				blocked = append(blocked, path)
+				delete(paths, id)
+			}
+		}
+	}
 	roots, err := stateRoots(paths)
 	if err != nil {
 		return err
@@ -84,6 +98,9 @@ func (s *Server) Reload() error {
 	}
 	staleAtLoad := map[string]bool{}
 	for _, file := range s.Store.Files() {
+		if _, allowed := paths[file.ID]; !allowed {
+			continue
+		}
 		if file.Kind != KindDocument {
 			continue
 		}
@@ -103,6 +120,10 @@ func (s *Server) Reload() error {
 	openedAs(s.Store, run.Results, run.Tests)
 	s.mu.Lock()
 	run.Running, run.Error, run.Active = s.run.Running, s.run.Error, s.run.Active
+	if len(blocked) > 0 {
+		sort.Strings(blocked)
+		run.Error = "Workspace access was revoked for: " + strings.Join(blocked, ", ")
+	}
 	s.run, s.staleAtLoad, s.stateRoots = run, staleAtLoad, slices.Sorted(maps.Keys(roots))
 	s.mu.Unlock()
 	s.updated.Notify()

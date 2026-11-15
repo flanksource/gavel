@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/verify"
+	"github.com/flanksource/gavel/workspaceaccess"
 )
 
 // LintRun is the problems shown for the edited files: the lint violations and
@@ -74,6 +75,12 @@ type Server struct {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if s.Store != nil && s.Store.Access != nil {
+		mux.Handle("/api/workspace/access", s.Store.Access.Handler())
+		mux.Handle("/api/workspace/access/", s.Store.Access.Handler())
+		mux.HandleFunc("GET /api/workspace/open", s.opened)
+		mux.HandleFunc("POST /api/workspace/open", s.opened)
+	}
 	mux.HandleFunc("GET /api/files", func(w http.ResponseWriter, r *http.Request) { respond(w, s.Store.Files(), nil) })
 	mux.HandleFunc("POST /api/files", s.createFile)
 	mux.HandleFunc("GET /api/templates", s.templates)
@@ -154,6 +161,11 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 func respond(w http.ResponseWriter, value any, err error) {
+	var denied *workspaceaccess.Denied
+	if errors.As(err, &denied) {
+		workspaceaccess.Respond(w, nil, err)
+		return
+	}
 	var noProject NoProjectError
 	if errors.As(err, &noProject) {
 		w.Header().Set("Content-Type", "application/json")
@@ -281,6 +293,12 @@ func (s *Server) ignoreLint(w http.ResponseWriter, r *http.Request) {
 	var input testui.IgnoreRequest
 	if !decode(w, r, &input) {
 		return
+	}
+	if s.Store.Access != nil {
+		if _, err := s.Store.Access.Authorize(r.Context(), input.WorkDir); err != nil {
+			respond(w, nil, err)
+			return
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

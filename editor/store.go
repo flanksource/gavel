@@ -1,9 +1,11 @@
 package editor
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/flanksource/gavel/workspaceaccess"
 	"os"
 	"path"
 	"path/filepath"
@@ -43,14 +45,18 @@ type entry struct {
 	name string
 }
 type Store struct {
-	mu    sync.Mutex
-	files map[string]entry
+	Access *workspaceaccess.Service
+	mu     sync.Mutex
+	files  map[string]entry
 	// roots are the directories files may be created in or moved within: each
 	// selected folder, and the folder of each selected file.
 	roots []editRoot
 }
 
 func NewStore(paths []string) (*Store, error) {
+	return newStore(paths, false)
+}
+func newStore(paths []string, allowEmpty bool) (*Store, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("provide at least one file or folder")
 	}
@@ -109,7 +115,7 @@ func NewStore(paths []string) (*Store, error) {
 			s.add(entry{File: File{Path: filepath.Join(display, rel), Kind: kind}, root: canonical, name: rel})
 		}
 	}
-	if len(s.files) == 0 {
+	if len(s.files) == 0 && !allowEmpty {
 		return nil, fmt.Errorf("no supported files found")
 	}
 	return s, nil
@@ -173,6 +179,11 @@ func (s *Store) entry(id string) (entry, error) {
 	e, ok := s.files[id]
 	if !ok {
 		return entry{}, os.ErrNotExist
+	}
+	if s.Access != nil {
+		if _, err := s.Access.Authorize(context.Background(), e.root); err != nil {
+			return entry{}, err
+		}
 	}
 	resolved, err := filepath.EvalSymlinks(e.Path)
 	if err != nil {

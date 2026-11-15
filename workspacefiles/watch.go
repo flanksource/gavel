@@ -53,6 +53,10 @@ func (s *Service) Renew(id, owner string) (Lease, error) {
 	if entry == nil || entry.owner != owner || time.Now().After(entry.Expires) {
 		return Lease{}, ErrExpired
 	}
+	if _, err := s.options.Authorize(entry.File.Root); err != nil {
+		notify(entry, Event{Error: err.Error(), Expired: true})
+		return Lease{}, err
+	}
 	entry.Expires = time.Now().Add(s.options.IdleTimeout)
 	return entry.Lease, nil
 }

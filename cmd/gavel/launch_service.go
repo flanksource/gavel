@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/gavel/launch"
 	"github.com/flanksource/gavel/resultstore"
 	"github.com/flanksource/gavel/runconfig"
+	"github.com/flanksource/gavel/workspaceaccess"
 )
 
 type launchCommandSchemas struct{}
@@ -53,7 +54,7 @@ func newLaunchService(ctx context.Context, root, backend string, localRoots []st
 	if err != nil {
 		return nil, err
 	}
-	workspaces, err := launch.NewWorkspaces(launch.WorkspacePolicy{Root: root, AllowLocal: len(localRoots) > 0, LocalRoots: localRoots, WatchIdleTimeout: watchIdleTimeout, Context: func(ctx context.Context) dbcontext.Context { return dbcontext.NewContext(ctx).WithDB(db.Gorm(), nil) }})
+	workspaces, err := launch.NewWorkspaces(launch.WorkspacePolicy{Root: root, Access: workspaceaccess.New(localRoots), AllowLocal: len(localRoots) > 0, LocalRoots: localRoots, WatchIdleTimeout: watchIdleTimeout, Context: func(ctx context.Context) dbcontext.Context { return dbcontext.NewContext(ctx).WithDB(db.Gorm(), nil) }})
 	if err != nil {
 		return nil, err
 	}

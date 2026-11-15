@@ -7,6 +7,8 @@ import {
   SegmentedControl,
   type DropdownMenuItem,
   type JsonSchemaObject,
+  WorkspaceAccessDialog,
+  workspaceAccessClient,
 } from "@flanksource/clicky-ui/components";
 import { UiChatDots, UiDotsVertical, UiFilePlus, UiFolder, UiListChecks } from "@flanksource/clicky-ui/icons";
 import gavelLockup from "../../../assets/brand/gavel-logo-mono.svg";
@@ -108,6 +110,7 @@ function readRoute(): Route {
 }
 
 type CommentFilter = "unread" | "all";
+const accessClient = workspaceAccessClient();
 // The tree's comment filter lives in the URL beside the route but outlives navigation.
 const readCommentFilter = (): CommentFilter => (new URLSearchParams(location.search).get("tree") === "unread" ? "unread" : "all");
 
@@ -139,6 +142,9 @@ const writeRoute = (route: Route) => history.pushState(null, "", routeHref(route
 const parentFolder = (path: string) => path.slice(0, path.lastIndexOf("/") + 1);
 
 export function App() {
+  const [workspaceAccess, setWorkspaceAccess] = useState(false);
+  const [openedRoots, setOpenedRoots] = useState<string[]>([]);
+  const [accessBlocked, setAccessBlocked] = useState(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [route, setRoute] = useState(readRoute);
   const [filters, setFilters] = useState<ProblemFilters>(emptyProblemFilters);
@@ -154,7 +160,7 @@ export function App() {
   const queues = useRef(new Map<string, Autosave>());
   const [, render] = useState(0);
 
-  const root = useMemo(() => commonRoot(files.map((file) => file.path)), [files]);
+  const root = useMemo(() => commonRoot([...files.map((file) => file.path), ...openedRoots.map(path => path + "/_")]), [files, openedRoots]);
   const refs = useMemo(
     () => files.map((file): FileRef => ({ file: file.path.slice(root.length) })),
     [files, root],
@@ -175,6 +181,19 @@ export function App() {
   const openFile = (entry: FileEntry, view: FileReviewView) =>
     navigate({ selection: { kind: "file", ref: { file: relativePath(entry) } }, view });
   const active = route.selection?.kind === "file" ? byRef.get(fileRefKey(route.selection.ref)) : undefined;
+  useEffect(() => accessClient.subscribe(() => {
+    if (active) void request(`/api/file/${active.id}`).then(() => setAccessBlocked(false)).catch(cause => { if (cause instanceof ApiError && cause.status === 403) {setAccessBlocked(true);setError("Workspace access was revoked. Your draft is preserved; restore access before saving.");} else setError(String(cause)); });
+  }, cause => setError(cause.message)), [active?.id]);
+  useEffect(() => { setAccessBlocked(false); }, [active?.id]);
+  useEffect(() => { void request<{ roots: string[] }>("/api/workspace/open").then(result => setOpenedRoots(result.roots)).catch(cause => setError(String(cause))); }, []);
+  const openFolder = async (path: string) => {
+    const selectedPath = route.selection ? root + route.selection.ref.file : undefined;
+    const result = await request<{ roots: string[]; files: FileEntry[] }>("/api/workspace/open", { path });
+    const nextRoot = commonRoot([...result.files.map(file => file.path), ...result.roots.map(folder => folder + "/_")]);
+    setOpenedRoots(result.roots); setFiles(result.files);
+    if (selectedPath && route.selection) navigate({ ...route, selection: { ...route.selection, ref: { file: selectedPath.slice(nextRoot.length) } } });
+    setWorkspaceAccess(false);
+  };
   const ExtensionForm = useMemo(() => (active ? previewExtensionForm(active.id) : undefined), [active?.id]);
   const activeRef = active ? { file: relativePath(active) } : null;
   const draft = active ? queues.current.get(active.id)?.state() : undefined;
@@ -684,6 +703,7 @@ export function App() {
       {(error || schemaError) && (
         <p role="alert" className="px-3 py-1 text-sm text-destructive">
           {error || schemaError}
+          <Button variant="ghost" size="sm" onClick={() => setWorkspaceAccess(true)}>Workspace access…</Button>
         </p>
       )}
       {route.comments ? (
@@ -712,6 +732,7 @@ export function App() {
         key={generation}
         className="min-h-0 flex-1"
         files={shownRefs}
+        folders={openedRoots.map(path => ({ file: path.slice(root.length) })).filter(ref => ref.file)}
         findings={shownFindings}
         treeNode={{
           badges: ({ node, default: counts }) => (
@@ -733,7 +754,7 @@ export function App() {
         onProblemFiltersChange={setFilters}
         loadFile={loadFile}
         fileUrl={fileUrl}
-        onSourceChange={(ref, source) => queues.current.get(entryOf(ref).id)?.edit(source)}
+        onSourceChange={accessBlocked ? undefined : (ref, source) => queues.current.get(entryOf(ref).id)?.edit(source)}
         fileToolbar={fileToolbar}
         fileTabs={fileTabs}
         filePreview={(ref) => /\.(tsx|jsx|mdx)$/i.test(ref.file)
@@ -802,7 +823,7 @@ export function App() {
               size="sm"
               title="All files actions"
               menuLabel="All files actions"
-              items={[newFileItem(""), lintItem("Lint all files", files)]}
+              items={[{ label: "Workspace access…", onSelect: () => setWorkspaceAccess(true) }, newFileItem(""), lintItem("Lint all files", files)]}
             />
           </div>
         }
@@ -827,6 +848,7 @@ export function App() {
         ]}
       />
       {fileOperation && <FileOperationDialog operation={fileOperation} {...fileHandlers} />}
+      {workspaceAccess && <WorkspaceAccessDialog client={accessClient} onClose={() => setWorkspaceAccess(false)} onOpenFolder={openFolder} />}
       {missingProject && active && skippedProject !== active.id && (
         <CreateProjectDialog missing={missingProject} onCreate={createProject} onClose={() => setSkippedProject(active.id)} />
       )}

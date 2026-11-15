@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -26,6 +27,11 @@ func (s *Store) previewRoot(id string) (string, string, error) {
 	if !ok {
 		return "", "", os.ErrNotExist
 	}
+	if s.Access != nil {
+		if _, err := s.Access.Authorize(context.Background(), e.root); err != nil {
+			return "", "", err
+		}
+	}
 	file := filepath.Join(e.root, e.name)
 	root := filepath.Dir(file)
 	for dir := root; ; dir = filepath.Dir(dir) {
@@ -43,6 +49,11 @@ func (s *Store) previewRoot(id string) (string, string, error) {
 		}
 		if gitErr == nil || filepath.Dir(dir) == dir {
 			break
+		}
+	}
+	if s.Access != nil {
+		if _, err := s.Access.Authorize(context.Background(), root); err != nil {
+			return "", "", err
 		}
 	}
 	page, err := filepath.Rel(root, file)

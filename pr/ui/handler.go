@@ -560,7 +560,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc(pattern, s.handleConnections)
 	}
 	if s.launchService != nil {
-		for _, path := range []string{"/api/launch", "/api/launch/", "/api/runs", "/api/runs/"} {
+		for _, path := range []string{"/api/launch", "/api/launch/", "/api/runs", "/api/runs/", "/api/workspace/"} {
 			mux.Handle(path, s.launchService.Handler())
 		}
 	}

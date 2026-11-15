@@ -1,9 +1,11 @@
 package workspacefiles
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/flanksource/gavel/workspaceaccess"
 	"io"
 	"io/fs"
 	"net/http"
@@ -87,6 +89,11 @@ func decode(w http.ResponseWriter, r *http.Request, input any) bool {
 }
 
 func respond(w http.ResponseWriter, value any, err error) {
+	var denied *workspaceaccess.Denied
+	if errors.As(err, &denied) {
+		workspaceaccess.Respond(w, nil, err)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	if err != nil {
@@ -165,6 +172,12 @@ func (s *Service) stream(w http.ResponseWriter, r *http.Request) {
 	}
 	input := entry.File.FileRequest
 	s.mu.Unlock()
+	accessErrors := make(chan error, 1)
+	if s.options.WatchAccess != nil {
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		go func() { accessErrors <- s.options.WatchAccess(ctx, input.Root) }()
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	send := func(event string, value any) bool {
@@ -190,6 +203,12 @@ func (s *Service) stream(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 	for {
 		select {
+		case err := <-accessErrors:
+			if err != nil {
+				send("file-error", map[string]string{"error": err.Error()})
+				_ = s.Release(id, owner)
+			}
+			return
 		case <-r.Context().Done():
 			return
 		case <-s.stop:

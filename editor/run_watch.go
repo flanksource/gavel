@@ -52,8 +52,19 @@ func (s *Server) WatchRuns(cache string) error {
 	}
 	go func() {
 		defer watcher.Close()
+		rescan := time.NewTicker(15 * time.Second)
+		defer rescan.Stop()
 		for {
 			select {
+			case <-rescan.C:
+				runs, err := status.List(cache)
+				if err != nil {
+					logger.Errorf("refresh gavel runs: %v", err)
+					continue
+				}
+				for _, run := range runs {
+					s.followRun(cache, run.PID, followed)
+				}
 			case <-s.Context.Done():
 				return
 			case err := <-watcher.Errors:
@@ -85,7 +96,6 @@ func (s *Server) followRun(cache string, pid int, followed map[int]bool) {
 		logger.V(1).Infof("read gavel run %d: %v", pid, err)
 		return
 	}
-	followed[pid] = true
 	if !s.inWorkspace(current.WorkDir) {
 		return
 	}
@@ -94,6 +104,7 @@ func (s *Server) followRun(cache string, pid int, followed map[int]bool) {
 		logger.V(1).Infof("follow gavel run %d: %v", pid, err)
 		return
 	}
+	followed[pid] = true
 	go func() {
 		for update := range watcher.Updates() {
 			s.setActive(ActiveRun{PID: pid, Command: update.Command, Started: update.Started, Groups: update.Groups})

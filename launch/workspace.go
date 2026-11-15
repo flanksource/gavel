@@ -19,10 +19,12 @@ import (
 	"github.com/flanksource/commons/merge"
 	"github.com/flanksource/gavel/internal/safefs"
 	"github.com/flanksource/gavel/resultstore"
+	"github.com/flanksource/gavel/workspaceaccess"
 	"github.com/google/uuid"
 )
 
 type WorkspacePolicy struct {
+	Access           *workspaceaccess.Service
 	Root             string
 	AllowLocal       bool
 	LocalRoots       []string
@@ -75,6 +77,9 @@ func NewWorkspaces(policy WorkspacePolicy) (*Workspaces, error) {
 			return nil, err
 		}
 	}
+	if policy.Access != nil {
+		policy.Access.Pinned = append([]string{}, policy.LocalRoots...)
+	}
 	workspaces := &Workspaces{policy: policy, entries: map[string]*workspaceEntry{}, stop: make(chan struct{}), done: make(chan struct{})}
 	go workspaces.collect()
 	return workspaces, nil
@@ -103,6 +108,12 @@ func (w *Workspaces) Scope(request Request, owner string) (string, error) {
 }
 
 func (w *Workspaces) allowed(path string) (string, error) {
+	if w.policy.Access != nil {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(w.policy.Root, path)
+		}
+		return w.policy.Access.Authorize(context.Background(), path)
+	}
 	if !w.policy.AllowLocal {
 		return "", errors.New("local workspace access is disabled")
 	}

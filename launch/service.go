@@ -54,7 +54,26 @@ func NewService(options ServiceOptions) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	files, err := workspacefiles.New(workspacefiles.Options{Roots: options.Workspaces.policy.LocalRoots, Authorize: options.Workspaces.allowed, IdleTimeout: options.Workspaces.policy.WatchIdleTimeout})
+	fileOptions := workspacefiles.Options{Roots: options.Workspaces.policy.LocalRoots, Authorize: options.Workspaces.allowed, IdleTimeout: options.Workspaces.policy.WatchIdleTimeout}
+	if access := options.Workspaces.policy.Access; access != nil {
+		fileOptions.WatchAccess = func(ctx context.Context, root string) error {
+			return access.Follow(ctx, func() error { _, err := access.Authorize(ctx, root); return err })
+		}
+		fileOptions.EnabledRoots = func(ctx context.Context) ([]string, error) {
+			roots, err := access.Roots(ctx)
+			if err != nil {
+				return nil, err
+			}
+			paths := []string{}
+			for _, r := range roots {
+				if r.Available {
+					paths = append(paths, r.Path)
+				}
+			}
+			return paths, nil
+		}
+	}
+	files, err := workspacefiles.New(fileOptions)
 	if err != nil {
 		return nil, err
 	}
