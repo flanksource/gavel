@@ -59,7 +59,7 @@ var _ = Describe("Recorded problems", func() {
 		Expect(os.WriteFile(guide, []byte("# Guide\n\nstep\n"), 0o600)).To(Succeed())
 		Expect(os.WriteFile(config, []byte(`{"name":"initial"}`), 0o600)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(dir, "unopened.md"), []byte("# Other\n"), 0o600)).To(Succeed())
-		store, err = NewStore([]string{guide, config})
+		store, err = NewStore(StoreOptions{Paths: []string{guide, config}})
 		Expect(err).NotTo(HaveOccurred())
 		server = &Server{Store: store, Context: context.Background()}
 	})
@@ -90,7 +90,7 @@ var _ = Describe("Recorded problems", func() {
 		Expect(os.Symlink(dir, link)).To(Succeed())
 		opened := filepath.Join(link, "guide.md")
 		var err error
-		store, err = NewStore([]string{opened})
+		store, err = NewStore(StoreOptions{Paths: []string{opened}})
 		Expect(err).NotTo(HaveOccurred())
 		server = &Server{Store: store, Context: context.Background()}
 		recordRun(time.Now().Add(time.Hour), testui.Snapshot{

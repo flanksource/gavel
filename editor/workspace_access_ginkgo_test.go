@@ -2,11 +2,12 @@ package editor
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+
 	"github.com/flanksource/gavel/workspaceaccess"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"os"
-	"path/filepath"
 )
 
 type editorGrants struct{ roots []workspaceaccess.Root }
@@ -22,7 +23,7 @@ var _ = Describe("editor workspace access", func() {
 		initial := GinkgoT().TempDir()
 		opened := GinkgoT().TempDir()
 		Expect(os.WriteFile(filepath.Join(initial, "first.md"), []byte("first"), 0600)).To(Succeed())
-		store, err := NewStore([]string{initial})
+		store, err := NewStore(StoreOptions{Paths: []string{initial}})
 		Expect(err).NotTo(HaveOccurred())
 		store.EnableAccess()
 		canonical, err := workspaceaccess.Canonical(opened)

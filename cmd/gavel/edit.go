@@ -23,14 +23,17 @@ import (
 	"github.com/flanksource/gavel/internal/vitedev"
 	jsonlint "github.com/flanksource/gavel/linters/json"
 	"github.com/flanksource/gavel/sdk/status"
+	"github.com/flanksource/gavel/verify"
 )
 
 type EditOptions struct {
-	Paths  []string `args:"true"`
-	Port   int      `flag:"port" help:"Local HTTP port (0 chooses an available port)"`
-	NoOpen bool     `flag:"no-open" help:"Print the URL without opening a browser"`
-	Schema string   `flag:"schema" help:"JSON Schema path or HTTP(S) URL overriding document declarations"`
-	Dev    bool     `flag:"dev" help:"Serve the page from the editor/ui Vite dev server, with clicky-ui from the sibling checkout's source when present (requires a source checkout)"`
+	Paths          []string `args:"true"`
+	Port           int      `flag:"port" help:"Local HTTP port (0 chooses an available port)"`
+	NoOpen         bool     `flag:"no-open" help:"Print the URL without opening a browser"`
+	Schema         string   `flag:"schema" help:"JSON Schema path or HTTP(S) URL overriding document declarations"`
+	Ext            []string `flag:"ext" help:"File extensions folders list, e.g. .md or .go, instead of the built-in documents and images; repeat for each (overrides .gavel.yaml edit.extensions)"`
+	IncludeIgnored []string `flag:"include-ignored" help:"Folder-relative glob or directory whose files are listed even though .gitignore excludes them; repeat for each (overrides .gavel.yaml edit.includeIgnored)"`
+	Dev            bool     `flag:"dev" help:"Serve the page from the editor/ui Vite dev server, with clicky-ui from the sibling checkout's source when present (requires a source checkout)"`
 	// Session defaults to the agent session gavel edit runs inside.
 	Session string `flag:"session" help:"Agent session id new comments are assigned and delivered to (default: the Claude/Codex session gavel edit runs in, as captain detects it; \"none\" routes through the files' comment agents)"`
 }
@@ -72,7 +75,19 @@ func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 			opts.Paths[i] = filepath.Join(dir, path)
 		}
 	}
-	store, err := editor.NewStore(opts.Paths)
+	editorServer := &editor.Server{ListingFlags: verify.EditConfig{Extensions: opts.Ext, IncludeIgnored: opts.IncludeIgnored}}
+	listingDir := dir
+	if len(opts.Paths) > 0 {
+		listingDir = opts.Paths[0]
+		if info, err := os.Stat(listingDir); err == nil && !info.IsDir() {
+			listingDir = filepath.Dir(listingDir)
+		}
+	}
+	listing, err := editorServer.ListingFor(listingDir)
+	if err != nil {
+		return nil, err
+	}
+	store, err := editor.NewStore(editor.StoreOptions{Paths: opts.Paths, Listing: listing})
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +116,8 @@ func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 		_ = listener.Close()
 		return nil, fmt.Errorf("resolving the agent session for new comments (pass --session=none to skip): %w", err)
 	}
-	editorServer := &editor.Server{Store: store, Schema: opts.Schema, Assets: editorui.Assets(), Context: ctx, Agents: agents.Captain{}, Session: session, Version: version}
+	editorServer.Store, editorServer.Schema, editorServer.Assets, editorServer.Context = store, opts.Schema, editorui.Assets(), ctx
+	editorServer.Agents, editorServer.Session, editorServer.Version = agents.Captain{}, session, version
 	if err := editorServer.Reload(); err != nil {
 		_ = listener.Close()
 		return nil, err

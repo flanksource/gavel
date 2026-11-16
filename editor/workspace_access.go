@@ -2,8 +2,10 @@ package editor
 
 import (
 	"context"
-	"github.com/flanksource/gavel/workspaceaccess"
 	"net/http"
+
+	"github.com/flanksource/gavel/verify"
+	"github.com/flanksource/gavel/workspaceaccess"
 )
 
 func (s *Store) EnableAccess() {
@@ -17,7 +19,10 @@ func (s *Store) OpenFolder(ctx context.Context, path string) error {
 	if _, err := s.Access.Authorize(ctx, path); err != nil {
 		return err
 	}
-	added, err := newStore([]string{path}, true)
+	s.mu.Lock()
+	listing := s.listing
+	s.mu.Unlock()
+	added, err := newStore(StoreOptions{Paths: []string{path}, Listing: listing}, true)
 	if err != nil {
 		return err
 	}
@@ -31,8 +36,57 @@ func (s *Store) OpenFolder(ctx context.Context, path string) error {
 	for _, e := range added.files {
 		s.add(e)
 	}
+	s.paths = append(s.paths, added.paths...)
 	return nil
 }
+
+// Switch replaces every edited file and folder with the folder dir, listed by listing.
+func (s *Store) Switch(ctx context.Context, dir string, listing verify.EditConfig) error {
+	if s.Access != nil {
+		if _, err := s.Access.Authorize(ctx, dir); err != nil {
+			return err
+		}
+	}
+	return s.replace(StoreOptions{Paths: []string{dir}, Listing: listing})
+}
+
+// Relist lists the edited files and folders again by listing.
+func (s *Store) Relist(listing verify.EditConfig) error {
+	s.mu.Lock()
+	paths := s.paths
+	s.mu.Unlock()
+	return s.replace(StoreOptions{Paths: paths, Listing: listing})
+}
+
+func (s *Store) replace(opts StoreOptions) error {
+	fresh, err := newStore(opts, true)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.files, s.roots, s.paths, s.listing = fresh.files, fresh.roots, fresh.paths, fresh.listing
+	return nil
+}
+
+// Listing is which files the folders list.
+func (s *Store) Listing() verify.EditConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listing
+}
+
+// Roots are the edited folders, as selected.
+func (s *Store) Roots() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	roots := []string{}
+	for _, root := range s.roots {
+		roots = append(roots, root.display)
+	}
+	return roots
+}
+
 func (s *Server) opened(w http.ResponseWriter, r *http.Request) {
 	if !workspaceaccess.Trusted(r) {
 		http.Error(w, "opening folders requires a local same-origin caller", 403)
@@ -54,11 +108,5 @@ func (s *Server) opened(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.Store.mu.Lock()
-	roots := []string{}
-	for _, root := range s.Store.roots {
-		roots = append(roots, root.display)
-	}
-	s.Store.mu.Unlock()
-	workspaceaccess.Respond(w, map[string]any{"roots": roots, "files": s.Store.Files()}, nil)
+	workspaceaccess.Respond(w, map[string]any{"roots": s.Store.Roots(), "files": s.Store.Files()}, nil)
 }

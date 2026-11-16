@@ -86,8 +86,8 @@ func (s *Store) Create(path, templateID string) (Document, error) {
 	if err != nil {
 		return Document{}, err
 	}
-	if kind, _ := kindOf(name); kind != KindDocument {
-		return Document{}, fmt.Errorf("cannot create %s: new files must end in one of %s", path, strings.Join(documentExtensions, ", "))
+	if kind, _ := s.kindOf(name); kind != KindDocument {
+		return Document{}, fmt.Errorf("cannot create %s: new files must end in one of the listed document extensions (%s)", path, strings.Join(s.extensions(), ", "))
 	}
 	source, err := sourceFor(templateID, name)
 	if err != nil {
@@ -134,7 +134,7 @@ func (s *Store) Rename(id, path, revision string) (File, error) {
 	if root.canonical != e.root {
 		return File{}, fmt.Errorf("cannot move %s to %s: files stay within the folder they were opened from (%s)", e.Path, path, filepath.Dir(e.Path))
 	}
-	if kind, _ := kindOf(name); kind != e.Kind {
+	if kind, _ := s.kindOf(name); kind != e.Kind {
 		return File{}, fmt.Errorf("cannot rename %s to %s: the new name must keep it a supported %s", e.Path, path, e.Kind)
 	}
 	dir, err := os.OpenRoot(e.root)

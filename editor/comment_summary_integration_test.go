@@ -27,7 +27,7 @@ var _ = Describe("Editor comment summary", func() {
 		}
 		imagePath := filepath.Join(dir, "c.png")
 		Expect(os.WriteFile(imagePath, []byte("\x89PNG\r\n\x1a\npixels"), 0600)).To(Succeed())
-		files, err := NewStore(append(paths, imagePath))
+		files, err := NewStore(StoreOptions{Paths: append(paths, imagePath)})
 		Expect(err).NotTo(HaveOccurred())
 		docs := map[string]Document{}
 		for _, entry := range files.Files() {

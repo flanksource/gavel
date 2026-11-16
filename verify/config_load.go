@@ -365,6 +365,11 @@ func decodeGavelConfig(path string, encoded []byte) (GavelConfig, error) {
 	if err := gc.PR.Lifecycle.Validate(); err != nil {
 		return GavelConfig{}, fmt.Errorf("%s: pr.%w", path, err)
 	}
+	edit, err := gc.Edit.Normalize()
+	if err != nil {
+		return GavelConfig{}, fmt.Errorf("%s: %w", path, err)
+	}
+	gc.Edit = edit
 	if err := gc.validateRuntime(); err != nil {
 		return GavelConfig{}, fmt.Errorf("%s: %w", path, err)
 	}

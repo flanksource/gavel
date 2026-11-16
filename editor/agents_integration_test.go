@@ -8,9 +8,10 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/flanksource/gavel/internal/safefs"
 	"path/filepath"
 	"strings"
+
+	"github.com/flanksource/gavel/internal/safefs"
 
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
@@ -79,7 +80,7 @@ var _ = Describe("Delivering an editor comment thread through the shared comment
 		useProject(dir)
 		path := filepath.Join(dir, "a.yaml")
 		Expect(os.WriteFile(path, []byte("name: x\n"), 0600)).To(Succeed())
-		files, err := NewStore([]string{path})
+		files, err := NewStore(StoreOptions{Paths: []string{path}})
 		Expect(err).NotTo(HaveOccurred())
 		doc, err = files.Read(files.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())

@@ -5,6 +5,15 @@ export type FileEntry = {
 };
 export type Document = FileEntry & { source: string; revision: string };
 
+/** The edited folders and their files, as the folder-changing routes answer. */
+export type OpenedFiles = { roots: string[]; files: FileEntry[] };
+/** A registered project the editor can switch to (GET /api/edit/projects). */
+export type EditProject = { name: string; dir: string };
+/** Which files the folders list; an empty extensions list means the built-in set. */
+export type ListingConfig = { extensions?: string[]; includeIgnored?: string[] };
+/** GET /api/edit/options: the listing in effect, the folder's .gavel.yaml and flag values, and the built-in extensions. */
+export type EditListing = ListingConfig & { configured: ListingConfig; flags: ListingConfig; dir: string; defaults: string[] };
+
 /** A non-2xx API answer, keeping the status and raw body for callers that branch on them. */
 export class ApiError extends Error {
   constructor(

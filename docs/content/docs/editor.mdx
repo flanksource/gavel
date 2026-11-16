@@ -11,7 +11,30 @@ gavel edit configs --schema ./schemas/settings.json
 gavel edit README.md --port 9095 --no-open
 ```
 
-Folders are searched recursively for `.md`, `.mdx`, `.tsx`, `.jsx`, `.json`, `.yaml`, and `.yml` files, respecting Git ignores. Explicitly named files are included even when ignored. Cmd+K or Ctrl+K searches names and paths. The selected file is kept in the URL.
+Folders are searched recursively for `.md`, `.mdx`, `.tsx`, `.jsx`, `.json`, `.yaml`, and `.yml` files and images, respecting Git ignores. Explicitly named files are included even when ignored. Cmd+K or Ctrl+K searches names and paths. The selected file is kept in the URL.
+
+### Choosing which files are listed
+
+`--ext` replaces the listed extensions, and `--include-ignored` lists files that `.gitignore` excludes. Both flags can be repeated. An extension with no richer view, such as `.go` or `.txt`, opens as plain source. An include pattern is relative to each opened folder; a bare directory such as `.tmp` includes everything below it.
+
+```sh
+gavel edit . --ext .md --ext .go
+gavel edit docs --include-ignored .tmp --include-ignored "dist/**/*.md"
+```
+
+The same settings can be kept in the folder's `.gavel.yaml`. A flag overrides its key; an unset flag uses the configuration.
+
+```yaml
+edit:
+  extensions: [.md, .mdx, .go]
+  includeIgnored: [.tmp]
+```
+
+**View options** in the editor's menu changes both lists for the open folders. **Apply** rescans immediately; **Save to .gavel.yaml** also writes the `edit:` section of the first opened folder.
+
+### Switching projects
+
+The project picker in the top bar lists the projects registered with `gavel projects`. Choosing one replaces the open folders with that project's directory, using the project's own `edit:` settings unless a flag overrides them. Unsaved drafts must be saved or discarded first. A project folder without workspace access opens the workspace access dialog.
 
 MDX, TSX and JSX offer a Facet **Preview** using the browser page runtime. Source changes render after 300 milliseconds, independently of autosave. The preview stays mounted when switching tabs and retains its last successful output while compiling. Import relative components and CSS from the page's package directory; supporting modules are readable by the runtime, while only selected files can be edited. Node-only imports cannot render in the browser.
 

@@ -24,7 +24,7 @@ var _ = Describe("File operations", func() {
 		dir = GinkgoT().TempDir()
 		Expect(os.WriteFile(filepath.Join(dir, "readme.md"), []byte("# Readme\n"), 0o600)).To(Succeed())
 		var err error
-		store, err = NewStore([]string{dir})
+		store, err = NewStore(StoreOptions{Paths: []string{dir}})
 		Expect(err).NotTo(HaveOccurred())
 	})
 	readme := func() Document {

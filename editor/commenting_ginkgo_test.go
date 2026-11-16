@@ -24,7 +24,7 @@ var _ = Describe("Editor comment boundaries", func() {
 		path := filepath.Join(dir, "conf", "settings.yaml")
 		Expect(os.MkdirAll(filepath.Dir(path), 0700)).To(Succeed())
 		Expect(os.WriteFile(path, []byte("name: example\n"), 0600)).To(Succeed())
-		store, err := NewStore([]string{path})
+		store, err := NewStore(StoreOptions{Paths: []string{path}})
 		Expect(err).NotTo(HaveOccurred())
 		doc, err := store.Read(store.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -56,7 +56,7 @@ var _ = Describe("Editor comment boundaries", func() {
 		link := filepath.Join(GinkgoT().TempDir(), "envs")
 		Expect(os.Symlink(filepath.Dir(real), link)).To(Succeed())
 		useProject(real)
-		store, err := NewStore([]string{filepath.Join(link, "base")})
+		store, err := NewStore(StoreOptions{Paths: []string{filepath.Join(link, "base")}})
 		Expect(err).NotTo(HaveOccurred())
 		doc, err := store.Read(store.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -85,7 +85,7 @@ var _ = Describe("Editor comment boundaries", func() {
 		dir := GinkgoT().TempDir()
 		path := filepath.Join(dir, "notes.md")
 		Expect(os.WriteFile(path, []byte("# notes\n"), 0600)).To(Succeed())
-		store, err := NewStore([]string{path})
+		store, err := NewStore(StoreOptions{Paths: []string{path}})
 		Expect(err).NotTo(HaveOccurred())
 		id := store.Files()[0].ID
 		server := &Server{Store: store}
@@ -118,7 +118,7 @@ var _ = Describe("Editor comment boundaries", func() {
 		path := filepath.Join(dir, "settings.yaml")
 		source := "before\nselected\nafter"
 		Expect(os.WriteFile(path, []byte(source), 0600)).To(Succeed())
-		store, err := NewStore([]string{path})
+		store, err := NewStore(StoreOptions{Paths: []string{path}})
 		Expect(err).NotTo(HaveOccurred())
 		doc, err := store.Read(store.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -160,7 +160,7 @@ var _ = Describe("Editor comment boundaries", func() {
 			useProject(dir)
 			path := filepath.Join(dir, "notes.md")
 			Expect(os.WriteFile(path, []byte(source), 0600)).To(Succeed())
-			store, err := NewStore([]string{path})
+			store, err := NewStore(StoreOptions{Paths: []string{path}})
 			Expect(err).NotTo(HaveOccurred())
 			doc, err = store.Read(store.Files()[0].ID)
 			Expect(err).NotTo(HaveOccurred())
@@ -208,7 +208,7 @@ var _ = Describe("Editor comment boundaries", func() {
 			useProject(dir)
 			path := filepath.Join(dir, "diagram.png")
 			Expect(os.WriteFile(path, []byte("\x89PNG\r\n\x1a\nnot-really-pixels"), 0600)).To(Succeed())
-			store, err := NewStore([]string{path})
+			store, err := NewStore(StoreOptions{Paths: []string{path}})
 			Expect(err).NotTo(HaveOccurred())
 			image := store.Files()[0]
 			Expect(image.Kind).To(Equal(KindImage))

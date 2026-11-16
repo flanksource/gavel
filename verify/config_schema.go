@@ -49,6 +49,7 @@ func gavelConfigSchema() map[string]any {
 			"checks":         checksSchema(),
 			"todos":          todosSchema(specSchema),
 			"comments":       commentsSchema(specSchema),
+			"edit":           editSchema(),
 			"status":         statusSchema(),
 			"test":           testSchema(),
 			"pr":             prSchema(),

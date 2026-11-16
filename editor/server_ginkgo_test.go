@@ -6,6 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing/fstest"
+
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
 	commonsContext "github.com/flanksource/commons/context"
@@ -16,10 +21,6 @@ import (
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"testing/fstest"
 )
 
 var _ = Describe("Editor HTTP API", func() {
@@ -30,7 +31,7 @@ var _ = Describe("Editor HTTP API", func() {
 		path := filepath.Join(GinkgoT().TempDir(), "config.json")
 		Expect(os.WriteFile(path, []byte(`{"name":"initial"}`), 0600)).To(Succeed())
 		var err error
-		store, err = NewStore([]string{path})
+		store, err = NewStore(StoreOptions{Paths: []string{path}})
 		Expect(err).NotTo(HaveOccurred())
 		doc, err = store.Read(store.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -170,7 +171,7 @@ var _ = Describe("Editor HTTP API", func() {
 			Expect(os.WriteFile(filepath.Join(root, "img", "a.png"), []byte(png), 0o600)).To(Succeed())
 			Expect(os.WriteFile(filepath.Join(root, "notes.txt"), []byte("notes"), 0o600)).To(Succeed())
 			Expect(os.WriteFile(filepath.Join(root, "guide.md"), []byte("![](img/a.png)"), 0o600)).To(Succeed())
-			s, err := NewStore([]string{root})
+			s, err := NewStore(StoreOptions{Paths: []string{root}})
 			Expect(err).NotTo(HaveOccurred())
 			ids = map[string]string{}
 			for _, f := range s.Files() {

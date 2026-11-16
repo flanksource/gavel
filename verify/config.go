@@ -372,6 +372,7 @@ type GavelConfig struct {
 	// Comments configures comment threads on the files beneath each .gavel.yaml;
 	// its agents are read per file (see CommentAgentsConfig), not from the merge.
 	Comments CommentsConfig `yaml:"comments,omitempty" json:"comments,omitempty"`
+	Edit     EditConfig     `yaml:"edit,omitempty" json:"edit,omitempty"`
 	Status   StatusConfig   `yaml:"status,omitempty" json:"status,omitempty"`
 	Test     TestConfig     `yaml:"test,omitempty" json:"test,omitempty"`
 	PR       PRConfig       `yaml:"pr,omitempty" json:"pr,omitempty"`

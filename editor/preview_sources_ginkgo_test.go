@@ -18,7 +18,7 @@ var _ = Describe("Preview project sources", func() {
 		Expect(os.WriteFile(filepath.Join(root, "title.jsx"), []byte("export default () => null"), 0600)).To(Succeed())
 		name := filepath.Join(root, "nested", "page.jsx")
 		Expect(os.WriteFile(name, []byte("export default () => null"), 0600)).To(Succeed())
-		store, err := NewStore([]string{name})
+		store, err := NewStore(StoreOptions{Paths: []string{name}})
 		Expect(err).NotTo(HaveOccurred())
 		result, err := store.Preview(store.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -26,7 +26,7 @@ var _ = Describe("Preview project sources", func() {
 		Expect(result.Paths).To(ContainElement("title.jsx"))
 	})
 	It("indexes project imports without adding support files to editable files", func() {
-		store, err := NewStore([]string{"testdata/page-preview/page.jsx"})
+		store, err := NewStore(StoreOptions{Paths: []string{"testdata/page-preview/page.jsx"}})
 		Expect(err).NotTo(HaveOccurred())
 		result, err := store.Preview(store.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -40,7 +40,7 @@ var _ = Describe("Preview project sources", func() {
 		Expect(os.MkdirAll(filepath.Join(root, "schemas", "extensions"), 0700)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(root, "schemas", "extensions", "pickers.tsx"), []byte("export default {}"), 0600)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(root, "product.yaml"), []byte("name: example\n"), 0600)).To(Succeed())
-		store, err := NewStore([]string{filepath.Join(root, "product.yaml")})
+		store, err := NewStore(StoreOptions{Paths: []string{filepath.Join(root, "product.yaml")}})
 		Expect(err).NotTo(HaveOccurred())
 		fileURL := func(path string) string { return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String() }
 		schema := map[string]any{"$defs": map[string]any{"resource0": map[string]any{"x-clicky-extensions": []any{
@@ -69,7 +69,7 @@ var _ = Describe("Preview project sources", func() {
 		outside := filepath.Join(GinkgoT().TempDir(), "secret.json")
 		Expect(os.WriteFile(outside, []byte("private"), 0600)).To(Succeed())
 		Expect(os.Symlink(outside, filepath.Join(root, "linked.json"))).To(Succeed())
-		store, err := NewStore([]string{filepath.Join(root, "page.jsx")})
+		store, err := NewStore(StoreOptions{Paths: []string{filepath.Join(root, "page.jsx")}})
 		Expect(err).NotTo(HaveOccurred())
 		for _, path := range []string{"../secret.json", "linked.json"} {
 			request := httptest.NewRequest("GET", "/source", nil)

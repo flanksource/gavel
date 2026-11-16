@@ -43,7 +43,9 @@ import {
 } from "@flanksource/clicky-ui/data";
 import { useEventSourceFactory } from "@flanksource/clicky-ui/hooks";
 import { createAutosave, type Autosave } from "./autosave";
-import { ApiError, request, type FileEntry, type Document } from "./api";
+import { ApiError, request, type FileEntry, type Document, type OpenedFiles } from "./api";
+import { ProjectPicker } from "./ProjectPicker";
+import { EditOptionsDialog } from "./EditOptionsDialog";
 import { commonRoot, editorFindingRef, nodePath, relativeToFile } from "./paths";
 import { commentsRouteFrom, NO_COMMENTS_FILTERS, taskRunFromHref, writeCommentsRoute, type CommentsFilters } from "./routes";
 import { CommentsPage, type OpenThread } from "./CommentsPage";
@@ -143,6 +145,7 @@ const parentFolder = (path: string) => path.slice(0, path.lastIndexOf("/") + 1);
 
 export function App() {
   const [workspaceAccess, setWorkspaceAccess] = useState(false);
+  const [editOptions, setEditOptions] = useState(false);
   const [openedRoots, setOpenedRoots] = useState<string[]>([]);
   const [accessBlocked, setAccessBlocked] = useState(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -186,14 +189,27 @@ export function App() {
   }, cause => setError(cause.message)), [active?.id]);
   useEffect(() => { setAccessBlocked(false); }, [active?.id]);
   useEffect(() => { void request<{ roots: string[] }>("/api/workspace/open").then(result => setOpenedRoots(result.roots)).catch(cause => setError(String(cause))); }, []);
-  const openFolder = async (path: string) => {
+  // Shows a new set of edited folders and files: closed files drop their drafts, and the
+  // selection follows the tree root, or clears when its file is no longer listed.
+  const showOpened = (opened: OpenedFiles) => {
+    const listed = new Set(opened.files.map((file) => file.id));
+    for (const [id, queue] of queues.current) {
+      if (listed.has(id)) continue;
+      queue.dispose();
+      queues.current.delete(id);
+    }
     const selectedPath = route.selection ? root + route.selection.ref.file : undefined;
-    const result = await request<{ roots: string[]; files: FileEntry[] }>("/api/workspace/open", { path });
-    const nextRoot = commonRoot([...result.files.map(file => file.path), ...result.roots.map(folder => folder + "/_")]);
-    setOpenedRoots(result.roots); setFiles(result.files);
-    if (selectedPath && route.selection) navigate({ ...route, selection: { ...route.selection, ref: { file: selectedPath.slice(nextRoot.length) } } });
+    const nextRoot = commonRoot([...opened.files.map(file => file.path), ...opened.roots.map(folder => folder + "/_")]);
+    setOpenedRoots(opened.roots); setFiles(opened.files);
+    if (!selectedPath || !route.selection) return;
+    const kept = selectedPath.startsWith(nextRoot) && (route.selection.kind === "folder" || opened.files.some((file) => file.path === selectedPath));
+    navigate(kept ? { ...route, selection: { ...route.selection, ref: { file: selectedPath.slice(nextRoot.length) } } } : { selection: null, view: route.view });
+  };
+  const openFolder = async (path: string) => {
+    showOpened(await request<OpenedFiles>("/api/workspace/open", { path }));
     setWorkspaceAccess(false);
   };
+  const unsavedFiles = () => [...queues.current.values()].filter((queue) => queue.state().status !== "saved").length;
   const ExtensionForm = useMemo(() => (active ? previewExtensionForm(active.id) : undefined), [active?.id]);
   const activeRef = active ? { file: relativePath(active) } : null;
   const draft = active ? queues.current.get(active.id)?.state() : undefined;
@@ -565,7 +581,14 @@ export function App() {
         id: "form",
         label: markdown ? "Frontmatter" : "Form",
         render: (ctx) => (
-          <DocumentForm path={ref.file} value={ctx.source} schema={schema} onChange={(source) => ctx.onSourceChange?.(source)} {...(ExtensionForm ? { Form: ExtensionForm } : {})} />
+          <DocumentForm
+            path={ref.file}
+            value={ctx.source}
+            schema={schema}
+            formOptions={{ layout: { mode: "inline", valueMaxWidth: "1200px" } }}
+            onChange={(source) => ctx.onSourceChange?.(source)}
+            {...(ExtensionForm ? { Form: ExtensionForm } : {})}
+          />
         ),
       });
     if (comparison !== null && entry.id === active?.id)
@@ -634,6 +657,7 @@ export function App() {
       // and its links open the full task manager below.
       actions={
         <div className="flex items-center gap-1">
+        <ProjectPicker roots={openedRoots} unsaved={unsavedFiles} onSwitched={showOpened} onAccessDenied={() => setWorkspaceAccess(true)} onError={setError} />
         <RecentComments
           recent={summary.recent}
           unread={unreadComments}
@@ -826,7 +850,7 @@ export function App() {
               size="sm"
               title="All files actions"
               menuLabel="All files actions"
-              items={[{ label: "Workspace access…", onSelect: () => setWorkspaceAccess(true) }, newFileItem(""), lintItem("Lint all files", files)]}
+              items={[{ label: "Workspace access…", onSelect: () => setWorkspaceAccess(true) }, { label: "View options…", onSelect: () => setEditOptions(true) }, newFileItem(""), lintItem("Lint all files", files)]}
             />
           </div>
         }
@@ -851,6 +875,15 @@ export function App() {
         ]}
       />
       {fileOperation && <FileOperationDialog operation={fileOperation} {...fileHandlers} />}
+      {editOptions && (
+        <EditOptionsDialog
+          onApplied={(applied) => {
+            showOpened(applied);
+            setEditOptions(false);
+          }}
+          onClose={() => setEditOptions(false)}
+        />
+      )}
       {workspaceAccess && <WorkspaceAccessDialog client={accessClient} onClose={() => setWorkspaceAccess(false)} onOpenFolder={openFolder} />}
       {missingProject && active && skippedProject !== active.id && (
         <CreateProjectDialog missing={missingProject} onCreate={createProject} onClose={() => setSkippedProject(active.id)} />

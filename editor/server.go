@@ -69,8 +69,11 @@ type Server struct {
 	Session string
 	// Version is the gavel version recorded on the lint runs the editor saves.
 	Version string
-	mu      sync.Mutex
-	run     LintRun
+	// ListingFlags are the gavel edit --ext/--include-ignored values; each set
+	// key overrides a switched-to project's .gavel.yaml edit section.
+	ListingFlags verify.EditConfig
+	mu           sync.Mutex
+	run          LintRun
 	// staleAtLoad marks files changed on disk after the run that checked them.
 	staleAtLoad map[string]bool
 	stateRoots  []string
@@ -84,7 +87,11 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/api/workspace/access/", s.Store.Access.Handler())
 		mux.HandleFunc("GET /api/workspace/open", s.opened)
 		mux.HandleFunc("POST /api/workspace/open", s.opened)
+		mux.HandleFunc("GET /api/edit/projects", s.editProjects)
+		mux.HandleFunc("POST /api/edit/project", s.switchProject)
 	}
+	mux.HandleFunc("GET /api/edit/options", s.editListing)
+	mux.HandleFunc("PUT /api/edit/options", s.saveListing)
 	mux.HandleFunc("GET /api/files", func(w http.ResponseWriter, r *http.Request) { respond(w, s.Store.Files(), nil) })
 	mux.HandleFunc("POST /api/files", s.createFile)
 	mux.HandleFunc("GET /api/templates", s.templates)

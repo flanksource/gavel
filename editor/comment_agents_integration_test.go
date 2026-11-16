@@ -82,7 +82,7 @@ var _ = Describe("Page agents configured in the settings layers of a file", Orde
 		for _, name := range []string{"19-security.mdx", "09-solution.mdx"} {
 			Expect(os.WriteFile(filepath.Join(slides, name), []byte("# "+name+"\n"), 0o600)).To(Succeed())
 		}
-		files, err = NewStore([]string{filepath.Join(slides, "19-security.mdx"), filepath.Join(slides, "09-solution.mdx")})
+		files, err = NewStore(StoreOptions{Paths: []string{filepath.Join(slides, "19-security.mdx"), filepath.Join(slides, "09-solution.mdx")}})
 		Expect(err).NotTo(HaveOccurred())
 		for _, file := range files.Files() {
 			doc, err := files.Read(file.ID)

@@ -1,12 +1,13 @@
 package editor
 
 import (
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 func TestEditor(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Editor") }
@@ -16,7 +17,7 @@ var _ = Describe("File store", func() {
 		name := filepath.Join(GinkgoT().TempDir(), "page"+extension)
 		Expect(os.WriteFile(name, []byte("export default () => <h1>Hello</h1>"), 0600)).To(Succeed())
 		for _, input := range []string{name, filepath.Dir(name)} {
-			store, err := NewStore([]string{input})
+			store, err := NewStore(StoreOptions{Paths: []string{input}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(store.Files()).To(HaveLen(1))
 			doc, err := store.Read(store.Files()[0].ID)
@@ -33,7 +34,7 @@ var _ = Describe("File store", func() {
 		link := filepath.Join(parent, "linked")
 		Expect(os.Symlink(real, link)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(real, "config.yaml"), []byte("name: example"), 0600)).To(Succeed())
-		store, err := NewStore([]string{link})
+		store, err := NewStore(StoreOptions{Paths: []string{link}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(store.Files()[0].Path).To(Equal(filepath.Join(link, "config.yaml")))
 	})
@@ -44,7 +45,7 @@ var _ = Describe("File store", func() {
 		Expect(os.WriteFile(path, []byte("# comment\nname: initial\n"), 0600)).To(Succeed())
 	})
 	It("deduplicates overlapping inputs and writes exact source with existing permissions", func() {
-		s, err := NewStore([]string{dir, path})
+		s, err := NewStore(StoreOptions{Paths: []string{dir, path}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(s.Files()).To(HaveLen(1))
 		doc, err := s.Read(s.Files()[0].ID)
@@ -59,7 +60,7 @@ var _ = Describe("File store", func() {
 		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0600)))
 	})
 	It("rejects stale saves without changing the external edit", func() {
-		s, err := NewStore([]string{path})
+		s, err := NewStore(StoreOptions{Paths: []string{path}})
 		Expect(err).NotTo(HaveOccurred())
 		doc, err := s.Read(s.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -72,7 +73,7 @@ var _ = Describe("File store", func() {
 		Expect(string(data)).To(Equal("external"))
 	})
 	It("rejects a discovered path replaced by a symlink outside the root", func() {
-		s, err := NewStore([]string{dir})
+		s, err := NewStore(StoreOptions{Paths: []string{dir}})
 		Expect(err).NotTo(HaveOccurred())
 		outside := filepath.Join(GinkgoT().TempDir(), "secret.yaml")
 		Expect(os.WriteFile(outside, []byte("private"), 0600)).To(Succeed())
@@ -84,7 +85,7 @@ var _ = Describe("File store", func() {
 	It("lists an image in a folder as kind image and refuses to read it as a document", func() {
 		Expect(os.MkdirAll(filepath.Join(dir, "img"), 0o755)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(dir, "img", "a.png"), []byte("\x89PNG\x00"), 0o600)).To(Succeed())
-		s, err := NewStore([]string{dir})
+		s, err := NewStore(StoreOptions{Paths: []string{dir}})
 		Expect(err).NotTo(HaveOccurred())
 		kinds := map[string]string{}
 		for _, f := range s.Files() {
@@ -105,7 +106,7 @@ var _ = Describe("File store", func() {
 		const svg = `<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>`
 		image := filepath.Join(dir, "logo.svg")
 		Expect(os.WriteFile(image, []byte(svg), 0o600)).To(Succeed())
-		s, err := NewStore([]string{image})
+		s, err := NewStore(StoreOptions{Paths: []string{image}})
 		Expect(err).NotTo(HaveOccurred())
 		file := s.Files()[0]
 		doc, err := s.Read(file.ID)
@@ -117,9 +118,9 @@ var _ = Describe("File store", func() {
 		Expect(os.ReadFile(image)).To(Equal([]byte(edited)))
 	})
 	It("rejects missing and unsupported inputs", func() {
-		_, err := NewStore(nil)
+		_, err := NewStore(StoreOptions{Paths: nil})
 		Expect(err).To(HaveOccurred())
-		_, err = NewStore([]string{filepath.Join(dir, "missing")})
+		_, err = NewStore(StoreOptions{Paths: []string{filepath.Join(dir, "missing")}})
 		Expect(err).To(HaveOccurred())
 	})
 })

@@ -265,6 +265,18 @@ func lifecycleStepSchema() map[string]any {
 	return step
 }
 
+func editSchema() map[string]any {
+	return object(
+		"Which files `gavel edit` lists beneath this directory; the `--ext` and `--include-ignored` flags override it.",
+		map[string]any{
+			"extensions": stringArray("File extensions to list, e.g. [.md, .go]. Empty lists the built-in editable documents " +
+				"(.md .mdx .tsx .jsx .json .yaml .yml) and images; other extensions open as plain source."),
+			"includeIgnored": stringArray("Folder-relative doublestar patterns listed even though .gitignore excludes them, " +
+				"e.g. [.tmp, dist/**/*.md]; a bare directory includes everything below it."),
+		},
+	)
+}
+
 func statusSchema() map[string]any {
 	return object(
 		"Settings for `gavel status`.",

@@ -14,8 +14,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/gavel/internal/fileread"
 	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/verify"
 )
 
 var ErrConflict = errors.New("file changed on disk; compare or reload before saving")
@@ -51,17 +53,33 @@ type Store struct {
 	// roots are the directories files may be created in or moved within: each
 	// selected folder, and the folder of each selected file.
 	roots []editRoot
+	// listing is which files the folders list: their extensions, and the
+	// gitignored files listed anyway.
+	listing verify.EditConfig
+	// paths are the selected files and folders, listed again on a Relist.
+	paths []string
 }
 
-func NewStore(paths []string) (*Store, error) {
-	return newStore(paths, false)
+// StoreOptions are the files and folders a Store edits, and which files the
+// folders list.
+type StoreOptions struct {
+	Paths   []string
+	Listing verify.EditConfig
 }
-func newStore(paths []string, allowEmpty bool) (*Store, error) {
-	if len(paths) == 0 {
+
+func NewStore(opts StoreOptions) (*Store, error) {
+	return newStore(opts, false)
+}
+func newStore(opts StoreOptions, allowEmpty bool) (*Store, error) {
+	if len(opts.Paths) == 0 {
 		return nil, fmt.Errorf("provide at least one file or folder")
 	}
-	s := &Store{files: map[string]entry{}}
-	for _, path := range paths {
+	listing, err := opts.Listing.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{files: map[string]entry{}, listing: listing, paths: slices.Clone(opts.Paths)}
+	for _, path := range opts.Paths {
 		display, err := filepath.Abs(path)
 		if err != nil {
 			return nil, err
@@ -79,7 +97,8 @@ func newStore(paths []string, allowEmpty bool) (*Store, error) {
 			return nil, err
 		}
 		if !info.IsDir() {
-			kind, ok := kindOf(canonical)
+			// A file named outright opens whether or not the folders list its extension.
+			kind, ok := kindIn(canonical, append(s.extensions(), builtinExtensions()...))
 			if !ok {
 				return nil, fmt.Errorf("unsupported file: %s", path)
 			}
@@ -92,11 +111,15 @@ func newStore(paths []string, allowEmpty bool) (*Store, error) {
 		if err := s.addRoot(display); err != nil {
 			return nil, err
 		}
-		matches, err := utils.GlobFilesBounded(canonical, supportedGlobs())
+		matches, err := utils.GlobFilesBounded(canonical, s.globs())
 		if err != nil {
 			return nil, err
 		}
-		for _, match := range matches {
+		ignored, err := s.includeIgnored(canonical)
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range append(matches, ignored...) {
 			real, err := filepath.EvalSymlinks(match)
 			if err != nil {
 				return nil, err
@@ -108,7 +131,7 @@ func newStore(paths []string, allowEmpty bool) (*Store, error) {
 			if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				continue
 			}
-			kind, ok := kindOf(rel)
+			kind, ok := s.kindOf(rel)
 			if !ok {
 				return nil, fmt.Errorf("glob matched an unsupported file: %s", match)
 			}
@@ -132,23 +155,68 @@ func (s *Store) add(file entry) string {
 	return id
 }
 
-// kindOf classifies path by extension, and is false for an unsupported file.
-func kindOf(path string) (string, bool) {
+// extensions are the extensions the folders list: the configured ones, or the
+// built-in documents and images.
+func (s *Store) extensions() []string {
+	if len(s.listing.Extensions) > 0 {
+		return s.listing.Extensions
+	}
+	return builtinExtensions()
+}
+
+// builtinExtensions are the editable documents and the images.
+func builtinExtensions() []string {
+	return append(slices.Clone(documentExtensions), fileread.ImageExtensions()...)
+}
+
+// kindOf classifies path by extension, and is false for an extension the
+// folders do not list.
+func (s *Store) kindOf(path string) (string, bool) {
+	return kindIn(path, s.extensions())
+}
+
+// kindIn classifies path among extensions: an image, or else a document.
+func kindIn(path string, extensions []string) (string, bool) {
+	if !slices.Contains(extensions, strings.ToLower(filepath.Ext(path))) {
+		return "", false
+	}
 	if _, ok := fileread.ContentType(path); ok {
 		return KindImage, true
 	}
-	if slices.Contains(documentExtensions, strings.ToLower(filepath.Ext(path))) {
-		return KindDocument, true
-	}
-	return "", false
+	return KindDocument, true
 }
 
-func supportedGlobs() []string {
+func (s *Store) globs() []string {
 	globs := []string{}
-	for _, ext := range append(slices.Clone(documentExtensions), fileread.ImageExtensions()...) {
+	for _, ext := range s.extensions() {
 		globs = append(globs, "**/*"+ext)
 	}
 	return globs
+}
+
+// includeIgnored are the listed files under root that the listing's
+// includeIgnored patterns match, gitignored or not; a pattern naming a
+// directory matches everything below it.
+func (s *Store) includeIgnored(root string) ([]string, error) {
+	files := []string{}
+	for _, pattern := range s.listing.IncludeIgnored {
+		patterns := []string{pattern}
+		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(pattern))); err == nil && info.IsDir() {
+			patterns = []string{pattern + "/**"}
+		}
+		for _, pattern := range patterns {
+			matches, err := doublestar.Glob(os.DirFS(root), pattern, doublestar.WithFilesOnly())
+			if err != nil {
+				return nil, fmt.Errorf("edit.includeIgnored %q: %w", pattern, err)
+			}
+			for _, match := range matches {
+				if _, ok := s.kindOf(match); ok {
+					files = append(files, filepath.Join(root, filepath.FromSlash(match)))
+				}
+			}
+		}
+	}
+	return files, nil
 }
 func (s *Store) Files() []File {
 	s.mu.Lock()

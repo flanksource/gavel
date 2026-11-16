@@ -25,7 +25,7 @@ var _ = Describe("Editor comment persistence", func() {
 		path := filepath.Join(dir, "settings.yaml")
 		source := "header\nselected\nfooter"
 		Expect(os.WriteFile(path, []byte(source), 0600)).To(Succeed())
-		files, err := NewStore([]string{path})
+		files, err := NewStore(StoreOptions{Paths: []string{path}})
 		Expect(err).NotTo(HaveOccurred())
 		doc, err := files.Read(files.Files()[0].ID)
 		Expect(err).NotTo(HaveOccurred())

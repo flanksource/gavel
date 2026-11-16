@@ -427,6 +427,15 @@ checked against the live config structs by
 | `todos.approvals` | `permissions.mode: default` on the step (the dashboard brokers each tool call) |
 | `checks.maxIterations` | `todos.run.workflow.verify.maxIterations` |
 
+## `edit`
+
+Which files [`gavel edit`](/docs/editor) lists beneath the directory. The `--ext` and `--include-ignored` flags override these keys.
+
+| Key | Type | Default | Merge | Description |
+| --- | --- | --- | --- | --- |
+| `edit.extensions` | string[] | `[]` (built-in documents and images) | nearer layer replaces | Extensions to list, e.g. `[.md, .go]`. Extensions with no richer view open as plain source. |
+| `edit.includeIgnored` | string[] | `[]` | nearer layer replaces | Folder-relative doublestar patterns listed even though `.gitignore` excludes them; a bare directory includes everything below it. |
+
 ## `ssh`
 
 SSH post-receive hook / push backend.

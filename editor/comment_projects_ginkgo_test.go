@@ -27,7 +27,7 @@ var _ = Describe("Editor comment projects", func() {
 			Expect(os.MkdirAll(filepath.Dir(path), 0o755)).To(Succeed())
 			Expect(os.WriteFile(path, []byte("name: x\n"), 0o600)).To(Succeed())
 		}
-		store, err := NewStore(paths)
+		store, err := NewStore(StoreOptions{Paths: paths})
 		Expect(err).NotTo(HaveOccurred())
 		idOf := map[string]string{}
 		for _, file := range store.Files() {
