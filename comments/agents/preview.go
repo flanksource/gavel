@@ -34,6 +34,9 @@ var previewAgent = comments.Actor{Kind: "agent", ID: "gavel:preview", Label: "Ga
 
 // Preview renders the run target would start for comment, without claiming or launching.
 func (d delivery) Preview(ctx context.Context, comment comments.Comment, target comments.DeliverTarget) (json.RawMessage, error) {
+	if err := requireEdits(target); err != nil {
+		return nil, err
+	}
 	options, err := decodeRunOptions(target.RunOptions)
 	if err != nil {
 		return nil, err
@@ -42,7 +45,7 @@ func (d delivery) Preview(ctx context.Context, comment comments.Comment, target 
 	if err != nil {
 		return nil, err
 	}
-	invocation, err := d.invocation(sessionRequest{Threads: []comments.Comment{comment}, Dir: dir, Agent: previewAgent, Prompt: target.Prompt, Options: options, Edits: editsOf(target)})
+	invocation, err := d.invocation(sessionRequest{Threads: []comments.Comment{comment}, Dir: dir, Agent: previewAgent, Prompt: target.Prompt, Options: options, Edits: target.Edits})
 	if err != nil {
 		return nil, err
 	}

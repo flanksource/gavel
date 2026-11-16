@@ -50,6 +50,45 @@ var _ = Describe("comment agents config", func() {
 		Expect(configured.Set("../x.md", &CommentAgent{})).To(MatchError(ContainSubstring(`"../x.md" must be a relative file path`)))
 	})
 
+	Describe("patching an entry with a JSON merge patch", func() {
+		const page = "16-security.mdx"
+		entry := CommentAgent{Enabled: ptr(true), Prompt: "slides-review", Instructions: "Keep the tables", Variables: map[string]any{"tone": "terse", "length": "short"}}
+		patched := func(patch string) (CommentAgentsConfig, error) {
+			configured := CommentAgentsConfig{Default: &CommentAgent{Enabled: ptr(false)}, Pages: map[string]CommentAgent{page: entry}}
+			edit, err := PatchCommentAgent([]byte(patch))
+			if err != nil {
+				return configured, err
+			}
+			return configured, configured.Edit(page, edit)
+		}
+		It("replaces present fields, removes null ones so they inherit, and merges nested objects", func() {
+			configured, err := patched(`{"edits":"propose","instructions":null,"variables":{"length":null,"audience":"ops"}}`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(configured.Pages[page]).To(Equal(CommentAgent{Enabled: ptr(true), Prompt: "slides-review", Edits: CommentEditsPropose, Variables: map[string]any{"tone": "terse", "audience": "ops"}}))
+			Expect(configured.Default).To(Equal(&CommentAgent{Enabled: ptr(false)}), "only the named entry changes")
+		})
+		It("deletes the entry for a null patch and creates one a patch names for the first time", func() {
+			removed, err := patched(`null`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(removed.Pages).To(BeNil())
+			var fresh CommentAgentsConfig
+			edit, err := PatchCommentAgent([]byte(`{"assign":true}`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fresh.Edit("", edit)).To(Succeed())
+			Expect(fresh.Default).To(Equal(&CommentAgent{Assign: ptr(true)}))
+		})
+		DescribeTable("rejects a patch before editing anything",
+			func(patch string) {
+				_, err := PatchCommentAgent([]byte(patch))
+				Expect(err).To(HaveOccurred())
+			},
+			Entry("an unknown field", `{"model":"opus"}`),
+			Entry("a field of the wrong type", `{"enabled":"yes"}`),
+			Entry("an edits policy outside the enum", `{"edits":"rewrite"}`),
+			Entry("a patch that is not an object", `["enabled"]`),
+		)
+	})
+
 	Describe("resolving a file's agent across layers", func() {
 		project := CommentAgentLayer{Label: "/repo/.gavel.yaml", Dir: ".", Agents: CommentAgentsConfig{Default: &CommentAgent{Enabled: ptr(true), Prompt: "editor-comments", Presets: []string{"fast"}}}}
 		slides := CommentAgentLayer{Label: "db:path:slides", Dir: "slides", Agents: CommentAgentsConfig{

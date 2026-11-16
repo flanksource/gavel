@@ -71,6 +71,8 @@ export type FileSettings = {
   merged: Record<string, unknown>;
   provenance: Record<string, string>;
   agent: ResolvedCommentAgent;
+  /** The agent session `gavel edit` was started from: new comments go to it, ahead of `agent`. */
+  session?: string;
 };
 
 /** The body of PUT /api/file/{id}/settings/agent: `agent` null removes the entry. */
@@ -269,16 +271,22 @@ export type ViewerChoice = { kind: "run" } | { kind: "session"; sessionId: strin
 
 const VIEWER_CHOICE = "gavel-edit:page-agent:";
 
-export function loadViewerChoice(target: string): ViewerChoice {
+/**
+ * The viewer's stored choice for target, else the session `gavel edit` was
+ * started from (`launching`), else a run of the configured agent.
+ */
+export function loadViewerChoice(target: string, launching?: string): ViewerChoice {
+  const fallback: ViewerChoice = launching ? { kind: "session", sessionId: launching } : { kind: "run" };
   try {
     const stored = window.localStorage.getItem(VIEWER_CHOICE + target);
     const parsed: unknown = stored ? JSON.parse(stored) : null;
     if (parsed && typeof parsed === "object" && (parsed as ViewerChoice).kind === "session" && typeof (parsed as { sessionId?: unknown }).sessionId === "string")
       return parsed as ViewerChoice;
-    return { kind: "run" };
+    if (parsed && typeof parsed === "object" && (parsed as ViewerChoice).kind === "run") return { kind: "run" };
+    return fallback;
   } catch {
-    // A per-viewer convenience only: unreadable storage hands off to the configured run.
-    return { kind: "run" };
+    // A per-viewer convenience only: unreadable storage hands off to the default.
+    return fallback;
   }
 }
 
@@ -299,7 +307,7 @@ export function usePageAgent(fileId: string | null, onError: (message: string) =
     try {
       const next = await request<FileSettings>(`/api/file/${fileId}/settings`);
       setAgent(next);
-      setChoice(loadViewerChoice(next.target));
+      setChoice(loadViewerChoice(next.target, next.session));
     } catch (cause) {
       onError(String(cause));
     }

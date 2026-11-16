@@ -37,7 +37,7 @@ var _ = Describe("generated HTTP comments", func() {
 		a := access{tenant: "tenant-http"}
 		svc, err := comments.New(comments.Options{Store: store, Access: a, Targets: a, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 1024})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(api.Register(func(context.Context) (*comments.Service, error) { return svc, nil })).To(Succeed())
+		commentsAPI(svc)
 		root := &cobra.Command{Use: "example"}
 		framework.GenerateCLI(root)
 		server := rpc.NewSwaggerServer(&rpc.ServeConfig{Executor: &rpc.ExecutorConfig{Enabled: true, PathPrefix: "/api/v1"}}, root, nil)
@@ -72,11 +72,31 @@ var _ = Describe("generated HTTP comments", func() {
 		Expect(document.Paths).To(HaveKey("/api/v1/comments/{id}/attachments"))
 		Expect(document.Paths).To(HaveKey("/api/v1/comments/{id}/deliver"))
 		Expect(document.Paths).To(HaveKey("/api/v1/comments/agent-sessions"))
+		Expect(document.Paths).To(HaveKey("/api/v1/comments/mentionables"))
 		Expect(document.Paths).To(HaveKey("/api/v1/comments/agent"))
 		Expect(document.Paths).To(HaveKey("/api/v1/comments/deliver"))
 		Expect(string(document.Paths["/api/v1/comments/agent-sessions"])).To(And(ContainSubstring(`"managed"`), ContainSubstring(`"resumable"`)))
 		Expect(document.Paths).NotTo(HaveKey("/api/v1/comments/routes"))
 		Expect(string(document.Paths["/api/v1/comments"])).To(ContainSubstring(`"type":"object"`))
+		var commentsPath struct {
+			Post struct {
+				RequestBody struct {
+					Content map[string]struct {
+						Schema struct {
+							Properties map[string]struct {
+								Items struct {
+									Required []string `json:"required"`
+								} `json:"items"`
+							} `json:"properties"`
+						} `json:"schema"`
+					} `json:"content"`
+				} `json:"requestBody"`
+			} `json:"post"`
+		}
+		Expect(json.Unmarshal(document.Paths["/api/v1/comments"], &commentsPath)).To(Succeed())
+		Expect(commentsPath.Post.RequestBody.Content["application/json"].Schema.Properties["attachments"].Items.Required).To(Equal([]string{"filename", "contentType", "data"}))
+		Expect(string(document.Paths["/api/v1/comments"])).To(ContainSubstring(`"enum":["matched","ambiguous","outdated"]`))
+		Expect(document.Paths).To(HaveKey("/api/v1/comments/read"))
 		w = request(http.MethodGet, "/api/v1/comments?scope="+url.QueryEscape("git://repo")+"&limit=20&unread=true", nil)
 		Expect(w.Code).To(Equal(200), w.Body.String())
 		Expect(w.Header().Get("X-Total-Count")).To(Equal("1"))
@@ -147,35 +167,61 @@ var _ = Describe("comment agent settings over HTTP", func() {
 			handler.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewReader(data)))
 			return w
 		}
-		save := func(handler http.Handler, agent *verify.CommentAgent) *httptest.ResponseRecorder {
-			return call(handler, http.MethodPut, map[string]any{"target": comments.Target{ScopeURI: scope, URI: page}, "layer": settings.Ref{Kind: settings.KindProject}, "page": true, "agent": agent})
+		save := func(handler http.Handler, patch any) *httptest.ResponseRecorder {
+			return call(handler, http.MethodPut, map[string]any{"target": comments.Target{ScopeURI: scope, URI: page}, "layer": settings.Ref{Kind: settings.KindProject}, "page": true, "agent": patch})
+		}
+		type agentSettings struct {
+			Settings settings.Resolved           `json:"settings"`
+			Agent    verify.ResolvedCommentAgent `json:"agent"`
+			Session  string                      `json:"session"`
+		}
+		settingsOf := func(w *httptest.ResponseRecorder) agentSettings {
+			GinkgoHelper()
+			Expect(w.Code).To(Equal(200), w.Body.String())
+			var out agentSettings
+			Expect(json.Unmarshal(w.Body.Bytes(), &out)).To(Succeed())
+			Expect(out.Settings.Positions).NotTo(BeEmpty())
+			return out
 		}
 		agentOf := func(w *httptest.ResponseRecorder) verify.ResolvedCommentAgent {
 			GinkgoHelper()
-			Expect(w.Code).To(Equal(200), w.Body.String())
-			var out struct {
-				Settings settings.Resolved           `json:"settings"`
-				Agent    verify.ResolvedCommentAgent `json:"agent"`
-			}
-			Expect(json.Unmarshal(w.Body.Bytes(), &out)).To(Succeed())
-			Expect(out.Settings.Positions).NotTo(BeEmpty())
-			return out.Agent
+			return settingsOf(w).Agent
 		}
 		enabled := true
 		source := verify.CommentAgentSource{Layer: "db:project:", Page: "pages/home"}
 		Expect(agentOf(save(person, &verify.CommentAgent{Enabled: &enabled, Group: "site-review"}))).To(Equal(verify.ResolvedCommentAgent{
 			Agent: verify.CommentAgent{Enabled: &enabled, Group: "site-review"}, Provenance: map[string]verify.CommentAgentSource{"enabled": source, "group": source}, Found: true,
 		}))
-		Expect(agentOf(call(person, http.MethodGet, page)).Agent.Group).To(Equal("site-review"))
+		Expect(agentOf(save(person, map[string]any{"group": nil, "edits": "propose"})).Agent).To(Equal(verify.CommentAgent{Enabled: &enabled, Edits: verify.CommentEditsPropose}), "a merge patch keeps absent fields and removes null ones")
+		Expect(save(person, map[string]any{"edits": "rewrite"}).Code).To(Equal(http.StatusBadRequest))
+
+		var mentionables []comments.Mentionable
+		w := httptest.NewRecorder()
+		person.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/comments/mentionables?scope="+url.QueryEscape(scope)+"&target="+url.QueryEscape(page), nil))
+		Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+		Expect(json.Unmarshal(w.Body.Bytes(), &mentionables)).To(Succeed())
+		Expect(mentionables).To(ContainElements(comments.Mentionable{ID: comments.MentionAgent, Name: "agent", Kind: "agent"}, comments.Mentionable{ID: "runtime:claude", Name: "claude", Kind: "agent"}))
+		Expect(settingsOf(call(person, http.MethodGet, page)).Session).To(Equal(""))
 		Expect(agentOf(save(person, nil)).Found).To(BeFalse())
 
+		live := routes
+		live.Session = "live-9"
+		Expect(settingsOf(call(host(access{tenant: "tenant-agent"}, live), http.MethodGet, page)).Session).To(Equal("live-9"), "GET reports the --session that takes new threads")
+
 		agent := host(actorAccess{access: access{tenant: "tenant-agent"}, actor: comments.Actor{Kind: "agent", ID: "claude:live-1"}}, routes)
+		undelivered, err := comments.New(comments.Options{Store: store, Access: access{tenant: "tenant-agent"}, Targets: access{tenant: "tenant-agent"}, Workflows: []comments.Workflow{comments.HumanReview()}})
+		Expect(err).NotTo(HaveOccurred())
+		noDelivery := route.NewRouter(nil)
+		api.RegisterDeliveryRoutes(noDelivery, func(context.Context) (*comments.Service, error) { return undelivered, nil })
+		w = httptest.NewRecorder()
+		noDelivery.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/comments/mentionables?scope="+url.QueryEscape(scope)+"&target="+url.QueryEscape(page), nil))
 		Expect([]int{
 			save(agent, &verify.CommentAgent{Enabled: &enabled}).Code,
 			call(agent, http.MethodGet, page).Code,
 			call(person, http.MethodGet, "https://elsewhere.test/home").Code,
 			call(host(access{tenant: "tenant-agent"}, nil), http.MethodGet, page).Code,
-		}).To(Equal([]int{http.StatusForbidden, http.StatusOK, http.StatusBadRequest, http.StatusNotImplemented}))
+			w.Code,
+		}).To(Equal([]int{http.StatusForbidden, http.StatusOK, http.StatusBadRequest, http.StatusNotImplemented, http.StatusNotImplemented}))
 	})
 })
 
@@ -247,5 +293,13 @@ var _ = Describe("agent delivery over HTTP", func() {
 			{ID: "live-1", Source: "claude", Title: "review-pass", Model: "claude-opus", CWD: dir},
 			{ID: "managed-1", Title: "Log the retry", CWD: dir, Status: "ended", Managed: true, Resumable: true},
 		}))
+		var mentionables []comments.Mentionable
+		Expect(call(http.MethodGet, "/api/v1/comments/mentionables?scope="+url.QueryEscape(scope)+"&target="+url.QueryEscape(scope+"/widget.go"), nil, &mentionables)).To(Equal(http.StatusOK))
+		Expect(mentionables).To(ContainElements(
+			comments.Mentionable{ID: "runtime:claude", Name: "claude", Kind: "agent"},
+			comments.Mentionable{ID: "session:live-1", Name: "review-pass", Kind: "agent"},
+			comments.Mentionable{ID: "session:managed-1", Name: "managed-1", Kind: "agent"},
+		))
+		Expect(mentionables).NotTo(ContainElement(HaveField("ID", comments.MentionAgent)), "a host without comment agent rules has no @agent")
 	})
 })

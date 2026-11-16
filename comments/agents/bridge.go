@@ -45,6 +45,19 @@ func (Captain) Live(ctx context.Context) ([]captaincli.SessionRecord, error) {
 	return result.Sessions, err
 }
 
+// Current is the live session this process runs inside, as captain detects
+// it; nil outside an agent. The database opens only inside one, so a process
+// that is not an agent's child needs none.
+func (Captain) Current(ctx context.Context) (*captaincli.SessionRecord, error) {
+	if captaincli.CurrentEnvironmentSession() == nil {
+		return nil, nil
+	}
+	if err := OpenCaptain(ctx); err != nil {
+		return nil, err
+	}
+	return captaincli.CurrentLiveSession(ctx)
+}
+
 func (Captain) Deliver(ctx context.Context, sessionID, text string) (deliver.Result, error) {
 	if err := OpenCaptain(ctx); err != nil {
 		return deliver.Result{}, err

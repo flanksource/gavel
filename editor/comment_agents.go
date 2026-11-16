@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -34,6 +35,8 @@ type fileSettings struct {
 	Target string `json:"target"`
 	settings.Resolved
 	Agent verify.ResolvedCommentAgent `json:"agent"`
+	// Session is the launching agent session new comments go to, ahead of Agent.
+	Session string `json:"session,omitempty"`
 }
 
 // fileTargetOf is the comment target of the edited file id.
@@ -62,7 +65,7 @@ func (s *Server) fileSettings(ctx context.Context, id string) (fileSettings, err
 	if err != nil {
 		return fileSettings{}, err
 	}
-	return fileSettings{Scope: target.ScopeURI, Target: target.URI, Resolved: out.Settings, Agent: out.Agent}, nil
+	return fileSettings{Scope: target.ScopeURI, Target: target.URI, Resolved: out.Settings, Agent: out.Agent, Session: s.Session}, nil
 }
 
 func (s *Server) fileSettingsOf(w http.ResponseWriter, r *http.Request) {
@@ -70,9 +73,12 @@ func (s *Server) fileSettingsOf(w http.ResponseWriter, r *http.Request) {
 	respond(w, out, err)
 }
 
-// saveFileAgent is PUT /api/file/{id}/settings/agent: it makes agent the
-// comment agent at layer (its default, or with page its entry for the file),
-// or removes that entry when agent is null, and answers the file's settings.
+// saveFileAgent is PUT /api/file/{id}/settings/agent: it makes agent the whole
+// comment agent entry at layer (its default, or with page its entry for the
+// file), or removes that entry when agent is null, and answers the file's
+// settings. Unlike PUT /api/v1/comments/agent, which merges a patch, this
+// route replaces the entry (the editor sends the entry it rebuilt); both save
+// through the same locked settings edit.
 func (s *Server) saveFileAgent(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Layer json.RawMessage `json:"layer"`
@@ -101,10 +107,22 @@ func (s *Server) saveFileAgent(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, err)
 		return
 	}
-	if _, err := routes.SaveCommentAgent(r.Context(), comments.SaveCommentAgentRequest{Target: target, Layer: input.Layer, Page: input.Page, Agent: input.Agent}); err != nil {
+	var agent *verify.CommentAgent
+	if err := strictJSON(input.Agent, &agent); err != nil {
+		http.Error(w, "comment agent: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := routes.SaveAgent(r.Context(), target, input.Layer, input.Page, verify.ReplaceCommentAgent(agent)); err != nil {
 		respond(w, nil, err)
 		return
 	}
 	out, err := s.fileSettings(r.Context(), r.PathValue("id"))
 	respond(w, out, err)
+}
+
+// strictJSON decodes data into out, refusing unknown fields.
+func strictJSON(data json.RawMessage, out any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(out)
 }

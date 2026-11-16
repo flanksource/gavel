@@ -87,7 +87,7 @@ func (s *Store) editedFile(ctx context.Context, scope, uri string) (Document, er
 	}
 	for id, canonical := range s.Paths() {
 		if canonical == path {
-			return s.Read(id)
+			return s.commentable(id)
 		}
 	}
 	return Document{}, fmt.Errorf("%w: %s is not one of the edited files", errInvalidTarget, path)

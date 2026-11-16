@@ -64,6 +64,20 @@ A delivery never gets in the way of the comment's author: attaching a screenshot
 
 A comment can also name where it goes when it is created: `deliver` on the create request is a delivery target (see [HTTP API](#http-api)) that replaces the comment agent for that comment, including its `assign`. The thread is delivered there once, in the background, even on a file no comment agent covers, and an invalid target fails the create before anything is stored. In the Gavel extension, the composer's target chip previews the page's comment agent while no target is chosen: **Auto: &lt;agent&gt;** when new comments are delivered to it, **Not delivered** when they are only posted. Pick `@session`, `@claude` or `@codex`, or type one in the comment, to send it elsewhere.
 
+### Mentions
+
+Without `deliver`, a person's comment or reply that mentions one agent is delivered to it, in the background, from every surface: the HTTP API, `gavel comments create --bodyMarkdown '@claude …'` and `gavel comments reply <id> --bodyMarkdown '@rename-pass …'` alike. The agents a comment can mention are listed by `GET /api/v1/comments/mentionables?scope=&target=`:
+
+| Mention | Delivers to |
+| --- | --- |
+| `@agent` | The target's comment agent, whether or not it runs automatically, including its `assign`: an assigning agent becomes the thread's assignee before the delivery starts |
+| `@<runtime family>` (`@claude`, `@codex`, …) | A fresh run of the family's default agent model, with the comment agent's prompt, presets, instructions, `edits` and `spec` (only the spec's model is replaced; the default prompt when no agent is configured) |
+| `@<session slug>` | That live session, or an ended managed session of the scope, resumed. A session is named by its Captain slug; a managed session without one by its label (the thread it started for) as a slug, e.g. `@write-the-changelog`; any other by its id |
+
+A mention is a whole `@name` token, matched case-insensitively: `@claudes` and `bob@claude.example` are not mentions, and a token that matches no agent is prose. A token in inline code (`` `@claude` ``), a fenced code block or a `>` blockquote is quoted text, not a mention. Mentioning two different agents fails the comment with 400 before it is stored, an explicit `deliver` wins over any mention, and an agent's own mentions are prose, so agents never hand threads to each other by quoting.
+
+`@agent` and the runtime families are matched first and need no lookup; the scope's sessions are listed (from Captain) only when a token is still unmatched, so a comment mentioning `@claude` never waits on the session list. A scope without a local working directory, such as a web project with no folder on disk, has no session mentions: a `@<slug>` there is prose. `agent` and the runtime family names are reserved: a session whose slug collides with one is not listed, and two sessions sharing one slug are listed as `<slug>-<first 8 characters of the id>` rather than by the ambiguous name. A reply's mention inside `POST /api/v1/comments/batch` is delivered only after the batch commits; a batch that rolls back delivers nothing.
+
 ```sh
 gavel comments agents set slides/16-security.mdx --layer slides --file .gavel.agents.yaml --page --prompt editor-comments --enabled
 gavel comments agents set slides/16-security.mdx --layer project --file .gavel.yaml --enabled=false
@@ -71,7 +85,7 @@ gavel comments agents get slides/16-security.mdx
 gavel comments agents delete slides/16-security.mdx --layer slides --file .gavel.agents.yaml --page
 ```
 
-`--layer` is `user`, `project`, a folder relative to the project, or an absolute directory above it. `--file` names the config file to write (created when absent), or `--db` writes the database layer. `--page` edits the layer's entry for the file instead of its default. `get` prints every layer and the agent that applies, each field traced to the layer that set it. For a web project, pass `--scope <scope-uri>` and the page key instead of a file path.
+`--layer` is `user`, `project`, a folder relative to the project, or an absolute directory above it. `--file` names the config file to write (created when absent), or `--db` writes the database layer. `--page` edits the layer's entry for the file instead of its default. `set` replaces the whole entry with the fields its flags give, so a field no flag sets is removed and inherits again; `PUT /api/v1/comments/agent` patches an entry instead. `get` prints every layer and the agent that applies, each field traced to the layer that set it. For a web project, pass `--scope <scope-uri>` and the page key instead of a file path.
 
 ## Proposals
 
@@ -113,7 +127,7 @@ comments:
 
 `direct`, the default, lets the agent edit the project's files, reply and resolve the thread. `propose` tells the agent not to create or modify any file, not even scratch copies: it reads the files and replies with `--edits` (a managed session uses its `propose_change` tool, which takes the same `edits`), gavel builds the commit, and the agent is not offered a resolve command or tool, because a person accepts the proposal. While a thread's delivery is `propose`, an agent's resolve is refused until a proposal is accepted. The delivery records the policy as `edits` in the thread's `agentRun`.
 
-Set it with `gavel comments agents set <path> ... --edits propose`, or for one delivery with `gavel comments deliver <id> --edits propose`. A managed run in propose mode cannot edit files: gavel denies its `Edit`, `Write`, `MultiEdit` and `NotebookEdit` tools over whatever the prompt allows (its shell stays available, under the same instruction). A live session is only instructed not to edit files: nothing stops it from doing so.
+Set it with `gavel comments agents set <path> ... --edits propose`, or for one delivery with `gavel comments deliver <id> --edits propose`. Every delivery that names no `edits` inherits the comment agent's, whether the agent runs automatically or not: a send to a live session, a batch, a mention, a retry and a preview alike (a batch whose threads' agents set different `edits` fails with 400 unless its target names one); without an agent, or one that sets no `edits`, it is `direct`. A managed run in propose mode cannot edit files: gavel denies its `Edit`, `Write`, `MultiEdit` and `NotebookEdit` tools over whatever the prompt allows (its shell stays available, under the same instruction). A live session is only instructed not to edit files: nothing stops it from doing so.
 
 ## HTTP API
 
@@ -121,15 +135,38 @@ Every host that serves `/api/v1/comments` also serves:
 
 | Route | Body | Answer |
 | --- | --- | --- |
+| `GET /api/v1/comments?scope=[&target=][&after=]` | | Threads, each with `readVersion`, `unread` and, for a thread whose selector carries a patch, `anchor` (below) |
+| `POST /api/v1/comments` | `{target, bodyMarkdown, workflowId, requestId, content?, links?, deliver?, attachments?}` | The new thread; `attachments` (below) are stored with it before it is delivered |
+| `POST /api/v1/comments/read` | `{target: {scopeUri, uri}}` | Marks every thread on the target read for the caller at its current version: `{marked}`, the number not already read |
 | `GET /api/v1/comments/agent-sessions[?scope=][&all=1]` | | Live sessions: `{id, source, title, model, cwd, status, inCmux}` |
+| `GET /api/v1/comments/mentionables?scope=&target=` | | The agents a comment on `target` can mention: `[{id, name, kind: "agent"}]`, with ids `agent`, `runtime:<family>` and `session:<id>`; 501 on a host without agent delivery |
 | `POST /api/v1/comments/{id}/deliver` | `{expectedVersion, requestId, target}` | The updated comment; 409 on a stale version, 502 when delivery failed |
 | `POST /api/v1/comments/{id}/deliver/preview` | `{target}` | The resolved run and its tools, without starting it |
-| `GET /api/v1/comments/agent?scope=&uri=` | | The target's comment agent: `{settings, agent}` |
-| `PUT /api/v1/comments/agent` | `{target: {scopeUri, uri}, layer, page, agent}` | Saves the agent at a layer (a null `agent` removes the entry) and answers `{settings, agent}`; only a person can save one |
+| `GET /api/v1/comments/agent?scope=&uri=` | | The target's comment agent: `{settings, agent, session?}`; `session` is the live session `gavel edit --session` routes every new human thread to, ahead of the agent |
+| `PUT /api/v1/comments/agent` | `{target: {scopeUri, uri}, layer, page, agent}` | Patches the agent entry at a layer and answers `{settings, agent, session?}`; only a person can save one |
 | `GET /api/v1/comments/{id}/proposals/{replyId}/diff` | | The reply's proposed patch: `{diff, commit, truncated?, binary?}` |
 
-A target is `{kind: "session", sessionId}` or `{kind: "run", prompt, runOptions?, groupKey?, fresh?}`, either with `edits?` (`direct` or `propose`); `fresh` on a session target answers 400. Over HTTP an action's `patch` is the diff text itself, and its `edits` the same JSON array `--edits` takes. Retrying a hand-off is another `deliver` with the thread's latest version and a new `requestId`. With `scope`, the session listing shows only sessions working in that scope's project directory; `all=1` lists every live session.
+A target is `{kind: "session", sessionId}` or `{kind: "run", prompt, runOptions?, groupKey?, fresh?}`, either with `edits?` (`direct` or `propose`, inherited from the target's comment agent when omitted); `fresh` on a session target answers 400. Over HTTP an action's `patch` is the diff text itself, and its `edits` the same JSON array `--edits` takes. Retrying a hand-off is another `deliver` with the thread's latest version and a new `requestId`. With `scope`, the session listing shows only sessions working in that scope's project directory; `all=1` lists every live session.
+
+`agent` on `PUT /api/v1/comments/agent` is a JSON merge patch (RFC 7386) of the entry the layer already holds for the page (or of its default with `page: false`), applied under the layer's save lock: a field that is present replaces that field (objects such as `variables` and `spec` merge), a field set to `null` is removed so it inherits again, and `agent: null` deletes the whole entry. `{"edits": "propose"}` changes only the policy; `{"instructions": null}` clears only the instructions. A patch naming an unknown field, a wrong type or an invalid `edits` answers 400 before anything is saved.
+
+A listed thread's `anchor` is `{state, startLine?, endLine?}`: where its patch anchor lies in the target as it is now, resolved the same way `gavel edit` resolves it. `matched` carries the lines it now covers (moved when they differ from the patch's), `ambiguous` means the hunk now occurs more than once, and `outdated` means it no longer occurs. Only the host reads a target's content, once per target per request: a thread on a target kind it keeps no file content for (a web page) has no `anchor`, a file deleted since resolves `outdated`, and a target the host cannot read fails the list. `after=<id>` pages by thread id instead of `offset`, so a thread deleted between pages skips none after it.
+
+A create's `attachments` are `[{filename, contentType, data}]`, at most 10, with `data` base64. They are stored on the new thread in the create's transaction, before it is routed, delivered or mentioned, so the agent sees them with the thread and no upload races the delivery's version bump. Each is checked first (a plain file name, a valid media type, 1 byte up to the host's attachment limit); an invalid one answers 400 before anything is written.
 
 In the comment agent answer, `settings` is the target's layers and the positions of its chain (what can be saved where), and `agent` is the resolved agent, `{agent, provenance, found}`, with each field traced to the layer that set it. `layer` is `{kind: "user"|"parent"|"project"|"path", path?, file?}`; without `file` it saves the database layer. A host without settings-based comment agents answers 501, and a target its settings do not cover answers 400. On a project scope, both its files (`<scope>/files/<path>`) and its dashboard pages (`<scope>/pages/<page key>`) have comment agents; a page's agents live in the project's database layers (a page entry keyed `pages/<page key>` at the project layer), not in its `.gavel.yaml` files.
 
-`gavel edit` also serves a file's comment agent settings: `GET /api/file/{id}/settings` answers its layers and the resolved agent with each field's layer, and `PUT /api/file/{id}/settings/agent` with `{layer, page, agent}` saves an agent at a layer (a null `agent` removes the entry) and answers the updated settings. Only a person can save one.
+`gavel edit` also serves a file's comment agent settings: `GET /api/file/{id}/settings` answers its layers and the resolved agent with each field's layer, and `PUT /api/file/{id}/settings/agent` with `{layer, page, agent}` replaces the agent entry at a layer with `agent` (a null `agent` removes the entry) and answers the updated settings. Only a person can save one. Unlike `PUT /api/v1/comments/agent` it replaces rather than patches, because the editor sends the whole entry it rebuilt; both save through the same locked settings edit.
+
+### Selectors in `gavel edit`
+
+A file thread's `target.selector` is `{kind, version: 1, view, anchor?, patch?, quote?, region?, locators?, html?}`:
+
+| Kind | On | Carries |
+| --- | --- | --- |
+| `document` | Any file | Nothing more: the whole file |
+| `code-range` | Text files | `patch`, the exact capture of its source lines, from the `source`, `preview` or `rich` view; optionally `quote` |
+| `dom` | Text files | `anchor` (the element), optionally `patch` and `quote` |
+| `region` | Images | `region: {x, y, w, h}`, fractions of the image's width and height |
+
+A `quote` is `{prefix?, exact, suffix?}`: source text as the file holds it (Markdown, not the rendered prose), with a non-empty `exact`. With a `patch`, `exact` must lie inside the patch's selected lines (CRLF compares as LF); a `dom` quote without a patch marks web text on a page without source. A `region` must be a non-empty box inside `[0,1]`: the server checks it strictly, so a client clamps a drag to the image before saving.

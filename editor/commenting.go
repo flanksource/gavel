@@ -26,6 +26,75 @@ type CommentSelector struct {
 	Patch    *comments.PatchAnchor `json:"patch,omitempty"`
 	Locators json.RawMessage       `json:"locators,omitempty"`
 	HTML     string                `json:"html,omitempty"`
+	// Quote is the exact selected text, inside Patch's lines when both are set.
+	// It is source text, as the file holds it (Markdown, not the rendered
+	// prose), and its exact text is never empty.
+	Quote *comments.TextQuote `json:"quote,omitempty"`
+	// Region is the box a region selector marks on an image.
+	Region *comments.Region `json:"region,omitempty"`
+}
+
+var commentViews = []string{"preview", "source", "rich", "form"}
+
+// selectorKinds are the selector kinds each file kind takes: an image has no
+// text to anchor, only itself or a box on it.
+var selectorKinds = map[string][]string{KindDocument: {"document", "dom", "code-range"}, KindImage: {"document", "region"}}
+
+// validate checks the selector against the file it is on, as of doc.
+func (s CommentSelector) validate(doc Document) error {
+	switch {
+	case s.Version != 1 || !slices.Contains(commentViews, s.View) || len(s.HTML) > 8192:
+		return fmt.Errorf("%w: selector version, view %q or html size", comments.ErrInvalid, s.View)
+	case !slices.Contains(selectorKinds[doc.Kind], s.Kind):
+		return fmt.Errorf("%w: a %s selector cannot anchor on a %s file", comments.ErrInvalid, s.Kind, doc.Kind)
+	case (s.Region != nil) != (s.Kind == "region"):
+		return fmt.Errorf("%w: a region selector, and only one, carries a region", comments.ErrInvalid)
+	case s.Quote != nil && s.Kind != "dom" && s.Kind != "code-range":
+		return fmt.Errorf("%w: a %s selector cannot carry a quote", comments.ErrInvalid, s.Kind)
+	case s.Quote != nil && s.Patch != nil:
+		if err := s.Quote.Within(*s.Patch); err != nil {
+			return err
+		}
+	case s.Quote != nil:
+		if err := s.Quote.Validate(); err != nil {
+			return err
+		}
+	}
+	switch s.Kind {
+	case "dom":
+		if s.Anchor == "" {
+			return fmt.Errorf("%w: dom selector needs an anchor", comments.ErrInvalid)
+		}
+	case "region":
+		return s.Region.Validate()
+	case "code-range":
+		return s.validatePatch(doc.Source)
+	}
+	return nil
+}
+
+// validatePatch requires the code range's patch to be exactly the capture of
+// its lines from source, from a view that shows source lines.
+func (s CommentSelector) validatePatch(source string) error {
+	if s.Patch == nil || s.View == "form" {
+		return fmt.Errorf("%w: code-range needs source lines from the source, preview or rich view", comments.ErrInvalid)
+	}
+	capture, err := comments.CapturePatch(source, s.Patch.StartLine, s.Patch.EndLine)
+	if err != nil {
+		return err
+	}
+	expected, err := json.Marshal(capture)
+	if err != nil {
+		return err
+	}
+	actual, err := json.Marshal(s.Patch)
+	if err != nil {
+		return err
+	}
+	if string(expected) != string(actual) {
+		return comments.ErrConflict
+	}
+	return nil
 }
 
 // commentHost is pr/ui's project comment host (local tenant, asserted or OS
@@ -52,35 +121,13 @@ func (h commentHost) Resolve(ctx context.Context, p comments.Principal, t commen
 	}
 	var selector CommentSelector
 	if err := json.Unmarshal(t.Selector, &selector); err != nil {
-		return t, comments.ErrInvalid
-	}
-	if selector.Version != 1 || !slices.Contains([]string{"preview", "source", "rich", "form"}, selector.View) || len(selector.HTML) > 8192 {
-		return t, comments.ErrInvalid
-	}
-	switch selector.Kind {
-	case "document":
-	case "dom":
-		if selector.Anchor == "" {
-			return t, comments.ErrInvalid
-		}
-	case "code-range":
-		if selector.Patch == nil || (selector.View != "source" && selector.View != "preview") {
-			return t, comments.ErrInvalid
-		}
-		capture, err := comments.CapturePatch(doc.Source, selector.Patch.StartLine, selector.Patch.EndLine)
-		if err != nil {
-			return t, err
-		}
-		expected, _ := json.Marshal(capture)
-		actual, _ := json.Marshal(selector.Patch)
-		if string(expected) != string(actual) {
-			return t, comments.ErrConflict
-		}
-	default:
-		return t, comments.ErrInvalid
+		return t, fmt.Errorf("%w: selector: %v", comments.ErrInvalid, err)
 	}
 	if t.Kind != selector.Kind {
-		return t, comments.ErrInvalid
+		return t, fmt.Errorf("%w: target kind %q differs from selector kind %q", comments.ErrInvalid, t.Kind, selector.Kind)
+	}
+	if err := selector.validate(doc); err != nil {
+		return t, err
 	}
 	t.Label = filepath.Base(doc.Path)
 	return t, nil
@@ -116,7 +163,9 @@ func (s *Server) OpenComments(ctx context.Context) (*comments.Service, error) {
 	locate := func(ctx context.Context, path string) (comments.Location, error) {
 		return ui.LocateCommentPath(ctx, catalog, path)
 	}
-	return comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 10 << 20, Routes: agents.ProjectRoutes(catalog, configured), Delivery: delivery, Proposals: ui.CommentProposals{}, Locate: locate})
+	routes := agents.ProjectRoutes(catalog, configured)
+	routes.Session = s.Session
+	return comments.New(comments.Options{Store: store, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: store, AttachmentLimit: 10 << 20, Routes: routes, Delivery: delivery, Proposals: ui.CommentProposals{}, Locate: locate})
 }
 
 // me serves GET /api/me: the actor this editor authors comments as.
@@ -127,29 +176,11 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 
 // fileComments pages every comment on a file, with the caller's read version of each.
 func fileComments(ctx context.Context, service *comments.Service, target fileTarget) ([]comments.Comment, map[string]int64, error) {
-	rows := []comments.Comment{}
-	reads := map[string]int64{}
-	for offset := 0; ; {
-		page, err := service.Page(ctx, comments.Filter{ScopeURI: target.Scope, TargetURI: target.URI, Limit: 200, Offset: offset})
-		if err != nil {
-			return nil, nil, err
-		}
-		rows = append(rows, page.Items...)
-		for _, read := range page.Read {
-			reads[read.CommentID] = read.Version
-		}
-		offset += len(page.Items)
-		if int64(offset) >= page.Total {
-			return rows, reads, nil
-		}
-		if len(page.Items) == 0 {
-			return nil, nil, fmt.Errorf("comments pagination stopped before total for %s", target.URI)
-		}
-	}
+	return service.TargetThreads(ctx, comments.ReadTarget{ScopeURI: target.Scope, URI: target.URI})
 }
 
 func (s *Server) listComments(w http.ResponseWriter, r *http.Request) {
-	doc, err := s.Store.Read(r.PathValue("id"))
+	doc, err := s.Store.commentable(r.PathValue("id"))
 	if err != nil {
 		respond(w, nil, err)
 		return
@@ -169,16 +200,10 @@ func (s *Server) listComments(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, err)
 		return
 	}
-	anchors := map[string]comments.PatchLocation{}
-	for _, c := range rows {
-		var selector CommentSelector
-		if err := json.Unmarshal(c.Target.Selector, &selector); err != nil {
-			respond(w, nil, err)
-			return
-		}
-		if selector.Patch != nil {
-			anchors[c.ID] = comments.ResolvePatch(doc.Source, *selector.Patch)
-		}
+	anchors, err := service.Anchors(r.Context(), rows)
+	if err != nil {
+		respond(w, nil, err)
+		return
 	}
 	respond(w, struct {
 		Scope    string                            `json:"scope"`

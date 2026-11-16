@@ -72,6 +72,25 @@ var _ = Describe("threadMarkdown", func() {
 		}, "\n\n")))
 	})
 
+	It("renders the quoted text inside a file comment's lines, and an image region as a percentage box", func() {
+		quoted, err := json.Marshal(map[string]any{"kind": "code-range", "patch": comments.PatchAnchor{Version: 1, StartLine: 3, EndLine: 3, Lines: []string{"total := price * qty"}}, "quote": comments.TextQuote{Prefix: "total := ", Exact: "price * qty"}})
+		Expect(err).NotTo(HaveOccurred())
+		region, err := json.Marshal(map[string]any{"kind": "region", "view": "preview", "region": comments.Region{X: 0.1, Y: 0.25, W: 0.5, H: 0.125}})
+		Expect(err).NotTo(HaveOccurred())
+		onFile := comments.Comment{ID: "c-quote", Body: "Round this", Author: author, Target: comments.Target{URI: scope + "/files/src/cart.go", ScopeURI: scope, Kind: "code-range", Selector: quoted}}
+		onImage := comments.Comment{ID: "c-region", Body: "Crop here", Author: author, Target: comments.Target{URI: scope + "/files/docs/flow.png", ScopeURI: scope, Kind: "region", Selector: region}}
+		Expect(threadMarkdown(onFile, "")).To(Equal(strings.Join([]string{
+			"## src/cart.go (line 3)",
+			fence + "\ntotal := price * qty\n" + fence,
+			"Quoted text: `price * qty`",
+			"**Reviewer** (user):\n\nRound this",
+		}, "\n\n")))
+		Expect(threadMarkdown(onImage, "")).To(Equal(strings.Join([]string{
+			"## docs/flow.png (region x 10%, y 25%, 50% wide, 12.5% high, preview view)",
+			"**Reviewer** (user):\n\nCrop here",
+		}, "\n\n")))
+	})
+
 	It("renders a reply's earlier proposal with its state, files and reviewer feedback", func() {
 		agent := comments.Actor{Kind: "agent", ID: "gavel:1", Label: "Gavel agent"}
 		proposal, err := json.Marshal(map[string]any{comments.ProposalContentKey: comments.Proposal{

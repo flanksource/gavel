@@ -39,6 +39,7 @@ func Handler(resolve Resolver) http.Handler {
 	router.Raw("POST /api/v1/comments/batch", Batch(resolve), route.Meta{Entity: "comments", Verb: "batch"})
 	RegisterDeliveryRoutes(router, resolve)
 	RegisterProposalRoutes(router, resolve)
+	RegisterReadRoutes(router, resolve)
 	router.MountGenerated("GET /api/v1/comments/openapi.json", OpenAPI(http.HandlerFunc(server.HandleOpenAPIJSON), "/api/v1"))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		router.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), resolverKey{}, resolve)))
@@ -49,7 +50,7 @@ func Batch(resolve Resolver) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var requests []comments.ActionRequest
 		ctx := rpc.ContextWithRequest(r.Context(), r)
-		if err := decode(ctx, nil, &requests); err != nil {
+		if err := decode(ctx, bodyLimit, &requests); err != nil {
 			writeError(w, err)
 			return
 		}

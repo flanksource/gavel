@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
-import { commentCountsAt } from "./comment-summary";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { commentCountsAt, markTargetRead } from "./comment-summary";
+
+describe("markTargetRead", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("posts the file's page target to the generic comments read route", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ marked: 2 }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    const target = { scopeUri: "gavel://project/demo", uri: "gavel://project/demo/files/a.yaml" };
+    await expect(markTargetRead(target)).resolves.toEqual({ marked: 2 });
+    expect(fetch.mock.calls).toEqual([
+      ["/api/v1/comments/read", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target }) }],
+    ]);
+  });
+});
 
 const BY_PATH = new Map([
   ["products/schemas/a.json", { total: 3, unread: 2 }],

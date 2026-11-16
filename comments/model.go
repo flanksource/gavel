@@ -84,7 +84,11 @@ type Filter struct {
 	Phase     Phase  `json:"phase,omitempty" flag:"phase"`
 	Limit     int    `json:"limit" flag:"limit" default:"50"`
 	Offset    int    `json:"offset" flag:"offset"`
-	Unread    bool   `json:"unread,omitempty" flag:"unread"`
+	// After pages by id instead of offset: only threads whose id sorts after
+	// it, so a thread deleted or added mid-way neither skips nor repeats
+	// another. Total then counts the threads after it. Exclusive with Offset.
+	After  string `json:"after,omitempty" flag:"after" help:"List only threads whose id sorts after this one (keyset paging)"`
+	Unread bool   `json:"unread,omitempty" flag:"unread"`
 	// Path is a file or directory the host's Locate turns into a scope and target filter.
 	Path string `json:"path,omitempty" flag:"path" help:"File or directory to list comments for (default: the current directory on the CLI)"`
 	// TargetPrefix matches every target URI beneath a directory.

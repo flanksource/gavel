@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 
@@ -106,9 +108,39 @@ func CommentWorkdir(ctx context.Context, t comments.Target) (string, error) {
 		return "", err
 	}
 	if project.Dir == "" {
-		return "", fmt.Errorf("project %q has no local directory for an agent session to run in", project.Name)
+		return "", fmt.Errorf("%w: project %q has no local directory for an agent session to run in", comments.ErrNoWorkdir, project.Name)
 	}
 	return projects.CanonicalPath(project.Dir)
+}
+
+var _ comments.TargetSources = CommentAccess{}
+
+// TargetSource is the text on disk of a gavel://project file target
+// (<scope>/files/<path>), so its threads' patch anchors resolve against the
+// file as it is now. A project's other targets (its dashboard pages, a pull
+// request) and other scopes keep no file content. A file deleted since its
+// threads were written resolves as empty text, so every anchor on it is
+// outdated; any other read failure is an error.
+func (CommentAccess) TargetSource(ctx context.Context, t comments.Target) (string, bool, error) {
+	if !strings.HasPrefix(t.ScopeURI, "gavel://project/") || !strings.HasPrefix(t.URI, t.ScopeURI+"/files/") {
+		return "", false, nil
+	}
+	catalog, err := projects.Shared(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	_, _, path, err := agents.ProjectFile(ctx, catalog, t.ScopeURI, t.URI)
+	if err != nil {
+		return "", false, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", true, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return string(data), true, nil
 }
 
 // CommentAccess is the comment host for gavel://project/<name> scopes: the

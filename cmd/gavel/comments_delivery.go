@@ -116,7 +116,7 @@ func commentsAgentSetCommand() *cobra.Command {
 	var target agentTargetFlags
 	var layer agentLayerFlags
 	var fields agentFieldFlags
-	cmd := &cobra.Command{Use: "set <path>", Short: "Set the comment agent at a settings layer: its default, or with --page its entry for the file", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "set <path>", Short: "Set the comment agent at a settings layer: its default, or with --page its entry for the file", Long: "Replaces the whole entry with the fields the flags give: a field no flag sets is removed and inherits again. (PUT /api/v1/comments/agent merges a patch instead.)", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		agent, err := fields.agent(cmd)
 		if err != nil {
 			return err
@@ -149,7 +149,7 @@ func saveCommentAgent(cmd *cobra.Command, target agentTargetFlags, layer agentLa
 	if err != nil {
 		return err
 	}
-	if err := settings.SaveCommentAgent(cmd.Context(), service, resolved, ref, layer.page, agent); err != nil {
+	if err := settings.SaveCommentAgent(cmd.Context(), service, resolved, ref, layer.page, verify.ReplaceCommentAgent(agent)); err != nil {
 		return err
 	}
 	return printAgentSettings(cmd, service, resolved)

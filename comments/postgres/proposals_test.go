@@ -56,6 +56,9 @@ func (d *revisionDelivery) Check(comments.DeliverTarget) error { return nil }
 func (d *revisionDelivery) Sessions(context.Context, comments.SessionQuery) ([]comments.AgentSession, error) {
 	return nil, nil
 }
+func (d *revisionDelivery) Mentionables(context.Context, comments.MentionQuery) ([]comments.Mentionable, error) {
+	return nil, nil
+}
 func (d *revisionDelivery) Preview(context.Context, comments.Comment, comments.DeliverTarget) (json.RawMessage, error) {
 	return nil, nil
 }

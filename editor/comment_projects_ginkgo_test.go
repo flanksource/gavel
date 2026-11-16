@@ -14,7 +14,7 @@ import (
 )
 
 var _ = Describe("Editor comment projects", func() {
-	It("GET /api/comments/projects lists each edited file's project once, with its edited files, skipping files outside every project", func(ctx SpecContext) {
+	It("GET /api/comments/projects lists each edited file's project once, with its edited files and images, skipping files outside every project", func(ctx SpecContext) {
 		alpha, beta, outside := GinkgoT().TempDir(), GinkgoT().TempDir(), GinkgoT().TempDir()
 		catalogPath := filepath.Join(GinkgoT().TempDir(), "projects.json")
 		DeferCleanup(projects.UseFileForTest(catalogPath))
@@ -22,7 +22,7 @@ var _ = Describe("Editor comment projects", func() {
 			_, err := projects.NewFile(catalogPath).Create(context.Background(), projects.Project{Name: name, Dir: dir})
 			Expect(err).NotTo(HaveOccurred())
 		}
-		paths := []string{filepath.Join(alpha, "a.yaml"), filepath.Join(alpha, "docs", "b.md"), filepath.Join(beta, "c.json"), filepath.Join(outside, "d.yaml")}
+		paths := []string{filepath.Join(alpha, "a.yaml"), filepath.Join(alpha, "docs", "b.md"), filepath.Join(beta, "c.json"), filepath.Join(beta, "e.png"), filepath.Join(outside, "d.yaml")}
 		for _, path := range paths {
 			Expect(os.MkdirAll(filepath.Dir(path), 0o755)).To(Succeed())
 			Expect(os.WriteFile(path, []byte("name: x\n"), 0o600)).To(Succeed())
@@ -53,6 +53,7 @@ var _ = Describe("Editor comment projects", func() {
 			}},
 			{Scope: "gavel://project/beta", Project: "beta", Dir: canonical(beta), Files: []CommentProjectFile{
 				{ID: idOf["c.json"], URI: "gavel://project/beta/files/c.json"},
+				{ID: idOf["e.png"], URI: "gavel://project/beta/files/e.png"},
 			}},
 		}))
 	})

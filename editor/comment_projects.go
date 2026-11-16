@@ -27,9 +27,6 @@ type CommentProject struct {
 func (s *Server) commentProjects(w http.ResponseWriter, r *http.Request) {
 	byScope := map[string]*CommentProject{}
 	for _, file := range s.Store.Files() {
-		if file.Kind != KindDocument {
-			continue
-		}
 		target, err := targetOf(r.Context(), file.Path)
 		if errors.As(err, new(NoProjectError)) {
 			continue

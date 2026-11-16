@@ -3,6 +3,7 @@ package clicky
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +19,7 @@ import (
 
 type actionFlags struct {
 	Version   int64               `flag:"expectedVersion" required:"true" help:"Required current comment version"`
-	Body      string              `flag:"bodyMarkdown" help:"Reply or updated Markdown"`
+	Body      string              `flag:"bodyMarkdown" help:"Reply or updated Markdown; a reply naming @agent, @<runtime> or @<session> is delivered to it"`
 	Summary   string              `flag:"summary" help:"Resolution or closure summary"`
 	ParentID  string              `flag:"parentId" help:"Local parent reply identity"`
 	Assignee  *comments.Actor     `flag:"assignee" help:"Assignee as JSON; null clears it"`
@@ -35,7 +36,7 @@ func (actionFlags) ClickyActionFlags() {}
 
 type createFlags struct {
 	Target    comments.Target         `flag:"target" required:"true" help:"Captured host target as JSON"`
-	Body      string                  `flag:"bodyMarkdown" required:"true" help:"Comment Markdown"`
+	Body      string                  `flag:"bodyMarkdown" required:"true" help:"Comment Markdown; naming @agent, @<runtime> or @<session> delivers it unless --deliver is given"`
 	Workflow  string                  `flag:"workflowId" required:"true" help:"Registered workflow ID"`
 	RequestID string                  `flag:"requestId" required:"true" help:"Stable request identity"`
 	Content   json.RawMessage         `flag:"content" help:"Structured comment content"`
@@ -51,6 +52,35 @@ type listItem struct {
 	comments.Comment
 	ReadVersion int64 `json:"readVersion"`
 	Unread      bool  `json:"unread"`
+	// Anchor is where the thread's patch anchor lies in its target now:
+	// matched (with its lines), ambiguous or outdated. Only a thread whose
+	// selector carries a patch, on a target the host has content for, has one.
+	Anchor *comments.PatchLocation `json:"anchor,omitempty"`
+}
+
+// listPage is one page of threads as GET /api/v1/comments lists them.
+func listPage(ctx context.Context, service *comments.Service, f comments.Filter) (entity.PagedResult[listItem], error) {
+	page, err := service.Page(ctx, f)
+	if err != nil {
+		return entity.PagedResult[listItem]{}, StatusError(err)
+	}
+	anchors, err := service.Anchors(ctx, page.Items)
+	if err != nil {
+		return entity.PagedResult[listItem]{}, StatusError(err)
+	}
+	reads := map[string]int64{}
+	for _, r := range page.Read {
+		reads[r.CommentID] = r.Version
+	}
+	rows := make([]listItem, 0, len(page.Items))
+	for _, c := range page.Items {
+		item := listItem{Comment: c, ReadVersion: reads[c.ID], Unread: reads[c.ID] < c.Version}
+		if anchor, ok := anchors[c.ID]; ok {
+			item.Anchor = &anchor
+		}
+		rows = append(rows, item)
+	}
+	return entity.NewPagedResult(rows, f.Limit, f.Offset, page.Total), nil
 }
 
 func Register(resolve Resolver) error {
@@ -70,16 +100,7 @@ func Register(resolve Resolver) error {
 			if err != nil {
 				return entity.PagedResult[listItem]{}, StatusError(err)
 			}
-			page, err := service.Page(ctx, f)
-			rows := make([]listItem, 0, len(page.Items))
-			reads := map[string]int64{}
-			for _, r := range page.Read {
-				reads[r.CommentID] = r.Version
-			}
-			for _, c := range page.Items {
-				rows = append(rows, listItem{Comment: c, ReadVersion: reads[c.ID], Unread: reads[c.ID] < c.Version})
-			}
-			return entity.NewPagedResult(rows, f.Limit, f.Offset, page.Total), StatusError(err)
+			return listPage(ctx, service, f)
 		}).
 		GetWithContext(func(ctx context.Context, id string) (comments.Comment, error) {
 			service, err := resolve(ctx)
@@ -96,7 +117,7 @@ func Register(resolve Resolver) error {
 		}
 		req := comments.CreateRequest{Target: flags.Target, Body: flags.Body, WorkflowID: flags.Workflow, RequestID: flags.RequestID, Content: flags.Content, Links: flags.Links, Deliver: flags.Deliver}
 		if _, ok := rpc.RequestFromContext(ctx); ok {
-			if err := decode(ctx, nil, &req); err != nil {
+			if err := decode(ctx, createBodyLimit(service), &req); err != nil {
 				return comments.Comment{}, StatusError(err)
 			}
 		}
@@ -111,7 +132,7 @@ func Register(resolve Resolver) error {
 			}
 			req := comments.ActionRequest{ID: id, Action: action, ExpectedVersion: flags.Version, Body: flags.Body, Summary: flags.Summary, Assignee: flags.Assignee, ParentID: flags.ParentID, Evidence: flags.Evidence, Content: flags.Content, Target: flags.Target, MessageID: flags.MessageID, Edits: flags.Edits, Mode: flags.Mode}
 			if _, ok := rpc.RequestFromContext(ctx); ok {
-				if err := decode(ctx, nil, &req); err != nil {
+				if err := decode(ctx, bodyLimit, &req); err != nil {
 					return comments.Comment{}, StatusError(err)
 				}
 			} else if req.Patch, err = readPatch(flags.Patch); err != nil {
@@ -150,23 +171,30 @@ func readPatch(path string) (string, error) {
 	return string(data), nil
 }
 
-func decode(ctx context.Context, body map[string]any, out any) error {
-	if r, ok := rpc.RequestFromContext(ctx); ok {
-		decoder := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(out); err != nil {
-			return fmt.Errorf("%w: %v", comments.ErrInvalid, err)
-		}
-		if err := decoder.Decode(new(any)); err != io.EOF {
-			return fmt.Errorf("%w: exactly one JSON value required", comments.ErrInvalid)
-		}
-		return nil
+// bodyLimit bounds a JSON request body; a create's also carries its attachments.
+const bodyLimit = 1 << 20
+
+// createBodyLimit is a create's body bound: bodyLimit plus the base64 of the
+// most attachments the service takes at its attachment limit.
+func createBodyLimit(service *comments.Service) int64 {
+	return int64(bodyLimit + comments.MaxCreateAttachments*base64.StdEncoding.EncodedLen(int(service.AttachmentLimit())))
+}
+
+// decode reads the request's JSON body, at most limit bytes, strictly into out.
+func decode(ctx context.Context, limit int64, out any) error {
+	r, ok := rpc.RequestFromContext(ctx)
+	if !ok {
+		return fmt.Errorf("decoding a comments request body needs the HTTP request in its context")
 	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
+	decoder := json.NewDecoder(http.MaxBytesReader(nil, r.Body, limit))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return fmt.Errorf("%w: %v", comments.ErrInvalid, err)
 	}
-	return json.Unmarshal(data, out)
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("%w: exactly one JSON value required", comments.ErrInvalid)
+	}
+	return nil
 }
 func StatusError(err error) error {
 	if err == nil {

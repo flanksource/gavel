@@ -219,6 +219,25 @@ func (s *Store) Read(id string) (Document, error) {
 	defer s.mu.Unlock()
 	return s.read(id)
 }
+
+// commentable reads what a comment pins to: a document's source and revision,
+// or the revision alone of an image with no text source.
+func (s *Store) commentable(id string) (Document, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, err := s.entry(id)
+	if err != nil {
+		return Document{}, err
+	}
+	if e.Kind != KindImage || strings.EqualFold(filepath.Ext(e.name), ".svg") {
+		return s.read(id)
+	}
+	data, err := fileread.Read(e.root, e.name, fileread.Options{Image: true})
+	if err != nil {
+		return Document{}, err
+	}
+	return Document{File: e.File, Revision: revision(data)}, nil
+}
 func (s *Store) read(id string) (Document, error) {
 	e, err := s.entry(id)
 	if err != nil {

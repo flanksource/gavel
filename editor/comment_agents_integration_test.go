@@ -36,6 +36,9 @@ var _ = Describe("Page agents configured in the settings layers of a file", Orde
 		slides   string
 		security Document
 		solution Document
+		files    *Store
+		storage  *postgres.Store
+		catalog  projects.Service
 	)
 	folder := settings.Ref{Kind: settings.KindPath, Path: "slides"}
 	call := func(method, path string, body any) *httptest.ResponseRecorder {
@@ -79,7 +82,7 @@ var _ = Describe("Page agents configured in the settings layers of a file", Orde
 		for _, name := range []string{"19-security.mdx", "09-solution.mdx"} {
 			Expect(os.WriteFile(filepath.Join(slides, name), []byte("# "+name+"\n"), 0o600)).To(Succeed())
 		}
-		files, err := NewStore([]string{filepath.Join(slides, "19-security.mdx"), filepath.Join(slides, "09-solution.mdx")})
+		files, err = NewStore([]string{filepath.Join(slides, "19-security.mdx"), filepath.Join(slides, "09-solution.mdx")})
 		Expect(err).NotTo(HaveOccurred())
 		for _, file := range files.Files() {
 			doc, err := files.Read(file.ID)
@@ -90,12 +93,12 @@ var _ = Describe("Page agents configured in the settings layers of a file", Orde
 				solution = doc
 			}
 		}
-		storage, err := postgres.New(db.Gorm())
+		storage, err = postgres.New(db.Gorm())
 		Expect(err).NotTo(HaveOccurred())
 		bridge = &agentstest.Bridge{Dir: mustTarget(security).Dir, Sessions: []captaincli.SessionRecord{}}
 		delivery, err := agents.Delivery(agents.Options{Bridge: bridge, Groups: storage, Workdir: ui.CommentWorkdir})
 		Expect(err).NotTo(HaveOccurred())
-		catalog, err := projects.Shared(ctx)
+		catalog, err = projects.Shared(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		host := commentHost{store: files}
 		svc, err = comments.New(comments.Options{Store: storage, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: storage, AttachmentLimit: 1024, Routes: agents.ProjectRoutes(catalog, settings.File{}), Delivery: delivery})
@@ -162,6 +165,44 @@ var _ = Describe("Page agents configured in the settings layers of a file", Orde
 		response := saveAgent(solution, settings.Ref{Kind: settings.KindPath, Path: "slides", File: ".gavel.agents.yaml"}, true, nil)
 		Expect(response.Code).To(Equal(200), response.Body.String())
 		Expect([]any{configured(".gavel.agents.yaml").Pages, settingsOf(solution).Agent.Agent.IsEnabled()}).To(Equal([]any{map[string]verify.CommentAgent(nil), true}))
+	})
+
+	It("assigns and delivers a new human thread to the session gavel edit was started from, ahead of the page agent", func(ctx SpecContext) {
+		const launching = "claude-launching"
+		Expect(saveAgent(security, settings.Ref{Kind: settings.KindPath, Path: "slides", File: verify.GavelConfigFileName}, true, &verify.CommentAgent{Enabled: ptr(true), Prompt: "security-review"}).Code).To(Equal(200))
+		live := &agentstest.Bridge{Dir: mustTarget(security).Dir, Sessions: []captaincli.SessionRecord{{ID: launching, Source: "claude", Model: "claude-opus", Live: &captaincli.SessionLiveWire{PID: 42, CWD: slides}}}}
+		delivery, err := agents.Delivery(agents.Options{Bridge: live, Groups: storage, Workdir: ui.CommentWorkdir})
+		Expect(err).NotTo(HaveOccurred())
+		routes := agents.ProjectRoutes(catalog, settings.File{})
+		routes.Session = launching
+		host := commentHost{store: files}
+		routed, err := comments.New(comments.Options{Store: storage, Access: host, Targets: host, Workflows: []comments.Workflow{comments.HumanReview()}, Blobs: storage, AttachmentLimit: 1024, Routes: routes, Delivery: delivery})
+		Expect(err).NotTo(HaveOccurred())
+		server := &Server{Store: files, Session: launching}
+		page, err := server.fileSettings(ctx, security.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{page.Session, page.Agent.Agent.Prompt}).To(Equal([]any{launching, "security-review"}), "the page agent stays configured; the session takes its threads")
+
+		selector, err := json.Marshal(CommentSelector{Kind: "document", View: "source", Version: 1})
+		Expect(err).NotTo(HaveOccurred())
+		place := mustTarget(security)
+		created, err := routed.Create(ctx, comments.CreateRequest{Target: comments.Target{ScopeURI: place.Scope, URI: place.URI, Kind: "document", Revision: security.Revision, Selector: selector}, Body: "Shorten the title", WorkflowID: "human-review", RequestID: "launching-session-1"})
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func() []any {
+			delivered, launched := live.Snapshot()
+			c, err := routed.Get(ctx, created.ID)
+			Expect(err).NotTo(HaveOccurred())
+			var assignee comments.Actor
+			if c.Assignee != nil {
+				assignee = *c.Assignee
+			}
+			sessions := []string{}
+			for _, d := range delivered {
+				sessions = append(sessions, d.SessionID)
+			}
+			return []any{assignee, sessions, len(launched)}
+		}).WithTimeout(10 * time.Second).Should(Equal([]any{comments.Actor{Kind: "agent", ID: "claude:" + launching, Label: "claude-opus"}, []string{launching}, 0}))
 	})
 
 	DescribeTable("refuses a layer it cannot write",

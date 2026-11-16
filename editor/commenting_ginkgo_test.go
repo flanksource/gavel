@@ -173,15 +173,70 @@ var _ = Describe("Editor comment boundaries", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resolve(CommentSelector{Kind: "code-range", Version: 1, View: "preview", Patch: &patch})).To(Succeed())
 		})
-		It("rejects code-range from rich and any unknown view as invalid", func() {
+		It("accepts code-range from rich when it carries source lines, and rejects one without or any unknown view", func() {
 			patch, err := comments.CapturePatch(source, 5, 5)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(resolve(CommentSelector{Kind: "code-range", Version: 1, View: "rich", Patch: &patch})).To(MatchError(comments.ErrInvalid))
+			Expect(resolve(CommentSelector{Kind: "code-range", Version: 1, View: "rich", Patch: &patch})).To(Succeed())
+			Expect(resolve(CommentSelector{Kind: "code-range", Version: 1, View: "rich"})).To(MatchError(comments.ErrInvalid))
 			Expect(resolve(CommentSelector{Kind: "document", Version: 1, View: "thumbnail"})).To(MatchError(comments.ErrInvalid))
 		})
 		It("accepts document and dom selectors from preview", func() {
 			Expect(resolve(CommentSelector{Kind: "document", Version: 1, View: "preview"})).To(Succeed())
 			Expect(resolve(CommentSelector{Kind: "dom", Version: 1, View: "preview", Anchor: "heading-1"})).To(Succeed())
+		})
+		It("accepts a quote inside the patch lines and rejects one outside them, or one a document or region selector carries", func() {
+			patch, err := comments.CapturePatch(source, 4, 5)
+			Expect(err).NotTo(HaveOccurred())
+			quoted := func(kind, exact string) CommentSelector {
+				return CommentSelector{Kind: kind, Version: 1, View: "preview", Anchor: "para-2", Patch: &patch, Quote: &comments.TextQuote{Prefix: "fo", Exact: exact, Suffix: "ted"}}
+			}
+			Expect([]error{
+				resolve(quoted("code-range", "ur\nselec")),
+				resolve(quoted("dom", "selec")),
+				resolve(CommentSelector{Kind: "dom", Version: 1, View: "preview", Anchor: "para-2", Quote: &comments.TextQuote{Exact: "web text"}}),
+			}).To(Equal([]error{nil, nil, nil}))
+			Expect(resolve(quoted("code-range", "three"))).To(MatchError(comments.ErrInvalid))
+			Expect(resolve(quoted("dom", "next"))).To(MatchError(comments.ErrInvalid))
+			Expect(resolve(CommentSelector{Kind: "dom", Version: 1, View: "preview", Anchor: "para-2", Quote: &comments.TextQuote{Prefix: "web "}})).To(MatchError(comments.ErrInvalid), "a dom quote with no patch still needs exact text")
+			Expect(resolve(CommentSelector{Kind: "document", Version: 1, View: "preview", Quote: &comments.TextQuote{Exact: "selected"}})).To(MatchError(comments.ErrInvalid))
+			Expect(resolve(CommentSelector{Kind: "region", Version: 1, View: "preview", Region: &comments.Region{W: 1, H: 1}})).To(MatchError(comments.ErrInvalid), "a document has no image regions")
+		})
+	})
+	Describe("image selectors", func() {
+		It("accepts document and region selectors on an image, and rejects text anchors or an out-of-bounds region", func() {
+			dir := GinkgoT().TempDir()
+			useProject(dir)
+			path := filepath.Join(dir, "diagram.png")
+			Expect(os.WriteFile(path, []byte("\x89PNG\r\n\x1a\nnot-really-pixels"), 0600)).To(Succeed())
+			store, err := NewStore([]string{path})
+			Expect(err).NotTo(HaveOccurred())
+			image := store.Files()[0]
+			Expect(image.Kind).To(Equal(KindImage))
+			host := commentHost{store: store}
+			p, err := host.Principal(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			place, err := targetOf(context.Background(), image.Path)
+			Expect(err).NotTo(HaveOccurred())
+			doc, err := store.commentable(image.ID)
+			Expect(err).NotTo(HaveOccurred())
+			resolve := func(selector CommentSelector) error {
+				raw, err := json.Marshal(selector)
+				Expect(err).NotTo(HaveOccurred())
+				_, err = host.Resolve(context.Background(), p, comments.Target{URI: place.URI, ScopeURI: place.Scope, Kind: selector.Kind, Revision: doc.Revision, Selector: raw})
+				return err
+			}
+			Expect([]error{
+				resolve(CommentSelector{Kind: "document", Version: 1, View: "preview"}),
+				resolve(CommentSelector{Kind: "region", Version: 1, View: "preview", Region: &comments.Region{X: 0.25, Y: 0.5, W: 0.5, H: 0.25}}),
+			}).To(Equal([]error{nil, nil}))
+			for _, invalid := range []CommentSelector{
+				{Kind: "region", Version: 1, View: "preview"},
+				{Kind: "region", Version: 1, View: "preview", Region: &comments.Region{X: 0.75, Y: 0, W: 0.5, H: 0.5}},
+				{Kind: "dom", Version: 1, View: "preview", Anchor: "img"},
+				{Kind: "code-range", Version: 1, View: "source", Patch: &comments.PatchAnchor{Version: 1, StartLine: 1, EndLine: 1, Lines: []string{"x"}}},
+			} {
+				Expect(resolve(invalid)).To(MatchError(comments.ErrInvalid), "%+v", invalid)
+			}
 		})
 	})
 	Describe("code-range re-anchoring", func() {

@@ -48,7 +48,7 @@ import { commonRoot, editorFindingRef, nodePath, relativeToFile } from "./paths"
 import { commentsRouteFrom, NO_COMMENTS_FILTERS, taskRunFromHref, writeCommentsRoute, type CommentsFilters } from "./routes";
 import { CommentsPage, type OpenThread } from "./CommentsPage";
 import { useCommentProjects, useProjectUnread } from "./project-comments";
-import { commentCountsAt, useCommentSummary } from "./comment-summary";
+import { commentCountsAt, markTargetRead, useCommentSummary } from "./comment-summary";
 import { RecentComments } from "./RecentComments";
 import { useFileComments } from "./file-comments";
 import { CreateProjectDialog } from "./CreateProjectDialog";
@@ -232,12 +232,15 @@ export function App() {
   };
   // The open file's threads are in front of the reader, so they are read, including ones they just wrote.
   const activeUnread = active ? (summary.files[active.id]?.unread ?? 0) : 0;
+  const activeTarget = active ? summary.targets[active.id] : undefined;
+  const activePath = active?.path;
   useEffect(() => {
-    if (!active || activeUnread === 0) return;
-    void request(`/api/file/${active.id}/comments/read`, {})
+    if (!activePath || activeUnread === 0) return;
+    if (!activeTarget) return setError(`comment summary has unread threads but no target for ${activePath}`);
+    void markTargetRead(activeTarget)
       .then(refreshSummary)
       .catch((cause) => setError(String(cause)));
-  }, [active?.id, activeUnread]);
+  }, [activePath, activeUnread, activeTarget, refreshSummary]);
 
   useEffect(() => {
     void request<FileEntry[]>("/api/files")

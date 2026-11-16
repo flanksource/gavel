@@ -23,30 +23,60 @@ type SettingsRoutes struct {
 	// Locate is the settings target t lies at in the host; ok is false for a
 	// target the host's settings do not cover (it is not routed).
 	Locate func(ctx context.Context, t comments.Target) (target settings.Target, ok bool, err error)
+	// Session is a live agent session that takes every human-review thread,
+	// assigned to it, ahead of the agent the settings configure.
+	Session string
 }
 
-var _ comments.CommentAgents = SettingsRoutes{}
+var (
+	_ comments.CommentAgents = SettingsRoutes{}
+	_ comments.AgentRules    = SettingsRoutes{}
+)
 
 // AgentSettings is a target's settings layers and the comment agent they
 // resolve to, each field traced to the layer that set it.
 type AgentSettings struct {
 	Settings settings.Resolved           `json:"settings"`
 	Agent    verify.ResolvedCommentAgent `json:"agent"`
+	// Session is the live session (gavel edit --session) every new human
+	// thread is routed to ahead of Agent; empty when the host sets none.
+	Session string `json:"session,omitempty"`
 }
 
 func (s SettingsRoutes) RouteFor(ctx context.Context, c comments.Comment) (comments.Route, bool, error) {
 	if c.WorkflowID != comments.HumanReview().ID {
 		return comments.Route{}, false, nil
 	}
-	target, ok, err := s.Locate(ctx, c.Target)
-	if err != nil || !ok {
-		return comments.Route{}, false, err
+	if s.Session != "" {
+		return comments.Route{Source: "session", Target: comments.DeliverTarget{Kind: "session", SessionID: s.Session}, Assign: true}, true, nil
 	}
-	resolved, err := s.agentSettings(ctx, target)
-	agent := resolved.Agent
+	agent, err := s.resolvedAgent(ctx, c.Target)
 	if err != nil || !agent.Found || !agent.Agent.IsEnabled() {
 		return comments.Route{}, false, err
 	}
+	return agentRoute(agent)
+}
+
+// AgentRule is the comment agent t's settings configure, enabled or not.
+func (s SettingsRoutes) AgentRule(ctx context.Context, t comments.Target) (comments.Route, bool, error) {
+	agent, err := s.resolvedAgent(ctx, t)
+	if err != nil || !agent.Found {
+		return comments.Route{}, false, err
+	}
+	return agentRoute(agent)
+}
+
+// resolvedAgent is the comment agent t's settings resolve to; not Found for a target they do not cover.
+func (s SettingsRoutes) resolvedAgent(ctx context.Context, t comments.Target) (verify.ResolvedCommentAgent, error) {
+	target, ok, err := s.Locate(ctx, t)
+	if err != nil || !ok {
+		return verify.ResolvedCommentAgent{}, err
+	}
+	resolved, err := s.agentSettings(ctx, target)
+	return resolved.Agent, err
+}
+
+func agentRoute(agent verify.ResolvedCommentAgent) (comments.Route, bool, error) {
 	deliver, err := AgentTarget(agent.Agent)
 	if err != nil {
 		return comments.Route{}, false, err
@@ -68,24 +98,31 @@ func (s SettingsRoutes) CommentAgent(ctx context.Context, t comments.Target) (an
 	return s.Agent(ctx, t)
 }
 
-// SaveCommentAgent saves req.Agent (a verify.CommentAgent, or null to remove
-// the entry) at req.Layer (a settings.Ref) of the target's chain and answers
-// its AgentSettings.
+// SaveCommentAgent applies req.Agent, a JSON merge patch of a
+// verify.CommentAgent (null removes the entry), to the entry at req.Layer (a
+// settings.Ref) of the target's chain and answers its AgentSettings.
 func (s SettingsRoutes) SaveCommentAgent(ctx context.Context, req comments.SaveCommentAgentRequest) (any, error) {
-	target, err := s.locate(ctx, req.Target)
+	edit, err := verify.PatchCommentAgent(req.Agent)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", comments.ErrInvalid, err)
 	}
-	var layer settings.Ref
-	if err := decodeStrict(req.Layer, &layer); err != nil {
-		return nil, fmt.Errorf("%w: comment agent layer: %v", comments.ErrInvalid, err)
+	return s.SaveAgent(ctx, req.Target, req.Layer, req.Page, edit)
+}
+
+// SaveAgent applies edit to the comment agent entry at layer (a settings.Ref)
+// of t's chain, its default or with page its entry for t, under the layer's
+// save lock, and answers t's AgentSettings.
+func (s SettingsRoutes) SaveAgent(ctx context.Context, t comments.Target, layer json.RawMessage, page bool, edit verify.CommentAgentEdit) (AgentSettings, error) {
+	target, err := s.locate(ctx, t)
+	if err != nil {
+		return AgentSettings{}, err
 	}
-	var agent *verify.CommentAgent
-	if err := decodeStrict(req.Agent, &agent); err != nil {
-		return nil, fmt.Errorf("%w: comment agent: %v", comments.ErrInvalid, err)
+	var ref settings.Ref
+	if err := decodeStrict(layer, &ref); err != nil {
+		return AgentSettings{}, fmt.Errorf("%w: comment agent layer: %v", comments.ErrInvalid, err)
 	}
-	if err := settings.SaveCommentAgent(ctx, s.Settings, target, layer, req.Page, agent); err != nil {
-		return nil, err
+	if err := settings.SaveCommentAgent(ctx, s.Settings, target, ref, page, edit); err != nil {
+		return AgentSettings{}, err
 	}
 	return s.agentSettings(ctx, target)
 }
@@ -104,7 +141,7 @@ func (s SettingsRoutes) agentSettings(ctx context.Context, target settings.Targe
 		return AgentSettings{}, err
 	}
 	agent, err := resolved.CommentAgent(target)
-	return AgentSettings{Settings: resolved, Agent: agent}, err
+	return AgentSettings{Settings: resolved, Agent: agent, Session: s.Session}, err
 }
 
 func decodeStrict(data json.RawMessage, out any) error {

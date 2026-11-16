@@ -34,6 +34,10 @@ func OpenAPI(next http.Handler, prefix string) http.Handler {
 			writeError(w, fmt.Errorf("generated document has no paths"))
 			return
 		}
+		if err := describeCreateAndList(paths, prefix); err != nil {
+			writeError(w, err)
+			return
+		}
 		for path, item := range HTTPPaths(prefix) {
 			paths[path] = item
 		}
@@ -60,8 +64,50 @@ func HTTPPaths(prefix string) map[string]any {
 	for path, item := range deliveryPaths(id, parameter) {
 		paths[prefix+path] = item
 	}
+	for path, item := range readPaths() {
+		paths[prefix+path] = item
+	}
 	paths[prefix+"/comments/{id}/proposals/{replyId}/diff"] = proposalDiffPath(id)
 	return paths
+}
+
+// describeCreateAndList adds to the generated /comments path what its flags
+// and reflection cannot say: a create's attachments (decoded from the body,
+// not a flag) and the anchor states a listed thread carries.
+func describeCreateAndList(paths map[string]any, prefix string) error {
+	item, _ := paths[prefix+"/comments"].(map[string]any)
+	create, err := schemaAt(item, "post", "requestBody", "content", "application/json", "schema", "properties")
+	if err != nil {
+		return fmt.Errorf("generated create schema: %w", err)
+	}
+	create["attachments"] = map[string]any{"type": "array", "maxItems": comments.MaxCreateAttachments, "description": "Files stored on the new thread, in the create's transaction, before it is routed or delivered. Each is checked (plain file name, media type, size up to the host's attachment limit) before anything is written.", "items": map[string]any{
+		"type": "object", "required": []string{"filename", "contentType", "data"}, "properties": map[string]any{
+			"filename": map[string]string{"type": "string"}, "contentType": map[string]string{"type": "string"}, "data": map[string]string{"type": "string", "format": "byte", "description": "base64"},
+		},
+	}}
+	anchor, err := schemaAt(item, "get", "responses", "200", "content", "application/json", "schema", "properties", "data", "items", "properties", "anchor")
+	if err != nil {
+		return fmt.Errorf("generated list schema: %w", err)
+	}
+	anchor["description"] = "Where the thread's patch anchor lies in its target now; only threads whose selector carries a patch, on targets the host has file content for"
+	state, err := schemaAt(anchor, "properties", "state")
+	if err != nil {
+		return fmt.Errorf("generated list anchor schema: %w", err)
+	}
+	state["enum"] = []string{"matched", "ambiguous", "outdated"}
+	return nil
+}
+
+// schemaAt is the object at keys below node.
+func schemaAt(node map[string]any, keys ...string) (map[string]any, error) {
+	for i, key := range keys {
+		next, ok := node[key].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("no object at %v", keys[:i+1])
+		}
+		node = next
+	}
+	return node, nil
 }
 
 // proposalDiffPath describes the patch a reply proposes: comments.ProposalDiff.
@@ -81,7 +127,7 @@ func proposalDiffPath(id map[string]any) map[string]any {
 // deliveryPaths are the agent delivery operations RegisterDeliveryRoutes mounts.
 func deliveryPaths(id map[string]any, parameter func(name, kind string, required bool) map[string]any) map[string]any {
 	str := map[string]string{"type": "string"}
-	target := map[string]any{"type": "object", "required": []string{"kind"}, "description": `{kind:"session", sessionId} or {kind:"run", prompt, runOptions?, groupKey?, fresh?}`, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"session", "run"}}, "sessionId": str, "prompt": str, "runOptions": map[string]string{"type": "object"}, "groupKey": str, "fresh": map[string]string{"type": "boolean", "description": "Run targets only: always start a new session instead of reusing groupKey's; it becomes the group's session"}, "edits": map[string]any{"type": "string", "enum": []string{"direct", "propose"}, "description": "direct (default) lets the agent edit files; propose has it answer with an edits (or patch) reply a person accepts, without file write tools"}}}
+	target := map[string]any{"type": "object", "required": []string{"kind"}, "description": `{kind:"session", sessionId} or {kind:"run", prompt, runOptions?, groupKey?, fresh?}`, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"session", "run"}}, "sessionId": str, "prompt": str, "runOptions": map[string]string{"type": "object"}, "groupKey": str, "fresh": map[string]string{"type": "boolean", "description": "Run targets only: always start a new session instead of reusing groupKey's; it becomes the group's session"}, "edits": map[string]any{"type": "string", "enum": []string{"direct", "propose"}, "description": "direct lets the agent edit files; omitted inherits the target's comment agent edits, direct when it sets none; propose has it answer with an edits (or patch) reply a person accepts, without file write tools"}}}
 	body := func(schema map[string]any) map[string]any {
 		return map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": schema}}}
 	}
@@ -92,7 +138,10 @@ func deliveryPaths(id map[string]any, parameter func(name, kind string, required
 	deliverResponses["409"] = map[string]any{"description": "Stale expectedVersion, or a delivery is already active"}
 	deliverResponses["502"] = map[string]any{"description": "Delivery ran and failed; the failure is recorded in the comment's agentRun"}
 	agentResponses := map[string]any{
-		"200": map[string]any{"description": "{settings, agent}: the target's settings layers and positions, and its resolved comment agent with each field traced to the layer that set it"},
+		"200": map[string]any{"description": "{settings, agent, session?}: the target's settings layers and positions, its resolved comment agent with each field traced to the layer that set it, and session, the live session (gavel edit --session) every new human thread goes to ahead of the agent, when the host sets one", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "object", "required": []string{"settings", "agent"}, "properties": map[string]any{
+			"settings": map[string]string{"type": "object"}, "agent": map[string]string{"type": "object"},
+			"session": map[string]string{"type": "string", "description": "The live session new human threads are routed to ahead of the agent"},
+		}}}}},
 		"400": map[string]any{"description": "The target is not one the host's settings cover"},
 		"501": map[string]any{"description": "Comment agent settings are not enabled on this host"},
 	}
@@ -104,8 +153,9 @@ func deliveryPaths(id map[string]any, parameter func(name, kind string, required
 		"target": map[string]any{"type": "object", "required": []string{"scopeUri", "uri"}, "properties": map[string]any{"scopeUri": str, "uri": str}},
 		"layer":  map[string]any{"type": "object", "required": []string{"kind"}, "description": "The settings layer to save at: {kind: user|parent|project|path, path?, file?} (no file saves the database layer)", "properties": map[string]any{"kind": str, "path": str, "file": str}},
 		"page":   map[string]any{"type": "boolean", "description": "Save the layer's entry for the target instead of its default"},
-		"agent":  map[string]any{"type": []string{"object", "null"}, "description": "The comments.agents entry to save; null removes it"},
+		"agent":  map[string]any{"type": []string{"object", "null"}, "description": "A JSON merge patch (RFC 7386) of the comments.agents entry, applied under the layer's save lock to the entry it already holds: a present field replaces that field (objects merge), a field set to null is removed so it inherits again; agent null deletes the whole entry"},
 	}}
+	saveResponses["400"] = map[string]any{"description": "The target is not one the host's settings cover, or the patch names an unknown field, a wrong type or an invalid edits policy"}
 	batchBody := map[string]any{"type": "object", "required": []string{"requestId", "target", "threads"}, "properties": map[string]any{
 		"requestId": str, "target": target,
 		"threads": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "object", "required": []string{"id", "expectedVersion"}, "properties": map[string]any{"id": str, "expectedVersion": map[string]string{"type": "integer", "format": "int64"}}}},
@@ -117,13 +167,27 @@ func deliveryPaths(id map[string]any, parameter func(name, kind string, required
 	return map[string]any{
 		"/comments/agent": map[string]any{
 			"get": map[string]any{"operationId": "comments-agent", "summary": "Read the comment agent a target's settings configure", "parameters": []any{parameter("scope", "string", true), parameter("uri", "string", true)}, "responses": agentResponses},
-			"put": map[string]any{"operationId": "comments-save-agent", "summary": "Save or remove the comment agent at one settings layer of a target", "requestBody": body(saveBody), "responses": saveResponses},
+			"put": map[string]any{"operationId": "comments-save-agent", "summary": "Patch or remove the comment agent at one settings layer of a target", "requestBody": body(saveBody), "responses": saveResponses},
 		},
 		"/comments/agent-sessions":       map[string]any{"get": map[string]any{"operationId": "comments-agent-sessions", "summary": "List the agent sessions a thread can be delivered to: live ones, and with a scope its managed sessions, ended ones included", "parameters": []any{parameter("scope", "string", false), parameter("all", "string", false)}, "responses": sessionsResponses(ok)}},
+		"/comments/mentionables":         map[string]any{"get": map[string]any{"operationId": "comments-mentionables", "summary": "List the agents a comment on a target addresses with an @name token: @agent (its comment agent rule), @<runtime family> (a fresh run of its default agent model) and @<session slug>", "parameters": []any{parameter("scope", "string", true), parameter("target", "string", true)}, "responses": mentionablesResponses(ok)}},
 		"/comments/deliver":              map[string]any{"post": map[string]any{"operationId": "comments-deliver-batch", "summary": "Deliver several threads of one scope to one target in a single message", "requestBody": body(batchBody), "responses": batchResponses}},
 		"/comments/{id}/deliver":         map[string]any{"post": map[string]any{"operationId": "comments-deliver", "summary": "Deliver a thread to a live agent session or a new managed run", "parameters": []any{id}, "requestBody": body(map[string]any{"type": "object", "required": []string{"expectedVersion", "requestId", "target"}, "properties": map[string]any{"expectedVersion": map[string]string{"type": "integer", "format": "int64"}, "requestId": str, "target": target}}), "responses": deliverResponses}},
 		"/comments/{id}/deliver/preview": map[string]any{"post": map[string]any{"operationId": "comments-deliver-preview", "summary": "Render what a run target would start for a thread", "parameters": []any{id}, "requestBody": body(map[string]any{"type": "object", "required": []string{"target"}, "properties": map[string]any{"target": target}}), "responses": ok("Rendered run preview")}},
 	}
+}
+
+// mentionablesResponses describe GET /comments/mentionables: comments.Mentionable items.
+func mentionablesResponses(ok func(string) map[string]any) map[string]any {
+	mentionable := map[string]any{"type": "object", "required": []string{"id", "name", "kind"}, "properties": map[string]any{
+		"id":   map[string]string{"type": "string", "description": `"agent", "runtime:<family>" or "session:<id>"`},
+		"name": map[string]string{"type": "string", "description": "The @name: agent, a runtime family, or a session's captain slug (a managed session without one: its label as a slug; else its id). A session whose name agent or a runtime holds is not listed; sessions sharing a name are listed as <name>-<first 8 of id>"},
+		"kind": map[string]any{"type": "string", "enum": []string{"agent"}},
+	}}
+	responses := ok("Mentionable agents")
+	responses["200"] = map[string]any{"description": "Mentionable agents; a scope without a local working directory lists no sessions", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "array", "items": mentionable}}}}
+	responses["400"] = map[string]any{"description": "No scope or target"}
+	return responses
 }
 
 // sessionsResponses describe GET /comments/agent-sessions: comments.AgentSession items.

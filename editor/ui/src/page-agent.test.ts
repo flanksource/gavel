@@ -324,6 +324,13 @@ describe("viewer choice", () => {
     expect([before, loadViewerChoice(target), loadViewerChoice(scope)]).toEqual([{ kind: "run" }, { kind: "session", sessionId: "s-1" }, { kind: "run" }]);
   });
 
+  it("defaults to the launching session until the viewer stores a choice, including a run", () => {
+    const launching = "launching-1";
+    const before = loadViewerChoice(target, launching);
+    saveViewerChoice(target, { kind: "run" });
+    expect([before, loadViewerChoice(target, launching)]).toEqual([{ kind: "session", sessionId: launching }, { kind: "run" }]);
+  });
+
   it("ignores a stored value that is not a choice", () => {
     window.localStorage.setItem(`gavel-edit:page-agent:${target}`, JSON.stringify({ kind: "session" }));
     expect(loadViewerChoice(target)).toEqual({ kind: "run" });

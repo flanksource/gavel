@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -23,6 +25,8 @@ type threadSelector struct {
 	Patch    *comments.PatchAnchor `json:"patch,omitempty"`
 	HTML     string                `json:"html,omitempty"`
 	Locators []json.RawMessage     `json:"locators,omitempty"`
+	Quote    *comments.TextQuote   `json:"quote,omitempty"`
+	Region   *comments.Region      `json:"region,omitempty"`
 }
 
 // elementContext is the element a host captured with a comment
@@ -209,6 +213,9 @@ func threadMarkdown(comment comments.Comment, baseURL string) (string, error) {
 	if patch := tc.selector.Patch; patch != nil && len(patch.Lines) > 0 {
 		sections = append(sections, "```\n"+strings.Join(patch.Lines, "\n")+"\n```")
 	}
+	if quote := tc.selector.Quote; quote != nil {
+		sections = append(sections, quotedText(quote.Exact))
+	}
 	element, err := elementSections(tc)
 	if err != nil {
 		return "", fmt.Errorf("thread %s element: %w", comment.ID, err)
@@ -335,6 +342,9 @@ func anchorLabel(selector threadSelector) string {
 		view = ", " + selector.View + " view"
 	}
 	switch {
+	case selector.Region != nil:
+		r := selector.Region
+		return fmt.Sprintf(" (region x %s, y %s, %s wide, %s high%s)", percent(r.X), percent(r.Y), percent(r.W), percent(r.H), view)
 	case selector.Patch != nil && selector.Patch.StartLine == selector.Patch.EndLine:
 		return fmt.Sprintf(" (line %d%s)", selector.Patch.StartLine, view)
 	case selector.Patch != nil:
@@ -344,6 +354,20 @@ func anchorLabel(selector threadSelector) string {
 	default:
 		return " (whole target)"
 	}
+}
+
+// percent renders a [0,1] fraction as a percentage to two decimals.
+func percent(fraction float64) string {
+	return strconv.FormatFloat(math.Round(fraction*10000)/100, 'f', -1, 64) + "%"
+}
+
+// quotedText is the exact text a comment selected: inline when it is one
+// plain line, fenced otherwise.
+func quotedText(exact string) string {
+	if strings.ContainsAny(exact, "\n`") {
+		return "Quoted text:\n\n```\n" + exact + "\n```"
+	}
+	return "Quoted text: `" + exact + "`"
 }
 
 func messageMarkdown(author comments.Actor, body string) string {

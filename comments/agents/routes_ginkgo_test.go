@@ -36,6 +36,12 @@ var _ = Describe("Comment agents of a project's dashboard pages", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect([]any{file.Agent.Agent.Prompt, file.Agent.Agent.Group, file.Agent.Agent.Edits}).To(Equal([]any{"file-agent", "", verify.CommentEditsPropose}))
 		Expect(file.Agent.Provenance["edits"]).To(Equal(file.Agent.Provenance["prompt"]), "edits is traced to the .gavel.yaml layer that set it")
+		fileTarget := comments.Target{ScopeURI: scope, URI: scope + "/files/" + verify.GavelConfigFileName}
+		rule, found, err := routes.AgentRule(ctx, fileTarget)
+		Expect(err).NotTo(HaveOccurred())
+		_, routed, err := routes.RouteFor(ctx, comments.Comment{Target: fileTarget, WorkflowID: comments.HumanReview().ID})
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{found, rule.Target, routed}).To(Equal([]any{true, comments.DeliverTarget{Kind: "run", Prompt: "file-agent", Edits: comments.EditsPropose}, false}), "a rule that does not run automatically still sets the file's edits policy")
 
 		key := url.PathEscape("https://example.com/docs#intro")
 		target := comments.Target{ScopeURI: scope, URI: scope + "/pages/" + key, Kind: "web-page"}
@@ -50,6 +56,12 @@ var _ = Describe("Comment agents of a project's dashboard pages", func() {
 		route, ok, err := routes.RouteFor(ctx, comments.Comment{Target: target, WorkflowID: comments.HumanReview().ID})
 		Expect(err).NotTo(HaveOccurred())
 		Expect([]any{ok, route}).To(Equal([]any{true, comments.Route{Source: "db:project:", Target: comments.DeliverTarget{Kind: "run", Prompt: "page-agent", GroupKey: "docs-review", Edits: comments.EditsPropose}}}))
+		routes.Session = "live-1"
+		route, ok, err = routes.RouteFor(ctx, comments.Comment{Target: target, WorkflowID: comments.HumanReview().ID})
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{ok, route}).To(Equal([]any{true, comments.Route{Source: "session", Target: comments.DeliverTarget{Kind: "session", SessionID: "live-1"}, Assign: true}}), "the launching session takes the thread ahead of the page agent")
+		_, ok, err = routes.RouteFor(ctx, comments.Comment{Target: target, WorkflowID: "other-workflow"})
+		Expect([]any{ok, err}).To(Equal([]any{false, nil}), "only human-review threads go to the session")
 		var synced int64
 		Expect(db.Gorm().Raw("SELECT count(*) FROM gavel_settings WHERE file IS NOT NULL").Scan(&synced).Error).To(Succeed())
 		Expect(synced).To(Equal(int64(1)), "resolving a page keeps the project's synced .gavel.yaml row")

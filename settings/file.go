@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/flanksource/gavel/verify"
 )
@@ -39,8 +40,14 @@ func (File) Save(_ context.Context, target Target, ref Ref, edit func(*verify.Ga
 	return saveFile(position, ref.File, edit)
 }
 
+// fileSaves serializes this process's read-edit-write of config files, as the
+// database layer's row lock does for its saves.
+var fileSaves sync.Mutex
+
 // saveFile applies edit to the config file name at position, creating it when absent.
 func saveFile(position Position, name string, edit func(*verify.GavelConfig) error) error {
+	fileSaves.Lock()
+	defer fileSaves.Unlock()
 	if !verify.IsGavelConfigFile(name) {
 		return fmt.Errorf("%q is not a %s or .gavel.<name>.yaml file", name, verify.GavelConfigFileName)
 	}

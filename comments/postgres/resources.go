@@ -47,6 +47,9 @@ func (s *Store) Page(ctx context.Context, p comments.Principal, f comments.Filte
 		if f.Phase != "" {
 			q = q.Where("c.phase=?", f.Phase)
 		}
+		if f.After != "" {
+			q = q.Where("c.id > ?", f.After)
+		}
 		if f.Unread {
 			q = q.Where("COALESCE(r.version,0) < c.version")
 		}

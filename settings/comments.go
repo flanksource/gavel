@@ -40,10 +40,11 @@ func (r Resolved) CommentAgent(target Target) (verify.ResolvedCommentAgent, erro
 	return verify.ResolveCommentAgent(layers, file)
 }
 
-// SaveCommentAgent makes agent the comment agent at layer ref of target's
-// chain: the layer's default, or with page its entry for target's file. A nil
-// agent removes that entry.
-func SaveCommentAgent(ctx context.Context, service Service, target Target, ref Ref, page bool, agent *verify.CommentAgent) error {
+// SaveCommentAgent applies edit to the comment agent at layer ref of target's
+// chain: the layer's default, or with page its entry for target's file. The
+// edit reads and writes the entry inside the layer's save, under its lock, so
+// concurrent saves of one layer never lose each other's fields.
+func SaveCommentAgent(ctx context.Context, service Service, target Target, ref Ref, page bool, edit verify.CommentAgentEdit) error {
 	key := ""
 	if page {
 		positions, _, err := diskChain(target)
@@ -54,7 +55,7 @@ func SaveCommentAgent(ctx context.Context, service Service, target Target, ref R
 			return err
 		}
 	}
-	return service.Save(ctx, target, ref, func(cfg *verify.GavelConfig) error { return cfg.Comments.Agents.Set(key, agent) })
+	return service.Save(ctx, target, ref, func(cfg *verify.GavelConfig) error { return cfg.Comments.Agents.Edit(key, edit) })
 }
 
 // pageKey is target's file relative to the directory of ref's position, the

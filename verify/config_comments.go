@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -204,6 +205,120 @@ func (c *CommentAgentsConfig) Set(page string, agent *CommentAgent) error {
 		c.Pages[page] = *agent
 	}
 	return nil
+}
+
+// CommentAgentEdit turns a layer's entry (nil when it has none) into its new
+// entry; a nil result removes the entry.
+type CommentAgentEdit func(current *CommentAgent) (*CommentAgent, error)
+
+// ReplaceCommentAgent makes agent the whole entry, or removes it when nil.
+func ReplaceCommentAgent(agent *CommentAgent) CommentAgentEdit {
+	return func(*CommentAgent) (*CommentAgent, error) { return agent, nil }
+}
+
+// PatchCommentAgent applies patch, a JSON merge patch (RFC 7386), to an
+// entry: a field that is present replaces that field (objects merge
+// recursively), a field set to null is removed so it inherits again, and a
+// null patch removes the whole entry. The patch is checked (known fields,
+// their types, the edits policy) before it is returned.
+func PatchCommentAgent(patch json.RawMessage) (CommentAgentEdit, error) {
+	var doc any
+	if err := json.Unmarshal(patch, &doc); err != nil {
+		return nil, fmt.Errorf("comment agent patch: %w", err)
+	}
+	if doc == nil {
+		return ReplaceCommentAgent(nil), nil
+	}
+	fields, ok := doc.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("comment agent patch must be a JSON object or null, not %s", patch)
+	}
+	if _, err := decodeCommentAgent(withoutNulls(fields)); err != nil {
+		return nil, fmt.Errorf("comment agent patch: %w", err)
+	}
+	return func(current *CommentAgent) (*CommentAgent, error) {
+		var base any = map[string]any{}
+		if current != nil {
+			data, err := json.Marshal(current)
+			if err != nil {
+				return nil, fmt.Errorf("encode the comment agent entry: %w", err)
+			}
+			if err := json.Unmarshal(data, &base); err != nil {
+				return nil, fmt.Errorf("decode the comment agent entry: %w", err)
+			}
+		}
+		merged, err := decodeCommentAgent(mergePatch(base, fields))
+		if err != nil {
+			return nil, fmt.Errorf("apply the comment agent patch: %w", err)
+		}
+		return &merged, nil
+	}, nil
+}
+
+// mergePatch is target with patch applied as RFC 7386 describes.
+func mergePatch(target, patch any) any {
+	fields, ok := patch.(map[string]any)
+	if !ok {
+		return patch
+	}
+	merged, ok := target.(map[string]any)
+	if !ok {
+		merged = map[string]any{}
+	}
+	for key, value := range fields {
+		if value == nil {
+			delete(merged, key)
+		} else {
+			merged[key] = mergePatch(merged[key], value)
+		}
+	}
+	return merged
+}
+
+// withoutNulls is fields with every null member removed, at any depth.
+func withoutNulls(fields map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range fields {
+		switch v := value.(type) {
+		case nil:
+		case map[string]any:
+			out[key] = withoutNulls(v)
+		default:
+			out[key] = v
+		}
+	}
+	return out
+}
+
+// decodeCommentAgent decodes doc strictly into a valid CommentAgent.
+func decodeCommentAgent(doc any) (CommentAgent, error) {
+	var agent CommentAgent
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return agent, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&agent); err != nil {
+		return agent, err
+	}
+	return agent, agent.Validate()
+}
+
+// Edit applies edit to the layer's default (page empty) or its entry for page.
+func (c *CommentAgentsConfig) Edit(page string, edit CommentAgentEdit) error {
+	current := c.Default
+	if page != "" {
+		current = nil
+		if entry, ok := c.Pages[page]; ok {
+			current = &entry
+		}
+	}
+	next, err := edit(current)
+	if err != nil {
+		return err
+	}
+	return c.Set(page, next)
 }
 
 func commentsSchema(specSchema map[string]any) map[string]any {

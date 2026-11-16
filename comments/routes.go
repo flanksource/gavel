@@ -39,6 +39,16 @@ type RouteResolver interface {
 	RouteFor(ctx context.Context, c Comment) (r Route, ok bool, err error)
 }
 
+// AgentRules is a RouteResolver whose configuration names a target's comment
+// agent rule whether or not it routes new threads automatically: every
+// delivery of the target's threads inherits the rule's edits policy, and @agent
+// addresses it.
+type AgentRules interface {
+	// AgentRule is t's rule as the route it would deliver through; ok is false
+	// when the host's configuration does not cover t or configures no agent for it.
+	AgentRule(ctx context.Context, t Target) (r Route, ok bool, err error)
+}
+
 // CommentAgents is a RouteResolver whose routes come from configuration the
 // host can also read and save per target: the comment agent a target's threads
 // are handed to. Payloads are the host's own and opaque here.
@@ -50,9 +60,12 @@ type CommentAgents interface {
 	SaveCommentAgent(ctx context.Context, req SaveCommentAgentRequest) (any, error)
 }
 
-// SaveCommentAgentRequest makes Agent the comment agent at Layer of Target's
+// SaveCommentAgentRequest patches the comment agent at Layer of Target's
 // configuration: the layer's default, or with Page its entry for the target.
-// A JSON null Agent removes that entry.
+// Agent is a JSON merge patch (RFC 7386) the host applies to the entry the
+// layer already holds, under its save lock: a present field replaces that
+// field, a null one is removed so it inherits, and a JSON null Agent removes
+// the whole entry.
 type SaveCommentAgentRequest struct {
 	Target Target          `json:"target"`
 	Layer  json.RawMessage `json:"layer"`
@@ -99,35 +112,55 @@ func (s *Service) SaveCommentAgent(ctx context.Context, req SaveCommentAgentRequ
 	return agents.SaveCommentAgent(ctx, req)
 }
 
-// routeCreated delivers a new root in the background to explicit, or, for a
-// human-authored root without one, through its route: the create never waits,
-// and failures land in its agentRun.
-func (s *Service) routeCreated(ctx context.Context, c Comment, explicit *DeliverTarget) {
-	if c.Version != 1 || (explicit == nil && (s.routes == nil || c.Author.Kind != "user")) {
+// routeCreated delivers a new root in the background through explicit (its
+// deliver target or its mention), or, for a human-authored root without one,
+// through its route: the create never waits, and failures land in its agentRun.
+func (s *Service) routeCreated(ctx context.Context, c Comment, explicit *Route) {
+	if explicit == nil && (s.routes == nil || c.Author.Kind != "user") {
 		return
 	}
+	s.deliverInBackground(ctx, c, func(ctx context.Context) (DeliverTarget, error) {
+		return s.deliverRoute(ctx, c, explicit)
+	})
+}
+
+// deliverInBackground runs deliver for thread c once the request that changed
+// it has answered; failures land in its agentRun.
+func (s *Service) deliverInBackground(ctx context.Context, c Comment, deliver func(context.Context) (DeliverTarget, error)) {
 	go func() {
 		ctx := context.WithoutCancel(ctx)
-		target, err := s.deliverRoute(ctx, c, explicit)
+		target, err := deliver(ctx)
 		if err == nil {
 			return
 		}
 		// An executed delivery records its own failure; one that never ran is recorded here.
 		if !errors.Is(err, ErrDelivery) {
-			err = errors.Join(err, s.delivery.RecordFailure(ctx, c.ID, target, err))
+			err = errors.Join(err, s.recordFailure(ctx, c, target, err))
 		}
-		// No request is left to answer: the create has already responded.
-		logger.Errorf("routing comment %s to an agent: %v", c.ID, err)
+		// No request is left to answer: it has already responded.
+		logger.Errorf("delivering comment %s to an agent: %v", c.ID, err)
 	}()
 }
 
-// deliverRoute delivers c to explicit, or else through its route, queued
+// recordFailure records on c a delivery to target that failed before its
+// executor ran, under the edits policy the delivery would have had. When that
+// policy cannot be resolved (the rule lookup is what failed) the failure is
+// still recorded, with the lookup error joined to cause.
+func (s *Service) recordFailure(ctx context.Context, c Comment, target DeliverTarget, cause error) error {
+	resolved, err := s.withRuleEdits(ctx, c.Target, target)
+	if err != nil {
+		cause = errors.Join(cause, err)
+	}
+	return errors.Join(err, s.delivery.RecordFailure(ctx, c.ID, resolved, cause))
+}
+
+// deliverRoute delivers c through explicit, or else through its route, queued
 // against the thread's latest version: the creator may already have changed it
-// (an attachment upload) by the time the delivery starts. An explicit target
-// replaces the route entirely, including its assignment.
-func (s *Service) deliverRoute(ctx context.Context, c Comment, explicit *DeliverTarget) (DeliverTarget, error) {
+// (an attachment upload) by the time the delivery starts. An explicit route
+// replaces the automatic one entirely, including its assignment.
+func (s *Service) deliverRoute(ctx context.Context, c Comment, explicit *Route) (DeliverTarget, error) {
 	if explicit != nil {
-		return *explicit, s.deliverLatest(ctx, c.ID, "create:"+c.ID, *explicit)
+		return explicit.Target, s.deliverThrough(ctx, c.ID, "create:"+c.ID, *explicit)
 	}
 	r, ok, err := s.routes.RouteFor(ctx, c)
 	if err != nil {
@@ -136,15 +169,21 @@ func (s *Service) deliverRoute(ctx context.Context, c Comment, explicit *Deliver
 	if !ok {
 		return r.Target, nil
 	}
+	return r.Target, s.deliverThrough(ctx, c.ID, "route:"+c.ID, r)
+}
+
+// deliverThrough delivers thread id through r: an Assign route makes its
+// agent the thread's assignee before the delivery starts.
+func (s *Service) deliverThrough(ctx context.Context, id, requestID string, r Route) error {
 	if r.Assign {
 		agent := RouteAgent(r)
-		if _, err = s.WithLatest(ctx, c.ID, func(latest Comment) (Comment, error) {
-			return s.Act(ctx, ActionRequest{ID: c.ID, ExpectedVersion: latest.Version, Action: "assign", Assignee: &agent})
+		if _, err := s.WithLatest(ctx, id, func(latest Comment) (Comment, error) {
+			return s.Act(ctx, ActionRequest{ID: id, ExpectedVersion: latest.Version, Action: "assign", Assignee: &agent})
 		}); err != nil {
-			return r.Target, fmt.Errorf("assigning comment %s to route %s: %w", c.ID, r.Source, err)
+			return fmt.Errorf("assigning comment %s to route %s: %w", id, r.Source, err)
 		}
 	}
-	return r.Target, s.deliverLatest(ctx, c.ID, "route:"+c.ID, r.Target)
+	return s.deliverLatest(ctx, id, requestID, r.Target)
 }
 
 func (s *Service) deliverLatest(ctx context.Context, id, requestID string, target DeliverTarget) error {

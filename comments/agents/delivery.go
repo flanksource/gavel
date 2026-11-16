@@ -73,12 +73,15 @@ func (d delivery) Execute(ctx context.Context, op comments.Operation) (json.RawM
 	if err != nil {
 		return nil, err
 	}
-	run, err := d.deliver(ctx, threads, payload.DeliverTarget)
+	run, err := AgentRun{}, requireEdits(payload.DeliverTarget)
+	if err == nil {
+		run, err = d.deliver(ctx, threads, payload.DeliverTarget)
+	}
 	if err != nil {
 		if run.RequestedAt.IsZero() {
 			run.RequestedAt = time.Now().UTC()
 		}
-		run.State, run.Error, run.Edits = "error", err.Error(), editsOf(payload.DeliverTarget)
+		run.State, run.Error, run.Edits = "error", err.Error(), payload.Edits
 		for _, thread := range threads {
 			_, recordErr := setAgentRun(ctx, d.service, thread.ID, run)
 			err = errors.Join(err, recordErr)
@@ -107,8 +110,11 @@ func (d delivery) threads(ctx context.Context, lead string, batch []string) ([]c
 	return threads, nil
 }
 
+// RecordFailure records cause as the thread's errored agentRun. The target's
+// edits policy is recorded as resolved; it is empty when resolving it is what
+// failed, and the failure is recorded all the same.
 func (d delivery) RecordFailure(ctx context.Context, commentID string, target comments.DeliverTarget, cause error) error {
-	run := AgentRun{SessionID: target.SessionID, RequestedAt: time.Now().UTC(), State: "error", Error: cause.Error(), Target: AgentRunTarget{Label: targetLabel(target)}, Edits: editsOf(target)}
+	run := AgentRun{SessionID: target.SessionID, RequestedAt: time.Now().UTC(), State: "error", Error: cause.Error(), Target: AgentRunTarget{Label: targetLabel(target)}, Edits: target.Edits}
 	_, err := setAgentRun(ctx, d.service, commentID, run)
 	return err
 }
@@ -117,7 +123,7 @@ func (d delivery) RecordFailure(ctx context.Context, commentID string, target co
 // session, an ended managed session resumed, or a new run. A run target with a
 // group reuses the group's session, live or resumed, unless Fresh.
 func (d delivery) deliver(ctx context.Context, threads []comments.Comment, target comments.DeliverTarget) (AgentRun, error) {
-	edits := editsOf(target)
+	edits := target.Edits
 	if target.Kind == "session" {
 		return d.toSession(ctx, threads, target.SessionID, edits)
 	}
@@ -190,16 +196,24 @@ func (d delivery) managed(ctx context.Context, thread comments.Comment, id strin
 // directory unless All, and with a scope its managed sessions: a live one
 // marked managed, an ended one as a resumable "ended" session.
 func (d delivery) Sessions(ctx context.Context, q comments.SessionQuery) ([]comments.AgentSession, error) {
-	records, err := d.Bridge.Live(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing live agent sessions: %w", err)
-	}
 	dir := ""
 	if !q.All && q.ScopeURI != "" {
+		var err error
 		if dir, err = d.Workdir(ctx, comments.Target{ScopeURI: q.ScopeURI}); err != nil {
 			return nil, err
 		}
 	}
+	records, err := d.Bridge.Live(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing live agent sessions: %w", err)
+	}
+	return d.sessions(ctx, q, dir, records)
+}
+
+// sessions are q's sessions among records, narrowed to those working in dir
+// unless it is empty, as Sessions lists them.
+func (d delivery) sessions(ctx context.Context, q comments.SessionQuery, dir string, records []captaincli.SessionRecord) ([]comments.AgentSession, error) {
+	var err error
 	var managed []comments.ManagedSession
 	if q.ScopeURI != "" {
 		if managed, err = d.Groups.ManagedSessions(ctx, q.TenantID, q.ScopeURI); err != nil {

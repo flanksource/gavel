@@ -31,11 +31,66 @@ type ActionRequest struct {
 	Mode string `json:"mode,omitempty"`
 }
 
+// Act applies req to its comment. A person's reply that mentions one agent
+// (an @name of Mentionables) then delivers the thread there in the background;
+// two different agents fail the reply before it is written.
 func (s *Service) Act(ctx context.Context, req ActionRequest) (Comment, error) {
+	out, mention, err := s.actMentioning(ctx, req)
+	if err != nil {
+		return out, err
+	}
+	s.deliverMention(ctx, mention)
+	return out, nil
+}
+
+// mentionDelivery is a reply's agent mention, delivered once the reply is
+// stored: by Act right away, by Batch only after its transaction commits.
+type mentionDelivery struct {
+	thread Comment
+	route  Route
+}
+
+// actMentioning applies req and answers the delivery its reply's mention asks for; nil for none.
+func (s *Service) actMentioning(ctx context.Context, req ActionRequest) (Comment, *mentionDelivery, error) {
 	p, err := s.principal(ctx)
 	if err != nil {
-		return Comment{}, err
+		return Comment{}, nil, err
 	}
+	route, err := s.replyMention(ctx, p, req)
+	if err != nil {
+		return Comment{}, nil, err
+	}
+	out, err := s.act(ctx, p, req)
+	if err != nil || route == nil {
+		return out, nil, err
+	}
+	return out, &mentionDelivery{thread: out, route: *route}, nil
+}
+
+// deliverMention delivers m's thread through its mention's route in the background.
+func (s *Service) deliverMention(ctx context.Context, m *mentionDelivery) {
+	if m == nil {
+		return
+	}
+	requestID := fmt.Sprintf("reply:%s:%d", m.thread.ID, m.thread.Version)
+	s.deliverInBackground(ctx, m.thread, func(ctx context.Context) (DeliverTarget, error) {
+		return m.route.Target, s.deliverThrough(ctx, m.thread.ID, requestID, m.route)
+	})
+}
+
+// replyMention is the route req, a reply, delivers its thread through by its agent mention; nil for none.
+func (s *Service) replyMention(ctx context.Context, p Principal, req ActionRequest) (*Route, error) {
+	if req.Action != "reply" || s.delivery == nil || p.Actor.Kind != "user" || len(mentionTokens(req.Body)) == 0 {
+		return nil, nil
+	}
+	c, err := s.Get(ctx, req.ID)
+	if err != nil {
+		return nil, err
+	}
+	return s.mentionRoute(ctx, p, c.Target, req.Body)
+}
+
+func (s *Service) act(ctx context.Context, p Principal, req ActionRequest) (Comment, error) {
 	if req.ExpectedVersion < 1 {
 		return Comment{}, fmt.Errorf("%w: expectedVersion is required", ErrInvalid)
 	}

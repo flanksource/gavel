@@ -23,12 +23,15 @@ type AgentRun struct {
 	Edits string `json:"edits,omitempty"`
 }
 
-// editsOf is target's edits policy, EditsDirect when it names none.
-func editsOf(target comments.DeliverTarget) string {
-	if target.Edits == "" {
-		return comments.EditsDirect
+// requireEdits refuses a target that reached the host without an edits
+// policy: the comments service resolves an empty one from the target's comment
+// agent rule before every delivery and preview. A delivery refused here is
+// still recorded on its threads as an errored agentRun.
+func requireEdits(target comments.DeliverTarget) error {
+	if target.Edits != comments.EditsDirect && target.Edits != comments.EditsPropose {
+		return fmt.Errorf("delivery target has edits policy %q, not the %q or %q the comments service resolves", target.Edits, comments.EditsDirect, comments.EditsPropose)
 	}
-	return target.Edits
+	return nil
 }
 
 // AgentRunTarget is where the thread went, and the channel captain delivered it through.

@@ -17,6 +17,7 @@ import (
 // do not implement comments.CommentAgents answers it 501.
 func RegisterDeliveryRoutes(router *route.Router, resolve Resolver) {
 	router.Raw("GET /api/v1/comments/agent-sessions", serve(resolve, agentSessions), route.Meta{Entity: "comments", Verb: "agent-sessions", ReadOnly: true})
+	router.Raw("GET /api/v1/comments/mentionables", serve(resolve, mentionables), route.Meta{Entity: "comments", Verb: "mentionables", ReadOnly: true})
 	router.Raw("GET /api/v1/comments/agent", serve(resolve, commentAgent), route.Meta{Entity: "comments", Verb: "agent", ReadOnly: true})
 	router.Raw("PUT /api/v1/comments/agent", serve(resolve, saveCommentAgent), route.Meta{Entity: "comments", Verb: "save-agent"})
 	router.Raw("POST /api/v1/comments/deliver", serve(resolve, deliverBatch), route.Meta{Entity: "comments", Verb: "deliver-batch"})
@@ -56,6 +57,11 @@ func agentSessions(ctx context.Context, service *comments.Service, r *http.Reque
 	return service.AgentSessions(ctx, comments.SessionQuery{ScopeURI: q.Get("scope"), All: q.Get("all") == "1"})
 }
 
+func mentionables(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {
+	q := r.URL.Query()
+	return service.Mentionables(ctx, comments.Target{ScopeURI: q.Get("scope"), URI: q.Get("target")})
+}
+
 func commentAgent(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {
 	q := r.URL.Query()
 	return service.CommentAgent(ctx, comments.Target{ScopeURI: q.Get("scope"), URI: q.Get("uri")})
@@ -63,7 +69,7 @@ func commentAgent(ctx context.Context, service *comments.Service, r *http.Reques
 
 func saveCommentAgent(ctx context.Context, service *comments.Service, _ *http.Request) (any, error) {
 	var req comments.SaveCommentAgentRequest
-	if err := decode(ctx, nil, &req); err != nil {
+	if err := decode(ctx, bodyLimit, &req); err != nil {
 		return nil, err
 	}
 	return service.SaveCommentAgent(ctx, req)
@@ -71,7 +77,7 @@ func saveCommentAgent(ctx context.Context, service *comments.Service, _ *http.Re
 
 func deliver(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {
 	var req comments.DeliverRequest
-	if err := decode(ctx, nil, &req); err != nil {
+	if err := decode(ctx, bodyLimit, &req); err != nil {
 		return nil, err
 	}
 	req.CommentID = r.PathValue("id")
@@ -80,7 +86,7 @@ func deliver(ctx context.Context, service *comments.Service, r *http.Request) (a
 
 func deliverBatch(ctx context.Context, service *comments.Service, _ *http.Request) (any, error) {
 	var req comments.DeliverBatchRequest
-	if err := decode(ctx, nil, &req); err != nil {
+	if err := decode(ctx, bodyLimit, &req); err != nil {
 		return nil, err
 	}
 	return service.DeliverBatch(ctx, req)
@@ -90,7 +96,7 @@ func previewDelivery(ctx context.Context, service *comments.Service, r *http.Req
 	var req struct {
 		Target comments.DeliverTarget `json:"target"`
 	}
-	if err := decode(ctx, nil, &req); err != nil {
+	if err := decode(ctx, bodyLimit, &req); err != nil {
 		return nil, err
 	}
 	return service.PreviewDelivery(ctx, r.PathValue("id"), req.Target)

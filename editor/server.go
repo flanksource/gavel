@@ -63,6 +63,10 @@ type Server struct {
 	Context  context.Context
 	// Agents reaches the live agent sessions threads are sent to.
 	Agents agents.Bridge
+	// Session is the live agent session `gavel edit` was started from: every
+	// new human comment is assigned and delivered to it. Empty routes through
+	// the files' configured comment agents.
+	Session string
 	// Version is the gavel version recorded on the lint runs the editor saves.
 	Version string
 	mu      sync.Mutex
@@ -90,7 +94,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/preview/runtimes", s.previewCatalog)
 	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/file/{id}/comments", s.listComments)
-	mux.HandleFunc("POST /api/file/{id}/comments/read", s.markFileCommentsRead)
 	mux.HandleFunc("GET /api/comments", s.commentSummary)
 	mux.HandleFunc("GET /api/comments/projects", s.commentProjects)
 	mux.HandleFunc("POST /api/projects", s.createProject)

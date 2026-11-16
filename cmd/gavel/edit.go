@@ -31,6 +31,30 @@ type EditOptions struct {
 	NoOpen bool     `flag:"no-open" help:"Print the URL without opening a browser"`
 	Schema string   `flag:"schema" help:"JSON Schema path or HTTP(S) URL overriding document declarations"`
 	Dev    bool     `flag:"dev" help:"Serve the page from the editor/ui Vite dev server, with clicky-ui from the sibling checkout's source when present (requires a source checkout)"`
+	// Session defaults to the agent session gavel edit runs inside.
+	Session string `flag:"session" help:"Agent session id new comments are assigned and delivered to (default: the Claude/Codex session gavel edit runs in, as captain detects it; \"none\" routes through the files' comment agents)"`
+}
+
+// editSession is the agent session new comments go to: the flag's session,
+// none for "none", else the live session captain finds this process inside
+// (inside an agent that is not live, an error).
+func editSession(ctx context.Context, flag string) (session string, label string, err error) {
+	switch flag {
+	case "none":
+		return "", "", nil
+	case "":
+		record, err := agents.Captain{}.Current(ctx)
+		if err != nil || record == nil {
+			return "", "", err
+		}
+		label = record.Source + " session " + record.ID
+		if record.Title != "" {
+			label += " (" + record.Title + ")"
+		}
+		return record.ID, label, nil
+	default:
+		return flag, "session " + flag, nil
+	}
 }
 
 func init() {
@@ -72,7 +96,12 @@ func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 	}
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	editorServer := &editor.Server{Store: store, Schema: opts.Schema, Assets: editorui.Assets(), Context: ctx, Agents: agents.Captain{}, Version: version}
+	session, sessionLabel, err := editSession(ctx, opts.Session)
+	if err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("resolving the agent session for new comments (pass --session=none to skip): %w", err)
+	}
+	editorServer := &editor.Server{Store: store, Schema: opts.Schema, Assets: editorui.Assets(), Context: ctx, Agents: agents.Captain{}, Session: session, Version: version}
 	if err := editorServer.Reload(); err != nil {
 		_ = listener.Close()
 		return nil, err
@@ -119,6 +148,9 @@ func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 	go func() { done <- server.Serve(listener) }()
 	url := "http://" + listener.Addr().String()
 	fmt.Println("Editor at " + url)
+	if sessionLabel != "" {
+		fmt.Println("Comments go to " + sessionLabel)
+	}
 	if !opts.NoOpen {
 		if err := openEditorBrowser(url); err != nil {
 			cancel()

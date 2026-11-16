@@ -16,6 +16,9 @@ var (
 	ErrDelivery = errors.New("agent delivery failed")
 	// ErrUnsupported is a request the host did not opt into, e.g. agent delivery.
 	ErrUnsupported = errors.New("comment host does not support this")
+	// ErrNoWorkdir is a scope with no local working directory for an agent
+	// session: its threads can start no managed session and mention none.
+	ErrNoWorkdir = errors.New("scope has no local working directory")
 )
 
 // DeliverAgent is the operation kind that hands a thread to an agent.
@@ -36,8 +39,10 @@ type DeliverTarget struct {
 	// Fresh always launches a new session, never reusing GroupKey's; the launched
 	// session becomes the group's, so the group's later deliveries reuse it.
 	Fresh bool `json:"fresh,omitempty"`
-	// Edits is EditsDirect (default when empty) or EditsPropose: the agent
-	// answers with a proposed patch and must not edit the project's files.
+	// Edits is EditsDirect or EditsPropose: the agent answers with a proposed
+	// patch and must not edit the project's files. Empty inherits the policy of
+	// the target's comment agent rule (AgentRules), EditsDirect when it sets none;
+	// the service resolves it before a delivery reaches the host's Delivery.
 	Edits string `json:"edits,omitempty"`
 }
 
@@ -115,6 +120,10 @@ type Delivery interface {
 	// Check rejects a target the host cannot run (e.g. malformed runOptions) before it is queued.
 	Check(DeliverTarget) error
 	Sessions(context.Context, SessionQuery) ([]AgentSession, error)
+	// Mentionables are the agents, besides the rule's @agent, a comment on the
+	// query's target addresses with an @name token, each with where it delivers:
+	// the runtime families always, the scope's sessions only when the query asks.
+	Mentionables(context.Context, MentionQuery) ([]Mentionable, error)
 	// Preview renders what a run target would start for c without claiming or launching.
 	Preview(context.Context, Comment, DeliverTarget) (json.RawMessage, error)
 	// RecordFailure records on the thread an automatic delivery to target that
@@ -173,6 +182,13 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (Comment, err
 	if err := s.checkTarget(req.Target); err != nil {
 		return Comment{}, err
 	}
+	c, err := s.Get(ctx, req.CommentID)
+	if err != nil {
+		return Comment{}, err
+	}
+	if req.Target, err = s.withRuleEdits(ctx, c.Target, req.Target); err != nil {
+		return Comment{}, err
+	}
 	payload, err := json.Marshal(req.Target)
 	if err != nil {
 		return Comment{}, err
@@ -186,9 +202,11 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (Comment, err
 
 // DeliverBatch hands req's threads, all of one scope, to req.Target in one
 // delivery: one message into one session, recorded as every thread's
-// agentRun. Every thread is checked before anything is queued, so one stale
-// (ErrConflict) or closed thread fails the whole batch. It is one deliver-agent
-// operation on the first thread, idempotent by RequestID as Deliver is.
+// agentRun. Unless the target sets an edits policy, every thread's rule must
+// resolve to the same one (ErrInvalid otherwise). Every thread is checked
+// before anything is queued, so one stale (ErrConflict) or closed thread fails
+// the whole batch. It is one deliver-agent operation on the first thread,
+// idempotent by RequestID as Deliver is.
 func (s *Service) DeliverBatch(ctx context.Context, req DeliverBatchRequest) ([]Comment, error) {
 	if err := s.checkTarget(req.Target); err != nil {
 		return nil, err
@@ -197,11 +215,41 @@ func (s *Service) DeliverBatch(ctx context.Context, req DeliverBatchRequest) ([]
 	if err != nil {
 		return nil, err
 	}
+	if req.Target, err = s.batchEdits(ctx, ids, req.Target); err != nil {
+		return nil, err
+	}
 	payload, err := json.Marshal(DeliverOperation{DeliverTarget: req.Target, Threads: ids})
 	if err != nil {
 		return nil, err
 	}
 	return s.runDelivery(ctx, QueueRequest{CommentID: ids[0], ExpectedVersion: req.Threads[0].ExpectedVersion, Kind: DeliverAgent, RequestID: req.RequestID, Payload: payload}, ids)
+}
+
+// batchEdits is target with an empty edits policy resolved from each thread's
+// rule; threads whose rules disagree need the target to choose one.
+func (s *Service) batchEdits(ctx context.Context, ids []string, target DeliverTarget) (DeliverTarget, error) {
+	if target.Edits != "" {
+		return target, nil
+	}
+	policies := map[string][]string{}
+	for _, id := range ids {
+		c, err := s.Get(ctx, id)
+		if err != nil {
+			return target, err
+		}
+		resolved, err := s.withRuleEdits(ctx, c.Target, target)
+		if err != nil {
+			return target, err
+		}
+		policies[resolved.Edits] = append(policies[resolved.Edits], id)
+	}
+	if len(policies) > 1 {
+		return target, fmt.Errorf("%w: the batch's threads inherit different edits policies %v; set the target's edits", ErrInvalid, policies)
+	}
+	for edits := range policies {
+		target.Edits = edits
+	}
+	return target, nil
 }
 
 // runDelivery queues a deliver-agent operation, processes exactly it inline
@@ -317,6 +365,9 @@ func (s *Service) PreviewDelivery(ctx context.Context, id string, target Deliver
 	}
 	c, err := s.Get(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if target, err = s.withRuleEdits(ctx, c.Target, target); err != nil {
 		return nil, err
 	}
 	return s.delivery.Preview(ctx, c, target)

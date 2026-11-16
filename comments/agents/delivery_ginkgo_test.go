@@ -3,84 +3,20 @@ package agents_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
-	"testing"
 	"time"
 
-	captaincli "github.com/flanksource/captain/pkg/cli"
-	"github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/comments"
 	"github.com/flanksource/gavel/comments/agents"
 	"github.com/flanksource/gavel/comments/agents/agentstest"
 	commentapi "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/comments/postgres"
-	"github.com/flanksource/gavel/internal/database"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestAgents(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Comment agents") }
-
-const scope = "gavel://project/acme"
-
-var reviewer = comments.Actor{Kind: "user", ID: "user:reviewer", Label: "Reviewer"}
-
-// host is a single-tenant host acting as the asserted actor, else the reviewer.
-type host struct{}
-
-func (host) Principal(ctx context.Context) (comments.Principal, error) {
-	actor, ok := commentapi.ActorFrom(ctx)
-	if !ok {
-		actor = reviewer
-	}
-	return comments.Principal{TenantID: "tenant-agents", Actor: actor}, nil
-}
-func (host) Authorize(_ context.Context, _ comments.Principal, _ string, t comments.Target) error {
-	if t.ScopeURI != scope {
-		return comments.ErrForbidden
-	}
-	return nil
-}
-func (h host) Resolve(_ context.Context, _ comments.Principal, t comments.Target) (comments.Target, error) {
-	return t, nil
-}
-
-type agentContent struct {
-	Page     map[string]string `json:"page"`
-	AgentRun agents.AgentRun   `json:"agentRun"`
-}
-
-func contentOf(c comments.Comment) agentContent {
-	var content agentContent
-	Expect(json.Unmarshal(c.Content, &content)).To(Succeed())
-	return content
-}
-
-// pageRoutes resolves a root's route from its page (the target URI below
-// <scope>/pages/), as a host's settings would; a page without one is not routed.
-type pageRoutes map[string]comments.Route
-
-func (p pageRoutes) RouteFor(_ context.Context, c comments.Comment) (comments.Route, bool, error) {
-	r, ok := p[strings.TrimPrefix(c.Target.URI, scope+"/pages/")]
-	return r, ok, nil
-}
-
-// gatedRoutes holds an automatic delivery's route lookup until the test releases it.
-type gatedRoutes struct {
-	comments.RouteResolver
-	reached, release chan struct{}
-}
-
-func (g gatedRoutes) RouteFor(ctx context.Context, c comments.Comment) (comments.Route, bool, error) {
-	g.reached <- struct{}{}
-	<-g.release
-	return g.RouteResolver.RouteFor(ctx, c)
-}
-
-func sessionRoute(source, session string) comments.Route {
-	return comments.Route{Source: source, Target: comments.DeliverTarget{Kind: "session", SessionID: session}}
-}
 
 var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 	routes := pageRoutes{
@@ -90,44 +26,24 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		"race":       sessionRoute("/repo/.gavel.yaml", "live-1"),
 		"assigned":   {Source: "db:path:pages", Target: comments.DeliverTarget{Kind: "session", SessionID: "live-2"}, Assign: true},
 	}
+	// proposeRule is the "proposals" page's rule: it does not route threads
+	// automatically, but every delivery of them inherits its propose policy.
+	proposeRule := comments.Route{Source: "db:path:pages/proposals", Target: comments.DeliverTarget{Kind: "run", Prompt: "editor-comments", Edits: comments.EditsPropose}}
 	var (
+		f           *fixture
 		svc         *comments.Service
 		store       *postgres.Store
 		newDelivery func(*comments.Service) comments.Delivery
 		bridge      *agentstest.Bridge
 		dir         string
 	)
-	live := func(id, slug string) captaincli.SessionRecord {
-		return captaincli.SessionRecord{ID: id, Source: "claude", Model: "claude-opus", Slug: slug, Live: &captaincli.SessionLiveWire{CWD: dir}}
-	}
-	create := func(ctx context.Context, page, body string) comments.Comment {
-		c, err := svc.Create(ctx, comments.CreateRequest{
-			Target: comments.Target{URI: scope + "/pages/" + page, ScopeURI: scope, Kind: "web-page", Label: page},
-			Body:   body, WorkflowID: "human-review", RequestID: "create-" + page + "-" + body,
-			Content: json.RawMessage(`{"page":{"url":"https://example.com/` + page + `"}}`),
-		})
-		Expect(err).NotTo(HaveOccurred())
-		return c
-	}
-	get := func(ctx context.Context, id string) comments.Comment {
-		c, err := svc.Get(ctx, id)
-		Expect(err).NotTo(HaveOccurred())
-		return c
-	}
+	create := func(ctx context.Context, page, body string) comments.Comment { return f.create(ctx, page, body) }
+	get := func(ctx context.Context, id string) comments.Comment { return f.get(ctx, id) }
 
 	BeforeAll(func(ctx SpecContext) {
-		db := dbtest.ForGinkgo(dbtest.Options{Name: "comment_agents"})
-		Expect(database.Migrate(ctx, db.DSN())).To(Succeed())
-		var err error
-		store, err = postgres.New(db.Gorm())
-		Expect(err).NotTo(HaveOccurred())
-		dir = GinkgoT().TempDir()
-		bridge = &agentstest.Bridge{Dir: dir}
-		bridge.Sessions = []captaincli.SessionRecord{live("live-1", "rename-pass"), live("live-2", "docs-pass")}
-		newDelivery, err = agents.Delivery(agents.Options{Bridge: bridge, Groups: store, Workdir: func(context.Context, comments.Target) (string, error) { return dir, nil }})
-		Expect(err).NotTo(HaveOccurred())
-		svc, err = comments.New(comments.Options{Store: store, Access: host{}, Targets: host{}, Workflows: []comments.Workflow{comments.HumanReview()}, Routes: routes, Delivery: newDelivery})
-		Expect(err).NotTo(HaveOccurred())
+		ruled := pageRules{pageRoutes: routes, rules: map[string]comments.Route{"proposals": proposeRule}, broken: map[string]error{"broken-rule": errors.New("rule store offline")}}
+		f = newFixture(ctx, "comment_agents", ruled)
+		svc, store, newDelivery, bridge, dir = f.svc, f.store, f.newDelivery, f.bridge, f.dir
 	})
 
 	It("hands a thread to a live session as its agent, delivers it with the page it is on, and records the run", func(ctx SpecContext) {
@@ -439,5 +355,78 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		Expect(assigneeOf(c.ID)()).To(Equal(comments.Actor{Kind: "agent", ID: "route:db:path:pages", Label: "live-2"}))
 		close(release)
 		Eventually(assigneeOf(c.ID)).WithTimeout(10 * time.Second).Should(Equal(comments.Actor{Kind: "agent", ID: "claude:live-2", Label: "claude-opus"}))
+	})
+
+	runOf := func(ctx context.Context, id string) func() agents.AgentRun {
+		return func() agents.AgentRun { return contentOf(get(ctx, id)).AgentRun }
+	}
+	toolNames := func(tools []api.ToolDefinition) []string {
+		names := []string{}
+		for _, tool := range tools {
+			names = append(names, tool.Name)
+		}
+		return names
+	}
+	proposeTools := []string{"list_threads", "reply_to_thread", "propose_change"}
+
+	It("inherits the page rule's propose policy for a session and a batch delivery that leave edits empty, unless the target sets edits", func(ctx SpecContext) {
+		toSession := func(c comments.Comment, requestID, edits string) agents.AgentRun {
+			_, err := svc.Deliver(ctx, comments.DeliverRequest{CommentID: c.ID, ExpectedVersion: c.Version, RequestID: requestID, Target: comments.DeliverTarget{Kind: "session", SessionID: "live-1", Edits: edits}})
+			Expect(err).NotTo(HaveOccurred())
+			return runOf(ctx, c.ID)()
+		}
+		inherited := toSession(create(ctx, "proposals", "Reword the hero"), "inherit-session", "")
+		sent, _ := bridge.Snapshot()
+		proposeCommands := strings.Contains(sent[len(sent)-1].Text, "--edits '")
+		overridden := toSession(create(ctx, "proposals", "Fix the hero typo"), "override-session", comments.EditsDirect)
+
+		a, b := create(ctx, "proposals", "Shorten the intro"), create(ctx, "proposals", "Drop the banner")
+		_, err := svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "inherit-batch", Target: comments.DeliverTarget{Kind: "run", Prompt: "editor-comments"}, Threads: []comments.DeliverThread{{ID: a.ID, ExpectedVersion: a.Version}, {ID: b.ID, ExpectedVersion: b.Version}}})
+		Expect(err).NotTo(HaveOccurred())
+		_, launched := bridge.Snapshot()
+		batch := launched[len(launched)-1]
+		Expect([]any{inherited.Edits, proposeCommands, overridden.Edits, runOf(ctx, a.ID)().Edits, runOf(ctx, b.ID)().Edits, batch.Options.Spec.Permissions.Tools["Edit"], toolNames(batch.Tools)}).
+			To(Equal([]any{comments.EditsPropose, true, comments.EditsDirect, comments.EditsPropose, comments.EditsPropose, api.ToolPolicyDeny, proposeTools}))
+	})
+
+	It("previews a run target on a propose page with the propose tools", func(ctx SpecContext) {
+		c := create(ctx, "proposals", "Preview the hero")
+		raw, err := svc.PreviewDelivery(ctx, c.ID, comments.DeliverTarget{Kind: "run", Prompt: "editor-comments"})
+		Expect(err).NotTo(HaveOccurred())
+		var preview agents.RunPreview
+		Expect(json.Unmarshal(raw, &preview)).To(Succeed())
+		thread := []string{}
+		for _, tool := range preview.Tools {
+			if tool.Source == "thread" {
+				thread = append(thread, tool.Name)
+			}
+		}
+		Expect(thread).To(Equal(proposeTools))
+	})
+
+	It("refuses a batch whose threads inherit different edits policies, unless its target sets one", func(ctx SpecContext) {
+		proposed, direct := create(ctx, "proposals", "Merge the cards"), create(ctx, "plain", "Merge the rows")
+		threads := []comments.DeliverThread{{ID: proposed.ID, ExpectedVersion: proposed.Version}, {ID: direct.ID, ExpectedVersion: direct.Version}}
+		_, mixed := svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "mixed-edits", Target: comments.DeliverTarget{Kind: "session", SessionID: "live-1"}, Threads: threads})
+		Expect(mixed).To(MatchError(comments.ErrInvalid))
+		_, err := svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "mixed-edits-chosen", Target: comments.DeliverTarget{Kind: "session", SessionID: "live-1", Edits: comments.EditsDirect}, Threads: threads})
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]string{runOf(ctx, proposed.ID)().Edits, runOf(ctx, direct.ID)().Edits}).To(Equal([]string{comments.EditsDirect, comments.EditsDirect}))
+	})
+
+	It("records a background delivery that failed resolving the page's rule on the thread, with the rule's error", func(ctx SpecContext) {
+		explicit := comments.DeliverTarget{Kind: "session", SessionID: "live-1"}
+		c, err := svc.Create(ctx, comments.CreateRequest{Target: pageTarget("broken-rule"), Body: "Fix the nav", WorkflowID: "human-review", RequestID: "create-broken-rule", Deliver: &explicit})
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(runOf(ctx, c.ID)).WithTimeout(10 * time.Second).Should(And(HaveField("State", "error"), HaveField("Error", ContainSubstring("rule store offline"))))
+	})
+
+	It("records a queued delivery that reached the host without an edits policy as an errored agentRun on its thread", func(ctx SpecContext) {
+		c := create(ctx, "home", "Queued before edits were resolved")
+		op, err := svc.Queue(ctx, comments.QueueRequest{CommentID: c.ID, ExpectedVersion: c.Version, Kind: comments.DeliverAgent, RequestID: "queued-no-edits", Payload: json.RawMessage(`{"kind":"session","sessionId":"live-1"}`)})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = svc.Process(ctx, comments.ProcessRequest{Executor: newDelivery(svc), Lease: time.Minute, OperationID: op.ID})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(runOf(ctx, c.ID)()).To(And(HaveField("State", "error"), HaveField("Error", ContainSubstring("edits policy"))))
 	})
 })
