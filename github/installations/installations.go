@@ -99,10 +99,9 @@ func (s Store) SyncRepos(ctx context.Context, org uuid.UUID, installationID int6
 			if err := tx.Exec(`
 				INSERT INTO repos (org_id, name, source, github_repo_id, installation_id, default_branch)
 				VALUES (?, ?, 'github', ?, ?, ?)
-				ON CONFLICT (github_repo_id) WHERE github_repo_id IS NOT NULL DO UPDATE SET
+				ON CONFLICT (org_id, github_repo_id) WHERE github_repo_id IS NOT NULL DO UPDATE SET
 					name = EXCLUDED.name, installation_id = EXCLUDED.installation_id,
-					default_branch = EXCLUDED.default_branch, updated_at = now()
-				WHERE repos.org_id = EXCLUDED.org_id`,
+					default_branch = EXCLUDED.default_branch, updated_at = now()`,
 				org, repo.FullName, repo.ID, installationID, repo.DefaultBranch).Error; err != nil {
 				return fmt.Errorf("record repository %s: %w", repo.FullName, err)
 			}

@@ -1,5 +1,5 @@
 // Accepts test and lint results that GitHub Actions jobs upload with their OIDC token, and stores
-// them for the organization the repository is linked to.
+// them for every organization the repository is linked to.
 package ui
 
 import (
@@ -63,26 +63,31 @@ func (c *CIResults) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeCIError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	var repo struct {
-		ID    uuid.UUID
-		OrgID uuid.UUID
-	}
-	result := c.DB.WithContext(r.Context()).Raw(`SELECT id, org_id FROM repos WHERE github_repo_id = ?`, claims.RepositoryID).Scan(&repo)
-	if result.Error != nil {
-		logger.Warnf("look up repository %d for CI results: %v", claims.RepositoryID, result.Error)
+	// Every organization holding the repository gets its results.
+	var holders []resultsRepo
+	if err := c.DB.WithContext(r.Context()).Raw(`SELECT id, org_id FROM repos WHERE github_repo_id = ? ORDER BY created_at, id`, claims.RepositoryID).
+		Scan(&holders).Error; err != nil {
+		logger.Warnf("look up repository %d for CI results: %v", claims.RepositoryID, err)
 		writeCIError(w, http.StatusInternalServerError, "could not look up the repository")
 		return
 	}
-	if result.RowsAffected == 0 {
+	if len(holders) == 0 {
 		writeCIError(w, http.StatusForbidden, fmt.Sprintf("%s (%d) is not linked to a gavel organization; install the gavel GitHub App on it", claims.Repository, claims.RepositoryID))
 		return
 	}
-	storeResults(w, r, c.Cache, repo.OrgID, repo.ID, claims.SHA, claims.Repository, runID)
+	storeResults(w, r, c.Cache, holders, claims.SHA, claims.Repository, runID)
 }
 
-// storeResults reads a snapshot of up to 50 MB from r and stores it as a run of repoID in org,
-// answering 201 with its run ID. With runID it replaces that run, or creates it, answering 200.
-func storeResults(w http.ResponseWriter, r *http.Request, store *cache.Store, org, repoID uuid.UUID, sha, what, runID string) {
+// resultsRepo is a repository a run's results are stored in: its ID and its organization's.
+type resultsRepo struct {
+	ID    uuid.UUID
+	OrgID uuid.UUID
+}
+
+// storeResults reads a snapshot of up to 50 MB from r and stores it as a run of each of repos,
+// answering 201 with its run ID: the first repository allocates it and the rest take the same one.
+// With runID it replaces that run, or creates it, answering 200.
+func storeResults(w http.ResponseWriter, r *http.Request, store *cache.Store, repos []resultsRepo, sha, what, runID string) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCIResultsBytes))
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
@@ -102,11 +107,12 @@ func storeResults(w http.ResponseWriter, r *http.Request, store *cache.Store, or
 	if runID != "" {
 		status = http.StatusOK
 	}
-	runID, err = ingestRunSnapshot(r.Context(), store, org, repoID, sha, data, snap, runID)
-	if err != nil {
-		logger.Warnf("store results for %s: %v", what, err)
-		writeCIError(w, http.StatusInternalServerError, "could not store the results")
-		return
+	for _, repo := range repos {
+		if runID, err = ingestRunSnapshot(r.Context(), store, repo.OrgID, repo.ID, sha, data, snap, runID); err != nil {
+			logger.Warnf("store results for %s in org %s: %v", what, repo.OrgID, err)
+			writeCIError(w, http.StatusInternalServerError, "could not store the results")
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

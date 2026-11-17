@@ -195,9 +195,9 @@ table "repos" {
     unique = true
     columns = [column.org_id, column.source, column.name]
   }
-  index "repos_github_repo_id_key" {
+  index "repos_org_github_repo_id_key" {
     unique = true
-    columns = [column.github_repo_id]
+    columns = [column.org_id, column.github_repo_id]
     where = "github_repo_id IS NOT NULL"
   }
   check "repos_source_valid" { expr = "source IN ('push', 'github')" }

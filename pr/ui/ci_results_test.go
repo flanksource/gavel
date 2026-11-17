@@ -1,5 +1,5 @@
 // Tests the CI results endpoint: a GitHub Actions OIDC token for a linked repository stores the
-// snapshot in that organization's blob store and indexes it; anything else is refused.
+// snapshot in the blob store of every organization holding it and indexes it; anything else is refused.
 package ui
 
 import (
@@ -23,6 +23,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 const ciAudience = "https://gavel.example"
@@ -105,6 +107,34 @@ func TestCIResults(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		require.Equal(t, http.StatusCreated, resp.StatusCode, string(body))
 		assert.Contains(t, string(body), "run-2026-10-15T09-00-00Z-2")
+	})
+
+	t.Run("a repository two organizations hold gets the results in both, under one run ID", func(t *testing.T) {
+		shared := map[uuid.UUID]uuid.UUID{}
+		for _, name := range []string{"Initech", "Hooli"} {
+			holder := uuid.New()
+			require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, ?)`, holder, holder.String(), name).Error)
+			var held struct{ ID uuid.UUID }
+			require.NoError(t, db.Raw(`INSERT INTO repos (org_id, name, source, github_repo_id) VALUES (?, 'acme/app', 'github', 555) RETURNING id`, holder).Scan(&held).Error)
+			shared[holder] = held.ID
+		}
+		resp := post(token("555"), snapshot)
+		body, _ := io.ReadAll(resp.Body)
+		require.Equal(t, http.StatusCreated, resp.StatusCode, string(body))
+		var created struct{ RunID string }
+		require.NoError(t, json.Unmarshal(body, &created))
+		for holder, held := range shared {
+			row, err := cache.ForOrg(holder).GetTestRun(context.Background(), "repo:"+held.String(), created.RunID)
+			require.NoError(t, err)
+			require.NotNil(t, row, "org %s has run %s", holder, created.RunID)
+			assert.Equal(t, 1, row.Failed)
+		}
+	})
+
+	t.Run("one organization can't hold a GitHub repository twice", func(t *testing.T) {
+		quiet := db.Session(&gorm.Session{Logger: gormlogger.Discard})
+		err := quiet.Exec(`INSERT INTO repos (org_id, name, source, github_repo_id) VALUES (?, 'acme/app-renamed', 'github', 123456)`, org).Error
+		require.ErrorContains(t, err, "repos_org_github_repo_id_key")
 	})
 
 	for name, tc := range map[string]struct {
