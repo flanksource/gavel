@@ -30,6 +30,10 @@ jobs:
         id: go-cache
         uses: ./.github/actions/go-cache
 
+      - name: Restore embedded PostgreSQL binaries
+        id: postgres-cache
+        uses: ./.github/actions/embedded-postgres-cache
+
       - name: Set up Node.js and TypeScript
         uses: actions/setup-node@v4
         with:
@@ -80,6 +84,19 @@ jobs:
         with:
           path: ${{ steps.go-cache.outputs.paths }}
           key: ${{ steps.go-cache.outputs.key }}
+
+      # The Test job writes the PostgreSQL binaries' cache the same way. The
+      # first database test extracts them, so they are there to save even when
+      # a later test fails.
+      - name: Save embedded PostgreSQL binaries
+        if: >-
+          always()
+          && github.ref_name == github.event.repository.default_branch
+          && steps.postgres-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.postgres-cache.outputs.path }}
+          key: ${{ steps.postgres-cache.outputs.key }}
 
   gavel-npm:
     name: "@flanksource/gavel library"
