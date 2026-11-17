@@ -40,6 +40,34 @@ func TestPRMergeEndpointValidation(t *testing.T) {
 	}
 }
 
+// TestHostedPRMergeUsesTheOrganizationsToken verifies a hosted merge reaches GitHub with the
+// organization's App token, never the host's own GITHUB_TOKEN.
+func TestHostedPRMergeUsesTheOrganizationsToken(t *testing.T) {
+	var authorizations []string
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		http.Error(w, "stop after the first request", http.StatusInternalServerError)
+	}))
+	t.Cleanup(gh.Close)
+	t.Setenv("GITHUB_API_URL", gh.URL)
+	t.Setenv("GITHUB_TOKEN", "host_token")
+
+	s := &Server{refreshCh: make(chan struct{}, 1), ghOpts: github.Options{TokenSource: func() (string, error) { return "ghs_org", nil }}}
+	s.SetHostedMode(true)
+	req := httptest.NewRequest("POST", "/api/prs/merge", bytes.NewBufferString(`{"url":"https://github.com/acme/service/pull/27","method":"squash"}`))
+	rec := httptest.NewRecorder()
+	s.handlePRMerge(rec, req)
+
+	if len(authorizations) == 0 {
+		t.Fatalf("merge never reached GitHub; status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+	for _, got := range authorizations {
+		if got != "Bearer ghs_org" {
+			t.Errorf("Authorization = %q, want the organization's token ghs_org", got)
+		}
+	}
+}
+
 // TestPRApproveEndpointValidation verifies the POST /api/prs/approve handler
 // applies the same shared validation.
 func TestPRApproveEndpointValidation(t *testing.T) {

@@ -11,7 +11,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/model"
-	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -91,7 +90,7 @@ func (s *Server) handlePRMerge(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err)
 		return
 	}
-	client, number, err := provider.ResolveURL(provider.Options{WorkDir: s.ghOpts.WorkDir, Token: s.ghOpts.Token}, link.URL)
+	client, number, err := s.linkedPRClient(r.Context(), link.URL)
 	if err == nil {
 		err = client.MergePR(r.Context(), number, body.MergeInput)
 	}

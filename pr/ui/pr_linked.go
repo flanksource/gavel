@@ -29,7 +29,7 @@ func linkedPRRepository(ref string) (string, error) {
 	return repo, err
 }
 
-// linkedPRClient is the client a linked PR is read through: a hosted organization's GitHub App,
+// linkedPRClient is the client a linked PR is read and merged through: a hosted organization's GitHub App,
 // or this host's credentials.
 func (s *Server) linkedPRClient(ctx context.Context, url string) (provider.Client, int, error) {
 	if s.hosted {
