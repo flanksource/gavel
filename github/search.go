@@ -329,6 +329,9 @@ func buildSearchQueryForRepos(repos []string, searchOpts PRSearchOptions) string
 }
 
 func SearchPRs(opts Options, searchOpts PRSearchOptions) (PRSearchResults, *RateLimit, error) {
+	if searchOpts.All && len(searchOpts.Repos) == 0 {
+		opts.owner = searchOpts.Org
+	}
 	token, err := opts.token()
 	if err != nil {
 		return nil, nil, err

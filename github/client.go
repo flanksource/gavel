@@ -23,13 +23,16 @@ import (
 type Options struct {
 	WorkDir string
 	Repo    string // owner/repo
-	Token   string // optional; falls back to GITHUB_TOKEN then GH_TOKEN env
+	Token   string // optional; falls back to the owning git connection, then GITHUB_TOKEN, then GH_TOKEN env
 	// TokenSource, when set, is the only credential: no fallback to Token, the
 	// environment or auth.json, so a hosted organization never uses the host's token.
 	TokenSource func() (string, error)
 	// Cache is the GitHub response cache of the organization this client acts for;
 	// nil is the shared local-org cache.
 	Cache *cache.Store
+	// owner is the organization a search across its repositories acts in, whose git
+	// connection supplies the token.
+	owner string
 }
 
 func (o Options) cacheStore() *cache.Store {
@@ -55,6 +58,9 @@ func (o Options) token() (string, error) {
 	if o.Token != "" {
 		return o.Token, nil
 	}
+	if token, err := o.connectionToken(); err != nil || token != "" {
+		return token, err
+	}
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
 		return t, nil
 	}
@@ -71,7 +77,7 @@ func (o Options) token() (string, error) {
 	if cfg.Token != "" {
 		return cfg.Token, nil
 	}
-	return "", fmt.Errorf("%w: set Options.Token, GITHUB_TOKEN, GH_TOKEN, or run `gavel system install` to persist one", ErrNoToken)
+	return "", fmt.Errorf("%w: set Options.Token, add a github connection with `gavel connections add`, set GITHUB_TOKEN or GH_TOKEN, or run `gavel system install` to persist one", ErrNoToken)
 }
 
 func (o Options) resolveRepo() (string, error) {

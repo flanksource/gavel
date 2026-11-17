@@ -22,9 +22,21 @@ type authenticator struct {
 	fetch  func(context.Context) (accessToken, error)
 	now    func() time.Time
 	cached accessToken
+	// connection, when set, is the PAT of the git connection that owns the repository, which
+	// comes before pat; "" when no connection does.
+	connection func(context.Context) (string, error)
 }
 
 func (a *authenticator) authorization(ctx context.Context) (string, error) {
+	if a.connection != nil {
+		pat, err := a.connection(ctx)
+		if err != nil {
+			return "", err
+		}
+		if pat != "" {
+			return "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+pat)), nil
+		}
+	}
 	if a.pat != "" {
 		return "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+a.pat)), nil
 	}
