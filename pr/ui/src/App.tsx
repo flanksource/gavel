@@ -1,4 +1,4 @@
-import { useState, useEffect, useEffectEvent, useMemo, useCallback, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useEffectEvent, useMemo, useCallback, useRef } from 'react';
 import type { PRItem, PRInfo, SearchConfig, Project } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
@@ -20,7 +20,6 @@ import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
 import { HostedProjectPane, HostedProjectsSidebar } from './components/HostedProjectsView';
 import { ProcessManager } from './components/ProcessManager';
 import { RunsView } from './components/RunsView';
-import { PlatformView } from './components/platform/PlatformView';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
@@ -64,6 +63,10 @@ import { Spinner } from './icons/Spinner';
 import { applyProjectScope } from './projectScope';
 
 const defaultConfig: SearchConfig = { repos: [] };
+
+// PlatformView is code-split: only platform admins open it, and its charts pull in recharts,
+// so the rest of the dashboard loads without them.
+const PlatformView = lazy(() => import('./components/platform/PlatformView').then(m => ({ default: m.PlatformView })));
 
 // Percentage width of the AppShell body sidebar per tab. A PR row carries title,
 // repo, checks and badges so it wants half the body; a project is just a name and
@@ -832,7 +835,9 @@ export function App() {
         ) : activeTab === 'runs' ? (
           <RunsView selectedId={selectedPath} onSelect={navigateRun} />
         ) : activeTab === 'platform' ? (
-          <PlatformView selectedOrg={selectedPath} onSelectOrg={navigatePlatformOrg} />
+          <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading the platform dashboard…</div>}>
+            <PlatformView selectedOrg={selectedPath} onSelectOrg={navigatePlatformOrg} />
+          </Suspense>
         ) : activeTab === 'prompts' ? (
           <PromptsView
             projects={scopedProjects}
