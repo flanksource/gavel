@@ -71,7 +71,7 @@ func newHostedLanding(t *testing.T) *hostedLanding {
 	// GitHub's API, here a local one.
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/repos/acme/app/pulls", r.URL.Path)
-		require.Equal(t, "Bearer ghs_app", r.Header.Get("Authorization"), "the organization's App opens it")
+		require.Equal(t, "Bearer ghs_install", r.Header.Get("Authorization"), "the repository's installation opens it")
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if h.refusePullRequest {

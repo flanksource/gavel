@@ -4,6 +4,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -19,23 +20,41 @@ import (
 func TestHostedTodosPushThroughTheOrgsApp(t *testing.T) {
 	creator, member := uuid.New(), uuid.New()
 	todo := &types.TODO{ID: uuid.NewString(), CreatedBy: creator.String()}
-	appToken := func() (string, error) { return "ghs_app", nil }
-	srv := &Server{ghOpts: github.Options{TokenSource: appToken, Repo: "acme/dashboard-search"}}
+	firstInstallation := func() (string, error) { return "ghs_first", nil }
+	srv := &Server{ghOpts: github.Options{TokenSource: firstInstallation, Repo: "acme/dashboard-search"}}
+	srv.SetHostedWorkspaces(HostedWorkspaces{Sources: &sandbox.Sources{
+		Token: func(_ context.Context, installation int64) (string, error) {
+			return fmt.Sprintf("ghs_%d", installation), nil
+		},
+	}})
 	actingAs := func(user uuid.UUID) context.Context {
 		return tenant.WithScope(context.Background(), tenant.Scope{OrgID: uuid.New(), UserID: &user, Role: "org:member"})
 	}
-	linked := todoSource{Dir: "/srv/workspaces/org/app", Hosted: &HostedWorkspace{Repo: sandbox.Repo{Name: "acme/app", Source: "github"}}}
+	linked := todoSource{Dir: "/srv/workspaces/org/app", Hosted: &HostedWorkspace{Repo: sandbox.Repo{Name: "acme/app", Source: "github", InstallationID: 42}}}
 
 	account, err := srv.todoGitHub(actingAs(creator), linked, todo)
 	require.NoError(t, err)
 	assert.Equal(t, "acme/app", account.Repo, "the workspace's own repository, not its checkout's origin")
 	token, err := account.TokenSource()
 	require.NoError(t, err)
-	assert.Equal(t, "ghs_app", token)
+	assert.Equal(t, "ghs_42", token, "the repository's own installation, not the organization's first")
 
 	_, err = srv.todoGitHub(actingAs(member), linked, todo)
 	require.Error(t, err)
 	assert.Equal(t, http.StatusForbidden, todoErrorStatus(http.StatusInternalServerError, err), err.Error())
+
+	unlinked := todoSource{Dir: "/srv/workspaces/org/old", Hosted: &HostedWorkspace{Repo: sandbox.Repo{Name: "acme/old", Source: "github"}}}
+	account, err = srv.todoGitHub(actingAs(creator), unlinked, todo)
+	require.NoError(t, err)
+	_, err = account.TokenSource()
+	require.EqualError(t, err, "no GitHub App installation grants acme/old any more; link one that does to reach it")
+
+	noApp := &Server{ghOpts: srv.ghOpts}
+	noApp.SetHostedWorkspaces(HostedWorkspaces{Sources: &sandbox.Sources{}})
+	account, err = noApp.todoGitHub(actingAs(creator), linked, todo)
+	require.NoError(t, err)
+	_, err = account.TokenSource()
+	require.EqualError(t, err, "this server has no GitHub App to reach acme/app with")
 
 	pushed := todoSource{Dir: "/srv/workspaces/org/tool", Hosted: &HostedWorkspace{Repo: sandbox.Repo{Name: "tool", Source: "push"}}}
 	_, err = srv.todoGitHub(actingAs(creator), pushed, todo)

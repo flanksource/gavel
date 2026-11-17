@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/todos/githubpush"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
@@ -57,7 +58,22 @@ func (s *Server) todoGitHub(ctx context.Context, source todoSource, todo *types.
 		return github.Options{}, fmt.Errorf("repository %s was pushed to gavel, not linked from GitHub, so its todos have no GitHub issues", repo.Name)
 	}
 	opts.Repo = repo.Name
+	opts.TokenSource = s.repoToken(repo)
 	return opts, nil
+}
+
+// repoToken mints tokens for a hosted GitHub repository from the installation that grants it,
+// which need not be the organization's first.
+func (s *Server) repoToken(repo sandbox.Repo) func() (string, error) {
+	return func() (string, error) {
+		if s.workspaces.Sources.Token == nil {
+			return "", fmt.Errorf("this server has no GitHub App to reach %s with", repo.Name)
+		}
+		if repo.InstallationID == 0 {
+			return "", fmt.Errorf("no GitHub App installation grants %s any more; link one that does to reach it", repo.Name)
+		}
+		return s.workspaces.Sources.Token(context.Background(), repo.InstallationID)
+	}
 }
 
 func (s *Server) handleTodoGitHubPush(w http.ResponseWriter, r *http.Request) {
