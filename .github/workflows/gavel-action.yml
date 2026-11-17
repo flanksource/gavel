@@ -27,6 +27,9 @@ jobs:
       - name: Restore Go cache
         uses: ./.github/actions/go-cache
 
+      - name: Restore embedded PostgreSQL binaries
+        uses: ./.github/actions/embedded-postgres-cache
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
