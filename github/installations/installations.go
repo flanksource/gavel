@@ -188,6 +188,32 @@ func (s Store) ReposByInstallation(ctx context.Context, org uuid.UUID) ([]Instal
 	return groups, nil
 }
 
+// SearchGroups is org's repositories grouped by the installation that grants them, each with
+// that installation's token, for the PR poller.
+func (s Store) SearchGroups(ctx context.Context, org uuid.UUID) ([]github.RepoGroup, error) {
+	byInstallation, err := s.ReposByInstallation(ctx, org)
+	if err != nil {
+		return nil, err
+	}
+	groups := make([]github.RepoGroup, 0, len(byInstallation))
+	for _, group := range byInstallation {
+		groups = append(groups, github.RepoGroup{
+			Name: fmt.Sprintf("GitHub App installation %d", group.Installation), Repos: group.Repos,
+			Token: s.InstallationTokenSource(group.Installation),
+		})
+	}
+	return groups, nil
+}
+
+// RepoToken mints a token for a repository from installationID, the installation recorded on
+// it; zero is a repository no installation grants any more.
+func (s Store) RepoToken(ctx context.Context, installationID int64) (string, error) {
+	if installationID == 0 {
+		return "", errors.New("no GitHub App installation grants the repository any more; link one that does")
+	}
+	return s.App.InstallationToken(ctx, installationID)
+}
+
 // InstallationTokenSource mints tokens for one installation, for github.Options.TokenSource.
 func (s Store) InstallationTokenSource(installationID int64) func() (string, error) {
 	return func() (string, error) {

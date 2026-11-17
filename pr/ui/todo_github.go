@@ -62,17 +62,18 @@ func (s *Server) todoGitHub(ctx context.Context, source todoSource, todo *types.
 	return opts, nil
 }
 
-// repoToken mints tokens for a hosted GitHub repository from the installation that grants it,
-// which need not be the organization's first.
+// repoToken mints tokens for a hosted GitHub repository with the server's GitHub account: the
+// installation that grants it, which need not be the organization's first, or the gh CLI's login.
 func (s *Server) repoToken(repo sandbox.Repo) func() (string, error) {
 	return func() (string, error) {
 		if s.workspaces.Sources.Token == nil {
-			return "", fmt.Errorf("this server has no GitHub App to reach %s with", repo.Name)
+			return "", fmt.Errorf("this server has no GitHub account to reach %s with", repo.Name)
 		}
-		if repo.InstallationID == 0 {
-			return "", fmt.Errorf("no GitHub App installation grants %s any more; link one that does to reach it", repo.Name)
+		token, err := s.workspaces.Sources.Token(context.Background(), repo.InstallationID)
+		if err != nil {
+			return "", fmt.Errorf("get a GitHub token for %s: %w", repo.Name, err)
 		}
-		return s.workspaces.Sources.Token(context.Background(), repo.InstallationID)
+		return token, nil
 	}
 }
 

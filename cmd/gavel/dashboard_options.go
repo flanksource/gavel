@@ -9,13 +9,21 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/flanksource/gavel/github/sharedaccount"
 )
 
 const (
 	authNone  = "none"
 	authClerk = "clerk"
+
+	// githubAuthApp serves hosted orgs the repositories their GitHub App installations grant;
+	// githubAuthGH serves every org the --github-repos the server's gh CLI login reaches.
+	githubAuthApp = "app"
+	githubAuthGH  = "gh"
 )
 
 // DashboardOptions configures `gavel serve`. Secrets are read from the environment
@@ -33,6 +41,8 @@ type DashboardOptions struct {
 	GitHubAppID          string   `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
 	GitHubAppSlug        string   `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
 	GitHubAppPrivateKey  string   `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
+	GitHubAuth           string   `flag:"github-auth" help:"How hosted orgs reach GitHub: app (their GitHub App installations) or gh (for development: every org shares this server's gh CLI login and --github-repos)" default:"app"`
+	GitHubRepos          []string `flag:"github-repos" help:"Repositories (owner/name) every org gets with --github-auth gh, or all for every one the gh CLI login can see; repeat for each"`
 	Sandbox              string   `flag:"sandbox" help:"Run hosted push checks and agent runs in a sandbox: docker, podman, kubernetes or substrate (--auth clerk); empty runs none"`
 	SandboxImage         string   `flag:"sandbox-image" help:"Runner image sandbox jobs start from, e.g. ghcr.io/flanksource/gavel-runner:<version> (docker, podman, kubernetes)"`
 	SandboxNetwork       string   `flag:"sandbox-network" help:"Bridge network sandbox containers join (docker, podman); see docs/sandbox.md" default:"gavel-sandbox"`
@@ -82,6 +92,27 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 }
 
 // gitHubAppID is --github-app-id as GitHub's numeric App ID.
+// gitHubRepoProblems checks --github-repos for --github-auth gh: owner/name repositories, or
+// just all.
+func gitHubRepoProblems(repos []string) []error {
+	if len(repos) == 0 {
+		return []error{errors.New("--github-auth gh requires --github-repos: owner/name repositories, or all")}
+	}
+	if slices.Contains(repos, sharedaccount.AllRepos) {
+		if len(repos) > 1 {
+			return []error{errors.New("--github-repos all already serves every repository the gh CLI's login can see; drop the named ones")}
+		}
+		return nil
+	}
+	var problems []error
+	for _, repo := range repos {
+		if owner, name, ok := strings.Cut(repo, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			problems = append(problems, fmt.Errorf("--github-repos takes owner/name or all, got %q", repo))
+		}
+	}
+	return problems
+}
+
 func (o DashboardOptions) gitHubAppID() (int64, error) {
 	id, err := strconv.ParseInt(o.GitHubAppID, 10, 64)
 	if err == nil && id <= 0 {
@@ -100,6 +131,22 @@ func (o DashboardOptions) Validate() error {
 		}
 	}
 	githubApp := o.GitHubAppID != "" || o.GitHubAppSlug != "" || o.GitHubAppPrivateKey != ""
+	switch o.GitHubAuth {
+	case "", githubAuthApp:
+		if len(o.GitHubRepos) > 0 {
+			add("--github-repos names the repositories of --github-auth gh")
+		}
+	case githubAuthGH:
+		if o.Auth != authClerk {
+			add("--github-auth gh serves hosted orgs and needs --auth clerk")
+		}
+		if githubApp {
+			add("--github-auth gh serves orgs from the gh CLI's login instead of the GitHub App; drop the --github-app-* flags")
+		}
+		problems = append(problems, gitHubRepoProblems(o.GitHubRepos)...)
+	default:
+		add("--github-auth must be %q or %q, got %q", githubAuthApp, githubAuthGH, o.GitHubAuth)
+	}
 	switch o.Auth {
 	case authNone:
 		if o.Sandbox != "" {

@@ -182,8 +182,13 @@ func (a *App) jwt() (string, error) {
 }
 
 // call sends an authenticated request to the GitHub API and decodes a 2xx response.
-// Errors carry GitHub's message, never the credential.
 func (a *App) call(ctx context.Context, method, path, bearer string, output any) error {
+	return callAPI(ctx, a.HTTP, method, path, bearer, output)
+}
+
+// callAPI sends an authenticated request to the GitHub API with client and decodes a 2xx
+// response. Errors carry GitHub's message, never the credential.
+func callAPI(ctx context.Context, client *http.Client, method, path, bearer string, output any) error {
 	req, err := http.NewRequestWithContext(ctx, method, githubAPIBase()+path, nil)
 	if err != nil {
 		return err
@@ -191,7 +196,7 @@ func (a *App) call(ctx context.Context, method, path, bearer string, output any)
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	resp, err := a.HTTP.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("cannot reach GitHub: %w", err)
 	}

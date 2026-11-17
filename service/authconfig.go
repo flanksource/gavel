@@ -98,7 +98,7 @@ func DiscoverGitHubToken() (string, TokenSource, error) {
 	if t := strings.TrimSpace(os.Getenv("GH_TOKEN")); t != "" {
 		return t, TokenSourceEnvGH, nil
 	}
-	if t, err := tokenFromGHCLI(); err != nil {
+	if t, err := GHCLIToken(); err != nil {
 		return "", "", fmt.Errorf("probe gh auth token: %w", err)
 	} else if t != "" {
 		return t, TokenSourceGHCLI, nil
@@ -106,10 +106,10 @@ func DiscoverGitHubToken() (string, TokenSource, error) {
 	return "", "", nil
 }
 
-// tokenFromGHCLI runs `gh auth token` if the gh CLI is on PATH. Not having
+// GHCLIToken runs `gh auth token` if the gh CLI is on PATH. Not having
 // gh or not being authenticated are both valid "no token" states — only
 // unexpected failures (exec error other than NotFound / ExitError) bubble up.
-func tokenFromGHCLI() (string, error) {
+func GHCLIToken() (string, error) {
 	path, err := exec.LookPath("gh")
 	if err != nil {
 		return "", nil

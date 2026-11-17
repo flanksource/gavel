@@ -1,5 +1,6 @@
 // Package githubtest runs a fake GitHub API for one GitHub App: installation tokens, the
-// installations and repositories it grants, and which installations each user token sees.
+// installations and repositories it grants, which installations each user token sees, and the
+// repositories a user token can reach directly.
 package githubtest
 
 import (
@@ -42,6 +43,7 @@ type Server struct {
 	mu            sync.Mutex
 	installations map[int64]installation
 	users         map[string][]int64
+	userRepos     map[string][]github.InstallationRepo
 	pulls         []PullRequest
 	searches      []Search
 }
@@ -89,7 +91,7 @@ func New(t TB) *Server {
 	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{KeyPath: keyPath, installations: map[int64]installation{}, users: map[string][]int64{}}
+	s := &Server{KeyPath: keyPath, installations: map[int64]installation{}, users: map[string][]int64{}, userRepos: map[string][]github.InstallationRepo{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Close)
 	t.Setenv("GITHUB_API_URL", s.URL)
@@ -118,6 +120,13 @@ func (s *Server) GrantUser(userToken string, installations ...int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.users[userToken] = installations
+}
+
+// GrantUserRepos lets a user token reach repos, as GET /user/repos and GET /repos/{owner}/{name} do.
+func (s *Server) GrantUserRepos(userToken string, repos ...github.InstallationRepo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.userRepos[userToken] = repos
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +173,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			installs = []map[string]any{}
 		}
 		writeJSON(w, map[string]any{"total_count": len(ids), "installations": installs})
+	case r.Method == http.MethodGet && r.URL.Path == "/user/repos":
+		repos := s.userRepos[bearer]
+		if r.URL.Query().Get("page") != "1" {
+			repos = nil
+		}
+		writeJSON(w, emptyIfNil(repos))
+	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "repos":
+		for _, repo := range s.userRepos[bearer] {
+			if repo.FullName == parts[1]+"/"+parts[2] {
+				writeJSON(w, repo)
+				return
+			}
+		}
+		notFound(w)
 	case r.Method == http.MethodPost && r.URL.Path == "/graphql":
 		s.search(w, r, bearer)
 	default:

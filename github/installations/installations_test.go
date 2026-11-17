@@ -165,4 +165,23 @@ func TestReposByInstallation(t *testing.T) {
 	groups, err = f.store.ReposByInstallation(ctx, f.orgB)
 	require.NoError(t, err)
 	assert.Empty(t, groups)
+
+	searched, err := f.store.SearchGroups(ctx, f.orgA)
+	require.NoError(t, err)
+	require.Len(t, searched, 2)
+	assert.Equal(t, []string{"globex/api", "globex/web"}, searched[1].Repos)
+	token, err = searched[1].Token()
+	require.NoError(t, err)
+	assert.Equal(t, "ghs_43", token, "each group is searched with its own installation's token")
+}
+
+func TestRepoToken(t *testing.T) {
+	f := newFixture(t)
+	f.github.Install(42, acmeAccount)
+	token, err := f.store.RepoToken(context.Background(), 42)
+	require.NoError(t, err)
+	assert.Equal(t, "ghs_42", token)
+
+	_, err = f.store.RepoToken(context.Background(), 0)
+	require.EqualError(t, err, "no GitHub App installation grants the repository any more; link one that does")
 }

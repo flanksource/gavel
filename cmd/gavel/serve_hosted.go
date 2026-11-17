@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/installations"
+	"github.com/flanksource/gavel/github/sharedaccount"
 	shared "github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/pr/provider"
@@ -134,7 +135,14 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	}
 
 	var app *github.App
-	if opts.GitHubAppID != "" {
+	var account hostedGitHub
+	switch {
+	case opts.GitHubAuth == githubAuthGH:
+		if _, err := sharedaccount.GHToken(); err != nil {
+			return hostedStack{}, fmt.Errorf("--github-auth gh: %w", err)
+		}
+		account = sharedaccount.New(db, opts.GitHubRepos, sharedaccount.GHToken)
+	case opts.GitHubAppID != "":
 		id, err := opts.gitHubAppID()
 		if err != nil {
 			return hostedStack{}, fmt.Errorf("--github-app-id %q: %w", opts.GitHubAppID, err)
@@ -142,13 +150,13 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		if app, err = github.LoadApp(id, opts.GitHubAppSlug, opts.GitHubAppPrivateKey); err != nil {
 			return hostedStack{}, err
 		}
+		account = installations.Store{DB: db, App: app}
 	}
-	store := installations.Store{DB: db, App: app}
 	// Sandbox jobs and hosted todo workspaces read repositories from the pushed ones and
 	// from GitHub mirrors.
 	sources := &sandbox.Sources{DataDir: opts.DataDir}
-	if app != nil {
-		sources.Token = app.InstallationToken
+	if account != nil {
+		sources.Token = account.RepoToken
 	}
 	blobs, err := verify.OpenGlobalStorage(ctx)
 	if err != nil {
@@ -164,9 +172,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	// Sandbox jobs authenticate with their run token; runs on substrate reach it through serve,
 	// as their run.
 	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
-	if app != nil {
+	if account != nil {
 		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
-			return ui.OrganizationPRs(store.TokenSource(org), cache.ForOrg(org))(ctx, url)
+			return ui.OrganizationPRs(account.TokenSource(org), cache.ForOrg(org))(ctx, url)
 		}
 	}
 	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret, sources, runs.Handler())
@@ -189,8 +197,8 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 			return nil, err
 		}
 		ghOpts := github.Options{TokenSource: githubNotConnected, Cache: cache.ForOrg(scope.OrgID)}
-		if app != nil {
-			ghOpts.TokenSource = store.TokenSource(scope.OrgID)
+		if account != nil {
+			ghOpts.TokenSource = account.TokenSource(scope.OrgID)
 		}
 		srv := ui.NewServer(gavelctx.New(ctx), interval, ghOpts, cfg)
 		srv.SetOrg(scope.OrgID, db)
@@ -208,15 +216,15 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		if err := srv.StartWorkspaceData(ctx, db); err != nil {
 			return nil, err
 		}
-		if app != nil {
-			ui.NewPoller(srv, orgPRSearch(srv, store, cache, scope.OrgID), interval).Start(ctx)
-			go syncReposEvery(ctx, store, scope.OrgID, repoSyncInterval)
+		if account != nil {
+			ui.NewPoller(srv, orgPRSearch(srv, account, cache, scope.OrgID), interval).Start(ctx)
+			go syncReposEvery(ctx, account, srv, scope.OrgID, repoSyncInterval)
 		}
 		return srv, nil
 	}, orgIdleTTL)
 	next := orgs.Handler()
 	if app != nil {
-		link := &ui.GitHubLink{App: app, Store: store, Clerk: backend, SecretKey: secret}
+		link := &ui.GitHubLink{App: app, Store: installations.Store{DB: db, App: app}, Clerk: backend, SecretKey: secret}
 		mux := http.NewServeMux()
 		mux.Handle("/api/github/", link.Handler())
 		mux.Handle("/", next)
@@ -253,12 +261,36 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	return hostedStack{handler: root, members: auth.Members, stop: stop, dispatcher: dispatcher}, nil
 }
 
+// hostedGitHub is how hosted orgs reach GitHub: their GitHub App installations
+// (installations.Store), or one gh CLI login every org shares (sharedaccount.Account).
+type hostedGitHub interface {
+	// TokenSource is org's token for its PR dashboard and runs.
+	TokenSource(org uuid.UUID) func() (string, error)
+	// RepoToken is a token for a repository recorded with installationID.
+	RepoToken(ctx context.Context, installationID int64) (string, error)
+	// SearchGroups is org's repositories, grouped by the token they are searched with.
+	SearchGroups(ctx context.Context, org uuid.UUID) ([]github.RepoGroup, error)
+	// SyncAll re-reads org's repositories from GitHub.
+	SyncAll(ctx context.Context, org uuid.UUID) error
+}
+
 // repoSyncInterval is how often an active organization's repositories are re-read from
-// its GitHub App installations.
+// GitHub.
 const repoSyncInterval = 10 * time.Minute
 
-// syncReposEvery re-reads org's installation repositories until ctx ends.
-func syncReposEvery(ctx context.Context, store installations.Store, org uuid.UUID, every time.Duration) {
+// syncReposEvery re-reads org's repositories now, refreshing srv's PRs from them, and then
+// every interval until ctx ends.
+func syncReposEvery(ctx context.Context, account hostedGitHub, srv *ui.Server, org uuid.UUID, every time.Duration) {
+	syncRepos := func() {
+		if err := account.SyncAll(ctx, org); err != nil && ctx.Err() == nil {
+			logger.Warnf("sync the repositories of org %s: %v", org, err)
+		}
+	}
+	syncRepos()
+	select {
+	case srv.RefreshCh() <- struct{}{}:
+	default:
+	}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -266,18 +298,16 @@ func syncReposEvery(ctx context.Context, store installations.Store, org uuid.UUI
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := store.SyncAll(ctx, org); err != nil && ctx.Err() == nil {
-				logger.Warnf("sync the repositories of org %s: %v", org, err)
-			}
+			syncRepos()
 		}
 	}
 }
 
-// orgPRSearch is an org's PR poller search: each installation's repositories, searched
-// with that installation's token, merged. An org without repositories has no PRs.
-func orgPRSearch(srv *ui.Server, store installations.Store, cache *ghcache.Store, org uuid.UUID) func(time.Time) (github.PRSearchResults, *github.RateLimit, error) {
+// orgPRSearch is an org's PR poller search: each group of its repositories, searched with
+// that group's token, merged. An org without repositories has no PRs.
+func orgPRSearch(srv *ui.Server, account hostedGitHub, cache *ghcache.Store, org uuid.UUID) func(time.Time) (github.PRSearchResults, *github.RateLimit, error) {
 	return func(since time.Time) (github.PRSearchResults, *github.RateLimit, error) {
-		groups, err := store.ReposByInstallation(context.Background(), org)
+		groups, err := account.SearchGroups(context.Background(), org)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -295,10 +325,10 @@ func orgPRSearch(srv *ui.Server, store installations.Store, cache *ghcache.Store
 		var rateLimit *github.RateLimit
 		for _, group := range groups {
 			search.Repos = group.Repos
-			opts := github.Options{TokenSource: store.InstallationTokenSource(group.Installation), Cache: cache.ForOrg(org)}
+			opts := github.Options{TokenSource: group.Token, Cache: cache.ForOrg(org)}
 			results, rl, err := github.SearchPRs(opts, search)
 			if err != nil {
-				return all, rl, fmt.Errorf("search the pull requests of installation %d: %w", group.Installation, err)
+				return all, rl, fmt.Errorf("search the pull requests of %s: %w", group.Name, err)
 			}
 			all = append(all, results...)
 			rateLimit = rl

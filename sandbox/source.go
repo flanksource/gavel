@@ -56,7 +56,8 @@ type Sources struct {
 	DataDir string
 	// GitHubURL is where GitHub repositories are cloned from; empty is https://github.com.
 	GitHubURL string
-	// Token returns an installation token for fetching a GitHub repository.
+	// Token returns a token for fetching a GitHub repository from the installation recorded on
+	// it, or from the server's one GitHub login when it serves without the App.
 	Token func(ctx context.Context, installationID int64) (string, error)
 
 	mirrors   sync.Map // mirror path → *sync.Mutex

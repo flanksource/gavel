@@ -289,6 +289,54 @@ func TestHostedGitHub(t *testing.T) {
 	assert.True(t, searched, "searched with the installation's token: %+v", gh.Searches())
 }
 
+func TestHostedGitHubThroughTheGHCLI(t *testing.T) {
+	gh := githubtest.New(t)
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\n[ \"$1 $2\" = 'auth token' ] && echo gho_cli\n"), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	gh.GrantUserRepos("gho_cli", github.InstallationRepo{ID: 1, FullName: "acme/api", DefaultBranch: "main"},
+		github.InstallationRepo{ID: 2, FullName: "acme/web", DefaultBranch: "main"})
+	gh.AddPullRequest(githubtest.PullRequest{Repo: "acme/api", Number: 7, Title: "Add login", Author: "ada"})
+	gh.AddPullRequest(githubtest.PullRequest{Repo: "acme/web", Number: 8, Title: "Not served", Author: "ada"})
+	f := newHostedFixture(t, func(o *DashboardOptions) { o.GitHubAuth, o.GitHubRepos = githubAuthGH, []string{"acme/api"} })
+
+	cookie := "__session=" + f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour))
+	call := func(method, path string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(method, f.server.URL+path, nil)
+		require.NoError(t, err)
+		req.Header.Set("Cookie", cookie)
+		req.Header.Set("Origin", hostedPublicURL)
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+
+	var snapshot struct {
+		PRs []struct {
+			Repo   string
+			Number int
+		} `json:"prs"`
+	}
+	require.Eventually(t, func() bool {
+		resp := call(http.MethodGet, "/api/prs")
+		return json.NewDecoder(resp.Body).Decode(&snapshot) == nil && len(snapshot.PRs) == 1
+	}, 10*time.Second, 50*time.Millisecond, "the org's poller fetches the named repository's PRs without any installation")
+	assert.Equal(t, "acme/api", snapshot.PRs[0].Repo)
+	assert.Equal(t, 7, snapshot.PRs[0].Number)
+
+	for _, search := range gh.Searches() {
+		assert.Equal(t, "gho_cli", search.Token, "searched with the gh CLI's login")
+		assert.NotContains(t, search.Query, "acme/web", "only the named repositories are searched")
+	}
+	var held []string
+	require.NoError(t, f.db.Gorm().Raw(`SELECT name FROM repos WHERE source = 'github' AND installation_id IS NULL`).Scan(&held).Error)
+	assert.Equal(t, []string{"acme/api"}, held, "the org holds the named repository for sandbox runs and todos")
+
+	assert.Equal(t, http.StatusNotFound, call(http.MethodPost, "/api/github/install").StatusCode, "there is no App to install")
+}
+
 func readAll(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	data, err := io.ReadAll(resp.Body)

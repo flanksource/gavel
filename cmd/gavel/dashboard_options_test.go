@@ -52,6 +52,29 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		}},
 		{"menu bar with clerk", func(o *DashboardOptions) { o.MenuBar = true }, []string{"--menu-bar is local-only and can't be used with --auth clerk"}},
 		{"dev mode with clerk", func(o *DashboardOptions) { o.Dev = true }, []string{"--dev is local-only and can't be used with --auth clerk"}},
+		{"gh CLI account with named repositories", func(o *DashboardOptions) {
+			o.GitHubAuth, o.GitHubRepos = githubAuthGH, []string{"acme/api", "acme/web"}
+		}, nil},
+		{"gh CLI account with every repository", func(o *DashboardOptions) { o.GitHubAuth, o.GitHubRepos = githubAuthGH, []string{"all"} }, nil},
+		{"gh CLI account without repositories", func(o *DashboardOptions) { o.GitHubAuth = githubAuthGH }, []string{
+			"--github-auth gh requires --github-repos: owner/name repositories, or all",
+		}},
+		{"gh CLI account with the App's flags", func(o *DashboardOptions) {
+			o.GitHubAuth, o.GitHubRepos, o.GitHubAppID = githubAuthGH, []string{"acme/api"}, "123"
+		}, []string{"--github-auth gh serves orgs from the gh CLI's login instead of the GitHub App; drop the --github-app-* flags"}},
+		{"gh CLI repositories that aren't owner/name", func(o *DashboardOptions) {
+			o.GitHubAuth, o.GitHubRepos = githubAuthGH, []string{"acme", "acme/api/extra"}
+		}, []string{`--github-repos takes owner/name or all, got "acme"`, `--github-repos takes owner/name or all, got "acme/api/extra"`}},
+		{"gh CLI every repository and named ones", func(o *DashboardOptions) {
+			o.GitHubAuth, o.GitHubRepos = githubAuthGH, []string{"all", "acme/api"}
+		}, []string{"--github-repos all already serves every repository the gh CLI's login can see; drop the named ones"}},
+		{"repositories without the gh CLI account", func(o *DashboardOptions) { o.GitHubRepos = []string{"acme/api"} }, []string{
+			"--github-repos names the repositories of --github-auth gh",
+		}},
+		{"unknown GitHub auth", func(o *DashboardOptions) { o.GitHubAuth = "token" }, []string{`--github-auth must be "app" or "gh", got "token"`}},
+		{"gh CLI account without clerk", func(o *DashboardOptions) {
+			*o = DashboardOptions{Auth: "none", GitHubAuth: githubAuthGH, GitHubRepos: []string{"acme/api"}}
+		}, []string{"--github-auth gh serves hosted orgs and needs --auth clerk"}},
 		{"push server with clerk", func(o *DashboardOptions) { o.SSHAddr = ":2222" }, nil},
 		{"push server without clerk", func(o *DashboardOptions) { *o = DashboardOptions{Auth: "none", SSHAddr: ":2222"} }, []string{
 			"--ssh-addr serves hosted pushes and needs --auth clerk; use gavel ssh serve locally",

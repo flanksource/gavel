@@ -43,18 +43,12 @@ func TestHostedTodosPushThroughTheOrgsApp(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, http.StatusForbidden, todoErrorStatus(http.StatusInternalServerError, err), err.Error())
 
-	unlinked := todoSource{Dir: "/srv/workspaces/org/old", Hosted: &HostedWorkspace{Repo: sandbox.Repo{Name: "acme/old", Source: "github"}}}
-	account, err = srv.todoGitHub(actingAs(creator), unlinked, todo)
-	require.NoError(t, err)
-	_, err = account.TokenSource()
-	require.EqualError(t, err, "no GitHub App installation grants acme/old any more; link one that does to reach it")
-
 	noApp := &Server{ghOpts: srv.ghOpts}
 	noApp.SetHostedWorkspaces(HostedWorkspaces{Sources: &sandbox.Sources{}})
 	account, err = noApp.todoGitHub(actingAs(creator), linked, todo)
 	require.NoError(t, err)
 	_, err = account.TokenSource()
-	require.EqualError(t, err, "this server has no GitHub App to reach acme/app with")
+	require.EqualError(t, err, "this server has no GitHub account to reach acme/app with")
 
 	pushed := todoSource{Dir: "/srv/workspaces/org/tool", Hosted: &HostedWorkspace{Repo: sandbox.Repo{Name: "tool", Source: "push"}}}
 	_, err = srv.todoGitHub(actingAs(creator), pushed, todo)
