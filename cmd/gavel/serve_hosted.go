@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -194,6 +195,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 	}
 
+	// stop waits for the organizations' PR polls and repository syncs, which it never cancels
+	// partway through.
+	var orgWork sync.WaitGroup
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
 		cfg, err := ui.LoadOrgSearchConfig(ctx, db, scope.OrgID)
 		if err != nil {
@@ -220,8 +224,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 			return nil, err
 		}
 		if account != nil {
-			ui.NewPoller(srv, orgPRSearch(srv, account, cache, scope.OrgID), interval).Start(ctx)
-			go syncReposEvery(ctx, account, srv, scope.OrgID, repoSyncInterval)
+			poller := ui.NewPoller(srv, orgPRSearch(srv, account, cache, scope.OrgID), interval)
+			orgWork.Go(func() { poller.Run(ctx) })
+			orgWork.Go(func() { syncReposEvery(ctx, account, srv, scope.OrgID, repoSyncInterval) })
 		}
 		return srv, nil
 	}, orgIdleTTL)
@@ -242,6 +247,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	stop := func() {
 		orgs.Close()
 		stopShell()
+		orgWork.Wait()
 	}
 	// CI jobs authenticate with their GitHub Actions OIDC token, not a Clerk session.
 	ciResults := &ui.CIResults{
@@ -281,11 +287,18 @@ type hostedGitHub interface {
 // GitHub.
 const repoSyncInterval = 10 * time.Minute
 
+// repoSyncTimeout bounds one sync of an organization's repositories, which is also how long
+// stopping the organization's dashboard can wait for it.
+const repoSyncTimeout = 2 * time.Minute
+
 // syncReposEvery re-reads org's repositories now, refreshing srv's PRs from them, and then
-// every interval until ctx ends.
+// every interval until ctx ends. A sync in flight when ctx ends runs to completion rather
+// than being cancelled partway through its queries.
 func syncReposEvery(ctx context.Context, account hostedGitHub, srv *ui.Server, org uuid.UUID, every time.Duration) {
 	syncRepos := func() {
-		if err := account.SyncAll(ctx, org); err != nil && ctx.Err() == nil {
+		syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), repoSyncTimeout)
+		defer cancel()
+		if err := account.SyncAll(syncCtx, org); err != nil {
 			logger.Warnf("sync the repositories of org %s: %v", org, err)
 		}
 	}

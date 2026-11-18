@@ -338,6 +338,93 @@ func TestHostedGitHubThroughTheGHCLI(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, call(http.MethodPost, "/api/github/install").StatusCode, "there is no App to install")
 }
 
+func TestStoppingTheHostedStackLetsARepositorySyncFinish(t *testing.T) {
+	gh := githubtest.New(t)
+	f := newHostedFixture(t, func(o *DashboardOptions) {
+		o.GitHubAppID, o.GitHubAppSlug, o.GitHubAppPrivateKey = strconv.Itoa(githubtest.AppID), "gavel-test", gh.KeyPath
+	})
+	// The org's first repository sync waits on this lock.
+	lock := f.db.Gorm().Begin()
+	require.NoError(t, lock.Exec(`LOCK TABLE github_installations IN ACCESS EXCLUSIVE MODE`).Error)
+	t.Cleanup(func() { lock.Rollback() })
+
+	req, err := http.NewRequest(http.MethodGet, f.server.URL+"/api/prs", nil)
+	require.NoError(t, err)
+	req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, readAll(t, resp))
+	require.NoError(t, resp.Body.Close())
+	require.Eventually(t, func() bool {
+		var waiting int
+		require.NoError(t, f.db.Gorm().Raw(`SELECT count(*) FROM pg_stat_activity WHERE pid <> pg_backend_pid()
+			AND wait_event_type = 'Lock' AND query LIKE '%SELECT id FROM github_installations WHERE org_id%'`).Scan(&waiting).Error)
+		return waiting > 0
+	}, 10*time.Second, 20*time.Millisecond, "the org's repository sync reads its installations")
+
+	stopped := make(chan struct{})
+	go func() {
+		f.stack.stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("stopping returned while the org's repository sync was still in flight")
+	case <-time.After(300 * time.Millisecond):
+	}
+	require.NoError(t, lock.Commit().Error)
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stopping never returned after the org's repository sync could finish")
+	}
+}
+
+func TestStoppingTheHostedStackLetsAPRPollFinish(t *testing.T) {
+	gh := githubtest.New(t)
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\n[ \"$1 $2\" = 'auth token' ] && echo gho_cli\n"), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	gh.GrantUserRepos("gho_cli", github.InstallationRepo{ID: 1, FullName: "acme/api", DefaultBranch: "main"})
+	gh.AddPullRequest(githubtest.PullRequest{Repo: "acme/api", Number: 7, Title: "Add login", Author: "ada"})
+	f := newHostedFixture(t, func(o *DashboardOptions) { o.GitHubAuth, o.GitHubRepos = githubAuthGH, []string{"acme/api"} })
+	// The org's poller indexes the PR it finds; indexing it waits on this lock.
+	lock := f.db.Gorm().Begin()
+	require.NoError(t, lock.Exec(`LOCK TABLE pull_requests IN SHARE MODE`).Error)
+	t.Cleanup(func() { lock.Rollback() })
+
+	req, err := http.NewRequest(http.MethodGet, f.server.URL+"/api/prs", nil)
+	require.NoError(t, err)
+	req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, readAll(t, resp))
+	require.NoError(t, resp.Body.Close())
+	require.Eventually(t, func() bool {
+		var waiting int
+		require.NoError(t, f.db.Gorm().Raw(`SELECT count(*) FROM pg_stat_activity WHERE pid <> pg_backend_pid()
+			AND wait_event_type = 'Lock' AND query LIKE '%INSERT INTO "pull_requests"%'`).Scan(&waiting).Error)
+		return waiting > 0
+	}, 10*time.Second, 20*time.Millisecond, "the org's poller indexes the PR it found")
+
+	stopped := make(chan struct{})
+	go func() {
+		f.stack.stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("stopping returned while the org's PR poll was still in flight")
+	case <-time.After(300 * time.Millisecond):
+	}
+	require.NoError(t, lock.Commit().Error)
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stopping never returned after the org's PR poll could finish")
+	}
+}
+
 func readAll(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	data, err := io.ReadAll(resp.Body)

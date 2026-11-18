@@ -33,11 +33,13 @@ func prKey(item github.PRListItem) string {
 	return fmt.Sprintf("%s#%d", item.Repo, item.Number)
 }
 
+// Start runs the poller in the background until ctx ends.
 func (p *Poller) Start(ctx context.Context) {
-	go p.loop(ctx)
+	go p.Run(ctx)
 }
 
-func (p *Poller) loop(ctx context.Context) {
+// Run polls until ctx ends. A fetch in flight when ctx ends finishes first.
+func (p *Poller) Run(ctx context.Context) {
 	p.fetchFull()
 
 	ticker := time.NewTicker(p.interval)
