@@ -32,13 +32,18 @@ type fakeGitHubApp struct {
 	tokenExpires time.Time
 	repos        int
 	lastClaims   atomic.Value
+	// Installation 43's token is minted only once heldMint is closed; heldMintStarted is
+	// closed when that mint reaches GitHub.
+	heldMint        chan struct{}
+	heldMintStarted chan struct{}
 }
 
 func newFakeGitHubApp(t *testing.T, repos int) *fakeGitHubApp {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
-	f := &fakeGitHubApp{key: key, tokenExpires: time.Now().Add(time.Hour), repos: repos}
+	f := &fakeGitHubApp{key: key, tokenExpires: time.Now().Add(time.Hour), repos: repos,
+		heldMint: make(chan struct{}), heldMintStarted: make(chan struct{})}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Close)
 	t.Setenv("GITHUB_API_URL", f.URL)
@@ -78,6 +83,10 @@ func (f *fakeGitHubApp) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		n := f.tokenCalls.Add(1)
 		json.NewEncoder(w).Encode(map[string]any{"token": fmt.Sprintf("ghs_%d", n), "expires_at": f.tokenExpires.UTC().Format(time.RFC3339)}) //nolint:errcheck
+	case r.Method == http.MethodPost && r.URL.Path == "/app/installations/43/access_tokens":
+		close(f.heldMintStarted)
+		<-f.heldMint
+		json.NewEncoder(w).Encode(map[string]any{"token": "ghs_held", "expires_at": f.tokenExpires.UTC().Format(time.RFC3339)}) //nolint:errcheck
 	case r.Method == http.MethodGet && r.URL.Path == "/app/installations/42":
 		if !f.appJWT(r) {
 			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
@@ -173,6 +182,38 @@ func TestAppInstallationToken(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "installation 99")
 	assert.Contains(t, err.Error(), "HTTP 404")
+}
+
+func TestAppInstallationTokenWhileAnotherMints(t *testing.T) {
+	fake := newFakeGitHubApp(t, 0)
+	app, err := LoadApp(123, "gavel", writeAppKey(t, fake.key))
+	require.NoError(t, err)
+	ctx := context.Background()
+	_, err = app.InstallationToken(ctx, 42)
+	require.NoError(t, err)
+
+	held := make(chan error, 1)
+	go func() {
+		_, err := app.InstallationToken(ctx, 43)
+		held <- err
+	}()
+	<-fake.heldMintStarted
+	t.Cleanup(func() {
+		close(fake.heldMint)
+		require.NoError(t, <-held)
+	})
+
+	cached := make(chan string, 1)
+	go func() {
+		token, _ := app.InstallationToken(ctx, 42)
+		cached <- token
+	}()
+	select {
+	case token := <-cached:
+		assert.Equal(t, "ghs_1", token)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cached token waited for another installation's mint to finish")
+	}
 }
 
 func TestAppInstallationAndRepos(t *testing.T) {

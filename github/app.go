@@ -76,11 +76,14 @@ func LoadApp(id int64, slug, keyPath string) (*App, error) {
 }
 
 // InstallationToken returns an access token for installationID, minting a new one when
-// the cached token is within installationTokenMargin of expiring.
+// the cached token is within installationTokenMargin of expiring. The lock guards only the
+// cache, not the call to GitHub, so one slow mint holds up no other installation; two callers
+// missing the cache at once may both mint, and GitHub allows that.
 func (a *App) InstallationToken(ctx context.Context, installationID int64) (string, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if cached, ok := a.tokens[installationID]; ok && a.now().Before(cached.expires.Add(-installationTokenMargin)) {
+	cached, ok := a.tokens[installationID]
+	a.mu.Unlock()
+	if ok && a.now().Before(cached.expires.Add(-installationTokenMargin)) {
 		return cached.token, nil
 	}
 	appJWT, err := a.jwt()
@@ -98,7 +101,9 @@ func (a *App) InstallationToken(ctx context.Context, installationID int64) (stri
 	if minted.Token == "" {
 		return "", fmt.Errorf("mint a token for GitHub App installation %d: GitHub returned no token", installationID)
 	}
+	a.mu.Lock()
 	a.tokens[installationID] = cachedToken{token: minted.Token, expires: minted.ExpiresAt}
+	a.mu.Unlock()
 	return minted.Token, nil
 }
 
