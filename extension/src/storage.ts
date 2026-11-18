@@ -37,11 +37,20 @@ function readPageEntry(key: string): PageResult {
   }
 }
 
-function writePageEntry(key: string, value: string | null): PageResult {
+function writePageEntry(key: string, value: string | null, preserveSession: boolean): PageResult {
   try {
+    if (preserveSession) {
+      const current = JSON.parse(window.localStorage.getItem(key) ?? "{}") as { session?: unknown };
+      if (current.session !== undefined && (typeof current.session !== "string" || !current.session))
+        throw new Error("The saved session is invalid");
+      const next = JSON.parse(value ?? "{}") as { session?: string };
+      if (typeof current.session === "string") next.session = current.session;
+      else delete next.session;
+      value = Object.keys(next).length ? JSON.stringify(next) : null;
+    }
     if (value === null) window.localStorage.removeItem(key);
     else window.localStorage.setItem(key, value);
-    return { ok: true, value: null };
+    return { ok: true, value };
   } catch (cause) {
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
   }
@@ -61,7 +70,7 @@ export async function readSiteSettings(tabId: number): Promise<SiteSettings> {
 }
 
 /** Stores the site's overrides in the page's `localStorage`; `null` removes the entry. */
-export async function writeSiteSettings(tabId: number, site: SiteSettings | null): Promise<void> {
-  const results = await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func: writePageEntry, args: [SITE_SETTINGS_KEY, site === null ? null : serializeSiteSettings(site)] });
+export async function writeSiteSettings(tabId: number, site: SiteSettings | null, options: { preserveSession?: boolean } = {}): Promise<void> {
+  const results = await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func: writePageEntry, args: [SITE_SETTINGS_KEY, site === null ? null : serializeSiteSettings(site), options.preserveSession === true] });
   answer(tabId, results);
 }

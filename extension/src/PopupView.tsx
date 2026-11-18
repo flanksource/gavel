@@ -80,9 +80,12 @@ export function Popup() {
   const saveSite = () => run("Saved for this site.", async () => {
     if (!siteDraft) throw new Error("This page's settings could not be read");
     const overrides = siteOverrides(global, settingsOf(siteDraft));
-    await writeSiteSettings(tabId, overrides);
-    setLoaded({ ...loaded, site: overrides ?? {} });
-    setSiteDraft(draftOf(effectiveSettings(global, overrides ?? {})));
+    const changesSession = siteDraft.session !== (site.session ?? "");
+    if (changesSession) await writeSiteSettings(tabId, overrides);
+    else await writeSiteSettings(tabId, overrides, { preserveSession: true });
+    const saved = await readSiteSettings(tabId);
+    setLoaded({ ...loaded, site: saved });
+    setSiteDraft(draftOf(effectiveSettings(global, saved)));
   });
   // Whether the grabber is enabled is not a default to reset: it keeps following the switch.
   const resetSite = () => run("This site follows the global defaults.", async () => {
@@ -96,15 +99,16 @@ export function Popup() {
     if (!siteDraft) throw new Error("This page's settings could not be read");
     const { enabled: _enabled, ...others } = site;
     const next: SiteSettings = enabled ? { ...others, enabled: true } : others;
-    await writeSiteSettings(tabId, next);
+    await writeSiteSettings(tabId, next, { preserveSession: true });
     try {
       await requestBackground({ type: enabled ? "activate" : "deactivate", tabId });
     } catch (cause) {
-      if (enabled) await writeSiteSettings(tabId, site);
+      if (enabled) await writeSiteSettings(tabId, site, { preserveSession: true });
       throw cause;
     }
-    setLoaded({ ...loaded, site: next });
-    setSiteDraft({ ...siteDraft, enabled });
+    const saved = await readSiteSettings(tabId);
+    setLoaded({ ...loaded, site: saved });
+    setSiteDraft(draftOf(effectiveSettings(global, saved)));
   });
   const saveGlobal = () => run("Saved global defaults.", async () => {
     const { session: _session, enabled: _enabled, ...defaults } = settingsOf(globalDraft);

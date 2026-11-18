@@ -26,12 +26,13 @@ export type RunOptions = {
 export type CommentEdits = "direct" | "propose";
 
 export type DeliverTarget =
-  | { kind: "session"; sessionId: string }
+  | { kind: "session"; sessionId: string; edits?: CommentEdits }
   | {
       kind: "run";
       prompt: string;
       runOptions?: RunOptions;
       groupKey?: string;
+      edits?: CommentEdits;
       /** Skips the group's recorded session, launches a new one and records it for the group. */
       fresh?: boolean;
     };
@@ -74,12 +75,22 @@ export type CommentAgentSettings = {
   agent: { agent: CommentAgent; provenance: Record<string, { layer: string; page?: string }>; found: boolean };
 };
 
+export type CommentAgentPatch = { [Field in keyof CommentAgent]?: CommentAgent[Field] | null };
+
+export type CreateDeliveryChoice = { defaultSessionId?: string; mentionId?: string };
+
+export type CreateDeliveryPreview = {
+  route?: { source: string; target: DeliverTarget; assign?: boolean };
+  session?: GavelAgentSession;
+  mention?: boolean;
+};
+
 /** `PUT /api/v1/comments/agent`: save `agent` at `layer` (its default, or with `page` its entry for the target); `null` removes it. */
 export type SaveCommentAgentRequest = {
   target: { scopeUri: string; uri: string };
   layer: SettingsRef;
   page: boolean;
-  agent: CommentAgent | null;
+  agent: CommentAgentPatch | null;
 };
 
 /**

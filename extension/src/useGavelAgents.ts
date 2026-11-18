@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Comment } from "@flanksource/clicky-ui";
+import { ownLayerOf } from "@flanksource/clicky-ui/comments/gavel";
+import type { CommentAgentPatch } from "../comments/gavel-delivery";
 import type { RuntimeCatalog } from "../agents/runtime-families";
 import { commentAgentFor, fetchRuntimeCatalog, pageTargetUri, type AgentSession, type CommentAgentSettings, type CommentEdits, type GavelClient, type PageRef, type RunTarget } from "./gavel-client";
 
@@ -67,7 +69,7 @@ export function useAdoptRunSession(options: { comments: Pick<Comment, "id" | "ag
       const run = recorded.get(thread.id);
       return run && run.requestedAt !== thread.requestedAt ? run : undefined;
     };
-    const adopted = watched.map(handedOff).find(run => run?.sessionId);
+    const adopted = watched.map(handedOff).find(run => run?.sessionId && run.state !== "error");
     if (adopted?.sessionId) {
       setWatched([]);
       adopt.current(adopted.sessionId);
@@ -80,8 +82,9 @@ export function useAdoptRunSession(options: { comments: Pick<Comment, "id" | "ag
   const watch = useCallback((ids: string[]) => {
     setWatched(ids.map(id => ({ id, requestedAt: latest.current.find(comment => comment.id === id)?.agentRun?.requestedAt })));
   }, []);
+  const watchNew = useCallback((id: string) => setWatched([{ id, requestedAt: undefined }]), []);
   const cancel = useCallback(() => setWatched([]), []);
-  return { watch, cancel };
+  return { watch, watchNew, cancel };
 }
 
 /** The models and agent runtimes a new session can start with, loaded once from the dashboard. */
@@ -99,66 +102,67 @@ export function useRuntimeCatalog(server: string): { catalog: RuntimeCatalog | u
   return { catalog, error };
 }
 
-const PROJECT_LAYER = { kind: "project" } as const;
-
-/**
- * Whether gavel starts an agent run for every new human comment on the current
- * page: the page's comment agent in gavel's settings, saved at the project
- * layer. It describes a run, never a live session. Turning it off removes the
- * page entry, or, when an inherited default would still enable the page, saves
- * an explicit disabled agent. While it is on, a changed run target is re-saved.
- */
+/** Reads Gavel's effective rule and patches only the settings the user changes. */
 export function useAutoRun(options: { client: GavelClient; page: PageRef | undefined; run: RunTarget | undefined }) {
   const { client, page, run } = options;
   const prefix = page ? pageTargetUri(client.scope, page) : undefined;
-  const runKey = JSON.stringify(run ?? null);
-  const [agent, setAgent] = useState<CommentAgentSettings["agent"]>();
-  const enabled = agent?.agent.enabled === true;
-  const [ready, setReady] = useState(false);
+  const [loaded, setLoaded] = useState<{ settings: CommentAgentSettings; prefix: string }>();
   const [error, setError] = useState<string | null>(null);
-  const synced = useRef(runKey);
+  const generation = useRef(0);
+  const revision = useRef(0);
+  const writes = useRef(Promise.resolve());
+  const current = loaded?.prefix === prefix ? loaded?.settings : undefined;
+  const agent = current?.agent;
 
   useEffect(() => {
-    if (!page) return;
-    let cancelled = false;
-    setReady(false);
-    setAgent(undefined);
-    client.commentAgent(page).then(
-      settings => {
-        if (cancelled) return;
-        setAgent(settings.agent);
-        setError(null);
-        setReady(true);
-      },
-      (cause: unknown) => { if (!cancelled) setError(describe(cause)); },
-    );
-    return () => { cancelled = true; };
+    const mine = ++generation.current;
+    setLoaded(undefined);
+    setError(null);
+    if (!page || !prefix) return;
+    void writes.current.then(async () => {
+      if (generation.current !== mine) return;
+      try {
+        const settings = await client.commentAgent(page);
+        if (generation.current === mine) setLoaded({ settings, prefix });
+      } catch (cause) {
+        if (generation.current === mine) setError(describe(cause));
+      }
+    });
+    return () => { generation.current++; };
   }, [client, prefix]);
 
-  const edits = agent?.agent.edits ?? "direct";
-  const set = useCallback(async (on: boolean, chosenEdits: CommentEdits | undefined = agent?.agent.edits) => {
-    if (!page || !run) throw new Error("The grabber has not reported the page yet");
-    try {
-      let saved = await client.saveCommentAgent({ page, layer: PROJECT_LAYER, agent: on ? { ...commentAgentFor(run), ...(chosenEdits ? { edits: chosenEdits } : {}) } : null });
-      if (!on && saved.agent.agent.enabled === true) saved = await client.saveCommentAgent({ page, layer: PROJECT_LAYER, agent: { enabled: false } });
-      setAgent(saved.agent);
-      setError(null);
-    } catch (cause) {
-      setError(describe(cause));
-    }
-  }, [client, page, run, agent]);
+  const save = (patch: CommentAgentPatch) => {
+    if (!page || !prefix || !current) throw new Error("The page's comment agent settings have not loaded");
+    const mine = generation.current;
+    const change = ++revision.current;
+    writes.current = writes.current.then(async () => {
+      if (generation.current !== mine) return;
+      try {
+        const settings = await client.saveCommentAgent({ page, layer: ownLayerOf(current.settings), agent: patch });
+        if (generation.current !== mine || revision.current !== change) return;
+        setLoaded({ settings, prefix });
+        setError(null);
+      } catch (cause) {
+        if (generation.current === mine && revision.current === change) setError(describe(cause));
+      }
+    });
+    return writes.current;
+  };
 
-  /** How an enabled page's agent changes the project: edits it directly or proposes patches. Saving while off would turn auto-run on. */
-  const setEdits = useCallback(async (next: CommentEdits) => {
-    if (!enabled) throw new Error("Cannot choose how the agent edits while auto-run is off; turn auto-run on first");
-    await set(true, next);
-  }, [enabled, set]);
+  const set = (on: boolean) => {
+    if (!on || !run) return save({ enabled: on });
+    const existing = agent?.agent ?? {};
+    const fields = Object.entries(commentAgentFor(run)).filter(([field]) => field === "enabled" || existing[field as keyof typeof existing] === undefined);
+    return save(Object.fromEntries(fields));
+  };
 
-  useEffect(() => {
-    if (synced.current === runKey) return;
-    synced.current = runKey;
-    if (enabled && ready) void set(true);
-  }, [runKey]);
-
-  return { agent, enabled, edits, ready, error, set, setEdits };
+  return {
+    agent,
+    enabled: agent?.agent.enabled === true,
+    edits: agent?.agent.edits ?? "direct",
+    ready: current !== undefined,
+    error,
+    set,
+    setEdits: (edits: CommentEdits) => save({ edits }),
+  };
 }

@@ -75,39 +75,11 @@ export function agentAssignItems({ sessions, currentSessionId, runtime, disabled
   ];
 }
 
-export type AssignAllOptions = {
-  sessions: AgentSession[];
-  threads: Comment[];
-  runtime: AgentSessionRuntime | undefined;
-  onSession: (session: AgentSession, ids: string[]) => void;
-  onNew: (ids: string[]) => void;
-};
-
-/** The page-level menu: hand every open thread not already with a session to it, or all of them to a new session. */
-export function assignAllItems({ sessions, threads, runtime, onSession, onNew }: AssignAllOptions): DropdownMenuItem[] {
-  const open = openRoots(threads);
-  const group = "Assign all open threads to";
-  const allIds = open.map(thread => thread.id);
-  const sessionItems = orderedSessions(sessions).map((session): DropdownMenuItem => {
-    const ids = open.filter(thread => thread.agentRun?.sessionId !== session.id).map(thread => thread.id);
-    return {
-      label: `${sessionLabel(session)} (${ids.length})`,
-      icon: agentGlyph(session.model ?? session.source).icon,
-      group,
-      title: session.status === ENDED ? `Resumes the ended session ${session.title} with these threads` : `Deliver these threads into the session ${session.title}`,
-      disabled: ids.length === 0 || unavailable(session),
-      onSelect: () => onSession(session, ids),
-    };
+/** Open roots eligible for the current target. Failed hand-offs can be tried again. */
+export function assignableRoots(threads: Comment[], sessionId: string | undefined): Comment[] {
+  return openRoots(threads).filter(thread => {
+    const run = thread.agentRun;
+    if (run?.state === "queued") return false;
+    return !sessionId || run?.sessionId !== sessionId || run.state === "error";
   });
-  return [
-    ...sessionItems,
-    {
-      label: `${newSessionLabel(runtime)} (${allIds.length})`,
-      icon: agentGlyph(runtime?.spec.model ?? "").icon,
-      group,
-      title: "Start a new agent session for all of these threads with the configured runtime",
-      disabled: allIds.length === 0,
-      onSelect: () => onNew(allIds),
-    },
-  ];
 }

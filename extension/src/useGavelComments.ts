@@ -11,6 +11,7 @@ import type { StoredComment } from "../contracts/comments-store";
 import { commentActor, localUser, type Action } from "../comments/gavel-projection";
 import type { Selection } from "../host/model";
 import type { DeliverTarget, GavelClient, PageRef } from "./gavel-client";
+import type { CreateDeliveryChoice } from "../comments/gavel-delivery";
 
 export const GAVEL_COMMENT_CONFIG: CommentConfig = {
   statuses: DEFAULT_COMMENT_STATUSES,
@@ -49,8 +50,8 @@ export type GavelComments = {
   loading: boolean;
   /** A broken backend or event stream must never look like "no comments". */
   error: string | null;
-  /** Creates a thread root, handed to `deliver` instead of the page's comment agent when set, and returns its id once gavel has stored it. */
-  create: (input: CommentCreateInput, selection: Selection, deliver?: DeliverTarget) => Promise<string>;
+  /** Creates a thread root and returns the ID Gavel assigned it. */
+  create: (input: CommentCreateInput, selection: Selection, delivery?: CreateDeliveryChoice) => Promise<string>;
   reply: (input: CommentReplyInput) => Promise<void>;
   updateStatus: (id: string, status: string) => Promise<void>;
   acknowledge: (id: string) => Promise<void>;
@@ -175,7 +176,7 @@ export function useGavelComments(options: { client: GavelClient; page: PageRef |
     comments: stored,
     loading,
     error: error ?? streamError,
-    create: async (input, selection, deliver) => {
+    create: async (input, selection, delivery) => {
       const comment: StoredComment = {
         id: crypto.randomUUID(),
         body: input.body,
@@ -185,8 +186,9 @@ export function useGavelComments(options: { client: GavelClient; page: PageRef |
         ...(input.rating ? { rating: input.rating } : {}),
         ...(input.assignee ? { assignee: input.assignee } : {}),
       };
-      await mutate(() => client.create({ page: requirePage(), comment, selection, ...(deliver ? { deliver } : {}) }));
-      return comment.id;
+      const created = await client.create({ page: requirePage(), comment, selection, ...(delivery ? { delivery } : {}) });
+      await refresh();
+      return created.id;
     },
     reply: async input => {
       const parent = latest.current.find(entry => entry.id === input.parentId);

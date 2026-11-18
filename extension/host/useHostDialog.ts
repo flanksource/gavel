@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { sendToHost } from "./useHostBridge";
 
-export function useHostDialog(visible = true) {
+export function useHostDialog(visible = true, notify = sendToHost) {
   useEffect(() => {
     if (!visible) return;
     let previous = false;
@@ -9,7 +9,7 @@ export function useHostDialog(visible = true) {
       const open = !!document.querySelector('[aria-modal="true"]');
       if (open !== previous) {
         previous = open;
-        sendToHost({ type: "dialog", open });
+        notify({ type: "dialog", open });
       }
     };
     const observer = new MutationObserver(update);
@@ -17,7 +17,7 @@ export function useHostDialog(visible = true) {
     update();
     return () => {
       observer.disconnect();
-      if (previous) sendToHost({ type: "dialog", open: false });
+      if (previous) notify({ type: "dialog", open: false });
     };
-  }, [visible]);
+  }, [visible, notify]);
 }

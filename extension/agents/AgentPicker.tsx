@@ -58,6 +58,7 @@ export type AgentPickerProps = {
     selectLabel: (session: AgentPickerSession) => string;
     /** Offers a "New session" choice; choosing it shows the runtime bar. */
     onNew?: () => void;
+    newLabel?: string;
     onAll?: () => void;
     /** Page-level "assign every open thread": to a listed session, or to a new one. */
     assignAll?: {
@@ -228,11 +229,11 @@ export function AgentPicker(props: AgentPickerProps) {
               variant="ghost"
               size="sm"
               aria-pressed={newSelected}
-              aria-label="New session"
+              aria-label={sessions.newLabel ?? "New session"}
               className="h-auto w-full justify-start gap-2 py-2 text-left"
               onClick={sessions.onNew}
             >
-              <span className="truncate">New session</span>
+              <span className="truncate">{sessions.newLabel ?? "New session"}</span>
               <span className="text-muted-foreground">runs the model above</span>
             </Button>
           )}

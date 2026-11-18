@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { agentGlyph } from "@flanksource/clicky-ui/comments";
 import { UiRobotAi, UiSliders } from "@flanksource/clicky-ui/icons";
 import type { Comment } from "@flanksource/clicky-ui";
-import { agentAssignItems, assignAllItems, openRoots } from "./assign-items";
+import { agentAssignItems, assignableRoots, openRoots } from "./assign-items";
 
 const live = { id: "s-1", source: "claude", title: "Fix header", model: "claude-opus-5-5", inCmux: true, status: "active" };
 const sleeping = { id: "s-2", source: "codex", title: "Docs pass", inCmux: false, status: "sleeping" };
@@ -59,30 +59,13 @@ describe("openRoots", () => {
   });
 });
 
-describe("assignAllItems", () => {
-  const threads = [thread("c-1"), withSession("c-2", "s-1"), withSession("c-3", "s-3")];
-
-  it("counts, per session, the open threads not already delivered to it, then offers a new session for all of them", () => {
-    const on = { onSession: vi.fn(), onNew: vi.fn() };
-    const items = assignAllItems({ sessions: [ended, live, sleeping], threads, runtime, ...on });
-    expect(items.map(item => [item.label, item.disabled ?? false, item.group])).toEqual([
-      ["Fix header (2)", false, "Assign all open threads to"],
-      ["Docs pass (3)", false, "Assign all open threads to"],
-      ["Old run · resumes (2)", false, "Assign all open threads to"],
-      ["New Sonnet 5.5 (3)", false, "Assign all open threads to"],
-    ]);
-    items.forEach(item => item.onSelect?.());
-    expect(on.onSession.mock.calls.map(([session, ids]) => [session.id, ids])).toEqual([["s-1", ["c-1", "c-3"]], ["s-2", ["c-1", "c-2", "c-3"]], ["s-3", ["c-1", "c-2"]]]);
-    expect(on.onNew.mock.calls).toEqual([[["c-1", "c-2", "c-3"]]]);
-  });
-
-  it("disables a session whose every open thread is already with it, and everything when no thread is open", () => {
-    const only = [withSession("c-2", "s-1")];
-    expect(assignAllItems({ sessions: [live, sleeping], threads: only, runtime: undefined, onSession: vi.fn(), onNew: vi.fn() }).map(item => [item.label, item.disabled ?? false])).toEqual([
-      ["Fix header (0)", true],
-      ["Docs pass (1)", false],
-      ["New session (Gavel's default) (1)", false],
-    ]);
-    expect(assignAllItems({ sessions: [live], threads: [], runtime, onSession: vi.fn(), onNew: vi.fn() }).map(item => item.disabled)).toEqual([true, true]);
-  });
+it("excludes successful deliveries to the current session and keeps failed deliveries eligible", () => {
+  const failed = withSession("failed", "s-1");
+  const threads = [
+    thread("new"),
+    withSession("delivered", "s-1"),
+    withSession("elsewhere", "s-2"),
+    { ...failed, agentRun: { ...failed.agentRun!, state: "error" as const } },
+  ];
+  expect(assignableRoots(threads, "s-1").map(comment => comment.id)).toEqual(["new", "elsewhere", "failed"]);
 });

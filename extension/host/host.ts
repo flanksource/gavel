@@ -147,11 +147,18 @@ export function installBookmarklet(options: HostOptions) {
         case "pick": screenshotRequested = message["screenshot"] === true; ui.frame.hidden = true; agent.receive({ type: "mode", mode: "comment" }); break;
         case "page": agent.receive({ type: "page" }); break;
         case "settings": {
+          const requestId = message["requestId"];
+          if (typeof requestId !== "string" || !requestId) throw new Error("Missing settings request ID");
           const agentSession = message["session"];
-          if (agentSession !== null && (typeof agentSession !== "string" || agentSession === "")) throw new Error("Invalid grabber agent session");
-          const stored = withSiteSession(localStorage.getItem(SITE_SETTINGS_KEY), agentSession);
-          if (stored === null) localStorage.removeItem(SITE_SETTINGS_KEY);
-          else localStorage.setItem(SITE_SETTINGS_KEY, stored);
+          try {
+            if (agentSession !== null && (typeof agentSession !== "string" || agentSession === "")) throw new Error("Invalid grabber agent session");
+            const stored = withSiteSession(localStorage.getItem(SITE_SETTINGS_KEY), agentSession);
+            if (stored === null) localStorage.removeItem(SITE_SETTINGS_KEY);
+            else localStorage.setItem(SITE_SETTINGS_KEY, stored);
+            send({ type: "settings-result", requestId });
+          } catch (cause) {
+            send({ type: "settings-result", requestId, error: cause instanceof Error ? cause.message : String(cause) });
+          }
           break;
         }
         case "pins": {

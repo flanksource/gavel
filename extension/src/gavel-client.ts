@@ -1,6 +1,7 @@
 import type { RuntimeCatalogFamily } from "@flanksource/clicky-ui/ai";
 import type { ChatModel } from "@flanksource/clicky-ui/chat";
 import type { GitDiffPayload } from "@flanksource/clicky-ui/data";
+import type { CommentMentionable } from "@flanksource/clicky-ui/comments";
 import type { AgentSessionGrouping, AgentSessionRuntime } from "../contracts/agent-session-store";
 import type { StoredComment } from "../contracts/comments-store";
 import { agentRuntimeFamilies, type RuntimeCatalog } from "../agents/runtime-families";
@@ -18,8 +19,11 @@ import {
 import {
   DEFAULT_RUN_PROMPT,
   type CommentAgent,
+  type CommentAgentPatch,
   type CommentAgentSettings,
   type CommentEdits,
+  type CreateDeliveryChoice,
+  type CreateDeliveryPreview,
   type DeliverBatchRequest,
   type DeliverTarget,
   type GavelAgentSession,
@@ -255,7 +259,7 @@ export class GavelClient {
   }
 
   /** Creates a thread root. A captured screenshot is uploaded as an attachment; if that fails the incomplete thread is removed. */
-  async create(options: { page: PageRef; comment: StoredComment; selection?: Selection; deliver?: DeliverTarget }): Promise<StoredComment> {
+  async create(options: { page: PageRef; comment: StoredComment; selection?: Selection; deliver?: DeliverTarget; delivery?: CreateDeliveryChoice }): Promise<StoredComment> {
     const { page, selection } = options;
     let comment = options.comment;
     let screenshot: Uint8Array<ArrayBuffer> | undefined;
@@ -272,6 +276,7 @@ export class GavelClient {
       requestId: comment.id,
       content,
       ...(options.deliver ? { deliver: options.deliver } : {}),
+      ...(options.delivery ? { delivery: options.delivery } : {}),
     });
     if (screenshot) {
       try {
@@ -337,6 +342,24 @@ export class GavelClient {
     return sessions;
   }
 
+  async mentionables(page: PageRef): Promise<CommentMentionable[]> {
+    const items = await this.json<CommentMentionable[]>(this.url("/mentionables", { scope: this.scope, target: pageTargetUri(this.scope, page) }));
+    if (!Array.isArray(items)) throw new Error("Gavel returned an invalid mentionables list");
+    return items;
+  }
+
+  async previewDelivery(options: { page: PageRef; body?: string; delivery?: CreateDeliveryChoice }): Promise<CreateDeliveryPreview> {
+    const { page, body, delivery } = options;
+    const preview = await this.post<CreateDeliveryPreview>("/delivery/preview", {
+      target: pageTarget({ scope: this.scope, page }),
+      ...(body ? { bodyMarkdown: body } : {}),
+      ...(delivery ? { delivery } : {}),
+    });
+    if (!preview || typeof preview !== "object" || Array.isArray(preview))
+      throw new Error("Gavel returned an invalid delivery preview");
+    return preview;
+  }
+
   /** The comment agent gavel's settings layers resolve for `page`. */
   async commentAgent(page: PageRef): Promise<CommentAgentSettings> {
     const settings = await this.json<CommentAgentSettings>(this.url("/agent", { scope: this.scope, uri: pageTargetUri(this.scope, page) }));
@@ -345,7 +368,7 @@ export class GavelClient {
   }
 
   /** Saves `agent` as `page`'s entry in the settings `layer` (`null` removes the entry) and returns the agent now resolved for the page. */
-  async saveCommentAgent(options: { page: PageRef; layer: SettingsRef; agent: CommentAgent | null }): Promise<CommentAgentSettings> {
+  async saveCommentAgent(options: { page: PageRef; layer: SettingsRef; agent: CommentAgentPatch | null }): Promise<CommentAgentSettings> {
     const body: SaveCommentAgentRequest = {
       target: { scopeUri: this.scope, uri: pageTargetUri(this.scope, options.page) },
       layer: options.layer,

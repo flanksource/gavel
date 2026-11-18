@@ -41,6 +41,33 @@ export function sendToHost(message: PanelMessage) {
   window.parent.postMessage(envelope(session, message), peer === "null" ? "*" : peer);
 }
 
+export async function saveHostSession(session: string | undefined): Promise<void> {
+  const host = connection;
+  if (!host) throw new Error("Bookmarklet bridge is not attached to a parent document");
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const finish = (error?: string) => {
+      window.clearTimeout(timer);
+      window.removeEventListener("message", receive);
+      if (error !== undefined) reject(new Error(error));
+      else resolve();
+    };
+    const receive = (event: MessageEvent) => {
+      if (event.source !== window.parent || !matchesBookmarkletParent({ expected: host.parentOrigin, received: event.origin })) return;
+      const result = bridgeMessage(event.data, host.session);
+      if (result?.["type"] !== "settings-result" || result["requestId"] !== requestId) return;
+      finish(typeof result["error"] === "string" ? result["error"] : undefined);
+    };
+    const timer = window.setTimeout(() => finish("The page did not confirm the session change"), 5000);
+    window.addEventListener("message", receive);
+    try {
+      sendToHost({ type: "settings", requestId, session: session ?? null });
+    } catch (cause) {
+      finish(cause instanceof Error ? cause.message : String(cause));
+    }
+  });
+}
+
 export function useHostBridge() {
   const [width, setWidth] = useCommentRailWidth(400, "playground.bookmarklet.width");
   const [state, setState] = useState<HostState>();

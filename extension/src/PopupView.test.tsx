@@ -29,7 +29,11 @@ const SESSION = { id: "s-1", source: "codex", title: "Review changes", model: "c
 
 function open(options: { global?: GlobalDefaults; site?: SiteSettings } = {}) {
   vi.mocked(readGlobalDefaults).mockResolvedValue(options.global ?? globalDefaults);
-  vi.mocked(readSiteSettings).mockResolvedValue(options.site ?? {});
+  let saved = options.site ?? {};
+  vi.mocked(readSiteSettings).mockImplementation(async () => saved);
+  vi.mocked(writeSiteSettings).mockImplementation(async (_tab, next, writeOptions) => {
+    saved = { ...next, ...(writeOptions?.preserveSession && saved.session ? { session: saved.session } : {}) };
+  });
   render(<Popup />);
 }
 
@@ -136,7 +140,7 @@ describe("popup site settings", () => {
     await waitFor(() => expect(enabled.hasAttribute("disabled")).toBe(false));
     fireEvent.click(enabled);
     await waitFor(() => expect(requestBackground).toHaveBeenCalledWith({ type: "activate", tabId: 7 }));
-    expect(writeSiteSettings).toHaveBeenLastCalledWith(7, { session: "s-1", enabled: true });
+    expect(writeSiteSettings).toHaveBeenLastCalledWith(7, { session: "s-1", enabled: true }, { preserveSession: true });
   });
 });
 

@@ -17,6 +17,8 @@ The form includes the project picker, labels, priority, status, description, scr
 
 Site settings use the page's `flanksource.grabber` localStorage entry. Previous Gavel entries are read and rewritten without the backend discriminator; playground entries must be discarded in the popup. Chrome associates an unpacked extension's IndexedDB with its extension ID: moving the install directory can create a new ID. Sync saved captures in the previous installation before replacing it, and keep that installation available until its queue is empty.
 
+The page composer previews where Gavel will deliver the comment. An `@` target changes that draft’s destination. The Session tab and Assign All use the page’s default destination. Choose a session under the settings gear to remember it for this site, or choose **Use automatic target** to follow Gavel’s auto-run rules again.
+
 ## Development
 
 Normal builds resolve installed packages without sibling source aliases. The migration needs a Clicky UI release containing the current comment/session APIs and the React picker at `@flanksource/clicky-ui/react-grab`. The picker ships within Clicky UI. Clicky UI 0.3.59 does not contain those APIs, and an unpublished dependency cannot support a clean install. Until that release exists, dependency installation, lockfile generation and the normal Make targets remain blocked; the explicit development checks below validate the local source only. Build the local picker with `pnpm --filter @flanksource/clicky-ui build:react-grab` in the Clicky UI checkout before development checks.

@@ -47,3 +47,14 @@ it("restores an expanded host when its panel becomes hidden", () => {
     [{ type: "dialog", open: false }],
   ]);
 });
+
+it("notifies the supplied host without contacting the extension bridge", async () => {
+  const notify = vi.fn();
+  renderHook(() => useHostDialog(true, notify));
+  const modal = document.createElement("div");
+  modal.setAttribute("aria-modal", "true");
+  await act(async () => { document.body.append(modal); });
+  await act(async () => { modal.remove(); });
+  expect(notify.mock.calls).toEqual([[{ type: "dialog", open: true }], [{ type: "dialog", open: false }]]);
+  expect(sendToHost).not.toHaveBeenCalled();
+});

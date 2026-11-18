@@ -54,6 +54,7 @@ export type HostMessage =
   | { type: "state"; state: HostState }
   | { type: "anchors"; anchors: AnchorState[] }
   | { type: "focus"; anchor: string }
+  | { type: "settings-result"; requestId: string; error?: string }
   | { type: "error"; error: string };
 export type PanelMessage =
   | { type: "open-rail" }
@@ -71,7 +72,7 @@ export type PanelMessage =
   | { type: "pick"; screenshot?: boolean }
   | { type: "page" }
   /** The panel changed this site's agent session; the host persists it in the page's grabber settings. `null` clears it. */
-  | { type: "settings"; session: string | null }
+  | { type: "settings"; requestId: string; session: string | null }
   | {
       type: "scroll";
       anchor: string;
