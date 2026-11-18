@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,46 @@ func TestPlatformTenants(t *testing.T) {
 	assert.Equal(t, `days must be a whole number from 1 to 60, got "90"`, failure["error"])
 }
 
+// clerkOrganizationLists counts the Backend API's organization list requests clerk served.
+func clerkOrganizationLists(clerk *clerktest.Server) int {
+	n := 0
+	for _, request := range clerk.BackendRequests() {
+		if strings.HasPrefix(request, "GET /v1/organizations?") {
+			n++
+		}
+	}
+	return n
+}
+
+func TestPlatformTenantsReadClerksOrganizationsOncePerMinute(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	clerk := clerktest.New(t, "cli", clerktest.User{ID: "user_ada"})
+	clerk.Organizations = []clerktest.Organization{{ID: "org_beta", Slug: "beta", Name: "Beta", Members: 1}}
+	now := time.Now()
+	p := &PlatformAPI{
+		Store: platform.Store{DB: db, Issuer: "https://clerk.example"},
+		Clerk: api.ClerkOrganizations{SecretKey: clerktest.SecretKey, HTTPClient: clerk.BackendClient()},
+		now:   func() time.Time { return now },
+	}
+	base := servePlatform(t, p, org, true)
+	load := func() PlatformTenants {
+		t.Helper()
+		var got PlatformTenants
+		require.Equal(t, http.StatusOK, platformGet(t, base+"/api/platform/tenants", &got))
+		require.Empty(t, got.ClerkError)
+		return got
+	}
+
+	load()
+	now = now.Add(59 * time.Second)
+	assert.Len(t, load().Tenants, 2, "the cached list still merges in Clerk's organizations")
+	assert.Equal(t, 1, clerkOrganizationLists(clerk), "a load within a minute reuses Clerk's list")
+
+	now = now.Add(2 * time.Second)
+	load()
+	assert.Equal(t, 2, clerkOrganizationLists(clerk), "a load after a minute reads Clerk again")
+}
+
 func TestPlatformTenantsWithoutClerk(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	clerk := clerktest.New(t, "cli", clerktest.User{ID: "user_ada"})
@@ -122,6 +163,10 @@ func TestPlatformTenantsWithoutClerk(t *testing.T) {
 	require.Len(t, got.Tenants, 1, "gavel's organizations, without Clerk's")
 	assert.Equal(t, org, got.Tenants[0].ID)
 	assert.Contains(t, got.ClerkError, "check the Clerk secret key")
+
+	require.Equal(t, http.StatusOK, platformGet(t, servePlatform(t, p, org, true)+"/api/platform/tenants", &got))
+	assert.Contains(t, got.ClerkError, "check the Clerk secret key")
+	assert.Equal(t, 2, clerkOrganizationLists(clerk), "a failed list isn't kept: the next load asks Clerk again")
 }
 
 func TestPlatformSandboxRuns(t *testing.T) {

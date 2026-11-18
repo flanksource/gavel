@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flanksource/captain/pkg/substrate"
@@ -37,6 +38,11 @@ type PlatformAPI struct {
 	SubstrateView string
 	// Substrate lists substrate's workers and actors; nil when serve runs without --sandbox substrate.
 	Substrate SubstrateInventory
+
+	now        func() time.Time
+	clerkMu    sync.Mutex
+	clerkOrgs  []api.ClerkOrganization
+	clerkAsked time.Time
 }
 
 // SubstrateInventory lists what a substrate holds, as captain's substrate client does.
@@ -44,6 +50,10 @@ type SubstrateInventory interface {
 	ListWorkers(ctx context.Context) ([]substrate.Worker, error)
 	ListActors(ctx context.Context, atespace string) ([]substrate.Actor, error)
 }
+
+// clerkOrganizationsMaxAge is how long the tenants route reuses Clerk's organization list, which
+// it reads page by page, so reloading the dashboard doesn't page through every organization again.
+const clerkOrganizationsMaxAge = time.Minute
 
 // platformSourceTimeout bounds how long one route waits for its source.
 const platformSourceTimeout = 10 * time.Second
@@ -126,7 +136,7 @@ func (p *PlatformAPI) tenants(w http.ResponseWriter, r *http.Request) {
 		result.Tenants = append(result.Tenants, PlatformTenant{Tenant: t, InGavel: true})
 		byClerkID[t.ClerkOrgID] = i
 	}
-	orgs, err := p.Clerk.Organizations(ctx)
+	orgs, err := p.clerkOrganizations(ctx)
 	if err != nil {
 		result.ClerkError = fmt.Sprintf("list the organizations in Clerk: %v", err)
 		writeJSON(w, result)
@@ -145,6 +155,30 @@ func (p *PlatformAPI) tenants(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.SortStableFunc(result.Tenants, func(a, b PlatformTenant) int { return strings.Compare(a.Name, b.Name) })
 	writeJSON(w, result)
+}
+
+// clerkOrganizations returns Clerk's organizations, read at most clerkOrganizationsMaxAge ago. A
+// failed read is not kept. The lock guards only the cache, not the read from Clerk.
+func (p *PlatformAPI) clerkOrganizations(ctx context.Context) ([]api.ClerkOrganization, error) {
+	now := time.Now
+	if p.now != nil {
+		now = p.now
+	}
+	p.clerkMu.Lock()
+	orgs, asked := p.clerkOrgs, p.clerkAsked
+	p.clerkMu.Unlock()
+	if !asked.IsZero() && now().Sub(asked) < clerkOrganizationsMaxAge {
+		return orgs, nil
+	}
+	asked = now()
+	orgs, err := p.Clerk.Organizations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p.clerkMu.Lock()
+	p.clerkOrgs, p.clerkAsked = orgs, asked
+	p.clerkMu.Unlock()
+	return orgs, nil
 }
 
 func (p *PlatformAPI) sandboxRuns(w http.ResponseWriter, r *http.Request) {
