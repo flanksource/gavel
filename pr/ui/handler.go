@@ -164,7 +164,8 @@ type Server struct {
 
 	// org owns every row this Server reads and writes; uuid.Nil is the local
 	// org. orgDB holds an organization's settings. githubCache is the GitHub
-	// cache those rows live in; nil is the shared cache.
+	// cache those rows live in, the one its GitHub options name; nil is the
+	// shared cache.
 	org         uuid.UUID
 	orgDB       *gorm.DB
 	githubCache *cache.Store
@@ -279,6 +280,7 @@ func NewServer(ctx gavelctx.Context, interval time.Duration, ghOpts github.Optio
 		ctx:               ctx,
 		interval:          interval,
 		ghOpts:            ghOpts,
+		githubCache:       ghOpts.Cache,
 		config:            config,
 		refreshCh:         make(chan struct{}, 1),
 		detailCache:       NewDetailCache(),

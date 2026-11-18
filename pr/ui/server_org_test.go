@@ -11,6 +11,7 @@ import (
 	"time"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
+	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/internal/database"
@@ -64,6 +65,23 @@ func TestServerIndexesPRsUnderItsOrg(t *testing.T) {
 	indexed, err = store.GetPRs([]ghcache.PRKey{key})
 	require.NoError(t, err)
 	assert.Empty(t, indexed, "the local org's index is untouched")
+}
+
+func TestServerIndexesPRsInTheCacheItsGitHubOptionsName(t *testing.T) {
+	db, store, org := openOrgDB(t)
+	// Without a process database the shared cache is disabled, so only the named cache can
+	// hold the index.
+	t.Setenv(database.EnvDSN, "")
+	srv := NewServer(gavelctx.New(t.Context()), time.Minute, github.Options{Cache: store.ForOrg(org)}, SearchConfig{})
+	srv.SetOrg(org, db)
+	require.NoError(t, srv.SetResults(github.PRSearchResults{{
+		Repo: "acme/app", Number: 1, URL: "https://github.com/acme/app/pull/1", Title: "Fix", UpdatedAt: time.Now(),
+	}}, false))
+
+	key := ghcache.PRKey{Provider: "github", Repo: "acme/app", Number: 1}
+	indexed, err := store.ForOrg(org).GetPRs([]ghcache.PRKey{key})
+	require.NoError(t, err)
+	assert.Contains(t, indexed, key)
 }
 
 func TestOrgConfigPersistsToOrgSettings(t *testing.T) {
