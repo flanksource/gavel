@@ -214,6 +214,18 @@ func (e *substrateExecutor) Sweep(ctx context.Context, lifetime time.Duration) (
 	return e.client.Sweep(ctx, jobPrefix, time.Now().Add(-lifetime))
 }
 
+// ListWorkers lists substrate's workers over the executor's connection, so serve reads substrate's
+// inventory without dialing it again.
+func (e *substrateExecutor) ListWorkers(ctx context.Context) ([]substrate.Worker, error) {
+	return e.client.ListWorkers(ctx)
+}
+
+// ListActors lists the actors of atespace, or of every atespace when it is empty, over the
+// executor's connection.
+func (e *substrateExecutor) ListActors(ctx context.Context, atespace string) ([]substrate.Actor, error) {
+	return e.client.ListActors(ctx, atespace)
+}
+
 // substrateHandle is a job's run: its log as the run writes it, and how it ended.
 type substrateHandle struct {
 	ref    string

@@ -324,6 +324,24 @@ func TestSubstrateSubmitLogsTheCredentialsTheGatewayInjects(t *testing.T) {
 	assert.Contains(t, logged.String(), "sandbox run 7a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d in substrate environment ate-env/gavel-run-7a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d: the egress gateway injects no credentials")
 }
 
+func TestSubstrateListsItsSubstratesWorkersAndActors(t *testing.T) {
+	server, executor, _ := startSubstrate(t, http.NotFoundHandler())
+	server.AddWorker(substrate.Worker{Name: "pool-a-0", Pool: "pool-a", State: "active"})
+	inventory, ok := executor.(interface {
+		ListWorkers(ctx context.Context) ([]substrate.Worker, error)
+		ListActors(ctx context.Context, atespace string) ([]substrate.Actor, error)
+	})
+	require.True(t, ok, "the platform dashboard reads substrate's inventory over the executor's connection")
+
+	workers, err := inventory.ListWorkers(t.Context())
+	require.NoError(t, err)
+	require.Len(t, workers, 1)
+	assert.Equal(t, "pool-a-0", workers[0].Name)
+	actors, err := inventory.ListActors(t.Context(), "")
+	require.NoError(t, err)
+	assert.Empty(t, actors, "no job has started an environment")
+}
+
 func TestSubstrateBackendIsCaptainsSubstrateSandboxOptions(t *testing.T) {
 	backend := SubstrateBackend(substrate.Options{
 		EnvAPI: "envapi.example:443", Control: "control.example:443", ControlTokenFile: "/run/token",

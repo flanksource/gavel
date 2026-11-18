@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/flanksource/captain/pkg/substrate"
 	commonssecret "github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
@@ -221,13 +220,11 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		platformAPI.MissionControl = missioncontrol.New(opts.MissionControlURL, opts.missionControlToken, opts.MissionControlInfra)
 		platformAPI.SubstrateView = opts.MissionControlSubstrateView
 	}
-	closeInventory := func() error { return nil }
-	if opts.Sandbox == "substrate" {
-		inventory, err := substrate.Dial(substrateOptions(opts))
-		if err != nil {
-			return hostedStack{}, fmt.Errorf("dial substrate for the platform dashboard's inventory: %w", err)
+	// With --sandbox substrate the executor lists substrate's inventory over its own connection.
+	if dispatcher != nil {
+		if inventory, ok := dispatcher.Executor.(ui.SubstrateInventory); ok {
+			platformAPI.Substrate = inventory
 		}
-		platformAPI.Substrate, closeInventory = inventory, inventory.Close
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/platform/", platformAPI.Handler())
@@ -245,9 +242,6 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	stop := func() {
 		orgs.Close()
 		stopShell()
-		if err := closeInventory(); err != nil {
-			logger.Warnf("close the platform dashboard's substrate connection: %v", err)
-		}
 	}
 	// CI jobs authenticate with their GitHub Actions OIDC token, not a Clerk session.
 	ciResults := &ui.CIResults{
