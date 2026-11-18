@@ -93,10 +93,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/edit/options", s.saveListing)
 	mux.HandleFunc("GET /api/files", func(w http.ResponseWriter, r *http.Request) { respond(w, s.Store.Files(), nil) })
 	mux.HandleFunc("POST /api/files", s.createFile)
+	mux.HandleFunc("POST /api/files/refresh", s.refreshFiles)
 	mux.HandleFunc("GET /api/templates", s.templates)
 	mux.HandleFunc("POST /api/file/{id}/rename", s.renameFile)
 	mux.HandleFunc("DELETE /api/file/{id}", s.deleteFile)
 	mux.Handle("GET /api/file/{id}/preview", rpchttp.TimingMiddleware(http.HandlerFunc(s.previewContext)))
+	mux.HandleFunc("POST /api/file/{id}/preview/component", s.previewComponent)
 	mux.HandleFunc("GET /api/preview/runtimes", s.previewCatalog)
 	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/file/{id}/comments", s.listComments)
@@ -232,24 +234,29 @@ func (s *Server) schema(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &input) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	schema, err := s.editorSchema(r.Context(), doc, input.Source)
+	if err == nil && schema != nil {
+		err = s.Store.PreviewExtensionRefs(r.PathValue("id"), schema)
+	}
+	respond(w, schema, err)
+}
+
+// editorSchema bundles the schema source declares, or the --schema flag or
+// .gavel.yaml json lint schema overriding it.
+func (s *Server) editorSchema(ctx context.Context, doc Document, source string) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	override := s.Schema
 	if override == "" {
 		cfg, err := verify.LoadGavelConfig(filepath.Dir(doc.Path))
 		if err != nil {
-			respond(w, nil, err)
-			return
+			return nil, err
 		}
 		if configured := cfg.LintOptionsFor("json").Schema; configured != nil {
 			override = *configured
 		}
 	}
-	schema, err := jsonlint.EditorSchema(ctx, []byte(input.Source), doc.Path, override)
-	if err == nil && schema != nil {
-		err = s.Store.PreviewExtensionRefs(r.PathValue("id"), schema)
-	}
-	respond(w, schema, err)
+	return jsonlint.EditorSchema(ctx, []byte(source), doc.Path, override)
 }
 func (s *Server) startLint(w http.ResponseWriter, r *http.Request) {
 	var input struct {

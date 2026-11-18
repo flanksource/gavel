@@ -12,9 +12,22 @@ import {
 export type SelectorView = "preview" | "source" | "rich" | "form";
 
 /** A stored comment selector, as `editor/commenting.go` validates it. */
-export type Selector = Pick<AnnotationCapture, "kind" | "version" | "patch" | "anchor" | "locators"> & {
+export type Selector = Pick<AnnotationCapture, "kind" | "version" | "patch" | "anchor" | "locators" | "quote" | "cell"> & {
   view: SelectorView;
 };
+
+/** What a code range stores beside its patch to sharpen its highlight: the selected words and the table cell they lie in. */
+export type SelectorExtras = Pick<Selector, "quote" | "cell">;
+
+const extrasIn = ({ quote, cell }: { quote?: Selector["quote"] | undefined; cell?: Selector["cell"] | undefined }): SelectorExtras => ({
+  ...(quote ? { quote } : {}),
+  ...(cell ? { cell } : {}),
+});
+
+/** The quote and cell a stored code range carries, for FileReview to highlight; none for any other kind. */
+export function extrasOf(selector: Selector): SelectorExtras {
+  return selector.kind === "code-range" ? extrasIn(selector) : {};
+}
 
 export function selectorView(view: string): SelectorView {
   return view === "source" || view === "rich" || view === "form" ? view : "preview";
@@ -29,16 +42,26 @@ export function anchorOf(selector: Selector): string {
     case "dom":
       return selector.locators?.length ? elementAnchor(selector.locators) : DOCUMENT_ANCHOR;
     case "document":
+    // FileReview draws no image regions, so a box on an image is listed with the file's comments.
+    case "region":
       return DOCUMENT_ANCHOR;
   }
 }
 
-/** The selector to store for a comment FileReview created at `anchor` in `view`. */
-export function selectorOf(anchor: string | null | undefined, view: string): Selector {
+/**
+ * The selector to store for a comment FileReview created at `anchor` in `view`.
+ * A code range keeps `extras` beside its patch; other kinds have no lines to
+ * hold them, so they drop them.
+ */
+export function selectorOf(
+  anchor: string | null | undefined,
+  view: string,
+  extras: { quote?: Selector["quote"] | undefined; cell?: Selector["cell"] | undefined } = {},
+): Selector {
   if (anchor && isPatchAnchor(anchor)) {
     // A Preview selection is anchored to its source lines; the server accepts it from either view.
     const patchView = view === "source" ? "source" : "preview";
-    return { kind: "code-range", version: 1, view: patchView, patch: parsePatchAnchor(anchor) };
+    return { kind: "code-range", version: 1, view: patchView, patch: parsePatchAnchor(anchor), ...extrasIn(extras) };
   }
   if (anchor && isElementAnchor(anchor))
     return { kind: "dom", version: 1, view: "preview", anchor, locators: parseElementAnchor(anchor) };

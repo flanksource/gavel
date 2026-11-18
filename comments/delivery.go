@@ -46,6 +46,14 @@ type DeliverTarget struct {
 	Edits string `json:"edits,omitempty"`
 }
 
+// EffectiveGroupKey is the group a run reuses when no explicit group is configured.
+func (t DeliverTarget) EffectiveGroupKey() string {
+	if t.GroupKey == "" {
+		return "comments:shared"
+	}
+	return t.GroupKey
+}
+
 func (t DeliverTarget) Validate() error {
 	if t.Edits != "" && t.Edits != EditsDirect && t.Edits != EditsPropose {
 		return fmt.Errorf("%w: edits must be %q or %q, not %q", ErrInvalid, EditsDirect, EditsPropose, t.Edits)
@@ -107,10 +115,12 @@ type AgentSessionContext struct {
 
 // SessionQuery narrows live sessions to those working in ScopeURI's directory,
 // unless All; with a ScopeURI the scope's managed sessions are listed too.
+// GroupKey returns only the group's current session and requires ScopeURI.
 // TenantID is the requesting principal's, set by Service.AgentSessions.
 type SessionQuery struct {
 	TenantID string
 	ScopeURI string
+	GroupKey string
 	All      bool
 }
 
@@ -336,6 +346,9 @@ func (s *Service) checkBatchThread(ctx context.Context, p Principal, t DeliverTh
 
 // AgentSessions lists the live agent sessions a principal can deliver threads to.
 func (s *Service) AgentSessions(ctx context.Context, q SessionQuery) ([]AgentSession, error) {
+	if q.GroupKey != "" && q.ScopeURI == "" {
+		return nil, fmt.Errorf("group session lookup requires a scope: %w", ErrInvalid)
+	}
 	if err := s.requireDelivery(); err != nil {
 		return nil, err
 	}

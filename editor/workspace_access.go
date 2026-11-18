@@ -47,26 +47,54 @@ func (s *Store) Switch(ctx context.Context, dir string, listing verify.EditConfi
 			return err
 		}
 	}
-	return s.replace(StoreOptions{Paths: []string{dir}, Listing: listing})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.replaceLocked(StoreOptions{Paths: []string{dir}, Listing: listing})
 }
 
 // Relist lists the edited files and folders again by listing.
 func (s *Store) Relist(listing verify.EditConfig) error {
 	s.mu.Lock()
-	paths := s.paths
-	s.mu.Unlock()
-	return s.replace(StoreOptions{Paths: paths, Listing: listing})
+	defer s.mu.Unlock()
+	return s.replaceLocked(StoreOptions{Paths: s.paths, Listing: listing})
 }
 
-func (s *Store) replace(opts StoreOptions) error {
+func (s *Store) replaceLocked(opts StoreOptions) error {
 	fresh, err := newStore(opts, true)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.files, s.roots, s.paths, s.listing = fresh.files, fresh.roots, fresh.paths, fresh.listing
 	return nil
+}
+
+func (s *Store) refresh(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Access != nil {
+		for _, root := range s.roots {
+			if _, err := s.Access.Authorize(ctx, root.display); err != nil {
+				return err
+			}
+		}
+	}
+	return s.replaceLocked(StoreOptions{Paths: s.paths, Listing: s.listing})
+}
+
+func (s *Server) refreshFiles(w http.ResponseWriter, r *http.Request) {
+	if !workspaceaccess.Trusted(r) {
+		http.Error(w, "refreshing files requires a local same-origin caller", http.StatusForbidden)
+		return
+	}
+	if err := s.Store.refresh(r.Context()); err != nil {
+		workspaceaccess.Respond(w, nil, err)
+		return
+	}
+	if err := s.Reload(); err != nil {
+		respond(w, nil, err)
+		return
+	}
+	respond(w, map[string]any{"roots": s.Store.Roots(), "files": s.Store.Files()}, nil)
 }
 
 // Listing is which files the folders list.

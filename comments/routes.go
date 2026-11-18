@@ -162,14 +162,25 @@ func (s *Service) deliverRoute(ctx context.Context, c Comment, explicit *Route) 
 	if explicit != nil {
 		return explicit.Target, s.deliverThrough(ctx, c.ID, "create:"+c.ID, *explicit)
 	}
-	r, ok, err := s.routes.RouteFor(ctx, c)
+	r, err := s.automaticRoute(ctx, c)
+	if err != nil || r == nil {
+		return DeliverTarget{}, err
+	}
+	return r.Target, s.deliverThrough(ctx, c.ID, "route:"+c.ID, *r)
+}
+
+func (s *Service) automaticRoute(ctx context.Context, c Comment) (*Route, error) {
+	if s.routes == nil || c.Author.Kind != "user" {
+		return nil, nil
+	}
+	route, ok, err := s.routes.RouteFor(ctx, c)
 	if err != nil {
-		return DeliverTarget{}, fmt.Errorf("resolving the route of %s: %w", c.Target.URI, err)
+		return nil, fmt.Errorf("resolving the route of %s: %w", c.Target.URI, err)
 	}
 	if !ok {
-		return r.Target, nil
+		return nil, nil
 	}
-	return r.Target, s.deliverThrough(ctx, c.ID, "route:"+c.ID, r)
+	return &route, nil
 }
 
 // deliverThrough delivers thread id through r: an Assign route makes its

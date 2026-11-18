@@ -148,7 +148,7 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 	})
 
 	It("lists a managed session after it ends as resumable, and resumes it with its recorded prompt when a thread is delivered to it", func(ctx SpecContext) {
-		target := comments.DeliverTarget{Kind: "run", Prompt: "editor-comments", RunOptions: json.RawMessage(`{"instructions":"Keep it terse"}`)}
+		target := comments.DeliverTarget{Kind: "run", Prompt: "editor-comments", Fresh: true, RunOptions: json.RawMessage(`{"instructions":"Keep it terse"}`)}
 		first := create(ctx, "changelog", "Write the changelog\nfor the release")
 		_, err := svc.Deliver(ctx, comments.DeliverRequest{CommentID: first.ID, ExpectedVersion: first.Version, RequestID: "run-changelog", Target: target})
 		Expect(err).NotTo(HaveOccurred())
@@ -208,7 +208,7 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 	})
 
 	It("delivers a batch in one launch that every thread records, and a stale thread fails the batch before anything is sent", func(ctx SpecContext) {
-		target := comments.DeliverTarget{Kind: "run", Prompt: "editor-comments"}
+		target := comments.DeliverTarget{Kind: "run", Prompt: "editor-comments", Fresh: true}
 		a, b := create(ctx, "batch", "Fix the logo"), create(ctx, "batch", "Fix the footer")
 		_, before := bridge.Snapshot()
 		delivered, err := svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "batch-1", Target: target, Threads: []comments.DeliverThread{{ID: a.ID, ExpectedVersion: a.Version}, {ID: b.ID, ExpectedVersion: b.Version}}})
@@ -381,7 +381,7 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		overridden := toSession(create(ctx, "proposals", "Fix the hero typo"), "override-session", comments.EditsDirect)
 
 		a, b := create(ctx, "proposals", "Shorten the intro"), create(ctx, "proposals", "Drop the banner")
-		_, err := svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "inherit-batch", Target: comments.DeliverTarget{Kind: "run", Prompt: "editor-comments"}, Threads: []comments.DeliverThread{{ID: a.ID, ExpectedVersion: a.Version}, {ID: b.ID, ExpectedVersion: b.Version}}})
+		_, err := svc.DeliverBatch(ctx, comments.DeliverBatchRequest{RequestID: "inherit-batch", Target: comments.DeliverTarget{Kind: "run", Prompt: "editor-comments", Fresh: true}, Threads: []comments.DeliverThread{{ID: a.ID, ExpectedVersion: a.Version}, {ID: b.ID, ExpectedVersion: b.Version}}})
 		Expect(err).NotTo(HaveOccurred())
 		_, launched := bridge.Snapshot()
 		batch := launched[len(launched)-1]

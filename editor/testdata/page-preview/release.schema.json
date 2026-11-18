@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "x-clicky-preview": { "ref": "./DataPreview.tsx" },
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "owners": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

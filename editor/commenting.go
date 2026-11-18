@@ -30,6 +30,9 @@ type CommentSelector struct {
 	// It is source text, as the file holds it (Markdown, not the rendered
 	// prose), and its exact text is never empty.
 	Quote *comments.TextQuote `json:"quote,omitempty"`
+	// Cell is the markdown table cell a code-range was made in; Patch is then
+	// its row's one line.
+	Cell *comments.TableCell `json:"cell,omitempty"`
 	// Region is the box a region selector marks on an image.
 	Region *comments.Region `json:"region,omitempty"`
 }
@@ -42,6 +45,14 @@ var selectorKinds = map[string][]string{KindDocument: {"document", "dom", "code-
 
 // validate checks the selector against the file it is on, as of doc.
 func (s CommentSelector) validate(doc Document) error {
+	if s.Cell != nil {
+		if s.Kind != "code-range" || s.Patch == nil || s.Patch.StartLine != s.Patch.EndLine {
+			return fmt.Errorf("%w: a table cell sits beside a code-range on its row's one line", comments.ErrInvalid)
+		}
+		if err := s.Cell.Validate(); err != nil {
+			return err
+		}
+	}
 	switch {
 	case s.Version != 1 || !slices.Contains(commentViews, s.View) || len(s.HTML) > 8192:
 		return fmt.Errorf("%w: selector version, view %q or html size", comments.ErrInvalid, s.View)

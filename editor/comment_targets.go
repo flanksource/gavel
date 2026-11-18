@@ -81,9 +81,14 @@ func (s *Store) editedFile(ctx context.Context, scope, uri string) (Document, er
 	if err != nil {
 		return Document{}, err
 	}
-	_, _, path, err := agents.ProjectFile(ctx, catalog, scope, uri)
+	_, _, logical, err := agents.ProjectFile(ctx, catalog, scope, uri)
 	if err != nil {
 		return Document{}, err
+	}
+	// The store keys files by their symlink-resolved path; a link inside the project (.tmp) can point outside it.
+	path, err := projects.CanonicalPath(logical)
+	if err != nil {
+		return Document{}, fmt.Errorf("resolve %s: %w", logical, err)
 	}
 	for id, canonical := range s.Paths() {
 		if canonical == path {

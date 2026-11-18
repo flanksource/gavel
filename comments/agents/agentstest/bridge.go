@@ -27,6 +27,8 @@ type Bridge struct {
 	Launched  []captaincli.PromptInvocation
 	// FailDeliver makes every delivery fail with this message.
 	FailDeliver string
+	// DeferEvents leaves provider events to the test driving the invocation.
+	DeferEvents bool
 	hold        func(stage string)
 }
 
@@ -83,7 +85,7 @@ func (b *Bridge) Launch(_ context.Context, invocation captaincli.PromptInvocatio
 		b.Sessions = append(b.Sessions, captaincli.SessionRecord{ID: id, Source: "claude", Slug: id, Live: live})
 	}
 	b.mu.Unlock()
-	if invocation.OnEvent != nil {
+	if invocation.OnEvent != nil && !b.DeferEvents {
 		invocation.OnEvent(0, api.Event{Kind: api.EventSystem, SessionID: id})
 	}
 	return captaincli.PromptRunResult{RunID: "run-" + id}, nil

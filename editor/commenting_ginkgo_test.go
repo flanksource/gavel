@@ -71,6 +71,23 @@ var _ = Describe("Editor comment boundaries", func() {
 			doc.ID,
 		}))
 	})
+	It("places a file under a symlink inside the project that points outside it at its path inside the project", func() {
+		root := GinkgoT().TempDir()
+		outside := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(outside, "review.md"), []byte("# review\n"), 0600)).To(Succeed())
+		Expect(os.Symlink(outside, filepath.Join(root, ".tmp"))).To(Succeed())
+		useProject(root)
+		store, err := NewStore(StoreOptions{Paths: []string{filepath.Join(root, ".tmp", "review.md")}})
+		Expect(err).NotTo(HaveOccurred())
+		doc, err := store.Read(store.Files()[0].ID)
+		Expect(err).NotTo(HaveOccurred())
+
+		place := mustTarget(doc)
+		edited, err := store.editedFile(context.Background(), place.Scope, place.URI)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]string{place.URI, edited.ID}).To(Equal([]string{"gavel://project/demo/files/.tmp/review.md", doc.ID}))
+	})
 	It("answers a file outside every project with a project to create for its directory", func() {
 		useProject(GinkgoT().TempDir())
 		outside := filepath.Join(GinkgoT().TempDir(), "notes.md")
@@ -200,6 +217,23 @@ var _ = Describe("Editor comment boundaries", func() {
 			Expect(resolve(CommentSelector{Kind: "dom", Version: 1, View: "preview", Anchor: "para-2", Quote: &comments.TextQuote{Prefix: "web "}})).To(MatchError(comments.ErrInvalid), "a dom quote with no patch still needs exact text")
 			Expect(resolve(CommentSelector{Kind: "document", Version: 1, View: "preview", Quote: &comments.TextQuote{Exact: "selected"}})).To(MatchError(comments.ErrInvalid))
 			Expect(resolve(CommentSelector{Kind: "region", Version: 1, View: "preview", Region: &comments.Region{W: 1, H: 1}})).To(MatchError(comments.ErrInvalid), "a document has no image regions")
+		})
+		It("accepts a table cell beside a code-range on its row's one line, and rejects one on several lines, on another kind, or out of range", func() {
+			row, err := comments.CapturePatch(source, 5, 5)
+			Expect(err).NotTo(HaveOccurred())
+			rows, err := comments.CapturePatch(source, 4, 5)
+			Expect(err).NotTo(HaveOccurred())
+			cell := comments.TableCell{KeyColumn: "Name", Key: "Bob", Column: "Age", Row: 1, Col: 1}
+			header := comments.TableCell{Column: "Age", Row: -1, Col: 1}
+			on := func(kind string, patch *comments.PatchAnchor, cell comments.TableCell) CommentSelector {
+				return CommentSelector{Kind: kind, Version: 1, View: "preview", Anchor: "para-2", Patch: patch, Cell: &cell}
+			}
+			Expect([]error{resolve(on("code-range", &row, cell)), resolve(on("code-range", &row, header))}).To(Equal([]error{nil, nil}))
+			Expect(resolve(on("code-range", &rows, cell))).To(MatchError(comments.ErrInvalid), "a cell lies on one row line")
+			Expect(resolve(on("dom", nil, cell))).To(MatchError(comments.ErrInvalid), "only a code-range carries a cell")
+			Expect(resolve(on("code-range", &row, comments.TableCell{Row: -2, Col: 0}))).To(MatchError(comments.ErrInvalid))
+			Expect(resolve(on("code-range", &row, comments.TableCell{Row: 0, Col: -1}))).To(MatchError(comments.ErrInvalid))
+			Expect(resolve(on("code-range", &row, comments.TableCell{Key: "Bob", Row: 0, Col: 0}))).To(MatchError(comments.ErrInvalid), "a key needs the column it is in")
 		})
 	})
 	Describe("image selectors", func() {

@@ -117,7 +117,8 @@ type CreateRequest struct {
 	// target resolves to; the create fails when the target is invalid. Without
 	// it, a person's body that mentions one agent (an @name of Mentionables) is
 	// delivered there; two different agents fail the create.
-	Deliver *DeliverTarget `json:"deliver,omitempty"`
+	Deliver  *DeliverTarget        `json:"deliver,omitempty"`
+	Delivery *CreateDeliveryChoice `json:"delivery,omitempty"`
 	// Attachments are stored on the new root, in the same transaction, before
 	// it is routed or delivered; each is checked (name, media type, size up to
 	// the host's attachment limit) before anything is written.
@@ -133,18 +134,8 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Comment, error
 	if !ok || strings.TrimSpace(req.Body) == "" || req.RequestID == "" {
 		return Comment{}, fmt.Errorf("%w: body, request ID and known workflow required", ErrInvalid)
 	}
-	if err = s.access.Authorize(ctx, p, "create", req.Target); err != nil {
-		return Comment{}, err
-	}
-	target, err := s.targets.Resolve(ctx, p, req.Target)
+	target, err := s.resolveCreateTarget(ctx, p, req.Target)
 	if err != nil {
-		return Comment{}, err
-	}
-	uri, err := url.Parse(target.URI)
-	if err != nil || uri.Scheme == "" || target.ScopeURI == "" || target.Kind == "" {
-		return Comment{}, fmt.Errorf("%w: resolved target needs URI, scope and kind", ErrInvalid)
-	}
-	if err = s.access.Authorize(ctx, p, "create", target); err != nil {
 		return Comment{}, err
 	}
 	if len(req.Content) > 0 && !json.Valid(req.Content) {
@@ -183,13 +174,31 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Comment, error
 	return created, nil
 }
 
-// createRoute is the route req's root is delivered through instead of its
-// automatic one: its explicit deliver target, else its body's agent mention.
-func (s *Service) createRoute(ctx context.Context, p Principal, target Target, req CreateRequest) (*Route, error) {
-	if req.Deliver == nil {
-		return s.mentionRoute(ctx, p, target, req.Body)
+func (s *Service) resolveCreateTarget(ctx context.Context, p Principal, input Target) (Target, error) {
+	if err := s.access.Authorize(ctx, p, "create", input); err != nil {
+		return Target{}, err
 	}
-	return &Route{Source: "deliver", Target: *req.Deliver}, s.checkTarget(*req.Deliver)
+	target, err := s.targets.Resolve(ctx, p, input)
+	if err != nil {
+		return Target{}, err
+	}
+	uri, err := url.Parse(target.URI)
+	if err != nil || uri.Scheme == "" || target.ScopeURI == "" || target.Kind == "" {
+		return Target{}, fmt.Errorf("%w: resolved target needs URI, scope and kind", ErrInvalid)
+	}
+	return target, s.access.Authorize(ctx, p, "create", target)
+}
+
+// createRoute is the route req's root is delivered through instead of its
+// automatic one: its explicit deliver target, agent mention, or remembered session.
+func (s *Service) createRoute(ctx context.Context, p Principal, target Target, req CreateRequest) (*Route, error) {
+	if req.Deliver != nil {
+		if req.Delivery != nil {
+			return nil, fmt.Errorf("%w: deliver and delivery cannot be combined", ErrInvalid)
+		}
+		return &Route{Source: "deliver", Target: *req.Deliver}, s.checkTarget(*req.Deliver)
+	}
+	return s.draftRoute(ctx, p, CreateDeliveryDraft{Target: target, Body: req.Body, Delivery: req.Delivery})
 }
 
 // createFile is one of a create's attachments, checked and described.

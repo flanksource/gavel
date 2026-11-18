@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AISpecRuntimeSpec } from "@flanksource/clicky-ui/ai";
 import { request } from "./api";
+import type { AgentSession } from "./agent-sessions";
 import { runTargetOf, type RunRequest, type RunTarget } from "./run-request";
 
 /** The captain prompt a comment agent runs when its entry names none (verify.DefaultCommentAgentPrompt). */
@@ -131,8 +132,16 @@ export function effectiveFieldsOf(settings: FileSettings): EffectiveField[] {
   });
 }
 
-/** The toolbar label: the prompt that works new threads and whether it assigns, or that none does. */
-export function agentLabel(settings: FileSettings): string {
+/**
+ * The toolbar label: the launching session new threads go to (by its live
+ * title, else its short id), else the prompt that works them and whether it
+ * assigns, or that none does.
+ */
+export function agentLabel(settings: FileSettings, sessions: readonly AgentSession[]): string {
+  if (settings.session) {
+    const live = sessions.find((session) => session.id === settings.session);
+    return live ? `${live.source} · ${live.title}` : `Session ${settings.session.slice(0, 8)}`;
+  }
   const { agent, found } = settings.agent;
   if (!found) return "No page agent";
   if (!agent.enabled) return "Page agent off";

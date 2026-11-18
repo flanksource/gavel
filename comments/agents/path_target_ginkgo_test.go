@@ -38,6 +38,16 @@ var _ = Describe("ProjectPathTarget", func() {
 		Entry("a file that does not exist yet", "pkg/new.go", false, "gavel://project/acme%20corp/files/pkg/new.go"),
 	)
 
+	It("places a file under a symlink that leaves the project at its path inside the project", func(ctx SpecContext) {
+		outside := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(outside, "notes.md"), []byte("# notes\n"), 0o600)).To(Succeed())
+		Expect(os.Symlink(outside, filepath.Join(root, ".tmp"))).To(Succeed())
+
+		target, err := agents.ProjectPathTarget(ctx, catalog, filepath.Join(root, ".tmp", "notes.md"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(target).To(Equal(agents.PathTarget{Project: "acme corp", Dir: root, Scope: "gavel://project/acme%20corp", URI: "gavel://project/acme%20corp/files/.tmp/notes.md"}))
+	})
+
 	It("fails with projects.ErrNotFound outside every project", func(ctx SpecContext) {
 		_, err := agents.ProjectPathTarget(ctx, catalog, GinkgoT().TempDir())
 		Expect(err).To(MatchError(projects.ErrNotFound))

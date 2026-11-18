@@ -7,10 +7,11 @@ import {
   SegmentedControl,
   type DropdownMenuItem,
   type JsonSchemaObject,
+  type WorkspaceAccessDialogProps,
   WorkspaceAccessDialog,
   workspaceAccessClient,
 } from "@flanksource/clicky-ui/components";
-import { UiChatDots, UiDotsVertical, UiFilePlus, UiFolder, UiListChecks } from "@flanksource/clicky-ui/icons";
+import { UiChatDots, UiDotsVertical, UiFilePlus, UiFolder, UiListChecks, UiRefresh } from "@flanksource/clicky-ui/icons";
 import gavelLockup from "../../../assets/brand/gavel-logo-mono.svg";
 import {
   DocumentForm,
@@ -58,6 +59,8 @@ import { CurrentUser } from "./CurrentUser";
 import { NewAgentSessionDialog } from "./NewAgentSessionDialog";
 import { PageAgentControl } from "./PageAgentControl";
 import { FacetPreview } from "./FacetPreview";
+import { deniedWorkspaceFolder, forgetPreviewFolder, PreviewWorkspaceAccess, rememberedPreviewFolder } from "./preview-workspace-access";
+import { DATA_DOCUMENT } from "./data-preview";
 import { previewExtensionForm } from "./SchemaExtensionForm";
 import { FileOperationDialog, type FileOperation, type FileOperationHandlers } from "./FileOperationDialog";
 
@@ -144,11 +147,12 @@ const writeRoute = (route: Route) => history.pushState(null, "", routeHref(route
 const parentFolder = (path: string) => path.slice(0, path.lastIndexOf("/") + 1);
 
 export function App() {
-  const [workspaceAccess, setWorkspaceAccess] = useState(false);
+  const [workspaceAccess, setWorkspaceAccess] = useState<Pick<WorkspaceAccessDialogProps, "initialPath" | "highlightedPath" | "onGranted"> | null>(null);
   const [editOptions, setEditOptions] = useState(false);
   const [openedRoots, setOpenedRoots] = useState<string[]>([]);
   const [accessBlocked, setAccessBlocked] = useState(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
+  const [refreshingTree, setRefreshingTree] = useState(false);
   const [route, setRoute] = useState(readRoute);
   const [filters, setFilters] = useState<ProblemFilters>(emptyProblemFilters);
   const [comparison, setComparison] = useState<string | null>(null);
@@ -158,9 +162,15 @@ export function App() {
   const [run, setRun] = useState<Run | null>(null);
   const [schema, setSchema] = useState<JsonSchemaObject | null>(null);
   const [schemaError, setSchemaError] = useState("");
+  // The component a JSON or YAML document declares to preview it, for the file it was resolved for.
+  const [previewComponent, setPreviewComponent] = useState<{ id: string; component: string } | null>(null);
+  const [previewAccess, setPreviewAccess] = useState<{ id: string; folder: string; revision: number } | null>(null);
+  const [previewRequestRevision, setPreviewRequestRevision] = useState(0);
+  const [previewError, setPreviewError] = useState("");
   // Remounts the view so a file re-reads its text after the draft was replaced from disk.
   const [generation, setGeneration] = useState(0);
   const queues = useRef(new Map<string, Autosave>());
+  const listingVersion = useRef(0);
   const [, render] = useState(0);
 
   const root = useMemo(() => commonRoot([...files.map((file) => file.path), ...openedRoots.map(path => path + "/_")]), [files, openedRoots]);
@@ -184,6 +194,16 @@ export function App() {
   const openFile = (entry: FileEntry, view: FileReviewView) =>
     navigate({ selection: { kind: "file", ref: { file: relativePath(entry) } }, view });
   const active = route.selection?.kind === "file" ? byRef.get(fileRefKey(route.selection.ref)) : undefined;
+  const manageWorkspaceAccess = (folder?: string, onGranted?: (path: string) => void) => {
+    if (folder) {
+      setWorkspaceAccess({ initialPath: folder, onGranted: (root) => {
+        if (root.path === folder) onGranted?.(root.path);
+      } });
+      return;
+    }
+    const remembered = active ? rememberedPreviewFolder(active.id) : undefined;
+    setWorkspaceAccess(remembered ? { highlightedPath: remembered } : {});
+  };
   useEffect(() => accessClient.subscribe(() => {
     if (active) void request(`/api/file/${active.id}`).then(() => setAccessBlocked(false)).catch(cause => { if (cause instanceof ApiError && cause.status === 403) {setAccessBlocked(true);setError("Workspace access was revoked. Your draft is preserved; restore access before saving.");} else setError(String(cause)); });
   }, cause => setError(cause.message)), [active?.id]);
@@ -191,23 +211,40 @@ export function App() {
   useEffect(() => { void request<{ roots: string[] }>("/api/workspace/open").then(result => setOpenedRoots(result.roots)).catch(cause => setError(String(cause))); }, []);
   // Shows a new set of edited folders and files: closed files drop their drafts, and the
   // selection follows the tree root, or clears when its file is no longer listed.
-  const showOpened = (opened: OpenedFiles) => {
+  const showOpened = (opened: OpenedFiles, preserveUnsaved = false) => {
+    listingVersion.current++;
     const listed = new Set(opened.files.map((file) => file.id));
     for (const [id, queue] of queues.current) {
-      if (listed.has(id)) continue;
+      if (listed.has(id) || (preserveUnsaved && queue.state().status !== "saved")) continue;
       queue.dispose();
       queues.current.delete(id);
     }
-    const selectedPath = route.selection ? root + route.selection.ref.file : undefined;
+    const current = preserveUnsaved ? readRoute() : route;
+    const selectedPath = current.selection ? root + current.selection.ref.file : undefined;
     const nextRoot = commonRoot([...opened.files.map(file => file.path), ...opened.roots.map(folder => folder + "/_")]);
     setOpenedRoots(opened.roots); setFiles(opened.files);
-    if (!selectedPath || !route.selection) return;
-    const kept = selectedPath.startsWith(nextRoot) && (route.selection.kind === "folder" || opened.files.some((file) => file.path === selectedPath));
-    navigate(kept ? { ...route, selection: { ...route.selection, ref: { file: selectedPath.slice(nextRoot.length) } } } : { selection: null, view: route.view });
+    if (!selectedPath || !current.selection) return;
+    const kept = selectedPath.startsWith(nextRoot) && (current.selection.kind === "folder" || opened.files.some((file) => file.path === selectedPath));
+    const relative = selectedPath.slice(nextRoot.length);
+    if (preserveUnsaved && kept && relative === current.selection.ref.file) return;
+    navigate(kept ? { ...current, selection: { ...current.selection, ref: { file: relative } } } : { selection: null, view: current.view });
+  };
+  const refreshTree = async () => {
+    setRefreshingTree(true);
+    setError("");
+    const version = listingVersion.current;
+    try {
+      const opened = await request<OpenedFiles>("/api/files/refresh", {});
+      if (version === listingVersion.current) showOpened(opened, true);
+    } catch (cause) {
+      setError(`Could not refresh the file tree. ${String(cause)}`);
+    } finally {
+      setRefreshingTree(false);
+    }
   };
   const openFolder = async (path: string) => {
     showOpened(await request<OpenedFiles>("/api/workspace/open", { path }));
-    setWorkspaceAccess(false);
+    setWorkspaceAccess(null);
   };
   const unsavedFiles = () => [...queues.current.values()].filter((queue) => queue.state().status !== "saved").length;
   const ExtensionForm = useMemo(() => (active ? previewExtensionForm(active.id) : undefined), [active?.id]);
@@ -321,6 +358,9 @@ export function App() {
   useEffect(() => {
     setSchema(null);
     setSchemaError("");
+    setPreviewComponent(null);
+    setPreviewAccess(null);
+    setPreviewError("");
   }, [active?.id]);
   useEffect(() => {
     if (!active || !draft || active.kind !== "document" || /\.[jt]sx$/i.test(active.path)) return;
@@ -336,6 +376,27 @@ export function App() {
             }
           })
           .catch((cause) => !cancelled && setSchemaError(`Form schema unavailable: ${cause instanceof ApiError ? cause.body.trim() : String(cause)}`));
+        if (DATA_DOCUMENT.test(active.path))
+          void request<{ component: string }>(`/api/file/${active.id}/preview/component`, { source: draft.source })
+            .then(({ component }) => {
+              if (!cancelled) {
+                setPreviewComponent(component ? { id: active.id, component } : null);
+                setPreviewAccess(null);
+                setPreviewError("");
+              }
+            })
+            .catch((cause) => {
+              if (cancelled) return;
+              const folder = deniedWorkspaceFolder(cause);
+              if (folder) {
+                forgetPreviewFolder(active.id, folder);
+                setPreviewAccess({ id: active.id, folder, revision: previewRequestRevision });
+                setPreviewError("");
+              } else {
+                setPreviewAccess(null);
+                setPreviewError(`Preview unavailable: ${cause instanceof ApiError ? cause.body.trim() : String(cause)}`);
+              }
+            });
       } catch (cause) {
         setSchemaError(`Form schema unavailable: ${String(cause)}`);
       }
@@ -344,7 +405,7 @@ export function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [active?.id, draft?.source, active?.path]);
+  }, [active?.id, draft?.source, active?.path, previewRequestRevision]);
 
   const openStream = useEventSourceFactory();
   useEffect(() => {
@@ -376,6 +437,7 @@ export function App() {
   // path) is reopened under the new root, null closes the open file, undefined keeps the route.
   const refreshFiles = async (open: string | null | undefined) => {
     const next = await request<FileEntry[]>("/api/files");
+    listingVersion.current++;
     setFiles(next);
     setFileOperation(null);
     if (open) navigate({ selection: { kind: "file", ref: { file: open.slice(commonRoot(next.map((file) => file.path)).length) } }, view: route.view });
@@ -511,16 +573,6 @@ export function App() {
     const state = queues.current.get(entry.id)?.state();
     return (
       <div className="flex flex-wrap items-center gap-2 text-sm" role="status">
-        {pageAgent && entry.id === active?.id && (
-          <PageAgentControl
-            fileId={entry.id}
-            agent={pageAgent.agent}
-            choice={pageAgent.choice}
-            sessions={pageAgent.sessions}
-            onChoose={pageAgent.choose}
-            onSaved={pageAgent.refresh}
-          />
-        )}
         {state && <span>{state.status === "error" ? state.error : state.status}</span>}
         {state?.status === "error" && (
           <>
@@ -657,7 +709,17 @@ export function App() {
       // and its links open the full task manager below.
       actions={
         <div className="flex items-center gap-1">
-        <ProjectPicker roots={openedRoots} unsaved={unsavedFiles} onSwitched={showOpened} onAccessDenied={() => setWorkspaceAccess(true)} onError={setError} />
+        <ProjectPicker roots={openedRoots} unsaved={unsavedFiles} onSwitched={showOpened} onAccessDenied={() => manageWorkspaceAccess()} onError={setError} />
+        {pageAgent && active && (
+          <PageAgentControl
+            fileId={active.id}
+            agent={pageAgent.agent}
+            choice={pageAgent.choice}
+            sessions={pageAgent.sessions}
+            onChoose={pageAgent.choose}
+            onSaved={pageAgent.refresh}
+          />
+        )}
         <RecentComments
           recent={summary.recent}
           unread={unreadComments}
@@ -727,10 +789,10 @@ export function App() {
       contentWidth="full"
       contentClassName="flex min-h-0 flex-col overflow-hidden"
     >
-      {(error || schemaError) && (
+      {(error || schemaError || previewError) && (
         <p role="alert" className="px-3 py-1 text-sm text-destructive">
-          {error || schemaError}
-          <Button variant="ghost" size="sm" onClick={() => setWorkspaceAccess(true)}>Workspace access…</Button>
+          {error || schemaError || previewError}
+          <Button variant="ghost" size="sm" onClick={() => manageWorkspaceAccess()}>Workspace access…</Button>
         </p>
       )}
       {route.comments ? (
@@ -784,9 +846,16 @@ export function App() {
         onSourceChange={accessBlocked ? undefined : (ref, source) => queues.current.get(entryOf(ref).id)?.edit(source)}
         fileToolbar={fileToolbar}
         fileTabs={fileTabs}
-        filePreview={(ref) => /\.(tsx|jsx|mdx)$/i.test(ref.file)
-          ? (ctx) => <FacetPreview key={entryOf(ref).id} id={entryOf(ref).id} review={ctx} />
-          : undefined}
+        filePreview={(ref) => {
+          const id = entryOf(ref).id;
+          if (/\.(tsx|jsx|mdx)$/i.test(ref.file)) return (ctx) => <FacetPreview key={id} id={id} review={ctx} accessClient={accessClient} onManageAccess={manageWorkspaceAccess} />;
+          if (previewAccess?.id === id) {
+            return () => <PreviewWorkspaceAccess key={`${id}:${previewAccess.folder}:${previewAccess.revision}`} fileId={id} folder={previewAccess.folder} client={accessClient} onApproved={() => setPreviewRequestRevision((revision) => revision + 1)} onManage={manageWorkspaceAccess} />;
+          }
+          if (!DATA_DOCUMENT.test(ref.file) || previewComponent?.id !== id) return undefined;
+          const data = { component: previewComponent.component, path: ref.file };
+          return (ctx) => <FacetPreview key={id} id={id} review={ctx} data={data} accessClient={accessClient} onManageAccess={manageWorkspaceAccess} />;
+        }}
         getFindingActions={findingActions}
         getFileActions={(ref) => {
           const entry = byRef.get(fileRefKey(ref));
@@ -836,6 +905,17 @@ export function App() {
             <Button
               size="sm"
               variant="ghost"
+              title="Refresh file tree"
+              aria-label="Refresh file tree"
+              aria-busy={refreshingTree}
+              disabled={refreshingTree}
+              onClick={() => void refreshTree()}
+            >
+              <UiRefresh />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               title="New file"
               aria-label="New file"
               onClick={() => setFileOperation({ kind: "new", folder: !route.selection ? "" : route.selection.kind === "folder" ? route.selection.ref.file : parentFolder(route.selection.ref.file) })}
@@ -850,7 +930,7 @@ export function App() {
               size="sm"
               title="All files actions"
               menuLabel="All files actions"
-              items={[{ label: "Workspace access…", onSelect: () => setWorkspaceAccess(true) }, { label: "View options…", onSelect: () => setEditOptions(true) }, newFileItem(""), lintItem("Lint all files", files)]}
+              items={[{ label: "Workspace access…", onSelect: () => manageWorkspaceAccess() }, { label: "View options…", onSelect: () => setEditOptions(true) }, newFileItem(""), lintItem("Lint all files", files)]}
             />
           </div>
         }
@@ -884,7 +964,7 @@ export function App() {
           onClose={() => setEditOptions(false)}
         />
       )}
-      {workspaceAccess && <WorkspaceAccessDialog client={accessClient} onClose={() => setWorkspaceAccess(false)} onOpenFolder={openFolder} />}
+      {workspaceAccess && <WorkspaceAccessDialog {...workspaceAccess} client={accessClient} onClose={() => setWorkspaceAccess(null)} onOpenFolder={openFolder} />}
       {missingProject && active && skippedProject !== active.id && (
         <CreateProjectDialog missing={missingProject} onCreate={createProject} onClose={() => setSkippedProject(active.id)} />
       )}

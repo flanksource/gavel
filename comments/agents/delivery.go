@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -127,7 +128,8 @@ func (d delivery) deliver(ctx context.Context, threads []comments.Comment, targe
 	if target.Kind == "session" {
 		return d.toSession(ctx, threads, target.SessionID, edits)
 	}
-	if target.GroupKey == "" || target.Fresh {
+	target.GroupKey = target.EffectiveGroupKey()
+	if target.Fresh {
 		return d.launch(ctx, threads, target)
 	}
 	lead := threads[0]
@@ -213,6 +215,17 @@ func (d delivery) Sessions(ctx context.Context, q comments.SessionQuery) ([]comm
 // sessions are q's sessions among records, narrowed to those working in dir
 // unless it is empty, as Sessions lists them.
 func (d delivery) sessions(ctx context.Context, q comments.SessionQuery, dir string, records []captaincli.SessionRecord) ([]comments.AgentSession, error) {
+	selected := ""
+	if q.GroupKey != "" {
+		var err error
+		selected, err = d.Groups.GroupSession(ctx, q.TenantID, q.ScopeURI, q.GroupKey)
+		if errors.Is(err, comments.ErrNotFound) {
+			return []comments.AgentSession{}, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("looking up comment group %s: %w", q.GroupKey, err)
+		}
+	}
 	var err error
 	var managed []comments.ManagedSession
 	if q.ScopeURI != "" {
@@ -236,6 +249,9 @@ func (d delivery) sessions(ctx context.Context, q comments.SessionQuery, dir str
 		if !live[session.ID] {
 			sessions = append(sessions, endedSession(session))
 		}
+	}
+	if selected != "" {
+		sessions = slices.DeleteFunc(sessions, func(session comments.AgentSession) bool { return session.ID != selected })
 	}
 	return sessions, nil
 }

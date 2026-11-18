@@ -1,13 +1,17 @@
 package agents_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/gavel/comments"
 	commentapi "github.com/flanksource/gavel/comments/clicky"
 	. "github.com/onsi/ginkgo/v2"
@@ -19,11 +23,48 @@ var _ = Describe("Delivering comment threads to the agents their body mentions",
 	assignRule := comments.Route{Source: "db:path:pages/assigned", Target: comments.DeliverTarget{Kind: "session", SessionID: "live-2"}, Assign: true}
 	var f *fixture
 	BeforeAll(func(ctx SpecContext) {
-		f = newFixture(ctx, "comment_agent_mentions", pageRules{pageRoutes: pageRoutes{}, rules: map[string]comments.Route{"proposals": proposeRule, "assigned": assignRule}})
+		f = newFixture(ctx, "comment_agent_mentions", pageRules{pageRoutes: pageRoutes{"draft-rule": assignRule}, rules: map[string]comments.Route{"proposals": proposeRule, "assigned": assignRule}})
 	})
 	sessionOf := func(ctx context.Context, id string) func() string {
 		return func() string { return f.runOf(ctx, id)().SessionID }
 	}
+
+	It("previews and delivers a draft mention ahead of its remembered session", func(ctx SpecContext) {
+		draft := comments.CreateDeliveryDraft{
+			Target: pageTarget("draft-preview"), Body: "Please @rename-pass fix this",
+			Delivery: &comments.CreateDeliveryChoice{DefaultSessionID: "live-2"},
+		}
+		input, err := json.Marshal(draft)
+		Expect(err).NotTo(HaveOccurred())
+		router := route.NewRouter(nil)
+		commentapi.RegisterDeliveryRoutes(router, func(context.Context) (*comments.Service, error) { return f.svc, nil })
+		response := httptest.NewRecorder()
+		request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/comments/delivery/preview", bytes.NewReader(input))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(response, request)
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		var preview comments.CreateDeliveryPreview
+		Expect(json.Unmarshal(response.Body.Bytes(), &preview)).To(Succeed())
+		Expect(preview.Session.ID).To(Equal("live-1"))
+		thread, err := f.svc.Create(ctx, comments.CreateRequest{Target: draft.Target, Body: draft.Body, Delivery: draft.Delivery, WorkflowID: "human-review", RequestID: "draft-preview"})
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(sessionOf(ctx, thread.ID)).WithTimeout(10 * time.Second).Should(Equal(preview.Session.ID))
+	})
+
+	It("resolves selected mentions, remembered sessions, and automatic and post-only drafts", func(ctx SpecContext) {
+		preview := func(page, body string, choice *comments.CreateDeliveryChoice) comments.CreateDeliveryPreview {
+			result, err := f.svc.PreviewCreateDelivery(ctx, comments.CreateDeliveryDraft{Target: pageTarget(page), Body: body, Delivery: choice})
+			Expect(err).NotTo(HaveOccurred())
+			return result
+		}
+		remembered := &comments.CreateDeliveryChoice{DefaultSessionID: "live-1"}
+		Expect(preview("draft-rule", "Fix the header", remembered).Session.ID).To(Equal("live-1"))
+		automatic := preview("draft-rule", "Fix the header", nil)
+		Expect(automatic.Route.Assign).To(BeTrue())
+		Expect(automatic.Session.ID).To(Equal("live-2"))
+		Expect(preview("draft-post-only", "Fix the header", nil)).To(Equal(comments.CreateDeliveryPreview{}))
+		Expect(preview("draft-post-only", "Fix the header", &comments.CreateDeliveryChoice{DefaultSessionID: "live-1", MentionID: "session:live-2"}).Session.ID).To(Equal("live-2"))
+	})
 
 	It("delivers a root mentioning @claude as a fresh run of claude's default agent model under the page rule's prompt and edits", func(ctx SpecContext) {
 		_, before := f.bridge.Snapshot()
@@ -39,18 +80,26 @@ var _ = Describe("Delivering comment threads to the agents their body mentions",
 	})
 
 	It("delivers @agent to the page rule, @<session slug> to that session, and a reply's mention to its thread", func(ctx SpecContext) {
-		_, before := f.bridge.Snapshot()
+		sentBefore, before := f.bridge.Snapshot()
+		shared, err := f.store.GroupSession(ctx, "tenant-agents", scope, "comments:shared")
+		Expect(err).NotTo(HaveOccurred())
+		preview, err := f.svc.PreviewCreateDelivery(ctx, comments.CreateDeliveryDraft{Target: pageTarget("proposals"), Body: "@agent shorten the footer"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(preview.Session.ID).To(Equal(shared))
 		ruled := f.create(ctx, "proposals", "@agent shorten the footer")
 		Eventually(func() string { return f.runOf(ctx, ruled.ID)().State }).WithTimeout(10 * time.Second).Should(Equal("sent"))
-		_, launched := f.bridge.Snapshot()
+		sent, launched := f.bridge.Snapshot()
+		Expect(launched).To(HaveLen(len(before)))
+		Expect(sent[len(sentBefore)].SessionID).To(Equal(shared))
+		Expect(sent[len(sentBefore)].Text).To(ContainSubstring("@agent shorten the footer"))
+		Expect(f.runOf(ctx, ruled.ID)().Edits).To(Equal(comments.EditsPropose))
 
 		toSlug := f.create(ctx, "mentions", "Please @rename-pass rename the button")
 		Eventually(sessionOf(ctx, toSlug.ID)).WithTimeout(10 * time.Second).Should(Equal("live-1"))
 		thread := f.create(ctx, "mentions", "The table overflows")
-		_, err := f.svc.Act(ctx, comments.ActionRequest{ID: thread.ID, ExpectedVersion: thread.Version, Action: "reply", Body: "@docs-pass can you take this?"})
+		_, err = f.svc.Act(ctx, comments.ActionRequest{ID: thread.ID, ExpectedVersion: thread.Version, Action: "reply", Body: "@docs-pass can you take this?"})
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(sessionOf(ctx, thread.ID)).WithTimeout(10 * time.Second).Should(Equal("live-2"))
-		Expect([]any{len(launched) - len(before), launched[len(launched)-1].Reference, launched[len(launched)-1].Options.Spec.Name}).To(Equal([]any{1, "editor-comments", ""}))
 	})
 
 	It("assigns a thread mentioning @agent to the rule's agent before delivering it, as the rule's own route does", func(ctx SpecContext) {

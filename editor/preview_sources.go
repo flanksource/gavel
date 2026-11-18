@@ -14,6 +14,7 @@ import (
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/gavel/editor/preview"
+	"github.com/flanksource/gavel/projects"
 )
 
 type PreviewContext struct {
@@ -231,7 +232,7 @@ func (s *Store) PreviewExtensionRefs(id string, schema any) error {
 						}
 						preview = &context
 					}
-					path, err := previewExtensionPath(ref, root, preview.Paths)
+					path, err := previewSourcePath(ref, root, preview.Paths, "form extension")
 					if err != nil {
 						return err
 					}
@@ -250,24 +251,31 @@ func (s *Store) PreviewExtensionRefs(id string, schema any) error {
 	return walk(schema)
 }
 
-func previewExtensionPath(ref, root string, paths []string) (string, error) {
+// previewSourcePath is the preview-root-relative path of the file URL ref, which
+// must name a source the root indexes; label names what ref is in errors.
+func previewSourcePath(ref, root string, paths []string, label string) (string, error) {
 	parsed, err := url.Parse(ref)
 	if err != nil {
-		return "", fmt.Errorf("form extension %s: %w", ref, err)
+		return "", fmt.Errorf("%s %s: %w", label, ref, err)
 	}
 	if parsed.Scheme != "file" {
-		return "", fmt.Errorf("form extension %s must be a file in the project", ref)
+		return "", fmt.Errorf("%s %s must be a file in the project", label, ref)
 	}
-	rel, err := filepath.Rel(root, filepath.FromSlash(parsed.Path))
+	// The preview root is symlink-resolved; a ref resolved against a file's display path may not be.
+	canonical, err := projects.CanonicalPath(filepath.FromSlash(parsed.Path))
 	if err != nil {
-		return "", fmt.Errorf("form extension %s: %w", ref, err)
+		return "", fmt.Errorf("%s %s: %w", label, ref, err)
+	}
+	rel, err := filepath.Rel(root, canonical)
+	if err != nil {
+		return "", fmt.Errorf("%s %s: %w", label, ref, err)
 	}
 	rel = filepath.ToSlash(rel)
 	if rel == ".." || strings.HasPrefix(rel, "../") {
-		return "", fmt.Errorf("form extension %s is outside the preview root %s", ref, root)
+		return "", fmt.Errorf("%s %s is outside the preview root %s", label, ref, root)
 	}
 	if !slices.Contains(paths, rel) {
-		return "", fmt.Errorf("form extension %s is not a previewable project source under %s", ref, root)
+		return "", fmt.Errorf("%s %s is not a previewable project source under %s", label, ref, root)
 	}
 	return rel, nil
 }

@@ -35,6 +35,31 @@ func (q TextQuote) Within(patch PatchAnchor) error {
 	return nil
 }
 
+// TableCell is the cell of a rendered markdown table a code-range comment was
+// made in, stored beside its patch, whose one line is the cell's row. The row
+// is named by Key, its text in KeyColumn (the first column, from the left,
+// whose body values are all unique; both are blank when none is), and the
+// column by its header text. Row (0-based body row, -1 for the header) and Col
+// are where it was captured, for when those names repeat or are gone.
+type TableCell struct {
+	KeyColumn string `json:"keyColumn"`
+	Key       string `json:"key"`
+	Column    string `json:"column"`
+	Row       int    `json:"row"`
+	Col       int    `json:"col"`
+}
+
+// Validate requires the indices to name a cell, and a key to name its column.
+func (c TableCell) Validate() error {
+	if c.Row < -1 || c.Col < 0 {
+		return fmt.Errorf("%w: table cell row %d or column %d is out of range", ErrInvalid, c.Row, c.Col)
+	}
+	if c.Key != "" && c.KeyColumn == "" {
+		return fmt.Errorf("%w: table cell key %q has no key column", ErrInvalid, c.Key)
+	}
+	return nil
+}
+
 // Region is a box on an image: its origin, width and height are fractions of
 // the image's width and height, so it survives any rendered size. The server
 // checks the box strictly; a client clamps a drag to the image before saving.

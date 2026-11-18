@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { PromptRunEditor, type AIPromptRunValue } from "@flanksource/clicky-ui/ai";
-import { Button, Field, InputField, Modal, SegmentedControl, Select, Switch } from "@flanksource/clicky-ui/components";
+import { Button, DropdownMenu, Field, InputField, Modal, SegmentedControl, Select, Switch } from "@flanksource/clicky-ui/components";
 import { Badge } from "@flanksource/clicky-ui/data";
-import { UiRobotAi } from "@flanksource/clicky-ui/icons";
+import { UiCheck, UiGearSix, UiRobotAi } from "@flanksource/clicky-ui/icons";
 import { request } from "./api";
 import type { AgentSession } from "./agent-sessions";
 import { useRuntimeCatalogs } from "./NewAgentSessionDialog";
@@ -42,22 +42,55 @@ type DialogProps = {
 };
 
 /**
- * The open page's agent: a toolbar button naming the captain prompt that works
- * new threads here, opening a dialog that shows where each field comes from,
- * saves the agent to a chosen settings layer, and holds the viewer's own choice
- * of where manual hand-offs go.
+ * The open page's agent: a robot-icon menu naming who works new threads here,
+ * choosing where the viewer's manual hand-offs go, and opening the settings
+ * dialog that shows where each field comes from and saves the agent to a
+ * chosen settings layer.
  */
 export function PageAgentControl(props: DialogProps) {
   const [open, setOpen] = useState(false);
+  const { agent: settings, choice, sessions, onChoose } = props;
+  const label = agentLabel(settings, sessions);
+  const handOff = (itemLabel: string, next: ViewerChoice, group: string) => ({
+    label: <span className="block max-w-80 truncate">{itemLabel}</span>,
+    title: itemLabel,
+    icon: UiCheck,
+    iconClassName: sameChoice(choice, next) ? undefined : "invisible",
+    group,
+    onSelect: () => onChoose(next),
+  });
   return (
     <>
-      <Button size="sm" variant={props.agent.agent.agent.enabled ? "outline" : "ghost"} onClick={() => setOpen(true)} title={`Page agent for ${props.agent.target}`}>
-        <UiRobotAi className="mr-1 size-4" />
-        {agentLabel(props.agent)}
-      </Button>
+      <DropdownMenu
+        align="right"
+        icon={UiRobotAi}
+        hideChevron
+        variant={settings.session || settings.agent.agent.enabled ? "outline" : "ghost"}
+        size="sm"
+        title={settings.session ? `${label}: new comments on ${settings.target} go to the session gavel edit was started from` : `Page agent: ${label}`}
+        menuLabel="Page agent"
+        menuClassName="max-w-sm"
+        header={
+          <div className="max-w-80 px-3 py-1 text-xs">
+            <div className="truncate font-medium">{label}</div>
+            <div className="truncate text-muted-foreground" title={settings.target}>
+              {settings.target}
+            </div>
+          </div>
+        }
+        items={[
+          handOff("A new run of this page agent", { kind: "run" }, "Your hand-offs go to"),
+          ...sessions.map((session) => handOff(session.title, { kind: "session", sessionId: session.id }, "Live sessions")),
+          { label: "Page agent settings…", icon: UiGearSix, onSelect: () => setOpen(true) },
+        ]}
+      />
       {open && <PageAgentDialog {...props} onSaved={async () => { await props.onSaved(); setOpen(false); }} onClose={() => setOpen(false)} />}
     </>
   );
+}
+
+function sameChoice(a: ViewerChoice, b: ViewerChoice): boolean {
+  return a.kind === "session" ? b.kind === "session" && a.sessionId === b.sessionId : b.kind === "run";
 }
 
 /** The effective agent's configured fields, each badged with the settings layer entry that set it. */

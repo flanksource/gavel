@@ -77,6 +77,15 @@ func setAgentRun(ctx context.Context, service *comments.Service, id string, run 
 				return comments.Comment{}, fmt.Errorf("comment %s content is not a JSON object: %w", id, err)
 			}
 		}
+		if raw := content["agentRun"]; len(raw) > 0 {
+			var current AgentRun
+			if err := json.Unmarshal(raw, &current); err != nil {
+				return comments.Comment{}, fmt.Errorf("comment %s agentRun: %w", id, err)
+			}
+			if current.RequestedAt.After(run.RequestedAt) {
+				return c, nil
+			}
+		}
 		content["agentRun"] = encoded
 		merged, err := json.Marshal(content)
 		if err != nil {

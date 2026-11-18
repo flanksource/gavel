@@ -26,6 +26,9 @@ func (d delivery) toSession(ctx context.Context, threads []comments.Comment, id,
 	if managed == nil {
 		return run, fmt.Errorf("agent session %s is no longer live; choose another", id)
 	}
+	// An explicit session selection follows that conversation even after its
+	// group has been switched to a fresh one.
+	managed.GroupKey = ""
 	return d.resume(ctx, threads, *managed, edits)
 }
 

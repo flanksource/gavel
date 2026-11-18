@@ -58,10 +58,10 @@ async function renderPicker(unsaved: number) {
   return onSwitched;
 }
 
-async function choose(dir: string) {
+async function choose(name: string) {
   const select = host.querySelector<HTMLSelectElement>('select[aria-label="Project"]')!;
   await act(async () => {
-    select.value = dir;
+    select.value = name;
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
 }
@@ -80,9 +80,9 @@ describe("currentProject", () => {
 describe("ProjectPicker", () => {
   it("switches to the chosen project at once when every draft is saved", async () => {
     const onSwitched = await renderPicker(0);
-    expect(host.querySelector<HTMLSelectElement>("select")!.value).toBe(gavel.dir);
+    expect(host.querySelector<HTMLSelectElement>("select")!.value).toBe(gavel.name);
 
-    await choose(docs.dir);
+    await choose(docs.name);
 
     expect(request).toHaveBeenCalledWith("/api/edit/project", { dir: docs.dir });
     expect(onSwitched).toHaveBeenCalledWith(switched);
@@ -91,7 +91,7 @@ describe("ProjectPicker", () => {
   it("asks before closing unsaved drafts, and keeps them when the reader keeps editing", async () => {
     const onSwitched = await renderPicker(2);
 
-    await choose(docs.dir);
+    await choose(docs.name);
     expect(host.querySelector('[role="dialog"]')?.textContent).toContain("2 files have changes that are not saved yet");
     expect(request).not.toHaveBeenCalledWith("/api/edit/project", expect.anything());
 
@@ -99,10 +99,21 @@ describe("ProjectPicker", () => {
     expect(onSwitched).not.toHaveBeenCalled();
   });
 
+  it("lists two projects registered for one directory as separate choices, and does not switch to the open one's alias", async () => {
+    const alias: EditProject = { name: "gavel.v2", dir: gavel.dir };
+    request.mockImplementation(async (path: string) => (path === "/api/edit/projects" ? { projects: [docs, gavel, alias], roots: [gavel.dir] } : switched));
+    await renderPicker(0);
+    expect([...host.querySelectorAll("option")].map((option) => option.value)).toEqual(["", docs.name, gavel.name, alias.name]);
+
+    await choose(alias.name);
+
+    expect(request).not.toHaveBeenCalledWith("/api/edit/project", expect.anything());
+  });
+
   it("switches after the reader confirms discarding the drafts", async () => {
     const onSwitched = await renderPicker(1);
 
-    await choose(docs.dir);
+    await choose(docs.name);
     await act(async () => button("Discard and switch").click());
 
     expect(request).toHaveBeenCalledWith("/api/edit/project", { dir: docs.dir });

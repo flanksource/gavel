@@ -21,6 +21,7 @@ func RegisterDeliveryRoutes(router *route.Router, resolve Resolver) {
 	router.Raw("GET /api/v1/comments/agent", serve(resolve, commentAgent), route.Meta{Entity: "comments", Verb: "agent", ReadOnly: true})
 	router.Raw("PUT /api/v1/comments/agent", serve(resolve, saveCommentAgent), route.Meta{Entity: "comments", Verb: "save-agent"})
 	router.Raw("POST /api/v1/comments/deliver", serve(resolve, deliverBatch), route.Meta{Entity: "comments", Verb: "deliver-batch"})
+	router.Raw("POST /api/v1/comments/delivery/preview", serve(resolve, previewCreateDelivery), route.Meta{Entity: "comments", Verb: "create-delivery-preview", ReadOnly: true})
 	router.Raw("POST /api/v1/comments/{id}/deliver", serve(resolve, deliver), route.Meta{Entity: "comments", Verb: "deliver", IDParam: "id"})
 	router.Raw("POST /api/v1/comments/{id}/deliver/preview", serve(resolve, previewDelivery), route.Meta{Entity: "comments", Verb: "deliver-preview", IDParam: "id", ReadOnly: true})
 }
@@ -54,7 +55,7 @@ func serve(resolve Resolver, handle handlerFunc) http.Handler {
 
 func agentSessions(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {
 	q := r.URL.Query()
-	return service.AgentSessions(ctx, comments.SessionQuery{ScopeURI: q.Get("scope"), All: q.Get("all") == "1"})
+	return service.AgentSessions(ctx, comments.SessionQuery{ScopeURI: q.Get("scope"), GroupKey: q.Get("group"), All: q.Get("all") == "1"})
 }
 
 func mentionables(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {
@@ -90,6 +91,14 @@ func deliverBatch(ctx context.Context, service *comments.Service, _ *http.Reques
 		return nil, err
 	}
 	return service.DeliverBatch(ctx, req)
+}
+
+func previewCreateDelivery(ctx context.Context, service *comments.Service, _ *http.Request) (any, error) {
+	var draft comments.CreateDeliveryDraft
+	if err := decode(ctx, bodyLimit, &draft); err != nil {
+		return nil, err
+	}
+	return service.PreviewCreateDelivery(ctx, draft)
 }
 
 func previewDelivery(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {

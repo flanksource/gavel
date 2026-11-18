@@ -8,7 +8,7 @@ import type { Autosave } from "./autosave";
 import { ApiError, request } from "./api";
 import { sendToItems, useAgentSessions, type AgentSession, type PageAgentHandOff } from "./agent-sessions";
 import { threadCallbacks } from "./comment-actions";
-import { anchorOf, selectorOf, type Selector } from "./comment-anchors";
+import { anchorOf, extrasOf, selectorOf, type Selector } from "./comment-anchors";
 import { deliverTargetOf, usePageAgent, type FileSettings, type ViewerChoice } from "./page-agent";
 import { runTargetOf, type RunPreview, type RunRequest, type RunTarget } from "./run-request";
 
@@ -100,6 +100,7 @@ export function threadItems(row: NativeComment): Comment[] {
       status: row.status,
       createdAt: row.createdAt,
       anchor,
+      ...extrasOf(row.target.selector),
       author: authorOf(row.author),
       ...(row.assignee ? { assignee: authorOf(row.assignee) } : {}),
       ...(agentRun ? { agentRun } : {}),
@@ -263,7 +264,7 @@ export function useFileComments({
     await queue.flush();
     if (queue.state().status !== "saved") throw new Error("Save the file before commenting");
     if (!listing.scope) throw new Error("Comments are still loading; try again");
-    const selector = selectorOf(input.anchor, view);
+    const selector = selectorOf(input.anchor, view, { quote: input.quote, cell: input.cell });
     const key = JSON.stringify({ selector, body: input.body });
     if (pending.current?.key !== key) pending.current = { key, requestId: crypto.randomUUID() };
     const attempt = pending.current;

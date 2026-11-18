@@ -122,7 +122,16 @@ describe("agentLabel", () => {
     ["the default prompt", { agent: { enabled: true }, provenance: {}, found: true }, "editor-comments · auto"],
     ["an assigning agent", { agent: { enabled: true, assign: true, prompt: "slides-review" }, provenance: {}, found: true }, "slides-review · auto + assign"],
   ])("labels %s", (_case, agent, label) => {
-    expect(agentLabel(settings({ agent }))).toBe(label);
+    expect(agentLabel(settings({ agent }), [])).toBe(label);
+  });
+
+  const launching = "01a1d4c9-e70e-70a0-b5ff-a3afcda28e1d";
+  const unconfigured = { agent: {}, provenance: {}, found: false };
+  it.each([
+    ["by its live title", [{ id: launching, source: "claude", title: "Cleanup review", inCmux: false }], "claude · Cleanup review"],
+    ["by its short id when it is not live", [], "Session 01a1d4c9"],
+  ])("labels the launching session ahead of the page agent %s", (_case, sessions, label) => {
+    expect(agentLabel(settings({ agent: unconfigured, session: launching }), sessions)).toBe(label);
   });
 });
 

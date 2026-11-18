@@ -39,9 +39,9 @@ func ProjectPathTarget(ctx context.Context, catalog projects.Service, path strin
 		return PathTarget{}, err
 	}
 	isDir := err == nil && info.IsDir()
-	dir := resolved
+	dir := path
 	if !isDir {
-		dir = filepath.Dir(resolved)
+		dir = filepath.Dir(path)
 	}
 	project, err := catalog.ForDir(ctx, dir)
 	if err != nil {
@@ -51,9 +51,12 @@ func ProjectPathTarget(ctx context.Context, catalog projects.Service, path strin
 	if err != nil {
 		return PathTarget{}, fmt.Errorf("resolve project %q directory: %w", project.Name, err)
 	}
-	rel, err := filepath.Rel(root, resolved)
+	rel, ok, err := projects.Within(project.ResolvedDir(), path)
 	if err != nil {
 		return PathTarget{}, fmt.Errorf("place %s under project %q: %w", path, project.Name, err)
+	}
+	if !ok {
+		return PathTarget{}, fmt.Errorf("%s is not under project %q directory %s", path, project.Name, root)
 	}
 	target := PathTarget{Project: project.Name, Dir: root, Scope: ProjectScope(project.Name), IsDir: isDir}
 	if rel != "." {

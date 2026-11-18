@@ -141,6 +141,22 @@ var _ = Describe("Editor file listing", func() {
 			return names
 		}
 
+		It("refreshes the open file listing after changes on disk", func() {
+			writeTree(root, map[string]string{"new.md": "new", "skip.txt": "ignored"})
+			Expect(os.Remove(filepath.Join(root, "README.md"))).To(Succeed())
+			recorder := serve(localRequest("POST", "/api/files/refresh", "{}"))
+			Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+			var opened struct {
+				Roots []string `json:"roots"`
+				Files []File   `json:"files"`
+			}
+			Expect(json.Unmarshal(recorder.Body.Bytes(), &opened)).To(Succeed())
+			Expect(opened.Roots).To(Equal([]string{root}))
+			Expect(opened.Files).To(HaveLen(2))
+			Expect(opened.Files[1].Path).To(Equal(filepath.Join(root, "new.md")))
+			Expect(files()).To(ConsistOf("logo.png", "new.md"))
+		})
+
 		It("lists the registered projects with the open folders", func() {
 			recorder := serve(httptest.NewRequest("GET", "/api/edit/projects", nil))
 			Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())

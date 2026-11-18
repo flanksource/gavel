@@ -10,12 +10,10 @@ import (
 	"maps"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/comments"
 	commentapi "github.com/flanksource/gavel/comments/clicky"
 	"github.com/google/uuid"
@@ -66,19 +64,19 @@ type sessionRequest struct {
 func (d delivery) launch(ctx context.Context, threads []comments.Comment, target comments.DeliverTarget) (AgentRun, error) {
 	run := AgentRun{RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: targetLabel(target)}, Edits: target.Edits}
 	session := comments.ManagedSession{ScopeURI: threads[0].Target.ScopeURI, GroupKey: target.GroupKey, Prompt: target.Prompt, RunOptions: target.RunOptions, Label: firstLine(threads[0].Body)}
-	return d.start(ctx, threads, session, run)
+	return d.start(ctx, threads, session, run, target.Fresh)
 }
 
 // resume restarts an ended managed session with its recorded prompt and run
 // options, resuming its conversation with the threads under this delivery's edits policy.
 func (d delivery) resume(ctx context.Context, threads []comments.Comment, session comments.ManagedSession, edits string) (AgentRun, error) {
 	run := AgentRun{SessionID: session.ID, RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: session.Label}, Edits: edits}
-	return d.start(ctx, threads, session, run)
+	return d.start(ctx, threads, session, run, false)
 }
 
 // start claims the threads for a new gavel agent and launches session's prompt
 // for them, resuming session.ID when set, recording the session it reports.
-func (d delivery) start(ctx context.Context, threads []comments.Comment, session comments.ManagedSession, run AgentRun) (AgentRun, error) {
+func (d delivery) start(ctx context.Context, threads []comments.Comment, session comments.ManagedSession, run AgentRun, fresh bool) (AgentRun, error) {
 	options, err := decodeRunOptions(session.RunOptions)
 	if err != nil {
 		return run, err
@@ -96,6 +94,10 @@ func (d delivery) start(ctx context.Context, threads []comments.Comment, session
 		return run, err
 	}
 	invocation.Options.Resume = session.ID
+	if session.GroupKey != "" {
+		invocation.SessionKey = threads[0].TenantID + "/" + session.ScopeURI + "/" + session.GroupKey
+	}
+	invocation.Fresh = fresh
 	// The session outlives this request; it keeps the request's values (the
 	// host's database, principal and prompt sources) but not its cancellation.
 	background, err := promptRunContext(context.WithoutCancel(ctx), dir)
@@ -103,7 +105,8 @@ func (d delivery) start(ctx context.Context, threads []comments.Comment, session
 		return run, err
 	}
 	session.CWD = dir
-	invocation.OnEvent = d.recordSession(background, threads, run, session)
+	recorder := &runRecorder{delivery: d, ctx: background, threads: threads, run: run, session: session}
+	invocation.OnEvent, invocation.OnComplete = recorder.event, recorder.complete
 	if _, err = d.Bridge.Launch(background, invocation); err != nil {
 		return run, fmt.Errorf("starting an agent session for %s: %w", threadIDs(threads), err)
 	}
@@ -179,32 +182,6 @@ func promptRunContext(ctx context.Context, dir string) (context.Context, error) 
 		return nil, fmt.Errorf("resolve prompts in %s: %w", dir, err)
 	}
 	return ctx, nil
-}
-
-// recordSession stores the session the run reports first as every thread's
-// agentRun (sent), and as a managed session of their scope (its group's when
-// session has a GroupKey), so it is listed after it ends and later threads
-// reuse or resume it.
-func (d delivery) recordSession(ctx context.Context, threads []comments.Comment, run AgentRun, session comments.ManagedSession) func(int, api.Event) {
-	var once sync.Once
-	return func(_ int, event api.Event) {
-		if event.Kind != api.EventSystem || event.SessionID == "" {
-			return
-		}
-		once.Do(func() {
-			run.SessionID, run.State = event.SessionID, "sent"
-			now := time.Now().UTC()
-			session.ID, session.Model, session.StartedAt, session.LastDeliveredAt = event.SessionID, event.Model, now, now
-			err := d.setRuns(ctx, threads, run)
-			if err == nil {
-				err = d.Groups.RecordSession(ctx, threads[0].TenantID, session)
-			}
-			if err != nil {
-				// No request is left to answer: the run reports its session after the launch returned.
-				logger.Errorf("recording session %s on %s: %v", event.SessionID, threadIDs(threads), err)
-			}
-		})
-	}
 }
 
 // threadIDs names the threads in a message: "thread <id>" or "threads <id>, <id>".
