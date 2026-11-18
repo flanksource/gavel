@@ -391,8 +391,11 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	if filterStore != nil {
 		srv.SetFilterStore(filterStore)
 	}
-	if runtime.DB != nil {
+	// The catalog lives in the migrated database `gavel serve` opens; `pr list --ui` doesn't
+	// migrate, so its database may predate the catalog.
+	if databaseMode == serveDatabaseWithMigrations && runtime.DB != nil {
 		srv.SetConnectionCatalog(runtime.DB)
+		useConnectionCatalog(runtime.DB)
 	}
 	srv.SetFixtureSchemaProvider(func() (any, error) {
 		return fixturesSchemaDocument()
