@@ -24,11 +24,15 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, fmt.Errorf("organization admin required"))
 		return
 	}
-	if s.orgDB == nil {
+	db := s.orgDB
+	if db == nil {
+		db = s.catalogDB
+	}
+	if db == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, fmt.Errorf("connections require a database"))
 		return
 	}
-	service, close, err := catalog.Open(r.Context(), catalog.Options{DB: s.orgDB, Scope: scope})
+	service, close, err := catalog.Open(r.Context(), catalog.Options{DB: db, Scope: scope})
 	if err != nil {
 		writeJSONError(w, http.StatusServiceUnavailable, err)
 		return

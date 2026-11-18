@@ -170,6 +170,8 @@ type Server struct {
 	githubCache *cache.Store
 	// filters holds the callers' named filters (see filters.go).
 	filters *filters.Store
+	// catalogDB holds a local dashboard's encrypted connections; a hosted one's are in orgDB.
+	catalogDB *gorm.DB
 
 	// blobs is the storage: store from ~/.gavel.yaml; nil keeps attachments in
 	// attachmentsDir.
@@ -190,6 +192,10 @@ type Server struct {
 func (s *Server) SetOrg(org uuid.UUID, db *gorm.DB) {
 	s.org, s.orgDB, s.filters = org, db, filters.NewStore(db)
 }
+
+// SetConnectionCatalog keeps a local dashboard's encrypted connections in db. Call it before
+// serving.
+func (s *Server) SetConnectionCatalog(db *gorm.DB) { s.catalogDB = db }
 
 // SetHostedWorkspaces serves the organization's repositories as its todo workspaces.
 // Call it before serving.
