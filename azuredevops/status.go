@@ -88,22 +88,28 @@ func (c *Client) refreshHead(ctx context.Context, pr *pullRequest, info *model.P
 	if err != nil {
 		return err
 	}
-	stale := head != pr.SourceCommit.ID
+	sourceStale := head != pr.SourceCommit.ID
 	pr.SourceCommit.ID, info.HeadRefOID = head, head
+	targetStale := false
 	if pr.TargetCommit.ID != "" {
 		base, err := c.refOID(ctx, c.repositoryPath(), pr.Target)
 		if err != nil {
 			return err
 		}
-		stale = stale || base != pr.TargetCommit.ID
+		targetStale = base != pr.TargetCommit.ID
 		pr.TargetCommit.ID, info.BaseRefOID = base, base
 	}
-	if stale {
-		pr.MergeCommit.ID = ""
-		info.MergeReadiness.State = "pending"
-		info.MergeReadiness.WaitingForMerge = true
-		info.MergeReadiness.Reasons = append(info.MergeReadiness.Reasons, "merge computation has not caught up to the source or target branch")
+	if !sourceStale && !targetStale {
+		return nil
 	}
+	info.MergeReadiness.State = "pending"
+	info.MergeReadiness.WaitingForMerge = true
+	if sourceStale {
+		pr.MergeCommit.ID = ""
+		info.MergeReadiness.Reasons = append(info.MergeReadiness.Reasons, "merge computation has not caught up to the source branch")
+		return nil
+	}
+	info.MergeReadiness.Reasons = append(info.MergeReadiness.Reasons, "target branch advanced since the last trial merge; checks ran against the previous target")
 	return nil
 }
 

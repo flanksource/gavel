@@ -21,6 +21,7 @@ import (
 )
 
 type Options struct {
+	Context context.Context `json:"-"`
 	WorkDir string
 	Repo    string // owner/repo
 	Token   string // optional; falls back to GITHUB_TOKEN then GH_TOKEN env

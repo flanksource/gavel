@@ -9,7 +9,7 @@ const checkContextsQuery = `query($id: ID!, $after: String!) {
         pageInfo { hasNextPage endCursor }
         nodes {
           __typename
-          ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
+          ... on CheckRun { id name status conclusion detailsUrl checkSuite { app { slug } workflowRun { workflow { name } } } }
           ... on StatusContext { context state targetUrl }
         }
       }

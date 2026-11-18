@@ -58,9 +58,11 @@ var _ = Describe("pipeline status", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.PR.MergeReadiness.State).To(Equal("ready"))
 	})
-	It("excludes a trial merge after the target branch changes", func() {
+	It("keeps the last trial merge builds when only the target branch advances", func() {
 		c := testClient(func(w http.ResponseWriter, r *http.Request) {
 			switch {
+			case strings.HasSuffix(r.URL.Path, "/timeline"):
+				fmt.Fprint(w, fixtureTimeline)
 			case strings.HasSuffix(r.URL.Path, "/pullrequests/27"):
 				fmt.Fprint(w, strings.TrimSuffix(fixturePR, "}")+`,"lastMergeTargetCommit":{"commitId":"old-target"}}`)
 			case strings.HasSuffix(r.URL.Path, "/refs"):
@@ -79,8 +81,12 @@ var _ = Describe("pipeline status", func() {
 		})
 		result, err := c.Status(context.Background(), 27, model.StatusOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Runs).To(BeEmpty())
+		Expect(result.Runs).To(HaveKey(int64(101)))
+		Expect(result.Runs[101].Conclusion).To(Equal("FAILURE"))
+		Expect(result.PR.StatusCheckRollup).To(HaveLen(1))
+		Expect(result.PR.BaseRefOID).To(Equal("new-target"))
 		Expect(result.PR.MergeReadiness.WaitingForMerge).To(BeTrue())
+		Expect(result.PR.MergeReadiness.Reasons).To(ContainElement("target branch advanced since the last trial merge; checks ran against the previous target"))
 	})
 	It("does not reuse an old trial merge while the source branch advances", func() {
 		c := testClient(func(w http.ResponseWriter, r *http.Request) {

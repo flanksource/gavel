@@ -78,11 +78,13 @@ const prFragment = `fragment prFields on PullRequest {
             nodes {
               __typename
               ... on CheckRun {
+                id
                 name
                 status
                 conclusion
                 detailsUrl
                 checkSuite {
+                  app { slug }
                   workflowRun {
                     workflow {
                       name
@@ -309,6 +311,8 @@ type graphQLContexts struct {
 }
 
 type graphQLCheckNode struct {
+	Required   *bool              `json:"isRequired"`
+	ID         string             `json:"id"`
 	Typename   string             `json:"__typename"`
 	Name       string             `json:"name"`
 	Status     string             `json:"status"`
@@ -321,6 +325,9 @@ type graphQLCheckNode struct {
 }
 
 type graphQLCheckSuite struct {
+	App *struct {
+		Slug string `json:"slug"`
+	} `json:"app"`
 	WorkflowRun *graphQLWorkflowRun `json:"workflowRun"`
 }
 
@@ -480,12 +487,16 @@ func (n graphQLCheckNode) toStatusCheck() model.StatusCheck {
 
 func (n graphQLCheckNode) checkRunToStatusCheck() model.StatusCheck {
 	sc := model.StatusCheck{
+		NodeID:     n.ID,
 		Name:       n.Name,
 		Status:     strings.ToUpper(n.Status),
 		DetailsURL: n.DetailsURL,
 	}
 	if n.Conclusion != nil {
 		sc.Conclusion = strings.ToUpper(*n.Conclusion)
+	}
+	if n.CheckSuite != nil && n.CheckSuite.App != nil {
+		sc.AppSlug = n.CheckSuite.App.Slug
 	}
 	if n.CheckSuite != nil && n.CheckSuite.WorkflowRun != nil {
 		sc.WorkflowName = n.CheckSuite.WorkflowRun.Workflow.Name
