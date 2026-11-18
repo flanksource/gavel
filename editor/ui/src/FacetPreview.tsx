@@ -1,27 +1,49 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createBrowserPreview,
+  type BrowserExports,
   type RenderOptions,
 } from "@flanksource/facet/browser-preview";
+import { Button, DropdownMenu } from "@flanksource/clicky-ui/components";
+import {
+  formatServerTimingDuration,
+  parseServerTiming,
+  StatusDot,
+  type BadgeStatus,
+  type ServerTimingMetric,
+} from "@flanksource/clicky-ui/data";
+import {
+  UiCheck,
+  UiCursorClick,
+  UiDownload,
+  UiExport,
+  UiRefresh,
+} from "@flanksource/clicky-ui/icons";
 import {
   isElementAnchor,
   elementAnchor,
   parseElementAnchor,
   type FileReviewPreviewContext,
 } from "@flanksource/clicky-ui/file-findings";
-import { request } from "./api";
+import { ApiError, request } from "./api";
+import { PreviewTiming, trackPreviewBuild, type RuntimeBuild } from "./preview-timing";
 
 type Context = {
   page: string;
   paths: string[];
   dependencies: Record<string, string>;
   runtimeOrigin: string;
+  runtime?: string;
+  runtimeBuild?: RuntimeBuild;
 };
-type Catalog = {
-  versions: Record<string, { version: string }>;
-  cached: string[];
-  local: string[];
-};
+type Catalog =
+  | { pinnedRuntime: string }
+  | { installed: string[] }
+  | {
+      versions: Record<string, { version: string }>;
+      cached: string[];
+      local: string[];
+    };
 
 export function FacetPreview({
   id,
@@ -43,12 +65,13 @@ export function FacetPreview({
   const [status, setStatus] = useState("connecting");
   const [error, setError] = useState("");
   const [context, setContext] = useState<Context | null>(null);
+  const [serverTiming, setServerTiming] = useState<ServerTimingMetric[]>([]);
+  const [buildTiming, setBuildTiming] = useState<ServerTimingMetric[]>([]);
   const [retry, setRetry] = useState(0);
+  const [exports, setExports] = useState<BrowserExports | null>(null);
   const [catalogRevision, setCatalogRevision] = useState(0);
-  const [versions, setVersions] = useState<
-    { version: string; source: string }[]
-  >([]);
-  const [version, setVersion] = useState(
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [selection, setSelection] = useState(
     () =>
       new URLSearchParams(location.search).get("facet") ??
       localStorage.getItem(`gavel-edit:facet:${id}`) ??
@@ -87,19 +110,7 @@ export function FacetPreview({
       `/api/preview/runtimes${catalogRevision ? "?refresh=1" : ""}`,
     )
       .then((catalog) => {
-        if (!cancelled)
-          setVersions(
-            Object.keys(catalog.versions)
-              .reverse()
-              .map((version) => ({
-                version,
-                source: catalog.local.includes(version)
-                  ? "local"
-                  : catalog.cached.includes(version)
-                    ? "cached"
-                    : "npm",
-              })),
-          );
+        if (!cancelled) setCatalog(catalog);
       })
       .catch((cause) => {
         if (!cancelled) setError(String(cause));
@@ -112,10 +123,18 @@ export function FacetPreview({
   useEffect(() => {
     let cancelled = false;
     setContext(null);
+    setStatus("connecting");
+    setServerTiming([]);
     preview.current?.invalidate();
-    void request<Context>(
-      `/api/file/${id}/preview${version ? `?facet=${encodeURIComponent(version)}` : ""}`,
+    const parameter = selection.includes("@") ? "runtime" : "facet";
+    void fetch(
+      `/api/file/${id}/preview${selection ? `?${parameter}=${encodeURIComponent(selection)}` : ""}`,
     )
+      .then(async (response) => {
+        if (!cancelled) setServerTiming(parseServerTiming(response.headers.get("Server-Timing")));
+        if (!response.ok) throw new ApiError(response.status, await response.text());
+        return response.json() as Promise<Context>;
+      })
       .then((next) => {
         if (!cancelled) {
           setContext(next);
@@ -128,12 +147,14 @@ export function FacetPreview({
     return () => {
       cancelled = true;
     };
-  }, [id, version, retry]);
+  }, [id, selection, retry]);
 
   useEffect(() => {
     const current = ++revision.current;
+    setBuildTiming([]);
     preview.current?.invalidate();
     if (!context) return;
+    const page = context.page;
     const timer = setTimeout(() => {
       serial.current = serial.current
         .then(async () => {
@@ -141,12 +162,13 @@ export function FacetPreview({
           if (!instance || !container.current || current !== revision.current)
             return;
           setStatus("rendering");
+          const build = trackPreviewBuild(performance.timeOrigin + performance.now(), setBuildTiming);
           await instance.render({
             container: container.current,
             runtimeOrigin: context.runtimeOrigin,
             code: source,
-            ext: context.page.split(".").pop()!,
-            page: context.page,
+            ext: page.split(".").pop()!,
+            page,
             sourceProvider: {
               url: `${context.runtimeOrigin}/sources/${id}`,
               paths: context.paths,
@@ -158,16 +180,20 @@ export function FacetPreview({
             dependencies: context.dependencies,
             format: "pdf",
             onStatus: (state) => {
-              if (current === revision.current) setStatus(state);
+              if (current !== revision.current) return;
+              setStatus(state);
+              if (state === "ready") build.ready(performance.timeOrigin + performance.now());
             },
             onError: (cause) => {
               if (current === revision.current) setError(cause.message);
             },
+            onExports: setExports,
             onBridge: (next) => {
               bridge.current = next;
               agentReady.current = false;
             },
             onMessage: (message) => {
+              if (message.type === "activity" && current === revision.current) build.activity(message);
               if (message.type === "status") {
                 agentReady.current = message.state === "ready";
                 if (agentReady.current) sendPins();
@@ -212,64 +238,139 @@ export function FacetPreview({
     };
   }, [context, source, id]);
 
+  const retryPreview = () => setRetry((value) => value + 1);
+
+  function chooseRuntime(next: string) {
+    localStorage.setItem(`gavel-edit:facet:${id}`, next);
+    const url = new URL(location.href);
+    if (next) url.searchParams.set("facet", next);
+    else url.searchParams.delete("facet");
+    history.replaceState(null, "", url);
+    setSelection(next);
+  }
+  const runtimeItem = (label: string, value: string, active: boolean) => ({
+    label,
+    icon: UiCheck,
+    iconClassName: active ? undefined : "invisible",
+    group: "Facet runtime",
+    onSelect: () => chooseRuntime(value),
+  });
+  const installed = catalog && "installed" in catalog ? catalog.installed : [];
+  const pinnedRuntime =
+    catalog && "pinnedRuntime" in catalog ? catalog.pinnedRuntime : undefined;
+  const namedRuntime =
+    context?.runtime ?? (selection.includes("@") ? selection : installed[0]);
+  const runtimeLabel =
+    pinnedRuntime ?? namedRuntime ?? `Facet ${selection || "default"}`;
+  const runtimeItems = installed.map((selector, index) =>
+    runtimeItem(
+      index === 0 ? `${selector} (default)` : selector,
+      index === 0 ? "" : selector,
+      selector === namedRuntime,
+    ),
+  );
+  if (catalog && "versions" in catalog) {
+    runtimeItems.push(runtimeItem("Project default", "", selection === ""));
+    for (const version of Object.keys(catalog.versions).reverse()) {
+      const source = catalog.local.includes(version)
+        ? "local"
+        : catalog.cached.includes(version) ? "cached" : "npm";
+      runtimeItems.push(runtimeItem(`${version} (${source})`, version, version === selection));
+    }
+  }
+  const clickyUI = context?.dependencies["@flanksource/clicky-ui"];
+  const buildTotal = buildTiming.find((metric) => metric.name === "total");
+  const statusLabel = status;
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2 px-2 text-sm">
-        <label htmlFor={`facet-runtime-${id}`}>Facet runtime</label>
-        <select
-          id={`facet-runtime-${id}`}
-          value={version}
-          onChange={(event) => {
-            const next = event.target.value;
-            localStorage.setItem(`gavel-edit:facet:${id}`, next);
-            const url = new URL(location.href);
-            if (next) url.searchParams.set("facet", next);
-            else url.searchParams.delete("facet");
-            history.replaceState(null, "", url);
-            setVersion(next);
-          }}
-        >
-          <option value="">Project default</option>
-          {versions.map((item) => (
-            <option key={item.version} value={item.version}>
-              {item.version} ({item.source})
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={() => setCatalogRevision((value) => value + 1)}
-        >
-          Refresh versions
-        </button>
-        <span role="status">
-          {status}
-          {context
-            ? ` · Clicky UI ${context.dependencies["@flanksource/clicky-ui"]}`
-            : ""}
-        </span>
-        <button
-          type="button"
-          disabled={status !== "ready"}
-          onClick={() => bridge.current?.send({ type: "pick" })}
-        >
-          Comment on element
-        </button>
-      </div>
+    <div className="relative flex h-full min-h-0 flex-col">
+      <DropdownMenu
+        align="right"
+        className="absolute right-3 top-3 z-10"
+        menuLabel="Preview"
+        trigger={
+          <Button
+            variant="outline"
+            size="sm"
+            className="rounded-full bg-background shadow-md"
+            aria-label={`Preview ${statusLabel}`}
+            title={`Preview ${statusLabel} · ${runtimeLabel}`}
+          >
+            <StatusDot status={previewTone(status, error)} label={statusLabel} />
+            {buildTotal && <span className="tabular-nums text-muted-foreground">{formatServerTimingDuration(buildTotal.duration)}</span>}
+          </Button>
+        }
+        header={
+          <div className="px-3 py-1 text-xs text-muted-foreground">
+            {runtimeLabel}
+            {clickyUI && ` · Clicky UI ${clickyUI}`}
+            <PreviewTiming origin={context?.runtimeOrigin} runtimeBuild={context?.runtimeBuild} server={serverTiming} build={buildTiming} />
+          </div>
+        }
+        items={[
+          ...runtimeItems,
+          ...(catalog && "versions" in catalog
+            ? [{
+                label: "Refresh versions",
+                icon: UiRefresh,
+                group: "Facet runtime",
+                onSelect: () => setCatalogRevision((value) => value + 1),
+              }]
+            : []),
+          {
+            label: "Comment on element",
+            icon: UiCursorClick,
+            group: "Preview",
+            disabled: status !== "ready",
+            onSelect: () => bridge.current?.send({ type: "pick" }),
+          },
+          {
+            label: "Download HTML",
+            icon: UiDownload,
+            group: "Export",
+            disabled: !exports,
+            onSelect: () => {
+              const link = document.createElement("a");
+              link.href = exports!.htmlUrl;
+              link.download = `${(context?.page ?? "report").split("/").pop()!.replace(/\.[^.]+$/, "")}.html`;
+              link.click();
+            },
+          },
+          {
+            label: "Save PDF…",
+            icon: UiExport,
+            group: "Export",
+            title: "One continuous page. Choose Save as PDF in the print dialog.",
+            disabled: !exports?.print,
+            onSelect: () => exports!.print!(),
+          },
+        ]}
+      />
       {error && (
-        <div>
+        <div className="flex items-start gap-2 border-b border-border p-2">
           <pre
             role="alert"
-            className="whitespace-pre-wrap p-2 text-sm text-destructive"
+            className="min-w-0 flex-1 whitespace-pre-wrap text-sm text-destructive"
           >
             {error}
           </pre>
-          <button type="button" onClick={() => setRetry((value) => value + 1)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={retryPreview}
+          >
             Retry preview
-          </button>
+          </Button>
         </div>
       )}
       <div ref={container} className="flex min-h-0 flex-1 flex-col" />
     </div>
   );
+}
+
+/** The status-dot tone of a preview runtime state. */
+function previewTone(state: string, error: string): BadgeStatus {
+  if (error || state === "error") return "error";
+  if (state === "ready") return "success";
+  return "info";
 }

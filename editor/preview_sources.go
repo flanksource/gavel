@@ -11,13 +11,18 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/gavel/editor/preview"
 )
 
 type PreviewContext struct {
-	Page          string            `json:"page"`
-	Paths         []string          `json:"paths"`
-	Dependencies  map[string]string `json:"dependencies"`
-	RuntimeOrigin string            `json:"runtimeOrigin"`
+	Page          string             `json:"page"`
+	Paths         []string           `json:"paths"`
+	Dependencies  map[string]string  `json:"dependencies"`
+	RuntimeOrigin string             `json:"runtimeOrigin"`
+	Runtime       string             `json:"runtime,omitempty"`
+	RuntimeBuild  *preview.BuildInfo `json:"runtimeBuild,omitempty"`
 }
 
 func (s *Store) previewRoot(id string) (string, string, error) {
@@ -115,11 +120,30 @@ func (s *Store) Preview(id string) (PreviewContext, error) {
 }
 
 func (s *Server) previewContext(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	stop := rpchttp.Track(ctx, "source-index")
 	result, err := s.Store.Preview(r.PathValue("id"))
-	result.RuntimeOrigin = s.PreviewOrigin
-	if err == nil {
-		err = s.resolvePreview(r.Context(), result.Dependencies, r.URL.Query().Get("facet"))
+	stop()
+	if err != nil {
+		respond(w, nil, err)
+		return
 	}
+	query := r.URL.Query()
+	stop = rpchttp.Track(ctx, "runtime")
+	host, err := s.selectPreview(ctx, query.Get("runtime"))
+	stop()
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	result.RuntimeOrigin = host.origin
+	if runtime := host.cache.Pinned; runtime != nil {
+		result.Runtime = runtime.Label()
+		result.RuntimeBuild = &runtime.Build
+	}
+	stop = rpchttp.Track(ctx, "dependencies")
+	err = host.resolve(ctx, result.Dependencies, query.Get("facet"))
+	stop()
 	respond(w, result, err)
 }
 

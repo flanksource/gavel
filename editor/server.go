@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/route"
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/comments"
 	"github.com/flanksource/gavel/comments/agents"
-	"github.com/flanksource/gavel/editor/preview"
 	"github.com/flanksource/gavel/internal/fileread"
 	"github.com/flanksource/gavel/linters"
 	jsonlint "github.com/flanksource/gavel/linters/json"
@@ -48,10 +48,9 @@ type LintRun struct {
 	Active []ActiveRun `json:"active"`
 }
 type Server struct {
-	PreviewOrigin  string
-	PreviewCache   *preview.Cache
 	PreviewAssets  fs.FS
 	PreviewLocal   map[string]string
+	previews       *previewSessions
 	Comments       http.Handler
 	CommentService func(context.Context) (*comments.Service, error)
 	Store          *Store
@@ -97,7 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/templates", s.templates)
 	mux.HandleFunc("POST /api/file/{id}/rename", s.renameFile)
 	mux.HandleFunc("DELETE /api/file/{id}", s.deleteFile)
-	mux.HandleFunc("GET /api/file/{id}/preview", s.previewContext)
+	mux.Handle("GET /api/file/{id}/preview", rpchttp.TimingMiddleware(http.HandlerFunc(s.previewContext)))
 	mux.HandleFunc("GET /api/preview/runtimes", s.previewCatalog)
 	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("GET /api/file/{id}/comments", s.listComments)

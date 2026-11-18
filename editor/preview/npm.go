@@ -50,6 +50,7 @@ type Cache struct {
 	Root        string
 	Local       map[string]string
 	LocalFrozen bool
+	Pinned      *NamedRuntime
 	mu          sync.Mutex
 }
 
@@ -87,6 +88,9 @@ type MetadataRequest struct {
 
 func (c *Cache) Metadata(ctx context.Context, request MetadataRequest) (Metadata, error) {
 	name := request.Name
+	if c.Pinned != nil {
+		return c.pinnedMetadata(name)
+	}
 	if root, ok := c.Local[name]; ok {
 		data, err := os.ReadFile(filepath.Join(root, "package.json"))
 		if err != nil {
@@ -162,6 +166,12 @@ func (c *Cache) Resolve(ctx context.Context, name, constraint string) (Manifest,
 }
 
 func (c *Cache) Package(ctx context.Context, name, version string) (string, error) {
+	if c.Pinned != nil {
+		if root := c.Pinned.Packages[name][version]; root != "" {
+			return root, nil
+		}
+		return "", fmt.Errorf("package %s@%s is absent from Facet runtime %s; add the dependency and run facet runtime build", name, version, c.Pinned.Label())
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	manifest, err := c.Resolve(ctx, name, version)

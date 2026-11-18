@@ -5,56 +5,107 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/flanksource/gavel/editor/preview"
 )
 
-func (s *Server) StartPreview(ctx context.Context, hostOrigin, cacheRoot string) (func() error, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
-	}
-	s.PreviewOrigin = "http://" + listener.Addr().String()
-	s.PreviewCache = &preview.Cache{Root: filepath.Join(cacheRoot, "page-runtime"), Local: s.PreviewLocal}
-	if len(s.PreviewLocal) > 0 {
+type previewHost struct {
+	origin string
+	cache  *preview.Cache
+	close  func() error
+}
+
+func (s *Server) startPreviewHost(ctx context.Context, opts PreviewOptions, selector string) (*previewHost, error) {
+	cache := &preview.Cache{Root: filepath.Join(opts.CacheRoot, "page-runtime"), Local: s.PreviewLocal}
+	if selector != "" {
+		runtime, err := preview.OpenNamedRuntime(ctx, selector, opts.Directory)
+		if err != nil {
+			return nil, err
+		}
+		cache.Pinned = runtime
+	} else if len(cache.Local) > 0 {
 		frozen := map[string]string{}
-		for name := range s.PreviewLocal {
-			root, err := s.PreviewCache.Package(ctx, name, "latest")
+		for name := range cache.Local {
+			root, err := cache.Package(ctx, name, "latest")
 			if err != nil {
-				_ = listener.Close()
 				return nil, err
 			}
 			frozen[name] = root
 		}
-		s.PreviewCache.Local = frozen
-		s.PreviewCache.LocalFrozen = true
+		cache.Local = frozen
+		cache.LocalFrozen = true
 	}
+	host, err := s.servePreview(opts.HostOrigin, cache)
+	if cache.Pinned != nil {
+		if err != nil {
+			return nil, errors.Join(err, cache.Pinned.Close())
+		}
+		stop := host.close
+		host.close = func() error { return errors.Join(stop(), cache.Pinned.Close()) }
+	}
+	return host, err
+}
+
+func (h *previewHost) profile(hostOrigin string) map[string]any {
+	managed := map[string]string{"@flanksource/facet": "0.1.74", "@flanksource/clicky-ui": "^0.3.57"}
+	policy := map[string]any{"dependencies": "any"}
+	if runtime := h.cache.Pinned; runtime != nil {
+		for name := range managed {
+			managed[name] = runtime.Versions[name]
+		}
+		allowed := make([]string, 0, len(runtime.Packages))
+		for name := range runtime.Packages {
+			allowed = append(allowed, name)
+		}
+		sort.Strings(allowed)
+		policy = map[string]any{"dependencies": "strict", "allow": allowed}
+	}
+	profile := map[string]any{
+		"runtimeDomain": "127.0.0.1", "embedders": []string{hostOrigin},
+		"packageOrigin": h.origin + "/packages", "registry": h.origin + "/registry",
+		"managed": managed, "policy": policy, "minReleaseAgeDays": 0,
+		"network": map[string]any{"allow": []string{"https://fonts.googleapis.com/*", "https://fonts.gstatic.com/*"}},
+		"csp":     map[string]any{"wasm": true, "add": map[string][]string{"style-src": {"https://fonts.googleapis.com"}, "font-src": {"'self'", "data:", "https://fonts.gstatic.com"}}},
+		"links":   "deny", "sources": []string{"host"}, "readinessTimeoutMs": 30000,
+	}
+	if runtime := h.cache.Pinned; runtime != nil && len(runtime.BrowserCatalog) > 0 {
+		profile["runtimeExports"] = true
+	}
+	return profile
+}
+
+func (s *Server) servePreview(hostOrigin string, cache *preview.Cache) (*previewHost, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	host := &previewHost{origin: "http://" + listener.Addr().String(), cache: cache}
+	profile := host.profile(hostOrigin)
 	mux := http.NewServeMux()
+	if runtime := cache.Pinned; runtime != nil && len(runtime.BrowserCatalog) > 0 {
+		mux.HandleFunc("GET /runtime-exports.json", func(w http.ResponseWriter, r *http.Request) {
+			respond(w, runtime.BrowserCatalog, nil)
+		})
+	}
 	mux.HandleFunc("GET /profile.json", func(w http.ResponseWriter, r *http.Request) {
-		respond(w, map[string]any{
-			"runtimeDomain": "127.0.0.1", "embedders": []string{hostOrigin},
-			"packageOrigin": s.PreviewOrigin + "/packages", "registry": s.PreviewOrigin + "/registry",
-			"managed": map[string]string{"@flanksource/facet": "0.1.74", "@flanksource/clicky-ui": "^0.3.57"},
-			"policy":  map[string]string{"dependencies": "any"}, "minReleaseAgeDays": 0,
-			"network": map[string]any{"allow": []string{"https://fonts.googleapis.com/*", "https://fonts.gstatic.com/*"}},
-			"csp":     map[string]any{"wasm": true, "add": map[string][]string{"style-src": {"https://fonts.googleapis.com"}, "font-src": {"'self'", "data:", "https://fonts.gstatic.com"}}},
-			"links":   "deny", "sources": []string{"host"}, "readinessTimeoutMs": 30000,
-		}, nil)
+		respond(w, profile, nil)
 	})
 	mux.HandleFunc("GET /sources/{id}/{path...}", s.Store.previewSource)
 	mux.HandleFunc("GET /registry/{name...}", func(w http.ResponseWriter, r *http.Request) {
-		metadata, err := s.PreviewCache.Metadata(r.Context(), preview.MetadataRequest{Name: r.PathValue("name")})
+		metadata, err := cache.Metadata(r.Context(), preview.MetadataRequest{Name: r.PathValue("name")})
 		respond(w, metadata, err)
 	})
-	mux.HandleFunc("GET /packages/{path...}", s.previewPackage)
+	mux.HandleFunc("GET /packages/{path...}", host.previewPackage)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
 		if strings.HasPrefix(name, "frame/") {
@@ -88,12 +139,19 @@ func (s *Server) StartPreview(ctx context.Context, hostOrigin, cacheRoot string)
 		w.Header().Set("Cache-Control", "no-store")
 		mux.ServeHTTP(w, r)
 	})}
-	go func() { <-ctx.Done(); _ = server.Close() }()
 	go func() { _ = server.Serve(listener) }()
-	return server.Close, nil
+	host.close = func() error {
+		// The listener is already bound even if Serve has yet to register it.
+		err := server.Close()
+		if closeErr := listener.Close(); !errors.Is(closeErr, net.ErrClosed) {
+			err = errors.Join(err, closeErr)
+		}
+		return err
+	}
+	return host, nil
 }
 
-func (s *Server) previewPackage(w http.ResponseWriter, r *http.Request) {
+func (h *previewHost) previewPackage(w http.ResponseWriter, r *http.Request) {
 	value := r.PathValue("path")
 	separator := strings.Index(value, "/")
 	if strings.HasPrefix(value, "@") {
@@ -118,30 +176,33 @@ func (s *Server) previewPackage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "package requires exact version", 400)
 		return
 	}
-	root, err := s.PreviewCache.Package(r.Context(), identity[:versionAt], identity[versionAt+1:])
+	root, err := h.cache.Package(r.Context(), identity[:versionAt], identity[versionAt+1:])
 	if err != nil {
 		respond(w, nil, err)
 		return
 	}
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	defer dir.Close()
+	packageFS := dir.FS()
 	if r.URL.Query().Has("meta") {
 		files := []map[string]string{}
-		err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		err = fs.WalkDir(packageFS, ".", func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if entry.IsDir() {
 				return nil
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			rel, err := filepath.Rel(root, path)
+			data, err := fs.ReadFile(packageFS, path)
 			if err != nil {
 				return err
 			}
 			hash := sha256.Sum256(data)
-			files = append(files, map[string]string{"path": "/" + filepath.ToSlash(rel), "integrity": "sha256-" + base64.StdEncoding.EncodeToString(hash[:])})
+			files = append(files, map[string]string{"path": "/" + path, "integrity": "sha256-" + base64.StdEncoding.EncodeToString(hash[:])})
 			return nil
 		})
 		respond(w, map[string]any{"files": files}, err)
@@ -151,26 +212,38 @@ func (s *Server) previewPackage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid package file", 400)
 		return
 	}
-	http.ServeFileFS(w, r, os.DirFS(root), name)
+	http.ServeFileFS(w, r, packageFS, name)
 }
 
 func (s *Server) previewCatalog(w http.ResponseWriter, r *http.Request) {
-	if s.PreviewCache == nil {
+	sessions := s.previews
+	if sessions == nil {
 		respond(w, nil, fmt.Errorf("browser runtime is not started"))
 		return
 	}
-	metadata, err := s.PreviewCache.Metadata(r.Context(), preview.MetadataRequest{Name: "@flanksource/facet", Refresh: r.URL.Query().Has("refresh")})
+	cache := sessions.defaultHost.cache
+	if sessions.options.Runtime != "" {
+		respond(w, map[string]string{"pinnedRuntime": cache.Pinned.Label()}, nil)
+		return
+	}
+	if len(sessions.installed) > 0 {
+		respond(w, struct {
+			Installed []string `json:"installed"`
+		}{sessions.installed}, nil)
+		return
+	}
+	metadata, err := cache.Metadata(r.Context(), preview.MetadataRequest{Name: "@flanksource/facet", Refresh: r.URL.Query().Has("refresh")})
 	if err != nil {
 		respond(w, nil, err)
 		return
 	}
 	cached, local := []string{}, []string{}
 	for version, manifest := range metadata.Versions {
-		if _, ok := s.PreviewLocal[manifest.Name]; ok {
+		if _, ok := cache.Local[manifest.Name]; ok {
 			local = append(local, version)
 			continue
 		}
-		hit, err := s.PreviewCache.Cached(manifest)
+		hit, err := cache.Cached(manifest)
 		if err != nil {
 			respond(w, nil, err)
 			return
@@ -186,9 +259,19 @@ func (s *Server) previewCatalog(w http.ResponseWriter, r *http.Request) {
 	}{metadata, cached, local}, nil)
 }
 
-func (s *Server) resolvePreview(ctx context.Context, deps map[string]string, selected string) error {
-	if s.PreviewCache == nil {
-		return fmt.Errorf("browser runtime is not started")
+func (h *previewHost) resolve(ctx context.Context, deps map[string]string, selected string) error {
+	if runtime := h.cache.Pinned; runtime != nil {
+		for name := range deps {
+			if version, ok := runtime.Versions[name]; ok {
+				deps[name] = version
+			} else {
+				delete(deps, name)
+			}
+		}
+		for _, name := range []string{"@flanksource/facet", "@flanksource/clicky-ui"} {
+			deps[name] = runtime.Versions[name]
+		}
+		return nil
 	}
 	if selected == "" {
 		selected = deps["@flanksource/facet"]
@@ -196,7 +279,7 @@ func (s *Server) resolvePreview(ctx context.Context, deps map[string]string, sel
 	if selected == "" {
 		selected = "0.1.74"
 	}
-	facet, err := s.PreviewCache.Resolve(ctx, "@flanksource/facet", selected)
+	facet, err := h.cache.Resolve(ctx, "@flanksource/facet", selected)
 	if err != nil {
 		return err
 	}
@@ -204,12 +287,12 @@ func (s *Server) resolvePreview(ctx context.Context, deps map[string]string, sel
 	if range_ == "" {
 		return fmt.Errorf("Facet %s has no Clicky UI peer dependency", facet.Version)
 	}
-	ui, err := s.PreviewCache.Resolve(ctx, "@flanksource/clicky-ui", range_)
+	ui, err := h.cache.Resolve(ctx, "@flanksource/clicky-ui", range_)
 	if err != nil {
 		return err
 	}
 	for _, library := range []preview.Manifest{facet, ui} {
-		root, err := s.PreviewCache.Package(ctx, library.Name, library.Version)
+		root, err := h.cache.Package(ctx, library.Name, library.Version)
 		if err != nil {
 			return err
 		}

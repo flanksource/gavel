@@ -34,6 +34,7 @@ type EditOptions struct {
 	Ext            []string `flag:"ext" help:"File extensions folders list, e.g. .md or .go, instead of the built-in documents and images; repeat for each (overrides .gavel.yaml edit.extensions)"`
 	IncludeIgnored []string `flag:"include-ignored" help:"Folder-relative glob or directory whose files are listed even though .gitignore excludes them; repeat for each (overrides .gavel.yaml edit.includeIgnored)"`
 	Dev            bool     `flag:"dev" help:"Serve the page from the editor/ui Vite dev server, with clicky-ui from the sibling checkout's source when present (requires a source checkout)"`
+	FacetRuntime   string   `flag:"facet-runtime" help:"Pin previews to a built Facet runtime by name, name@version, or folder (defaults to the latest installed build)"`
 	// Session defaults to the agent session gavel edit runs inside.
 	Session string `flag:"session" help:"Agent session id new comments are assigned and delivered to (default: the Claude/Codex session gavel edit runs in, as captain detects it; \"none\" routes through the files' comment agents)"`
 }
@@ -131,7 +132,7 @@ func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 		_ = listener.Close()
 		return nil, err
 	}
-	if opts.Dev {
+	if opts.Dev && opts.FacetRuntime == "" {
 		sourceDir, err := vitedev.ResolveDir(editorDev, "")
 		if err != nil {
 			_ = listener.Close()
@@ -141,7 +142,9 @@ func runEdit(ctx context.Context, opts EditOptions) (any, error) {
 		editorServer.PreviewLocal = map[string]string{"@flanksource/facet": filepath.Join(siblings, "facet"), "@flanksource/clicky-ui": filepath.Join(siblings, "clicky-ui/packages/ui")}
 		editorServer.PreviewAssets = os.DirFS(filepath.Join(siblings, "clicky-ui/packages/page-runtime/dist/static"))
 	}
-	closePreview, err := editorServer.StartPreview(ctx, "http://"+listener.Addr().String(), cache)
+	closePreview, err := editorServer.StartPreview(ctx, editor.PreviewOptions{
+		HostOrigin: "http://" + listener.Addr().String(), CacheRoot: cache, Directory: dir, Runtime: opts.FacetRuntime,
+	})
 	if err != nil {
 		_ = listener.Close()
 		return nil, err
