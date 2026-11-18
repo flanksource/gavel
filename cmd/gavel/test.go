@@ -1294,14 +1294,14 @@ func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
 	cmd.Flags().DurationVar(&flags.IdleTimeout, "idle-timeout", 0,
 		"With --ui --detach, exit the detached UI server after this long with no HTTP requests (default 5m when --detach is set).")
 	cmd.Flags().DurationVar(&flags.Timeout, "timeout", 20*time.Minute,
-		"Global wall-clock deadline for the entire test+lint run (or test.timeout). On timeout, diagnostics are logged (and checkpointed into the run's stacks under --ui/--diagnostics) and every subprocess is killed.")
+		"Deadline for the entire test and lint run (test.timeout in .gavel.yaml). On timeout, Gavel records diagnostics and kills subprocesses.")
 	cmd.Flags().DurationVar(&flags.LintTimeout, "lint-timeout", 0,
 		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
 	cmd.Flags().DurationVar(&flags.TestTimeout, "test-timeout", 0,
-		"Per-test-package subprocess deadline (or test.testTimeout; none by default). Applies to each go test / ginkgo / vitest invocation. A Go test binary past it is sent SIGQUIT and given 3s to dump its goroutines onto the attempt before the tree is killed.")
+		"Deadline per test package (test.testTimeout in .gavel.yaml, no deadline by default). Go test gets 3s to dump goroutines before Gavel kills its process tree.")
 	if failed := cmd.Flags().Lookup("failed"); failed != nil {
 		failed.NoOptDefVal = failedAutoSentinel
-		failed.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use --baseline when set, otherwise .gavel/last.json."
+		failed.Usage = "Re-run only failed tests: a previous results JSON path, or a duration (1d, 6h) to re-run every test that failed in a run started within it. Pass without a value to use --baseline when set, otherwise .gavel/last.json."
 	}
 	if pr := cmd.Flags().Lookup("pr"); pr != nil {
 		pr.Usage = "PR reference (12, #12, owner/repo#12, or a PR URL); re-run only the tests that failed in that PR's gavel CI artifacts."
@@ -1329,6 +1329,8 @@ func init() {
 		}
 		return runTests(opts, detach)
 	})
+	testCmd.Use = "test [flags] [path...] [-- runner args...]"
+	testCmd.Short = "Discover and run project tests"
 	// Allow flags and positional package paths to interleave so callers (e.g. the
 	// flanksource/gavel composite action) can append flags after user-supplied
 	// paths. Use `--` to terminate flag parsing for framework-aware focus or

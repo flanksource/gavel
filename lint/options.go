@@ -29,10 +29,10 @@ type Options struct {
 	Linters      []string               `flag:"linters" yaml:"linters,omitempty" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
 	Ignore       []string               `flag:"ignore" yaml:"ignore,omitempty" help:"Glob patterns to exclude from linting"`
 	Generated    *bool                  `flag:"-" yaml:"generated,omitempty" json:"generated,omitempty"`
-	Tags         []string               `flag:"tags" yaml:"tags,omitempty" json:"tags,omitempty" help:"Build tags for supported linters (comma-separated or repeated)"`
+	Tags         []string               `flag:"tags" yaml:"tags,omitempty" json:"tags,omitempty" help:"Go build tags for golangci-lint and UIR (comma-separated or repeated)"`
 	Exclude      []string               `flag:"exclude" yaml:"exclude,omitempty" help:"Exclude rule IDs or * patterns, optionally source:rule (repeat or comma-separate); disable native rules where supported"`
 	Triage       bool                   `flag:"triage" yaml:"triage,omitempty" help:"Interactive mode to select violation types to ignore"`
-	Fix          bool                   `flag:"fix" yaml:"fix,omitempty" help:"Enable auto-fixing"`
+	Fix          bool                   `flag:"fix" yaml:"fix,omitempty" help:"Apply native auto-fixes where the selected linter supports them"`
 	NoCache      bool                   `flag:"no-lint-cache" yaml:"no-lint-cache,omitempty" help:"Make every caching linter re-check its inputs and overwrite its cached results"`
 	Timeout      string                 `flag:"timeout" yaml:"timeout,omitempty" help:"Timeout per linter; overrides runtime.timeout (default 5m)"`
 	WorkDir      string                 `flag:"work-dir" yaml:"work-dir,omitempty" help:"Working directory"`
@@ -75,7 +75,7 @@ type Options struct {
 	captaincli.AIRuntimeOptions
 	Selection    *changeset.Selection `flag:"-" json:"-" yaml:"-"`
 	OptionFields map[string]bool      `json:"-" yaml:"-" flag:"-"`
-	Schema       string               `flag:"schema" json:"schema,omitempty" yaml:"schema,omitempty" help:"JSON Schema path or HTTP(S) URL; defaults to document schema declarations"`
+	Schema       string               `flag:"schema" json:"schema,omitempty" yaml:"schema,omitempty" help:"For the JSON/YAML linter, use this JSON Schema path or HTTP(S) URL instead of auto-selecting a schema"`
 }
 
 func (o Options) Pretty() api.Text {
@@ -111,13 +111,17 @@ func (o Options) Pretty() api.Text {
 func (o Options) Help() api.Textable {
 	return clicky.Text(`Run linters on the project.
 
-Automatically detects which linters are available and runs them.
-Supports: golangci-lint, ruff, eslint, oxlint, react-doctor, pyright, tsc, markdownlint, vale, jscpd, betterleaks, uir, json.
+Gavel detects linters from project files and configuration. Pass files or
+directories to scope findings. Select one linter by subcommand, or one or more
+with --linters. Arguments after -- require a single linter that accepts them.
+--failed and --pr select linters and files using saved findings.
 
 Examples:
+  gavel lint github                   # repository PR health and security alerts (explicit only)
+  gavel lint github -- --stale-after 720h --repo acme/service
   gavel lint
   gavel lint jscpd
-  gavel lint jscpd eslint
+  gavel lint --linters jscpd,eslint
   gavel lint react-doctor
   gavel lint uir                     # SQL rules from .uir.yaml
   gavel lint uir --exclude 'small-*'
@@ -129,7 +133,8 @@ Examples:
   gavel lint --linters=golangci-lint,ruff
   gavel lint --fix
   gavel lint --triage
+  gavel lint --failed=.gavel/previous.json # re-run linters and files with saved violations
   gavel lint --pr 12                 # re-run the linters that flagged PR #12 in CI
   gavel lint -y                      # auto-AI-fix violations (implies --ai-fix)
-  gavel lint ./pkg/...`)
+  gavel lint ./pkg`)
 }

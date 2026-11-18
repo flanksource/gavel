@@ -55,7 +55,9 @@ itself always resolves the real binaries and ignores the shims.`)
 }
 
 func registerLintShimCommands(lintCmd *cobra.Command) {
-	clicky.AddNamedCommand("install-shims", lintCmd, LintInstallShimsOptions{}, runLintInstallShims)
+	cmd := clicky.AddNamedCommand("install-shims", lintCmd, LintInstallShimsOptions{}, runLintInstallShims)
+	cmd.Short = "Install resource-limited wrappers for supported linters"
+	cmd.Example = "  gavel lint install-shims --dry-run\n  gavel lint install-shims --tools eslint,tsc --timeout 30s"
 	lintCmd.AddCommand(&cobra.Command{
 		Use:                "shim-exec <tool> [args...]",
 		Short:              "Run a linter with the limits passed by a gavel shim",

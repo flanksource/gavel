@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/extensions"
@@ -82,7 +83,11 @@ func commandDirs(ctx context.Context, workDir string) (workspace.Dirs, error) {
 }
 
 func init() {
-	clicky.BindAllFlagsToCommand(rootCmd, "format", "tasks")
+	const defaultTaskConcurrency = 6
+	flags := clicky.BindAllFlags(rootCmd.PersistentFlags(), "format", "tasks")
+	setGavelUsage(rootCmd)
+	flags.MaxConcurrent = defaultTaskConcurrency
+	rootCmd.PersistentFlags().Lookup("max-concurrent").DefValue = strconv.Itoa(defaultTaskConcurrency)
 	properties.BindFlags(rootCmd.PersistentFlags())
 	database.BindDatabaseURLFlag(rootCmd.PersistentFlags())
 	// A fixture's `setup:` resolves `connection://…` references against the

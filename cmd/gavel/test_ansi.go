@@ -24,26 +24,11 @@ type testANSIOptions struct {
 }
 
 func (o testANSIOptions) Help() api.Textable {
-	const (
-		heading   = "font-bold text-purple-600"
-		flagStyle = "text-cyan-600 font-bold"
-		muted     = "text-muted"
-	)
-	return clicky.Text("gavel test ansi", heading).Space().
-		Append("— run a command under a fixed-size PTY and capture its timed output", muted).NewLine().NewLine().
-		Append("Records the merged stdout/stderr stream as asciinema-style timed events plus a", "").NewLine().
-		Append("timeline of width-aware settled-screen snapshots. Useful for debugging TUI redraw", "").NewLine().
-		Append("bugs (cursor-up under-counts, wrap-induced smears, duplicated frames).", "").NewLine().NewLine().
-		Append("USAGE", heading).NewLine().
-		Append("  gavel test ansi [out.json] -- <command> [args...]", flagStyle).NewLine().
-		Append("  A command after ", muted).Append("--", flagStyle).Append(" is required. Without out.json the JSON is written to stdout.", muted).NewLine().NewLine().
-		Append("FLAGS", heading).NewLine().
-		Append("  --width", flagStyle).Append("             PTY columns (0 = detect, fallback 120)", muted).NewLine().
-		Append("  --height", flagStyle).Append("            PTY rows (0 = detect, fallback 40)", muted).NewLine().
-		Append("  --snapshot-interval", flagStyle).Append(" snapshot cadence (default 100ms)", muted).NewLine().NewLine().
-		Append("EXAMPLES", heading).NewLine().
-		Append("  gavel test ansi --width 120 out.json -- gavel status --ai .", flagStyle).NewLine().
-		Append("  gavel test ansi -- gavel test ./pkg", flagStyle).Append("   (JSON to stdout)", muted).NewLine()
+	return clicky.Text(`Capture a command's merged stdout and stderr in a fixed-size terminal.
+
+The JSON includes asciinema-style timed events and settled screen snapshots
+for debugging terminal redraws. Put the command and its arguments after --.
+Gavel writes the JSON to stdout when you omit the output path.`)
 }
 
 var testANSICmd *cobra.Command
@@ -192,7 +177,8 @@ func ansiCaptureSummary(c *fixtures.Capture, outPath string) ansiSummary {
 
 func init() {
 	testANSICmd = clicky.AddNamedCommand("ansi", testCmd, testANSIOptions{}, runTestANSI)
-	testANSICmd.Use = "ansi [out.json] -- <command>"
+	testANSICmd.Use = "ansi [flags] [out.json] -- <command> [args...]"
 	testANSICmd.Short = "Capture timed PTY/ANSI output of a command for redraw debugging"
+	testANSICmd.Example = "  gavel test ansi --width 120 out.json -- gavel test ./testrunner\n  gavel test ansi -- gavel version"
 	testANSICmd.Flags().SetInterspersed(true)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/flanksource/clicky"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
@@ -18,6 +19,13 @@ func TestGavelCLI(t *testing.T) {
 // so without an isolated HOME they assert against the developer's own config.
 var _ = BeforeEach(func() {
 	GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+})
+
+var _ = Describe("task concurrency", func() {
+	It("defaults the task limit and its help text to six", func() {
+		Expect(rootCmd.PersistentFlags().Lookup("max-concurrent").DefValue).To(Equal("6"))
+		Expect(clicky.Flags.MaxConcurrent).To(Equal(6))
+	})
 })
 
 // withRootContext gives cmd the context the root command resolves from --cwd,

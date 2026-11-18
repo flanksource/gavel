@@ -32,6 +32,11 @@ func (o *Options) Configure() error {
 	if err := runconfig.Apply(o, cfg.LintOptionsFor(""), o.OptionFields); err != nil {
 		return err
 	}
+	for _, name := range o.Linters {
+		if name == "github" && (o.Changed || o.Since != "" || o.PR != "" || len(o.ChangedFiles) > 0 || len(o.Files) > 0) {
+			return fmt.Errorf("github audits repositories; use --cwd and omit local file, change and artifact PR selections")
+		}
+	}
 	if o.Schema != "" {
 		o.Schema, err = jsonlint.ResolveSchema(o.Schema, o.WorkDir)
 	}

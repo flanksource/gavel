@@ -99,6 +99,14 @@ When the PR published gavel results, each failing shard shows the failing tests 
 lint violations, plus a "Reproduce locally" block with the exact gavel commands that
 re-run them here: gavel test --pr <n> / gavel lint --pr <n>.
 
+The GitHub linter includes this PR's CodeQL annotations automatically, with every
+file, line, severity and message. --json includes them under each check's lint
+field. --actions scopes them with their check; --logs is not required. Annotation
+retrieval errors are reported as lintError and return a nonzero exit code. Findings
+from a required failing CodeQL check are errors; otherwise they are warnings.
+Other PRs, repository alerts and PR health rules are audited by gavel lint github.
+PR status exit codes continue to reflect all failed checks, including optional ones.
+
 A PR that conflicts with its base gets a "Merge conflicts" section listing every
 conflicting path and how it conflicts, plus the git commands that resolve it.
 The exit code is 1 whenever the PR cannot merge — a failing check, a failing job,

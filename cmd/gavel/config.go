@@ -162,10 +162,10 @@ func configHelp(cmd *cobra.Command) api.Text {
 
 func renderHelpFlagGroups(cmd *cobra.Command) api.Text {
 	t := clicky.Text("")
-	for _, group := range clicky.CommandFlagGroups(cmd) {
+	for _, group := range helpFlagGroups(cmd) {
 		t = t.Add(renderHelpFlags(group.Title, group.Flags))
 	}
-	return t
+	return t.Append(globalHelpHint)
 }
 
 func renderHelpFlags(title string, flags *pflag.FlagSet) api.Text {

@@ -34,6 +34,8 @@ func init() {
 		}
 		return runLint(lintCmd.Context(), opts)
 	})
+	lintCmd.Use = "lint [flags] [path...] [-- linter args...]"
+	lintCmd.Short = "Discover and run project linters"
 	bindLintSourceFlags(lintCmd)
 	registerLintLinterSubcommands(lintCmd)
 	registerLintShimCommands(lintCmd)

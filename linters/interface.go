@@ -474,7 +474,7 @@ func (vn *violationNode) Pretty() api.Text {
 	}
 
 	// In default mode, show line:col on the message line
-	if !verbose && vn.v.Line > 0 {
+	if (!verbose || len(vn.v.Locations) > 0 && vn.v.Locations[0].Ref != "") && vn.v.Line > 0 {
 		loc := fmt.Sprintf(":%d", vn.v.Line)
 		if vn.v.Column > 0 {
 			loc = fmt.Sprintf(":%d:%d", vn.v.Line, vn.v.Column)
@@ -495,7 +495,7 @@ func (vn *violationNode) Pretty() api.Text {
 	// At -v, show source line with line number gutter and column pointer
 	if vn.v.Excerpt != nil {
 		t = t.NewLine().Add(vn.v.Excerpt.Pretty())
-	} else if verbose && vn.v.Line > 0 {
+	} else if verbose && vn.v.Line > 0 && (len(vn.v.Locations) == 0 || vn.v.Locations[0].Ref == "") {
 		if srcLine := readFileLine(vn.v.File, vn.v.Line); srcLine != "" {
 			lineNo := fmt.Sprintf("%d", vn.v.Line)
 			gutter := strings.Repeat(" ", len(lineNo))
@@ -649,7 +649,10 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 	result.Linter, result.WorkDir = linter.Name(), opts.WorkDir
 	result.Success, result.TimedOut = err == nil && !timedOut, timedOut
 	result.Duration, result.Violations = time.Since(start), violations
-	result.Error, result.Command, result.Args = formatErr(statusErr), cmd, args
+	if !result.Skipped || statusErr != nil {
+		result.Error = formatErr(statusErr)
+	}
+	result.Command, result.Args = cmd, args
 
 	if metadata, ok := linter.(MetadataProvider); ok {
 		result.FileCount = metadata.GetFileCount()
@@ -660,7 +663,7 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 }
 
 // runForResult runs linter, through RunResult when it is a ResultLinter so
-// the fields only it knows survive. A ResultLinter's own Error fails the run
+// the fields only it knows survive. A non-skipped ResultLinter's own Error fails the run
 // even when it returns no error, and a nil result with no error is a bug in
 // the linter.
 func runForResult(ctx commonsContext.Context, task *clicky.Task, linter Linter) (*LinterResult, error) {
@@ -676,7 +679,7 @@ func runForResult(ctx commonsContext.Context, task *clicky.Task, linter Linter) 
 		}
 		return &LinterResult{}, err
 	}
-	if result.Error != "" && err == nil {
+	if result.Error != "" && !result.Skipped && err == nil {
 		err = errors.New(result.Error)
 	}
 	return result, err

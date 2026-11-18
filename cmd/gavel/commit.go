@@ -42,7 +42,7 @@ type CommitOptions struct {
 	Force              bool   `flag:"force" help:"Skip pre-commit hooks"`
 	Push               string `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR: true (bare -p) pushes commits ahead of the branch's upstream; branch pushes the whole branch and seeds the PR from every commit ahead of the default branch, so an already-pushed branch can get its PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
 	Target             string `flag:"target" help:"With --push, select [remote/]base[:topic] for the PR and push. Remote defaults to origin; topic defaults to the current branch (generated on protected branches). Example: zim/main:feat/new-topic."`
-	AutoMerge          bool   `flag:"auto-merge" help:"With -p, when a new PR is opened, enable GitHub auto-merge so it merges once required checks pass."`
+	AutoMerge          bool   `flag:"auto-merge" help:"With -p, enable automatic completion of a new GitHub or Azure DevOps PR once required checks and approvals pass."`
 	MergeType          string `flag:"merge-type" help:"Merge method for --auto-merge: rebase|squash|merge" default:"rebase"`
 	Fixup              string `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
 	NoAutosquash       bool   `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
@@ -149,12 +149,11 @@ already pushed but has no PR yet.
 
 Use --target [remote/]base[:topic] with --push to choose the merge base, remote (default origin), and optionally the remote topic branch name. For example, --target zim/main:feat/new-topic pushes HEAD to feat/new-topic on zim and opens a PR against main in that remote's repository. Without a topic override, the current branch is used (generated on protected branches or the selected base). An explicit target seeds the PR from every commit ahead of the selected base. Only existing PRs matching the selected base and explicit topic are reused.
 
-Add --auto-merge to enable GitHub auto-merge on a PR that -p opens (so it
-merges once required checks pass). --merge-type sets the method
-(rebase|squash|merge; default rebase). Auto-merge only applies to PRs this
-run opens; when -p instead pushes to an existing PR, --auto-merge is ignored
-with a warning. If GitHub rejects enabling auto-merge (repo disallows it, the
-chosen method isn't enabled, no branch protection), gavel exits non-zero.
+Add --auto-merge to enable GitHub auto-merge or Azure DevOps auto-complete on a
+PR that -p opens. The provider merges it once required checks and approvals pass.
+--merge-type sets the method (rebase|squash|merge, default rebase). When -p
+pushes to an existing PR, gavel warns that the flag applies only to new PRs.
+If the provider rejects the request, gavel exits non-zero with the PR number.
 
 Examples:
   gavel commit                          # session-scoped: commits only the running agent's edits, else staged changes

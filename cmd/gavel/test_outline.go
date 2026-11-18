@@ -14,7 +14,7 @@ type testOutlineOptions struct {
 	Paths        []string `json:"paths,omitempty" args:"true"`
 	AISummary    bool     `json:"ai_summary,omitempty" flag:"ai-summary" help:"Generate one-line AI summaries of what each test verifies"`
 	Frameworks   []string `json:"frameworks,omitempty" flag:"framework" help:"Limit to frameworks: go, ginkgo, jest, vitest, playwright, fixture"`
-	FixtureFiles []string `json:"fixture_files,omitempty" flag:"fixture-files" help:"Markdown fixture globs; overrides .gavel.yaml fixtures.files"`
+	FixtureFiles []string `json:"fixture_files,omitempty" flag:"fixture-files" help:"Fixture file globs; overrides .gavel.yaml fixtures.files"`
 	Duplication  bool     `json:"duplication,omitempty" flag:"duplication" default:"true" help:"Compute per-test duplication via jscpd"`
 	History      bool     `json:"history,omitempty" flag:"history" default:"true" help:"Join run history from .gavel snapshots"`
 }
@@ -62,6 +62,8 @@ func normalizeOutlineFramework(name string) (parsers.Framework, error) {
 
 func init() {
 	cmd := clicky.AddNamedCommandWithContext("outline", testCmd, testOutlineOptions{}, runTestOutline)
+	cmd.Use = "outline [flags] [path...]"
 	cmd.Short = "Static outline of tests with size, complexity, duplication, and run history"
+	cmd.Example = "  gavel test outline ./testrunner\n  gavel test outline --framework go ./cmd/gavel"
 	cmd.Flags().SetInterspersed(true)
 }

@@ -15,24 +15,26 @@ var lintSubcommands = []struct {
 	subcmd     string
 	linterName string
 	short      string
+	example    string
 }{
-	{"golangci-lint", "golangci-lint", "Run only golangci-lint"},
-	{"golangci", "golangci-lint", "Alias for golangci-lint"},
-	{"ruff", "ruff", "Run only ruff (Python)"},
-	{"eslint", "eslint", "Run only eslint"},
-	{"oxlint", "oxlint", "Run only oxlint (JS/TS)"},
-	{"react-doctor", "react-doctor", "Run only react-doctor (React diagnostics)"},
-	{"pyright", "pyright", "Run only pyright (Python types)"},
-	{"tsc", "tsc", "Run only tsc (TypeScript compile check)"},
-	{"typescript", "tsc", "Alias for tsc"},
-	{"markdownlint", "markdownlint", "Run only markdownlint"},
-	{"vale", "vale", "Run only vale (prose)"},
-	{"jscpd", "jscpd", "Run only jscpd (duplicate-code detector)"},
-	{"uir", "uir", "Run SQL architecture rules from .uir.yaml"},
-	{"json", "json", "Validate JSON, YAML and NDJSON syntax and schemas"},
-	{"yaml", "json", "Validate YAML syntax and schemas (alias for json)"},
-	{"betterleaks", "betterleaks", "Run only betterleaks (secret scanner)"},
-	{"secrets", "betterleaks", "Alias for betterleaks"},
+	{"golangci-lint", "golangci-lint", "Check Go code with golangci-lint", "--tags integration ./pkg"},
+	{"golangci", "golangci-lint", "Check Go code (alias for golangci-lint)", "--changed"},
+	{"ruff", "ruff", "Check Python code with Ruff", "--exclude ruff:F401 ./src"},
+	{"eslint", "eslint", "Check JavaScript and TypeScript with ESLint", "--changed ./web"},
+	{"oxlint", "oxlint", "Check JavaScript and TypeScript with Oxlint", "--dry-run ./web"},
+	{"react-doctor", "react-doctor", "Check React projects with React Doctor", "--changed ./web"},
+	{"pyright", "pyright", "Check Python types with Pyright", "--dry-run ./src"},
+	{"tsc", "tsc", "Check TypeScript types with the TypeScript compiler", "--dry-run ./web"},
+	{"typescript", "tsc", "Check TypeScript types (alias for tsc)", "--dry-run ./web"},
+	{"markdownlint", "markdownlint", "Check Markdown formatting and structure", "./docs"},
+	{"vale", "vale", "Check prose against Vale style rules", "./docs"},
+	{"jscpd", "jscpd", "Detect duplicate code with jscpd", "--summary ./src"},
+	{"uir", "uir", "Check SQL architecture rules from .uir.yaml and .uir.d", "--exclude 'small-*'"},
+	{"json", "json", "Validate JSON, YAML, NDJSON and Markdown frontmatter", "--schema schema.json config.json"},
+	{"github", "github", "Audit GitHub PR health, Dependabot security alerts and CodeQL findings", "-- --repo acme/service --stale-after 720h"},
+	{"yaml", "json", "Validate YAML and other structured files (alias for json)", "--schema schema.json config.yaml"},
+	{"betterleaks", "betterleaks", "Scan for secrets with Betterleaks", "--changed"},
+	{"secrets", "betterleaks", "Scan for secrets (alias for betterleaks)", "--dry-run"},
 }
 
 func registerLintLinterSubcommands(parent *cobra.Command) {
@@ -46,9 +48,19 @@ func registerLintLinterSubcommands(parent *cobra.Command) {
 			opts.Linters = []string{entry.linterName}
 			return runLint(sub.Context(), opts)
 		})
-		sub.Use = entry.subcmd + " [path...] [-- native args]"
+		sub.Use = entry.subcmd + " [flags] [path...] [-- linter args...]"
 		bindLintSourceFlags(sub)
 		sub.Short = entry.short
+		sub.Long = entry.short + ".\n\nPass files or directories to scope findings. Arguments after -- go to the linter."
+		sub.Example = "  " + sub.CommandPath() + " " + entry.example
+		switch entry.linterName {
+		case "json":
+			sub.Use = entry.subcmd + " [flags] [path...]"
+			sub.Long = entry.short + ".\n\nPass files or directories to validate. Use --schema to apply a JSON Schema to the selected files."
+		case "github":
+			sub.Use = "github [flags] [-- github args...]"
+			sub.Long = entry.short + ".\n\nThis audit is repository-wide and runs when explicitly selected. Use --cwd to select a project. After --, use --repo owner/repo to override configured repository selection and --stale-after to set the PR inactivity threshold (default 720h)."
+		}
 		if err := sub.Flags().MarkHidden("linters"); err != nil {
 			panic(fmt.Sprintf("hide --linters on %s: %v", entry.subcmd, err))
 		}

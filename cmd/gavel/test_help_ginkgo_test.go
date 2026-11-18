@@ -5,6 +5,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/spf13/pflag"
 )
 
 var _ = Describe("gavel test --help", func() {
@@ -25,6 +26,27 @@ var _ = Describe("gavel test --help", func() {
 			))
 		},
 		Entry("gavel test", []string{"test"}),
-		Entry("gavel test ginkgo", []string{"test", "ginkgo"}),
 	)
+	It("describes every visible test option", func() {
+		testCmd.LocalFlags().VisitAll(func(flag *pflag.Flag) {
+			if !flag.Hidden {
+				Expect(flag.Usage).NotTo(BeEmpty(), "--%s", flag.Name)
+			}
+		})
+	})
+	It("gives each public test command its own usage and examples", func() {
+		for _, cmd := range testCmd.Commands() {
+			if !cmd.IsAvailableCommand() {
+				continue
+			}
+			Expect(cmd.Long).NotTo(Equal(testCmd.Long), cmd.CommandPath())
+			Expect(cmd.Example).To(ContainSubstring(cmd.CommandPath()+" "), cmd.CommandPath())
+			Expect(cmd.UsageString()).To(ContainSubstring("Use gavel --help to show arguments available to all commands."))
+			if cmd.Name() == "ansi" {
+				Expect(cmd.UseLine()).To(ContainSubstring("[flags] [out.json] -- <command> [args...]"))
+			} else {
+				Expect(cmd.UseLine()).To(ContainSubstring("[path...]"), cmd.CommandPath())
+			}
+		}
+	})
 })

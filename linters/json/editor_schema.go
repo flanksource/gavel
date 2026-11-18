@@ -118,6 +118,10 @@ func EditorSchema(ctx context.Context, data []byte, path, override string) (map[
 					if err := resolveExtensionRefs(child, base); err != nil {
 						return nil, err
 					}
+				} else if key == "x-clicky-preview" {
+					if err := resolvePreviewRef(child, base); err != nil {
+						return nil, err
+					}
 				} else {
 					next, err := rewrite(child, base)
 					if err != nil {

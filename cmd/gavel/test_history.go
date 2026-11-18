@@ -39,6 +39,8 @@ func runTestHistory(ctx context.Context, opts testHistoryOptions) (any, error) {
 
 func init() {
 	cmd := clicky.AddNamedCommandWithContext("history", testCmd, testHistoryOptions{}, runTestHistory)
+	cmd.Use = "history [flags] [path...]"
 	cmd.Short = "Show test execution history from .gavel snapshots"
+	cmd.Example = "  gavel test history ./testrunner\n  gavel test history ./testrunner/runner_test.go"
 	cmd.Flags().SetInterspersed(true)
 }
