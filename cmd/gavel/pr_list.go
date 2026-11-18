@@ -391,6 +391,9 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	if filterStore != nil {
 		srv.SetFilterStore(filterStore)
 	}
+	if runtime.DB != nil {
+		srv.SetConnectionCatalog(runtime.DB)
+	}
 	srv.SetFixtureSchemaProvider(func() (any, error) {
 		return fixturesSchemaDocument()
 	})

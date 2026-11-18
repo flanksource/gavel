@@ -119,6 +119,9 @@ type hostedStack struct {
 // hostedDashboard builds the handler --auth clerk serves: the Authenticator in front of
 // one dashboard Server per organization, and an org-less Server for page loads.
 func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, cache *ghcache.Store) (hostedStack, error) {
+	// Each organization reaches its repositories with its own credentials, never the host's
+	// connection files or local catalog.
+	useLocalConnections(false)
 	interval, err := time.ParseDuration(opts.Interval)
 	if err != nil {
 		return hostedStack{}, fmt.Errorf("invalid interval %q: %w", opts.Interval, err)

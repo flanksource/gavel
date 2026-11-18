@@ -88,6 +88,7 @@ func newHostedFixture(t *testing.T, configure ...func(*DashboardOptions)) hosted
 		change(&opts)
 	}
 	require.NoError(t, opts.Validate())
+	t.Cleanup(func() { useLocalConnections(true) })
 	stack, err := hostedDashboard(t.Context(), opts, opened.Gorm(), cache)
 	require.NoError(t, err)
 	t.Cleanup(stack.stop)
