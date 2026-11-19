@@ -556,7 +556,7 @@ table "todo_pr_links" {
   }
 
   check "todo_pr_links_provider_check" {
-    expr = "provider = ANY (ARRAY['github'::text, 'azure'::text])"
+    expr = "provider = ANY (ARRAY['github'::text, 'azure'::text, 'gitlab'::text])"
   }
   check "todo_pr_links_repo_normalized" {
     expr = "repo <> '' AND repo = lower(repo)"

@@ -64,7 +64,8 @@ func (a *Account) SearchGroups(context.Context, uuid.UUID) ([]github.RepoGroup, 
 }
 
 // SyncAll makes org's repositories without an installation match the served ones. One the
-// server no longer serves is deleted, unless a sandbox run refers to it.
+// server no longer serves is deleted, unless a sandbox run refers to it or a git connection
+// brings it.
 func (a *Account) SyncAll(ctx context.Context, org uuid.UUID) error {
 	repos, err := a.resolve(ctx)
 	if err != nil {
@@ -83,7 +84,8 @@ func (a *Account) SyncAll(ctx context.Context, org uuid.UUID) error {
 				return fmt.Errorf("record repository %s: %w", repo.FullName, err)
 			}
 		}
-		gone := tx.Where("org_id = ? AND source = 'github' AND installation_id IS NULL", org).
+		// A repository a git connection brings is the connection's to remove.
+		gone := tx.Where("org_id = ? AND source = 'github' AND installation_id IS NULL AND connection_id IS NULL", org).
 			Where("NOT EXISTS (SELECT 1 FROM sandbox_runs WHERE sandbox_runs.repo_id = repos.id)")
 		if len(ids) > 0 {
 			gone = gone.Where("github_repo_id NOT IN ?", ids)

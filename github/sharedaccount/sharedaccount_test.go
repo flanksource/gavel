@@ -136,3 +136,16 @@ func TestGHTokenReadsTheGHCLIsLogin(t *testing.T) {
 	_, err = sharedaccount.GHToken()
 	require.ErrorIs(t, err, sharedaccount.ErrNoLogin, "gh is installed but not logged in")
 }
+
+func TestARepositoryAConnectionHoldsStaysWhenTheServerStopsNamingIt(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	require.NoError(t, sharedaccount.New(f.db, []string{"acme/api", "acme/web"}, cliToken).SyncAll(ctx, f.orgA))
+	connection := uuid.New()
+	require.NoError(t, f.db.Exec(`INSERT INTO connections (id, org_id, namespace, name, type, key_id, payload) VALUES (?, ?, '', 'acme', 'github', 'k', '\x00')`,
+		connection, f.orgA).Error)
+	require.NoError(t, f.db.Exec(`UPDATE repos SET connection_id = ? WHERE org_id = ? AND name = 'acme/web'`, connection, f.orgA).Error)
+
+	require.NoError(t, sharedaccount.New(f.db, []string{"acme/api"}, cliToken).SyncAll(ctx, f.orgA))
+	assert.Equal(t, []string{"acme/api", "acme/web"}, f.repoNames(t, f.orgA), "the connection still brings web")
+}

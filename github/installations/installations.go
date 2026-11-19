@@ -110,7 +110,9 @@ func (s Store) SyncRepos(ctx context.Context, org uuid.UUID, installationID int6
 		if len(ids) > 0 {
 			gone = gone.Where("github_repo_id NOT IN ?", ids)
 		}
-		if err := gone.Session(&gorm.Session{}).
+		// A repository a sandbox run refers to, or a git connection also brings, is kept,
+		// without its installation.
+		if err := gone.Session(&gorm.Session{}).Where("connection_id IS NULL").
 			Where("NOT EXISTS (SELECT 1 FROM sandbox_runs WHERE sandbox_runs.repo_id = repos.id)").
 			Delete(&repoRow{}).Error; err != nil {
 			return fmt.Errorf("remove repositories the installation no longer grants: %w", err)

@@ -146,7 +146,8 @@ table "repos" {
     null = false
     type = uuid
   }
-  # <repo> for pushed repositories, <owner>/<repo> for GitHub.
+  # <repo> for pushed repositories, <owner>/<repo> for GitHub, the provider's full name
+  # (group/project, Project/repo) for a connection's.
   column "name" {
     null = false
     type = text
@@ -162,6 +163,23 @@ table "repos" {
   column "installation_id" {
     null = true
     type = bigint
+  }
+  # The git connection the repository comes from. A GitHub repository its installation also
+  # grants keeps both; deleting the connection keeps a repository sandbox runs refer to.
+  column "connection_id" {
+    null = true
+    type = uuid
+  }
+  # Where a connection's repository is cloned from.
+  column "remote_url" {
+    null = true
+    type = text
+  }
+  # The provider's stable id for a connection's repository (git.RepositoryInfo.ID), or its
+  # remote URL for a plain git connection.
+  column "provider_repo_id" {
+    null = true
+    type = text
   }
   column "default_branch" {
     null = false
@@ -191,6 +209,12 @@ table "repos" {
     on_delete = SET_NULL
     on_update = NO_ACTION
   }
+  foreign_key "repos_connection_id_fkey" {
+    columns = [column.connection_id]
+    ref_columns = [table.connections.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
   index "repos_org_source_name_key" {
     unique = true
     columns = [column.org_id, column.source, column.name]
@@ -200,7 +224,12 @@ table "repos" {
     columns = [column.org_id, column.github_repo_id]
     where = "github_repo_id IS NOT NULL"
   }
-  check "repos_source_valid" { expr = "source IN ('push', 'github')" }
+  index "repos_org_connection_repo_key" {
+    unique = true
+    columns = [column.org_id, column.connection_id, column.provider_repo_id]
+    where = "connection_id IS NOT NULL"
+  }
+  check "repos_source_valid" { expr = "source IN ('push', 'github', 'gitlab', 'azure_devops', 'git')" }
 }
 
 # Per-org dashboard settings; replaces ~/.config/gavel/ui.settings.json in hosted mode.

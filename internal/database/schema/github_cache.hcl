@@ -321,7 +321,7 @@ table "pull_requests" {
   }
 
   check "pull_requests_provider_check" {
-    expr = "provider = ANY (ARRAY['github'::text, 'azure'::text])"
+    expr = "provider = ANY (ARRAY['github'::text, 'azure'::text, 'gitlab'::text])"
   }
 }
 

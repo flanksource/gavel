@@ -185,3 +185,22 @@ func TestRepoToken(t *testing.T) {
 	_, err = f.store.RepoToken(context.Background(), 0)
 	require.EqualError(t, err, "no GitHub App installation grants the repository any more; link one that does")
 }
+
+func TestAConnectionKeepsARepositoryItsInstallationStopsGranting(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	require.NoError(t, f.store.Link(ctx, f.orgA, f.user, github.Installation{ID: 42, Account: github.InstallationAccount{Login: "acme", Type: "Organization"}}))
+	f.github.Install(42, acmeAccount, acme(1, "api"), acme(2, "web"))
+	require.NoError(t, f.store.SyncRepos(ctx, f.orgA, 42))
+	connection := uuid.New()
+	require.NoError(t, f.db.Exec(`INSERT INTO connections (id, org_id, namespace, name, type, key_id, payload) VALUES (?, ?, '', 'acme', 'github', 'k', '\x00')`,
+		connection, f.orgA).Error)
+	require.NoError(t, f.db.Exec(`UPDATE repos SET connection_id = ? WHERE name = 'acme/web'`, connection).Error)
+
+	f.github.Install(42, acmeAccount, acme(1, "api"))
+	require.NoError(t, f.store.SyncRepos(ctx, f.orgA, 42))
+	assert.Equal(t, []string{"acme/api linked", "acme/web unlinked"}, f.repoRows(t, f.orgA), "the connection still brings web")
+	var held struct{ ConnectionID uuid.UUID }
+	require.NoError(t, f.db.Raw(`SELECT connection_id FROM repos WHERE name = 'acme/web'`).Scan(&held).Error)
+	assert.Equal(t, connection, held.ConnectionID)
+}
