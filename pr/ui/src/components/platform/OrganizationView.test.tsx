@@ -24,6 +24,7 @@ const bodies: Record<string, unknown> = {
   '/api/platform/captain-history?days=30': { days: [], failures: [], live: [] },
   '/api/platform/substrate/inventory': { workers: [], actors: [] },
   '/api/platform/github': { app: { id: 1, slug: 'gavel-dev' }, installations: [] },
+  '/api/platform/orgs/o-alpha/sandbox-size': { size: null, default: { cpuMillicores: 2000, memoryBytes: 4 * 2 ** 30 } },
 };
 
 beforeEach(() => {
@@ -46,6 +47,7 @@ it('shows the organization\'s summary and only its rows in each panel', async ()
   expect(screen.getByText('3 repositories (1 pushed)')).toBeTruthy();
   expect(screen.getByText(`Last run ${formatDateTime('2026-11-09T10:00:00Z')}`)).toBeTruthy();
   expect(await screen.findByText('2 runs'), 'Beta\'s 9 runs are left out').toBeTruthy();
+  expect(await screen.findByText('2 CPU · 4 GiB per environment, the default')).toBeTruthy();
 });
 
 it('goes back to every organization', async () => {
