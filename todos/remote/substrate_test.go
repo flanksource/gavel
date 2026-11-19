@@ -19,6 +19,8 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/sandbox/substraterun"
+	"github.com/flanksource/captain/pkg/substrate"
+	"github.com/flanksource/captain/pkg/substrate/substratetest"
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/internal/database"
@@ -226,6 +228,26 @@ func TestSubstrateRunnerRunsAHostedStepOnSubstrate(t *testing.T) {
 
 	branch := sandbox.RunBranch(hosted.todo, id)
 	assert.Equal(t, result.Response.Workspace.Worktree.Head, gitRun(t, hosted.gitDir, "rev-parse", "refs/heads/"+branch), "the run's branch is the repository's")
+}
+
+func TestSubstrateRunnerCreatesTheRunsEnvironmentFromItsOrganizationsTemplate(t *testing.T) {
+	env := &environment{t: t}
+	hosted := newHostedRun(t, env)
+	server := substratetest.Start(t)
+	server.AddTemplate("ate-env", "gavel-runner", substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	client, err := substrate.Dial(server.Options())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	templates := &sandbox.OrgTemplates{DB: hosted.runner.Dispatcher.DB, Client: client, Atespace: "ate-env", Base: "gavel-runner"}
+	hosted.runner.Dispatcher.Templates = templates
+	hosted.runner.Backend["template"] = "gavel-runner"
+	want, err := templates.Resolve(t.Context(), hosted.org)
+	require.NoError(t, err)
+
+	_, err = hosted.runner.Run(t.Context(), step())
+	require.NoError(t, err)
+	assert.Equal(t, want.Name, env.selection.Options["template"], "the organization's template replaces the backend's")
+	assert.Equal(t, "gavel-runner", hosted.runner.Backend["template"], "the backend shared by every run keeps its own")
 }
 
 func TestSubstrateRunnerBoundsARunByTheDispatchersTimeout(t *testing.T) {

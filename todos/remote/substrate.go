@@ -99,7 +99,7 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 
 // runOptions are the substrate backend's options with the run's own: its environment, the commit
 // it starts from and the branch its commits come back on, gavel's program, the organization's
-// model keys, and the run's lifetime.
+// model keys and template, and the run's lifetime.
 func (r *SubstrateRunner) runOptions(recorded *sandbox.RecordedRun, sha, branch string) map[string]any {
 	options := maps.Clone(r.Backend)
 	options["environment"] = sandbox.JobName(recorded.ID)
@@ -111,6 +111,9 @@ func (r *SubstrateRunner) runOptions(recorded *sandbox.RecordedRun, sha, branch 
 	options["env"] = map[string]string{"GAVEL_DB": "off", "CI": "1"}
 	options["credentials"] = sandbox.SubstrateCredentialOptions(recorded.Credentials)
 	options["maxLifetime"] = r.Dispatcher.RunLifetime().String()
+	if recorded.Template != "" {
+		options["template"] = recorded.Template
+	}
 	return options
 }
 

@@ -343,6 +343,21 @@ table "sandbox_runs" {
     type = text
     default = ""
   }
+  # The substrate template the run's environment was created from, and the size it ran at; empty
+  # and null on other backends.
+  column "template" {
+    null    = false
+    type    = text
+    default = ""
+  }
+  column "cpu_millicores" {
+    null = true
+    type = bigint
+  }
+  column "memory_bytes" {
+    null = true
+    type = bigint
+  }
   # The RunSpec the run API serves to the job (sandbox.RunSpec).
   column "spec" {
     null    = false

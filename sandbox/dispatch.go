@@ -60,6 +60,9 @@ type Dispatcher struct {
 	// brings the source into the job, and has the job's runner clone it from the checkout the job
 	// starts in.
 	Sources *Sources
+	// Templates, when set, creates each run's environment from its organization's substrate
+	// template, whose name and size the run records.
+	Templates *OrgTemplates
 }
 
 // ErrNoModelKey refuses an agent run whose organization has no model key.
@@ -142,7 +145,7 @@ func (d *Dispatcher) Start(ctx context.Context, scope tenant.Scope, spec RunSpec
 // StartRun is Start for a run whose ID the caller chose, so it can be ready for the run's
 // messages before its job starts.
 func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec, output io.Writer) (*Run, error) {
-	credentials, err := d.record(ctx, id, scope, spec)
+	recorded, err := d.record(ctx, id, scope, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -156,8 +159,9 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 		Command:     []string{"gavel", "runner", "exec", "--run", run.ID.String()},
 		Env:         map[string]string{"GAVEL_SERVER": d.Server, "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"},
 		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": d.runToken(run.ID, scope.OrgID)},
-		Credentials: credentials,
+		Credentials: recorded.credentials,
 		Limits:      limits,
+		Template:    recorded.template.Name,
 	}
 	for key, value := range d.SecretEnv {
 		if key != "GAVEL_RUN_TOKEN" {
@@ -213,29 +217,45 @@ func (d *Dispatcher) jobSource(ctx context.Context, scope tenant.Scope, spec Run
 	return &JobSource{GitDir: dir, Commit: commit}, nil
 }
 
-// record files run id as queued, with its organization's credentials, which it returns.
-func (d *Dispatcher) record(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec) ([]substrate.Credential, error) {
+// recordedRun is what a run is given when it is recorded: its organization's credentials, and
+// the template its environment is created from, which is empty without org templates.
+type recordedRun struct {
+	credentials []substrate.Credential
+	template    OrgTemplate
+}
+
+// record files run id as queued, with its organization's credentials and template.
+func (d *Dispatcher) record(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec) (recordedRun, error) {
 	if !contains(runKinds, spec.Kind) {
-		return nil, fmt.Errorf("sandbox run kind %q is not one of %s", spec.Kind, strings.Join(runKinds, ", "))
+		return recordedRun{}, fmt.Errorf("sandbox run kind %q is not one of %s", spec.Kind, strings.Join(runKinds, ", "))
 	}
 	credentials, err := d.credentials(ctx, id, scope.OrgID, spec.Kind)
 	if err != nil {
-		return nil, err
+		return recordedRun{}, err
+	}
+	recorded := recordedRun{credentials: credentials}
+	var cpu, memory *int64
+	if d.Templates != nil {
+		if recorded.template, err = d.Templates.Resolve(ctx, scope.OrgID); err != nil {
+			return recordedRun{}, fmt.Errorf("start sandbox run %s: %w", id, err)
+		}
+		cpu, memory = &recorded.template.Size.CPUMillicores, &recorded.template.Size.MemoryBytes
 	}
 	encoded, err := json.Marshal(spec)
 	if err != nil {
-		return nil, fmt.Errorf("encode the run spec: %w", err)
+		return recordedRun{}, fmt.Errorf("encode the run spec: %w", err)
 	}
 	var repo *uuid.UUID
 	if spec.RepoID != uuid.Nil {
 		repo = &spec.RepoID
 	}
-	if err := d.DB.WithContext(ctx).Exec(`INSERT INTO sandbox_runs (id, org_id, user_id, repo_id, kind, ref, sha, todo_id, status, backend, spec)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
-		id, scope.OrgID, scope.UserID, repo, spec.Kind, spec.Ref, spec.SHA, spec.TodoID, d.Executor.Name(), string(encoded)).Error; err != nil {
-		return nil, fmt.Errorf("record sandbox run: %w", err)
+	if err := d.DB.WithContext(ctx).Exec(`INSERT INTO sandbox_runs (id, org_id, user_id, repo_id, kind, ref, sha, todo_id, status, backend, spec, template, cpu_millicores, memory_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+		id, scope.OrgID, scope.UserID, repo, spec.Kind, spec.Ref, spec.SHA, spec.TodoID, d.Executor.Name(), string(encoded),
+		recorded.template.Name, cpu, memory).Error; err != nil {
+		return recordedRun{}, fmt.Errorf("record sandbox run: %w", err)
 	}
-	return credentials, nil
+	return recorded, nil
 }
 
 // runToken is the token run in org calls the run API with, good for the run's lifetime.
@@ -251,6 +271,9 @@ type RecordedRun struct {
 	Token string
 	// Credentials are its organization's model keys, which substrate's egress gateway injects.
 	Credentials []substrate.Credential
+	// Template is the substrate template its environment is created from, its organization's;
+	// empty is the backend's own.
+	Template string
 	// Log takes the run's output, which is stored as its log and shown on its task.
 	Log    io.Writer
 	finish func(succeeded bool)
@@ -262,7 +285,7 @@ func (r *RecordedRun) Finish(succeeded bool) { r.finish(succeeded) }
 // RecordRun files run id as running, for a run that executes elsewhere: it signs the run's token,
 // gives it its organization's credentials, and stores what is written to its Log as its log.
 func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec) (*RecordedRun, error) {
-	credentials, err := d.record(ctx, id, scope, spec)
+	recorded, err := d.record(ctx, id, scope, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +304,7 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 		})
 		_, _ = typed.GetResult()
 	}()
-	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: credentials, Log: writer, finish: func(succeeded bool) {
+	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: recorded.credentials, Template: recorded.template.Name, Log: writer, finish: func(succeeded bool) {
 		_ = writer.Close()
 		<-stored
 		status := "succeeded"
