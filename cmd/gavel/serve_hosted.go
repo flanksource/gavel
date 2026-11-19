@@ -230,6 +230,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 			platformAPI.Substrate = inventory
 		}
 	}
+	if dispatcher != nil && dispatcher.Templates != nil {
+		platformAPI.Sizes = dispatcher.Templates
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/platform/", platformAPI.Handler())
 	if app != nil {
