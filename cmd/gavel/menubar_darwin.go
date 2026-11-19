@@ -23,6 +23,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
+const menuBarSupported = true
+
 func runMenuBar(srv *ui.Server, dashboardURL string) error {
 	if dashboardURL == "" {
 		return fmt.Errorf("menu bar requires a dashboard URL")

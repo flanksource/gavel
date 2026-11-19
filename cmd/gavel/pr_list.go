@@ -516,7 +516,10 @@ func runDashboardFrontend(ctx context.Context, srv *ui.Server, dashboardURL stri
 		testui.OpenBrowser(dashboardURL)
 	}
 	if opts.MenuBar {
-		return runMenuBar(srv, dashboardURL)
+		if menuBarSupported {
+			return runMenuBar(srv, dashboardURL)
+		}
+		logger.Warnf("--menu-bar ignored: menu bar requires a macOS build with CGO_ENABLED=1 and -tags gavel_menubar (or task build:prod)")
 	}
 
 	<-ctx.Done()
