@@ -45,6 +45,9 @@ it('shows each budget\'s use in its unit, and the ones used up', async () => {
   expect(screen.getByText('Model cost in the last 30 days: $4.50 of $50.00')).toBeTruthy();
   expect(screen.getByText(/Only an organization admin can change budgets/)).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Set budget' })).toBeNull();
+  expect(screen.getByText(/A used-up budget refuses new runs and stops the ones running/)).toBeTruthy();
+  expect(screen.getByText(/token and model cost budgets hold back agent runs only/)).toBeTruthy();
+  expect(screen.getByText(/waits its turn for room/)).toBeTruthy();
 });
 
 it('says when there are no budgets', async () => {
