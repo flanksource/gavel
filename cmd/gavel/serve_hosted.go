@@ -181,7 +181,11 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	}
 	if dispatcher != nil {
 		if sweeper, ok := dispatcher.Executor.(sandbox.Sweeper); ok {
-			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime())
+			var templates templateSweeper
+			if dispatcher.Templates != nil {
+				templates = dispatcher.Templates
+			}
+			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime(), templates)
 		}
 	}
 
