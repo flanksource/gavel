@@ -39,6 +39,14 @@ func keptTestRun(dir, runID string, withStore bool) {
 func keptWatchedTestRun(dir, runID string) *traces.ProcessRefs {
 	host, err := traces.Open(dir, runID)
 	Expect(err).ToNot(HaveOccurred())
+	// A failure before the store is closed below must still close it, or its owner outlives the
+	// spec, writing to a directory that is gone.
+	closed := false
+	DeferCleanup(func() {
+		if !closed {
+			Expect(host.Close(context.Background())).To(Succeed())
+		}
+	})
 	trace, err := host.StartProcessTrace(traces.ProcessTraceOptions{RootPID: os.Getpid(), Facets: true})
 	Expect(err).ToNot(HaveOccurred())
 	Expect(trace.CheckpointStacks(context.Background(), stacks.CheckpointParams{Reason: "manual"})).To(Succeed())
@@ -49,6 +57,7 @@ func keptWatchedTestRun(dir, runID string) *traces.ProcessRefs {
 	refs := trace.Refs()
 	Expect(trace.Stop(context.Background())).To(Succeed())
 	Expect(host.Close(context.Background())).To(Succeed())
+	closed = true
 	writeTestRunSnapshot(dir, runID, &refs)
 	return &refs
 }
