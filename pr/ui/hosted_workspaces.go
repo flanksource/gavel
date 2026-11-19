@@ -32,7 +32,7 @@ type HostedWorkspaces struct {
 // repoQuery selects org's repositories, shaped as the sandbox reads them.
 func (w HostedWorkspaces) repoQuery(ctx context.Context, org uuid.UUID) *gorm.DB {
 	return w.DB.WithContext(ctx).Table("repos").
-		Select("id, org_id AS org, source, name, COALESCE(github_repo_id, 0) AS git_hub_repo_id, COALESCE(installation_id, 0) AS installation_id").
+		Select(sandbox.RepoColumns).
 		Where("org_id = ?", org)
 }
 

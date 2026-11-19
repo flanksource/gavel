@@ -4,6 +4,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	commonsgit "github.com/flanksource/commons-db/git"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
@@ -151,6 +153,31 @@ func TestHostedWorkspacesRunInSandboxes(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, workspace.Options.SandboxedRuns, "a hosted workspace's runs execute in sandboxes")
+}
+
+func TestAHostedWorkspaceOfAConnectionsRepositoryChecksOutThroughIt(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	dataDir := t.TempDir()
+	pushed := pushedRepo(t, db, org, dataDir, "api")
+	remote := "file://" + filepath.Join(dataDir, "repos", org.String(), pushed.String()+".git")
+	connection := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO connections (id, org_id, namespace, name, type, key_id, payload) VALUES (?, ?, '', 'acme', 'gitlab', 'k', '\x00')`,
+		connection, org).Error)
+	var repo struct{ ID uuid.UUID }
+	require.NoError(t, db.Raw(`INSERT INTO repos (org_id, name, source, connection_id, remote_url, provider_repo_id) VALUES (?, 'acme/api', 'gitlab', ?, ?, '31') RETURNING id`,
+		org, connection, remote).Scan(&repo).Error)
+	var asked []uuid.UUID
+	sources := &sandbox.Sources{DataDir: dataDir, Connection: func(_ context.Context, held sandbox.Repo) (*commonsgit.Repository, error) {
+		asked = append(asked, *held.ConnectionID)
+		return commonsgit.NewRepository(commonsgit.RepositoryOptions{URL: held.RemoteURL})
+	}}
+
+	workspace, err := HostedWorkspaces{DB: db, Sources: sources}.Resolve(t.Context(), org, "repo:"+repo.ID.String())
+	require.NoError(t, err)
+	readme, err := os.ReadFile(filepath.Join(workspace.Options.RootPath, "README.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "api", string(readme))
+	assert.Equal(t, []uuid.UUID{connection}, asked, "fetched through the repository's connection")
 }
 
 func TestHostedTodoListExcludesOnlyTheCallersHiddenProjects(t *testing.T) {
