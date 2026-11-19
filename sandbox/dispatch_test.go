@@ -552,7 +552,11 @@ func TestAnAgentRunWaitsForRoomWritingWhyToItsLog(t *testing.T) {
 		recorded <- run
 	}()
 
-	require.Eventually(t, func() bool { status, _ := runMessage(t, db, id); return status == "queued" }, 5*time.Second, 10*time.Millisecond)
+	// The run is recorded as queued, then why it waits.
+	require.Eventually(t, func() bool {
+		status, message := runMessage(t, db, id)
+		return status == "queued" && message != ""
+	}, 5*time.Second, 10*time.Millisecond)
 	_, message := runMessage(t, db, id)
 	assert.Contains(t, message, "hold 4 of its 4 concurrent GiB")
 	holding.Release()

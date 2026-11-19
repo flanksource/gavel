@@ -205,12 +205,10 @@ func (a *Admission) limits(ctx context.Context, org uuid.UUID, demand Demand) (l
 	var caps limits
 	var refusals []string
 	for _, status := range statuses {
-		modelBudget := status.Resource == budget.Tokens || status.Resource == budget.USD
 		switch {
-		case modelBudget && !demand.ModelCalls:
+		case isModelBudget(status.Resource) && !demand.ModelCalls:
 		case status.Kind == budget.Cumulative && status.Reached():
-			refusals = append(refusals, fmt.Sprintf("this organization has used %s of its %s %s budget since %s",
-				amount(status.Budget, status.Used), amount(status.Budget, status.Amount), resourceName(status.Resource), status.Since.UTC().Format(time.RFC3339)))
+			refusals = append(refusals, usedUp(status))
 		case status.Kind == budget.Concurrent:
 			want := float64(size.CPUMillicores) / 1000
 			if status.Resource == budget.Memory {
@@ -229,6 +227,17 @@ func (a *Admission) limits(ctx context.Context, org uuid.UUID, demand Demand) (l
 		return limits{}, fmt.Errorf("%w: %s; an organization admin can raise it", ErrBudgetUsedUp, strings.Join(refusals, "; "))
 	}
 	return caps, nil
+}
+
+// usedUp says how much of a used-up cumulative budget the organization used, and since when.
+func usedUp(status budget.Status) string {
+	return fmt.Sprintf("this organization has used %s of its %s %s budget since %s",
+		amount(status.Budget, status.Used), amount(status.Budget, status.Amount), resourceName(status.Resource), status.Since.UTC().Format(time.RFC3339))
+}
+
+// isModelBudget reports whether a budget counts model calls, which only agent runs make.
+func isModelBudget(resource budget.Resource) bool {
+	return resource == budget.Tokens || resource == budget.USD
 }
 
 // fit reports whether a run of size fits beside held.
