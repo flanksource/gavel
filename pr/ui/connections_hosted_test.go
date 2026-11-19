@@ -55,4 +55,18 @@ func TestAHostedOrgKeepsItsGitConnections(t *testing.T) {
 
 	status, body = hostedCall(t, base, http.MethodPost, "/api/connections/"+row.ID.String()+"/validate", admin, "org:admin", nil)
 	assert.Equal(t, http.StatusNotFound, status, "validating dials the connection, which hosted mode doesn't yet guard: %v", body)
+
+	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, connection_id, provider_repo_id) VALUES (?, 'acme/api', 'git', ?, 'https://example.com/acme/api.git')`,
+		org, row.ID).Error)
+	deleteRequest, err := http.NewRequest(http.MethodDelete, base+"/api/connections/"+row.ID.String(), nil)
+	require.NoError(t, err)
+	deleteRequest.Header.Set("X-Test-User", admin.String())
+	deleteRequest.Header.Set("X-Test-Role", "org:admin")
+	deleted, err := http.DefaultClient.Do(deleteRequest)
+	require.NoError(t, err)
+	require.NoError(t, deleted.Body.Close())
+	require.Equal(t, http.StatusNoContent, deleted.StatusCode)
+	var repos int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM repos WHERE org_id = ?`, org).Scan(&repos).Error)
+	assert.Zero(t, repos, "deleting the connection removes the repositories only it brings")
 }

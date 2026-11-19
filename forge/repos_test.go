@@ -173,3 +173,37 @@ func TestAnOrgWithoutGitConnectionsSyncsWithoutAKey(t *testing.T) {
 	require.NoError(t, forge.SyncRepos(context.Background(), db, scope, git.ClientOptions{}))
 	assert.Empty(t, held(t, db, scope.OrgID))
 }
+
+func TestDeletingAConnectionRemovesTheRepositoriesOnlyItBrings(t *testing.T) {
+	db := catalog(t)
+	scope := hostedOrg(t, db)
+	gitlab := fakeListing(t, "/api/v4/groups/acme/projects")
+	gitlab.set(`[{"id":31,"path":"api","path_with_namespace":"acme/api","http_url_to_repo":"https://gitlab.example.com/acme/api.git","namespace":{"full_path":"acme"}},
+		{"id":32,"path":"web","path_with_namespace":"acme/web","http_url_to_repo":"https://gitlab.example.com/acme/web.git","namespace":{"full_path":"acme"}}]`)
+	saveFor(t, db, scope, models.Connection{Name: "acme-gitlab", Type: models.ConnectionTypeGitlab, URL: gitlab.URL, Password: "glpat",
+		InsecureTLS: true, Properties: map[string]string{"group": "acme"}})
+	require.NoError(t, db.Exec(`INSERT INTO github_installations (id, org_id, account_login, account_type) VALUES (42, ?, 'acme', 'Organization')`, scope.OrgID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, github_repo_id, installation_id) VALUES (?, 'acme/app', 'github', 101, 42)`, scope.OrgID).Error)
+	github := fakeListing(t, "/orgs/acme/repos")
+	github.set(`[{"id":101,"name":"app","full_name":"acme/app","clone_url":"https://github.com/acme/app.git","default_branch":"main"}]`)
+	saveFor(t, db, scope, models.Connection{Name: "acme-github", Type: models.ConnectionTypeGithub, URL: github.URL, Password: "ghp",
+		InsecureTLS: true, Properties: map[string]string{"organization": "acme"}})
+	require.NoError(t, forge.SyncRepos(context.Background(), db, scope, git.ClientOptions{}))
+	var web struct{ ID uuid.UUID }
+	require.NoError(t, db.Raw(`SELECT id FROM repos WHERE org_id = ? AND name = 'acme/web'`, scope.OrgID).Scan(&web).Error)
+	require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, repo_id, kind, status, backend) VALUES (?, ?, ?, 'test', 'succeeded', 'docker')`,
+		uuid.New(), scope.OrgID, web.ID).Error)
+
+	require.NoError(t, forge.DeleteConnection(context.Background(), db, scope, "acme-gitlab"))
+	require.NoError(t, forge.DeleteConnection(context.Background(), db, scope, "acme-github"))
+	installation := int64(42)
+	assert.Equal(t, []heldRepo{
+		{Name: "acme/app", Source: "github", ProviderRepoID: "101", RemoteURL: "https://github.com/acme/app.git", InstallationID: &installation},
+		{Name: "acme/web", Source: "gitlab", ProviderRepoID: "32", RemoteURL: "https://gitlab.example.com/acme/web.git"},
+	}, held(t, db, scope.OrgID), "api is gone; web is kept for its run and app for its installation, both without the connection")
+	var left int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM connections WHERE org_id = ?`, scope.OrgID).Scan(&left).Error)
+	assert.Zero(t, left)
+
+	require.ErrorContains(t, forge.DeleteConnection(context.Background(), db, scope, "acme-gitlab"), `connection "acme-gitlab"`)
+}

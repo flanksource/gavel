@@ -73,16 +73,48 @@ func syncConnection(ctx context.Context, db *gorm.DB, org uuid.UUID, connection 
 		if len(ids) > 0 {
 			gone = gone.Where("provider_repo_id NOT IN ?", ids)
 		}
-		if err := gone.Session(&gorm.Session{}).Where("installation_id IS NULL").
-			Where("NOT EXISTS (SELECT 1 FROM sandbox_runs WHERE sandbox_runs.repo_id = repos.id)").
-			Delete(&repoRow{}).Error; err != nil {
-			return fmt.Errorf("remove the repositories connection %q no longer lists: %w", connection.Name, err)
-		}
-		if err := gone.Session(&gorm.Session{}).Updates(map[string]any{"connection_id": nil, "updated_at": gorm.Expr("now()")}).Error; err != nil {
-			return fmt.Errorf("unlink the repositories connection %q no longer lists: %w", connection.Name, err)
+		if err := releaseRepos(gone); err != nil {
+			return fmt.Errorf("release the repositories connection %q no longer lists: %w", connection.Name, err)
 		}
 		return nil
 	})
+}
+
+// DeleteConnection deletes scope's connection reference and, in the same transaction, the
+// repositories it brings: one a sandbox run refers to, or its installation grants, is kept
+// without the connection.
+func DeleteConnection(ctx context.Context, db *gorm.DB, scope tenant.Scope, reference string) error {
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		store, closeStore, err := connections.OpenStore(ctx, connections.Options{DB: tx, Scope: scope})
+		if err != nil {
+			return fmt.Errorf("open the organization's connection catalog: %w", err)
+		}
+		connection, err := store.ResolveConnection(dbcontext.NewContext(ctx), reference)
+		if err != nil {
+			return errors.Join(err, closeStore())
+		}
+		if err := releaseRepos(tx.Model(&repoRow{}).Where("org_id = ? AND connection_id = ?", scope.OrgID, connection.ID)); err != nil {
+			return errors.Join(fmt.Errorf("release the repositories of connection %q: %w", connection.Name, err), closeStore())
+		}
+		if err := store.DeleteConnection(ctx, connection.ID.String()); err != nil {
+			return errors.Join(fmt.Errorf("delete connection %q: %w", connection.Name, err), closeStore())
+		}
+		return closeStore()
+	})
+}
+
+// releaseRepos lets go of the repositories selected: one a sandbox run refers to, or its
+// installation grants, is kept without its connection; the rest are deleted.
+func releaseRepos(selected *gorm.DB) error {
+	if err := selected.Session(&gorm.Session{}).Where("installation_id IS NULL").
+		Where("NOT EXISTS (SELECT 1 FROM sandbox_runs WHERE sandbox_runs.repo_id = repos.id)").
+		Delete(&repoRow{}).Error; err != nil {
+		return fmt.Errorf("remove them: %w", err)
+	}
+	if err := selected.Session(&gorm.Session{}).Updates(map[string]any{"connection_id": nil, "updated_at": gorm.Expr("now()")}).Error; err != nil {
+		return fmt.Errorf("unlink the ones kept: %w", err)
+	}
+	return nil
 }
 
 // repoRow names the repos table for gorm's query builder.

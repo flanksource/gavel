@@ -40,7 +40,7 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	result, err := connectionResult(service, w, r, scope, s.hosted)
+	result, err := connectionResult(service, db, w, r, scope, s.hosted)
 	if closeErr := close(); closeErr != nil {
 		writeJSONError(w, http.StatusServiceUnavailable, errors.Join(err, closeErr))
 		return
@@ -74,13 +74,16 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, safe)
 }
 
-func connectionResult(service *shared.Service, w http.ResponseWriter, r *http.Request, scope tenant.Scope, hosted bool) (any, error) {
+func connectionResult(service *shared.Service, db *gorm.DB, w http.ResponseWriter, r *http.Request, scope tenant.Scope, hosted bool) (any, error) {
 	ref := r.PathValue("reference")
 	switch {
 	case r.Method == http.MethodGet && ref == "":
 		return service.Inventory(shared.ListOptions{Type: r.URL.Query().Get("type")})
 	case r.Method == http.MethodGet:
 		return service.ResolveReference(ref)
+	case r.Method == http.MethodDelete && hosted:
+		// A hosted organization's repositories come from its connections, so they go with it.
+		return nil, forge.DeleteConnection(r.Context(), db, scope, ref)
 	case r.Method == http.MethodDelete:
 		return nil, service.Delete(ref)
 	case r.Method == http.MethodPost && ref != "":
