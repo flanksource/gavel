@@ -217,7 +217,7 @@ created from the runner image. The environment is deleted once the job exits or 
 
 ### Running the substrate e2e
 
-Two tests run on a live cluster, whose runner image must be this gavel's, since the environment
+These tests run on a live cluster, whose runner image must be this gavel's, since the environment
 runs its `gavel runner run-task`. `TestPushChecksRunOnSubstrate` (`pr/ui`) runs a failing and a
 passing push check through the dispatcher: each job runs in a checkout of the pushed commit, asks
 a run API on the host over its run's channel and exits with the check's verdict.
@@ -266,8 +266,15 @@ Then run:
 
 ```sh
 GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui \
-  -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate|TestHostedTodoRunsOnSubstrate'
+  -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate|TestHostedTodoRunsOnSubstrate|TestOrgBudgetsHoldOnSubstrate'
 ```
+
+`TestOrgBudgetsHoldOnSubstrate` (`pr/ui`) holds an organization's push checks to its budgets: they
+run from its own copy of the runner template at its size (1 core, 1 GiB, read from
+`/proc/meminfo`), a second check waits while the first holds the organization's one concurrent
+core and starts once it ends, and a used-up CPU budget stops a running check, deleting its
+environment, and refuses the next. It needs `gavel-e2e/gavel` to create and delete templates in
+`ate-env` (an `editor`), and deletes the template it made.
 
 `TestHostedTodoRunsOnSubstrate` runs a hosted todo's plan step whole in an environment against the
 real model, so the `gavel-runner` template's image must hold this tree's gavel; on failure it logs the environment's
