@@ -30,13 +30,16 @@ const (
 	DefaultDebounce = 250 * time.Millisecond
 	// DefaultConcurrency bounds the scans running at once.
 	DefaultConcurrency = 4
+	// scanTimeout bounds one background scan, which is also how long Close can wait for it.
+	scanTimeout = 2 * time.Minute
 )
 
 // Options configures a Tracker. Zero durations and concurrency take the
 // defaults.
 type Options struct {
 	Store *Store
-	// Context bounds every background scan: the process's root context.
+	// Context schedules background scans while it lasts: the process's root context. A scan
+	// running when it ends finishes; Close waits for it.
 	Context     context.Context
 	Hot         time.Duration
 	Idle        time.Duration
@@ -59,6 +62,8 @@ type Tracker struct {
 	sem                chan struct{}
 	resolve            singleflight.Group
 	watcher            *metadataWatcher
+	// scans are the background scans enqueue started.
+	scans sync.WaitGroup
 
 	mu      sync.Mutex
 	repos   map[string]*trackedRepo // by root dir
@@ -67,6 +72,8 @@ type Tracker struct {
 	focus   map[string]time.Time // worktree path → lease expiry
 	active  []string             // directories agents are working in
 	started bool
+	// closed stops enqueue from starting background scans.
+	closed bool
 	// unlocatable remembers directories that are not in a git repository.
 	unlocatable map[string]locateFailure
 }
@@ -402,6 +409,10 @@ func (t *Tracker) runStatus(ctx context.Context, repo *trackedRepo, path string,
 func (t *Tracker) enqueue(key jobKey, source string) {
 	scansEnqueued.WithLabelValues(jobKind(key), source).Inc()
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return
+	}
 	state := t.jobs[key]
 	if state == nil {
 		state = &jobState{}
@@ -413,8 +424,20 @@ func (t *Tracker) enqueue(key jobKey, source string) {
 		return
 	}
 	state.running = true
+	t.scans.Add(1)
 	t.mu.Unlock()
-	go t.drain(key, state)
+	go func() {
+		defer t.scans.Done()
+		t.drain(key, state)
+	}()
+}
+
+// Close stops starting background scans and returns once those running have finished.
+func (t *Tracker) Close() {
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
+	t.scans.Wait()
 }
 
 func (t *Tracker) drain(key jobKey, state *jobState) {
@@ -423,6 +446,11 @@ func (t *Tracker) drain(key jobKey, state *jobState) {
 		select {
 		case t.sem <- struct{}{}:
 		case <-t.ctx.Done():
+			return
+		}
+		if t.ctx.Err() != nil {
+			// The slot and the context's end were both ready.
+			<-t.sem
 			return
 		}
 		observeSince(scanQueueWait.WithLabelValues(jobKind(key)), queued)
@@ -452,10 +480,14 @@ func (t *Tracker) run(key jobKey) {
 	if repo == nil {
 		return
 	}
+	// The scan finishes even if the tracker's context ends meanwhile, rather than being
+	// cancelled partway through its queries.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.ctx), scanTimeout)
+	defer cancel()
 	var err error
 	if key.worktree == "" {
 		var changed bool
-		if changed, err = t.runRefs(t.ctx, repo, false); changed {
+		if changed, err = t.runRefs(ctx, repo, false); changed {
 			// A moved HEAD changes what is uncommitted; a new worktree has no
 			// status yet.
 			for _, path := range t.worktreesOf(repo) {
@@ -463,7 +495,7 @@ func (t *Tracker) run(key jobKey) {
 			}
 		}
 	} else {
-		err = t.runStatus(t.ctx, repo, key.worktree, false)
+		err = t.runStatus(ctx, repo, key.worktree, false)
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		logger.Warnf("git state: %v", err)

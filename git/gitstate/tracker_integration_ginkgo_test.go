@@ -26,6 +26,8 @@ type trackedRepo struct {
 	dsn           string
 	db            *gorm.DB
 	tracker       *gitstate.Tracker
+	// stop ends the tracker's context, as the process's shutdown does.
+	stop context.CancelFunc
 }
 
 func git(dir string, args ...string) string {
@@ -74,9 +76,12 @@ func newTrackedRepo(ctx context.Context, opts gitstate.Options) *trackedRepo {
 	commit(r.feature, "a.txt", "a1\na2\n", "feat: a")
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	DeferCleanup(cancel)
 	opts.Store, opts.Context = gitstate.NewStore(r.db), runCtx
-	r.tracker = gitstate.NewTracker(opts)
+	r.tracker, r.stop = gitstate.NewTracker(opts), cancel
+	DeferCleanup(func() {
+		cancel()
+		r.tracker.Close()
+	})
 	return r
 }
 
@@ -341,5 +346,41 @@ var _ = Describe("porcelain paths", func() {
 	It("lists each record's path and skips a rename's source", func() {
 		raw := []byte(" M a.txt\x00R  new.txt\x00old.txt\x00?? dir/u.txt\x00")
 		Expect(gitstate.PorcelainPaths(raw)).To(Equal([]string{"a.txt", "new.txt", "dir/u.txt"}))
+	})
+})
+
+var _ = Describe("Tracker shutdown", func() {
+	It("lets the background scan running when its context ends finish, and Close waits for it", func(ctx SpecContext) {
+		r := newTrackedRepo(ctx, gitstate.Options{})
+		_, err := r.tracker.State(ctx, r.root)
+		Expect(err).NotTo(HaveOccurred())
+		scanned := func() time.Time {
+			GinkgoHelper()
+			var at time.Time
+			Expect(r.db.Raw(`SELECT status_scanned_at FROM git_worktree_overview WHERE path = ?`, r.feature).Scan(&at).Error).To(Succeed())
+			return at
+		}
+		before := scanned()
+		// The worktree's next status scan waits on this lock.
+		lock := r.db.Begin()
+		Expect(lock.Exec(`LOCK TABLE git_worktree_overview IN SHARE MODE`).Error).To(Succeed())
+		DeferCleanup(func() { lock.Rollback() })
+
+		r.tracker.Touch(r.feature)
+		Eventually(func() int64 {
+			return r.count(`SELECT count(*) FROM pg_stat_activity WHERE pid <> pg_backend_pid()
+				AND wait_event_type = 'Lock' AND query LIKE '%UPDATE git_worktree_overview%'`)
+		}, 10*time.Second, 20*time.Millisecond).Should(BeNumerically(">", 0), "the status scan marks the worktree scanned")
+
+		r.stop()
+		closed := make(chan struct{})
+		go func() {
+			r.tracker.Close()
+			close(closed)
+		}()
+		Consistently(closed, 300*time.Millisecond).ShouldNot(BeClosed(), "Close waits for the scan in flight")
+		Expect(lock.Commit().Error).To(Succeed())
+		Eventually(closed, 10*time.Second).Should(BeClosed())
+		Expect(scanned()).To(BeTemporally(">", before), "the scan ran to completion")
 	})
 })

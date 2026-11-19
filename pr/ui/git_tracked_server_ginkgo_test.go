@@ -40,8 +40,11 @@ func newTrackedGitServer() trackedGitServer {
 	DeferCleanup(func() { Expect(opened.Close()).To(Succeed()) })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	DeferCleanup(cancel)
 	tracker := gitstate.NewTracker(gitstate.Options{Store: gitstate.NewStore(opened.Gorm()), Context: ctx})
+	DeferCleanup(func() {
+		cancel()
+		tracker.Close()
+	})
 	return trackedGitServer{
 		server:  &Server{ctx: gavelctx.New(ctx, gavelctx.WithGitTracker(tracker)), filters: filters.NewStore(opened.Gorm())},
 		tracker: tracker, db: opened.Gorm(), ctx: ctx,

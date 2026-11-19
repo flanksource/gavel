@@ -372,6 +372,10 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	if err != nil {
 		return err
 	}
+	if tracker != nil {
+		// No scan starts once the dashboard exits, and one running finishes first.
+		defer tracker.Close()
+	}
 	if opts.retention && runtime.DB != nil {
 		if err := startRetention(ctx, runtime.DB, ghcache.Shared(), ""); err != nil {
 			return err
