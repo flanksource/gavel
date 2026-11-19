@@ -1,5 +1,5 @@
 // Tests one organization's view of the platform dashboard: its summary, the panels showing only
-// its rows, the way back to every organization, and an organization gavel doesn't know.
+// its rows and its measured use, the way back to every organization, and an organization gavel doesn't know.
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from '../todos/queryTestWrapper';
@@ -25,6 +25,10 @@ const bodies: Record<string, unknown> = {
   '/api/platform/substrate/inventory': { workers: [], actors: [] },
   '/api/platform/github': { app: { id: 1, slug: 'gavel-dev' }, installations: [] },
   '/api/platform/orgs/o-alpha/sandbox-size': { size: null, default: { cpuMillicores: 2000, memoryBytes: 4 * 2 ** 30 } },
+  '/api/platform/orgs/o-alpha/measured-usage': {
+    missionControl: 'https://mc.example.com/api', title: 'Measured use', lastRefreshedAt: '2026-11-19T10:05:00Z',
+    panels: [{ name: 'Peak memory, last 24h (GiB)', type: 'number', value: 1.5 }],
+  },
 };
 
 beforeEach(() => {
@@ -48,6 +52,7 @@ it('shows the organization\'s summary and only its rows in each panel', async ()
   expect(screen.getByText(`Last run ${formatDateTime('2026-11-09T10:00:00Z')}`)).toBeTruthy();
   expect(await screen.findByText('2 runs'), 'Beta\'s 9 runs are left out').toBeTruthy();
   expect(await screen.findByText('2 CPU · 4 GiB per environment, the default')).toBeTruthy();
+  expect(await screen.findByText('1.50'), 'its measured memory').toBeTruthy();
 });
 
 it('goes back to every organization', async () => {
