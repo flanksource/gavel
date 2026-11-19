@@ -1,6 +1,8 @@
 package gitstate_test
 
 import (
+	"time"
+
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/git/gitstate"
 	. "github.com/onsi/ginkgo/v2"
@@ -66,6 +68,21 @@ var _ = Describe("Project git summary", func() {
 
 		Expect(state.Summary("acme")).To(Equal(gitstate.Summary{
 			Name: "acme", Base: "main", Adds: 5, Dels: 3, UncommittedBranches: 1,
+		}))
+	})
+
+	It("dates the project by its newest commit or uncommitted edit across live worktrees", func() {
+		primaryCommit := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+		featureEdit := time.Date(2026, 11, 3, 14, 30, 0, 0, time.UTC)
+		prunedCommit := time.Date(2026, 11, 5, 8, 0, 0, 0, time.UTC)
+		state := gitstate.State{Base: "main", CurrentBranch: "main", Worktrees: []gitstate.Worktree{
+			{Worktree: gavelgit.Worktree{Branch: "main", Primary: true}, LastCommitAt: primaryCommit},
+			{Worktree: gavelgit.Worktree{Branch: "feature"}, LastCommitAt: primaryCommit.Add(time.Hour), TouchedAt: &featureEdit, Changes: gitstate.Changes{Unstaged: 1}},
+			{Worktree: gavelgit.Worktree{Branch: "removed", Prunable: true}, LastCommitAt: prunedCommit},
+		}}
+
+		Expect(state.Summary("acme")).To(Equal(gitstate.Summary{
+			Name: "acme", Base: "main", Branch: "main", Worktrees: 2, UncommittedBranches: 1, LastActivityAt: &featureEdit,
 		}))
 	})
 

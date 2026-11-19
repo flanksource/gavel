@@ -12,6 +12,11 @@ export interface ProjectGitSummary {
   // Distinct named branches with uncommitted files in any live worktree,
   // including the primary checkout and base branch.
   uncommittedBranches: number;
+  // The primary checkout's current branch.
+  branch?: string;
+  // Newest commit or uncommitted edit across the live worktrees (RFC 3339);
+  // absent when none is dated.
+  lastActivityAt?: string;
   // Set when this project's git state could not be read; the other fields are
   // then not meaningful and must not be shown as zero work.
   error?: string;

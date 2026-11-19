@@ -82,7 +82,9 @@ export function parseProjectGitSummaries(payload: unknown): ProjectGitSummary[] 
       || typeof entry.base !== 'string'
       || !hasNumbers(entry, ['adds', 'dels', 'worktrees', 'branches', 'uncommittedBranches'])
       || !Number.isSafeInteger(entry.uncommittedBranches) || Number(entry.uncommittedBranches) < 0
-      || (entry.error !== undefined && typeof entry.error !== 'string')) {
+      || (entry.error !== undefined && typeof entry.error !== 'string')
+      || (entry.branch !== undefined && typeof entry.branch !== 'string')
+      || (entry.lastActivityAt !== undefined && (typeof entry.lastActivityAt !== 'string' || Number.isNaN(Date.parse(entry.lastActivityAt))))) {
       throw new Error(`Load project git summary: invalid entry ${JSON.stringify(entry)}`);
     }
   }

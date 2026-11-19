@@ -92,6 +92,11 @@ type Summary struct {
 	Branches            int    `json:"branches"`
 	Error               string `json:"error,omitempty"`
 	UncommittedBranches int    `json:"uncommittedBranches"`
+	// Branch is the primary checkout's current branch.
+	Branch string `json:"branch,omitempty"`
+	// LastActivityAt is the newest commit or uncommitted edit across the live
+	// worktrees; nil when none is dated.
+	LastActivityAt *time.Time `json:"lastActivityAt,omitempty"`
 }
 
 func (state State) Summary(name string) Summary {
@@ -99,11 +104,20 @@ func (state State) Summary(name string) Summary {
 	if state.Error != "" {
 		return summary
 	}
+	summary.Branch = state.CurrentBranch
 	dirtyBranches := make(map[string]struct{})
 	summary.Branches = len(state.Branches)
 	for _, wt := range state.Worktrees {
 		if !wt.Prunable && wt.StatusError != "" {
 			return Summary{Name: name, Base: state.Base, Error: fmt.Sprintf("worktree %s: %s", wt.Path, wt.StatusError)}
+		}
+		if !wt.Prunable {
+			for _, at := range []*time.Time{&wt.LastCommitAt, wt.TouchedAt} {
+				if at != nil && !at.IsZero() && (summary.LastActivityAt == nil || at.After(*summary.LastActivityAt)) {
+					newest := *at
+					summary.LastActivityAt = &newest
+				}
+			}
 		}
 		if wt.Primary {
 			summary.Adds, summary.Dels = wt.Changes.Adds, wt.Changes.Dels

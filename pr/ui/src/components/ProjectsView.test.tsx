@@ -16,7 +16,7 @@ vi.mock('../eventHub', () => ({
   openEventStream: (url: string) => new EventSource(url),
 }));
 
-vi.mock('./ProcControl', () => ({ ProcControl: () => null }));
+vi.mock('./ProcControl', () => ({ ProcStatusIcon: () => null, ProcPorts: () => null }));
 vi.mock('./TodoBadge', () => ({ TodoBadge: () => null }));
 vi.mock('./GitChangesBadge', () => ({ GitChangesBadge: () => null }));
 vi.mock('./RelativeTime', () => ({ RelativeTime: ({ iso }: { iso: string }) => <span>{iso}</span> }));

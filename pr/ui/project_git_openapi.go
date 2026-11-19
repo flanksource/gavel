@@ -108,6 +108,8 @@ func projectGitOpenAPISchemas() map[string]any {
 		"worktrees": map[string]any{"type": "integer", "description": "Linked worktrees, the primary checkout excluded"},
 		"branches":  typed("integer"), "error": typed("string"),
 		"uncommittedBranches": map[string]any{"type": "integer", "minimum": 0, "description": "Distinct named branches with uncommitted files in live worktrees, including the primary checkout and base branch; detached and prunable worktrees excluded"},
+		"branch":              map[string]any{"type": "string", "description": "The primary checkout's current branch"},
+		"lastActivityAt":      map[string]any{"type": "string", "format": "date-time", "description": "Newest commit or uncommitted edit across the live worktrees; absent when none is dated"},
 	})
 	schemas := map[string]any{
 		"ProjectGitSummaries": map[string]any{"type": "array", "items": summary},

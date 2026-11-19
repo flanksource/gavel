@@ -156,7 +156,15 @@ var _ = Describe("project git", func() {
 			summaries := decodeProjectGit[[]gitstate.Summary](recorder)
 			Expect(summaries).To(HaveLen(2))
 			// Primary README +1; the worktree's uncommitted b.txt and the unmerged branch diffs are not counted.
-			Expect(summaries[0]).To(Equal(gitstate.Summary{Name: "acme", Base: "main", Adds: 1, Worktrees: 1, Branches: 2, UncommittedBranches: 2}))
+			// The README edit is the newest activity, dated by its mtime.
+			Expect(summaries[0].LastActivityAt).NotTo(BeNil())
+			readme, err := os.Stat(filepath.Join(f.repo, "README.md"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*summaries[0].LastActivityAt).To(BeTemporally("~", readme.ModTime(), time.Second))
+			Expect(summaries[0]).To(Equal(gitstate.Summary{
+				Name: "acme", Base: "main", Branch: "main", Adds: 1, Worktrees: 1, Branches: 2, UncommittedBranches: 2,
+				LastActivityAt: summaries[0].LastActivityAt,
+			}))
 			Expect(summaries[1].Name).To(Equal("broken"))
 			Expect(summaries[1].Error).To(ContainSubstring("worktree list"))
 			Expect(summaries[1]).To(Equal(gitstate.Summary{Name: "broken", Error: summaries[1].Error}))
