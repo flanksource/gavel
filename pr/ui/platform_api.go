@@ -36,6 +36,9 @@ type PlatformAPI struct {
 	// SubstrateView is the namespace/name of the Mission Control View graphing substrate's
 	// metrics; empty when serve runs without one.
 	SubstrateView string
+	// OrgView is the namespace/name of the Mission Control View measuring one organization's CPU
+	// and memory; empty when serve runs without one.
+	OrgView string
 	// Substrate lists substrate's workers and actors; nil when serve runs without --sandbox substrate.
 	Substrate SubstrateInventory
 	// Sizes are the organizations' substrate templates, whose size platform admins set; nil when
@@ -77,6 +80,7 @@ func (p *PlatformAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/platform/substrate/metrics", p.substrateMetrics)
 	mux.HandleFunc("GET /api/platform/substrate/inventory", p.substrateInventory)
 	mux.HandleFunc("GET /api/platform/orgs/{id}/sandbox-size", p.sandboxSize)
+	mux.HandleFunc("GET /api/platform/orgs/{id}/measured-usage", p.orgMeasuredUsage)
 	mux.HandleFunc("PUT /api/platform/orgs/{id}/sandbox-size", p.setSandboxSize)
 	mux.HandleFunc("DELETE /api/platform/orgs/{id}/sandbox-size", p.resetSandboxSize)
 	return platformAdminsOnly(mux)

@@ -437,11 +437,17 @@ func TestChartReadsMissionControl(t *testing.T) {
 		"missionControl.token.secretName=gavel-mission-control"))
 	assert.Contains(t, strings.Join(container.Args, " "), " --mission-control-url https://mc.example.com/api --mission-control-infra namespace=gavel")
 	assert.NotContains(t, strings.Join(container.Args, " "), "--mission-control-substrate-view", "substrate's metrics View is optional")
+	assert.NotContains(t, strings.Join(container.Args, " "), "--mission-control-org-view", "the organizations' measured use View is optional")
 
 	container = serveContainer(t, render(t,
 		"missionControl.url=https://mc.example.com/api", "missionControl.infra=namespace=gavel",
 		"missionControl.substrateView=substrate/capacity", "missionControl.token.secretName=gavel-mission-control"))
 	assert.Contains(t, strings.Join(container.Args, " "), " --mission-control-substrate-view substrate/capacity")
+
+	container = serveContainer(t, render(t,
+		"missionControl.url=https://mc.example.com/api", "missionControl.infra=namespace=gavel",
+		"missionControl.orgView=substrate/org-usage", "missionControl.token.secretName=gavel-mission-control"))
+	assert.Contains(t, strings.Join(container.Args, " "), " --mission-control-org-view substrate/org-usage")
 	assert.Equal(t, "secret:gavel-mission-control/token", env(container)["GAVEL_MISSION_CONTROL_TOKEN"])
 
 	container = serveContainer(t, render(t))
