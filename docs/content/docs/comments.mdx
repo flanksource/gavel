@@ -18,12 +18,14 @@ The path is either a positional argument or `--path`, not both. Gavel resolves i
 
 ## Send a thread to an agent
 
-Any open thread can be handed to an agent. Gavel assigns the thread to the agent, acknowledges it as the agent, and delivers it with the commands the agent uses to reply and resolve it. The hand-off is recorded on the thread as its `agentRun`: the session, when it was requested, its state (`queued`, `sent`, or `error` with the error), and where it went.
+Any open thread can be handed to an agent. Gavel assigns the thread to the agent, acknowledges it as the agent, and delivers it with the commands the agent uses to reply and resolve it. The hand-off is recorded on the thread as its `agentRun`: the session, when it was requested, its state (`queued`, `sent`, `done`, or `error` with the error), and where it went.
 
 There are two kinds of target:
 
 - **A live session.** The thread is delivered into a Claude or Codex session that is already running, through Captain.
-- **A new run.** Gavel starts a managed session from a prompt (for example the library's `editor-comments`) in the project's directory. The session gets tools that list, reply to and resolve the threads on its target. With a group key, later threads of the same group are sent into that session while it is still live, instead of starting another one.
+- **A managed run.** Gavel starts or continues a session from a prompt (for example the library's `editor-comments`) in the project's directory. Comments in the same scope share a session by default, across pages. A group key selects a separate conversation. The session gets tools that list, reply to and resolve the threads on its target.
+
+Comments arriving while a managed session is starting or working join the same conversation. Captain runs those turns in delivery order, retaining each comment's tools, permissions and outcome. A failed turn reports its error on the comment, including failures before the provider starts; it does not remain marked `queued`.
 
 ```sh
 gavel comments deliver <id> --session <session-id>
@@ -44,6 +46,8 @@ The agent receives the thread with the context it was left in, whenever the comm
 
 A comment agent sends every new comment on a file to an agent, without anyone choosing **Send to agent**. Only comments written by a person are sent; replies, review decisions and comments written by agents are not. Delivery runs in the background, so creating a comment never waits for it.
 
+The Gavel extension enables **Auto-run new comments on this page** by default when you open an unconfigured page. It saves the page's agent in the project's database settings, so the choice survives closing the panel or reloading the page. Turning auto-run off saves an explicit opt-out and keeps the agent's other settings. An existing page or inherited setting with `enabled: false` stays off.
+
 Comment agents are configured as `comments.agents` in the gavel settings of the file: the `.gavel.yaml` and `.gavel.<name>.yaml` files of your home directory, the project root and each folder down to the file, plus settings saved in the database where no file exists. A layer has a `default` agent for everything beneath its directory, and a `pages` map of agents for single files, keyed by path relative to the layer's directory:
 
 ```yaml
@@ -58,7 +62,7 @@ comments:
         instructions: Check every claim against the security controls.
 ```
 
-Layers merge field by field, ancestors first, and within a layer its `default` then its page entry. `enabled: false` opts a folder or file out of an agent set further up. With `assign: true` the thread is assigned to the agent as soon as it is created. With `group: <key>` every thread the agent receives is delivered in that delivery group, so later threads go to the group's session while it is still live instead of each starting a new run.
+Layers merge field by field, ancestors first, and within a layer its `default` then its page entry. `enabled: false` opts a folder or file out of an agent set further up. With `assign: true` the thread is assigned to the agent as soon as it is created. With `group: <key>` every thread the agent receives is delivered in that delivery group, separate from the scope's default shared session.
 
 A delivery never gets in the way of the comment's author: attaching a screenshot right after creating the comment, with the version the create returned, succeeds while the agent picks the thread up.
 
@@ -138,7 +142,7 @@ Every host that serves `/api/v1/comments` also serves:
 | `GET /api/v1/comments?scope=[&target=][&after=]` | | Threads, each with `readVersion`, `unread` and, for a thread whose selector carries a patch, `anchor` (below) |
 | `POST /api/v1/comments` | `{target, bodyMarkdown, workflowId, requestId, content?, links?, deliver?, attachments?}` | The new thread; `attachments` (below) are stored with it before it is delivered |
 | `POST /api/v1/comments/read` | `{target: {scopeUri, uri}}` | Marks every thread on the target read for the caller at its current version: `{marked}`, the number not already read |
-| `GET /api/v1/comments/agent-sessions[?scope=][&all=1]` | | Live sessions: `{id, source, title, model, cwd, status, inCmux}` |
+| `GET /api/v1/comments/agent-sessions[?scope=][&group=][&all=1]` | | Live and resumable managed sessions; `group` requires `scope` and returns only that group's current session |
 | `GET /api/v1/comments/mentionables?scope=&target=` | | The agents a comment on `target` can mention: `[{id, name, kind: "agent"}]`, with ids `agent`, `runtime:<family>` and `session:<id>`; 501 on a host without agent delivery |
 | `POST /api/v1/comments/{id}/deliver` | `{expectedVersion, requestId, target}` | The updated comment; 409 on a stale version, 502 when delivery failed |
 | `POST /api/v1/comments/{id}/deliver/preview` | `{target}` | The resolved run and its tools, without starting it |

@@ -153,13 +153,16 @@ tasks:
       - editor/ui/index.html
       - editor/ui/package.json
       - editor/ui/vite.config.ts
+      - editor/ui/runtime-assets.ts
       - editor/ui/pnpm-lock.yaml
       - editor/ui/pnpm-workspace.yaml
       - editor/ui/tsconfig.json
       - ../clicky-ui/packages/ui/dist/**/*
+      - ../clicky-ui/packages/page-runtime/dist/static/**/*
     generates:
       - editor/ui/dist/index.html
       - editor/ui/dist/assets/*
+      - editor/ui/dist/page-runtime/sw.js
 
   build:
     desc: Build the binary
