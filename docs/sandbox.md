@@ -120,12 +120,30 @@ created from the runner image. The environment is deleted once the job exits or 
   no run token and can't reach serve, as a job's can't.
 - **Cleanup.** A run works at most its timeout, an hour, whatever its step's own budget. Every
   ten minutes serve deletes `gavel-run-` environments older than a run can live (its timeout
-  plus 15 minutes), left behind when serve stopped mid-run. Substrate's access
-  policy must let serve's identity list the atespace's actors for this.
+  plus 15 minutes), left behind when serve stopped mid-run, and the organizations' templates
+  no actor runs that are no longer their organization's (an old size or an old base template),
+  or whose organization gavel no longer has. Substrate's access policy must let serve's identity
+  list the atespace's actors and templates for this.
 - **Image.** Environments are created from `--substrate-template`, which is required: an image
   template an operator registered with `ate-env manifest template --rootfs-image
-  <image@sha256:…>`, which sets the image they run and their CPU, memory and volumes.
+  <image@sha256:…>`, which sets the image they run and their volumes.
   `--sandbox-image` is refused, since env creates no environment from an image of its own.
+- **Organization templates and sizes.** Each organization's runs, jobs and agent runs alike, are
+  created from its own copy of `--substrate-template`, `gavel-org-<organization>-<hash>`, which
+  gavel makes on the organization's first run. The copy runs what the base template runs at the
+  organization's size, the CPU and memory substrate books on a worker and holds each environment
+  to: the size a platform admin set for the organization on the platform dashboard, else
+  `--substrate-cpu` and `--substrate-memory` (chart `sandbox.substrate.size.cpu` and `.memory`),
+  else the base template's own. A copy builds no golden snapshot, so a run starts at once from
+  the image, even right after its template was made. A template can't change, so the hash names
+  the base template's UID and the size: registering the runner's next image under the same name,
+  or a new size, gives each organization a new template on its next run, and the sweep deletes
+  the old ones once nothing runs them. Each run records its template and size
+  (`sandbox_runs.template`, `cpu_millicores`, `memory_bytes`). Substrate's metrics name an
+  environment's template, so an organization's actual CPU and memory show under its template's
+  name. Serve's identity must be allowed to get, create, list and delete actor templates in the
+  atespace, which its `editor` role allows. A run whose organization can't get its template
+  fails without being recorded, saying why.
 - **Versions.** gavel speaks Substrate 1.0.0-rc.2 and env `56424de` or later.
 - **Egress.** Substrate denies every destination an actor's egress policy doesn't allow. gavel
   gives each environment, a job's or an agent run's, a policy that allows proxy.golang.org,
