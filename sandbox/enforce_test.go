@@ -105,7 +105,8 @@ func TestEnforceStopsAnOrganizationsRunsOnceACPUBudgetIsUsedUp(t *testing.T) {
 	require.NoError(t, dispatcher.Enforce(ctx, org))
 
 	_, err = job.Wait(ctx)
-	require.Error(t, err, "the job was stopped")
+	require.ErrorIs(t, err, ErrBudgetUsedUp, "the job was stopped, and says why")
+	assert.Contains(t, err.Error(), "of its 2 core-hours cpu budget")
 	status, message := runMessage(t, db, job.ID)
 	assert.Equal(t, "cancelled", status)
 	assert.Contains(t, message, "stopped: budget used up: this organization has used ")

@@ -18,7 +18,8 @@ type activeRun struct {
 	org        uuid.UUID
 	modelCalls bool
 	stop       func(reason error)
-	stopped    bool
+	// stopped is why the run was stopped; nil while it runs.
+	stopped error
 }
 
 // track keeps run id of org, which makes model calls when modelCalls is set, until it finishes,
@@ -32,13 +33,16 @@ func (d *Dispatcher) track(id, org uuid.UUID, modelCalls bool, stop func(reason 
 	d.active[id] = &activeRun{org: org, modelCalls: modelCalls, stop: stop}
 }
 
-// untrack forgets run id as it finishes, reporting whether it was stopped.
-func (d *Dispatcher) untrack(id uuid.UUID) bool {
+// untrack forgets run id as it finishes, returning why it was stopped: nil when it wasn't.
+func (d *Dispatcher) untrack(id uuid.UUID) error {
 	d.activeMu.Lock()
 	defer d.activeMu.Unlock()
 	run, ok := d.active[id]
 	delete(d.active, id)
-	return ok && run.stopped
+	if !ok {
+		return nil
+	}
+	return run.stopped
 }
 
 // Enforce stops org's running runs that one of its used-up cumulative budgets covers, recording
@@ -62,11 +66,11 @@ func (d *Dispatcher) Enforce(ctx context.Context, org uuid.UUID) error {
 		if run.modelCalls {
 			reasons = append(append([]string{}, every...), modelCalls...)
 		}
-		if run.org != org || run.stopped || len(reasons) == 0 {
+		if run.org != org || run.stopped != nil || len(reasons) == 0 {
 			continue
 		}
-		run.stopped = true
 		reason := fmt.Errorf("%w: %s; an organization admin can raise it", ErrBudgetUsedUp, strings.Join(reasons, "; "))
+		run.stopped = reason
 		stops = append(stops, func() { run.stop(reason) })
 	}
 	d.activeMu.Unlock()
