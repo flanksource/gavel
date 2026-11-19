@@ -17,6 +17,7 @@ import (
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/budget"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/tenant"
@@ -426,4 +427,163 @@ func TestDispatcherRecordsNoAgentRunWithoutAModelKey(t *testing.T) {
 
 	_, err := dispatcher.RecordRun(t.Context(), uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
 	require.ErrorIs(t, err, ErrNoModelKey)
+}
+
+// newBudgetedDispatcher is a dispatcher whose runs come from their organization's template, of
+// 2 cores and 4 GiB, admitted within the organization's budgets.
+func newBudgetedDispatcher(t *testing.T, executor Executor) (*Dispatcher, *gorm.DB, uuid.UUID) {
+	t.Helper()
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	dispatcher.Templates, _ = orgTemplatesOn(t, db, substrate.Size{})
+	dispatcher.Admission = &Admission{Budgets: budget.Store{DB: db}, RunLifetime: dispatcher.RunLifetime(), Wait: time.Minute, Recheck: time.Minute}
+	return dispatcher, db, org
+}
+
+func runMessage(t *testing.T, db *gorm.DB, id uuid.UUID) (string, string) {
+	t.Helper()
+	var row struct{ Status, StatusMessage string }
+	require.NoError(t, db.Raw(`SELECT status, status_message FROM sandbox_runs WHERE id = ?`, id).Scan(&row).Error)
+	return row.Status, row.StatusMessage
+}
+
+func TestDispatcherQueuesARunUntilItsOrganizationHasRoom(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, org := newBudgetedDispatcher(t, executor)
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
+	require.NoError(t, err)
+	holding, err := dispatcher.Admission.Enter(ctx, org, substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	require.NoError(t, err)
+	var streamed bytes.Buffer
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, &streamed)
+	require.NoError(t, err, "a run that must wait for room isn't refused")
+	status, message := runMessage(t, db, run.ID)
+	assert.Equal(t, "queued", status)
+	assert.Equal(t, "queued: this organization's runs hold 2 of its 2 concurrent cores, and no run is ahead of this one", message)
+	assert.Contains(t, streamed.String(), message+"\n", "the caller is told the run waits, and why")
+	assert.Empty(t, executor.submitted, "the job isn't submitted while it waits")
+
+	holding.Release()
+	_, err = run.Wait(ctx)
+	require.NoError(t, err)
+	require.Len(t, executor.submitted, 1)
+	status, message = runMessage(t, db, run.ID)
+	assert.Equal(t, "succeeded", status)
+	assert.Empty(t, message)
+	assert.Contains(t, streamed.String(), "started after waiting for room\n")
+	_, _, err = VerifyRunToken(dispatcher.TokenKey, executor.submitted[0].SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(44*time.Minute))
+	require.NoError(t, err, "the run's token is signed when it leaves the line, so waiting uses none of its lifetime")
+}
+
+func TestDispatcherRefusesARunItsBudgetsHaveNoRoomFor(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, org := newBudgetedDispatcher(t, executor)
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 1})
+	require.NoError(t, err)
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.ErrorIs(t, err, ErrBudgetUsedUp)
+	assert.Contains(t, err.Error(), "a run of 2 cores can never start under this organization's concurrent cpu budget of 1 core")
+	status, message := runMessage(t, db, run.ID)
+	assert.Equal(t, "failed", status)
+	assert.Contains(t, message, "can never start", "the run's record says why it didn't run")
+	assert.Empty(t, executor.submitted)
+
+	_, err = dispatcher.RecordRun(ctx, uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
+	require.ErrorIs(t, err, ErrBudgetUsedUp, "an agent run is refused too")
+}
+
+func TestDispatcherFailsAQueuedRunThatWaitsTooLong(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, org := newBudgetedDispatcher(t, executor)
+	dispatcher.Admission.Wait = 50 * time.Millisecond
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
+	require.NoError(t, err)
+	holding, err := dispatcher.Admission.Enter(ctx, org, substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	require.NoError(t, err)
+	defer holding.Release()
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.NoError(t, err)
+	_, err = run.Wait(ctx)
+	require.ErrorIs(t, err, ErrQueueTimeout)
+	status, message := runMessage(t, db, run.ID)
+	assert.Equal(t, "failed", status)
+	assert.Contains(t, message, "waited 50ms for room and gave up")
+	assert.Empty(t, executor.submitted)
+}
+
+func TestCancellingAQueuedRunTakesItOutOfLine(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, org := newBudgetedDispatcher(t, executor)
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
+	require.NoError(t, err)
+	holding, err := dispatcher.Admission.Enter(ctx, org, substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	require.NoError(t, err)
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.NoError(t, err)
+	require.NoError(t, run.Cancel(ctx))
+	_, err = run.Wait(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	status, message := runMessage(t, db, run.ID)
+	assert.Equal(t, "cancelled", status)
+	assert.Equal(t, "cancelled while it waited for room", message)
+	holding.Release()
+	assert.Empty(t, executor.submitted, "a cancelled run never starts")
+}
+
+func TestAnAgentRunWaitsForRoomWritingWhyToItsLog(t *testing.T) {
+	dispatcher, db, org := newBudgetedDispatcher(t, &memoryExecutor{})
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.Memory, Kind: budget.Concurrent, Amount: 4})
+	require.NoError(t, err)
+	holding, err := dispatcher.Admission.Enter(ctx, org, substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	require.NoError(t, err)
+	id := uuid.New()
+	recorded := make(chan *RecordedRun)
+	go func() {
+		run, err := dispatcher.RecordRun(ctx, id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
+		assert.NoError(t, err)
+		recorded <- run
+	}()
+
+	require.Eventually(t, func() bool { status, _ := runMessage(t, db, id); return status == "queued" }, 5*time.Second, 10*time.Millisecond)
+	_, message := runMessage(t, db, id)
+	assert.Contains(t, message, "hold 4 of its 4 concurrent GiB")
+	holding.Release()
+	run := <-recorded
+	status, message := runMessage(t, db, id)
+	assert.Equal(t, "running", status)
+	assert.Empty(t, message)
+	run.Finish(true)
+
+	stored, err := dispatcher.Logs(org).Read(ctx, "runs/"+id.String()+"/log.txt")
+	require.NoError(t, err)
+	defer stored.Close()
+	data, err := io.ReadAll(stored)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "queued: this organization's runs hold 4 of its 4 concurrent GiB")
+	assert.Contains(t, string(data), "started after waiting for room")
+}
+
+func TestFailQueuedRunsSaysServeRestartedWhileTheyWaited(t *testing.T) {
+	dispatcher, db, _, org := newDispatcher(t, &memoryExecutor{})
+	queued, running := uuid.New(), uuid.New()
+	for id, status := range map[uuid.UUID]string{queued: "queued", running: "running"} {
+		require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend) VALUES (?, ?, 'lint', ?, 'memory')`, id, org, status).Error)
+	}
+
+	failed, err := dispatcher.FailQueuedRuns(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), failed)
+	status, message := runMessage(t, db, queued)
+	assert.Equal(t, "failed", status)
+	assert.Equal(t, "serve restarted while the run waited for room", message)
+	status, _ = runMessage(t, db, running)
+	assert.Equal(t, "running", status)
 }

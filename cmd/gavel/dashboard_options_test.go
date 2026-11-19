@@ -261,6 +261,11 @@ func TestSubstrateSandboxRefusesSecretsInItsJobs(t *testing.T) {
 	sized, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil, sources, http.NotFoundHandler())
 	require.NoError(t, err)
 	assert.Equal(t, substrate.Size{CPUMillicores: 500, MemoryBytes: 2 << 30}, sized.Templates.Size)
+
+	require.NotNil(t, dispatcher.Admission, "each run is admitted within its organization's budgets")
+	assert.Equal(t, 15*time.Minute, dispatcher.Admission.Wait, "sandbox.queue.timeout: a run waits at most 15 minutes for room")
+	assert.Equal(t, 30*time.Second, dispatcher.Admission.Recheck, "sandbox.budget.interval")
+	assert.Equal(t, dispatcher.RunLifetime(), dispatcher.Admission.RunLifetime)
 }
 
 func TestContainerAndKubernetesSandboxesWarnTheyUseServesKeys(t *testing.T) {

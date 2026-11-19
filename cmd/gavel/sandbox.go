@@ -14,6 +14,8 @@ import (
 
 	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/commons/properties"
+	"github.com/flanksource/gavel/budget"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/sandbox"
@@ -86,6 +88,11 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 			return nil, err
 		}
 		dispatcher.Templates = templates
+		dispatcher.Admission = &sandbox.Admission{
+			Budgets: budget.Store{DB: db}, RunLifetime: dispatcher.RunLifetime(),
+			Wait:    properties.Duration(15*time.Minute, "sandbox.queue.timeout"),
+			Recheck: properties.Duration(30*time.Second, "sandbox.budget.interval"),
+		}
 		dispatcher.Sources = sources
 		// Each run's requests carry its organization's keys, which the credential provider in
 		// substrate's cluster fetches from this gavel by the run.

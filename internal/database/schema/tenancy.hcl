@@ -378,6 +378,12 @@ table "sandbox_runs" {
     null = false
     type = text
   }
+  # Why the run is queued, or why it was refused or failed before it ran; empty otherwise.
+  column "status_message" {
+    null    = false
+    type    = text
+    default = ""
+  }
   column "exit_code" {
     null = true
     type = integer
