@@ -76,7 +76,7 @@ describe('UserMenu', () => {
     expect(page.dataset.label).toBe('SSH keys');
     expect(page.dataset.url).toBe('ssh-keys');
     const orgPages = screen.getAllByTestId('organization-profile-page');
-    expect(orgPages.map(orgPage => [orgPage.dataset.label, orgPage.dataset.url])).toEqual([['Model keys', 'model-keys'], ['Usage', 'usage']]);
+    expect(orgPages.map(orgPage => [orgPage.dataset.label, orgPage.dataset.url])).toEqual([['Model keys', 'model-keys'], ['Usage and budgets', 'usage']]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

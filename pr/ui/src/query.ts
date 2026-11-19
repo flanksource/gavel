@@ -4,6 +4,7 @@ export const queryKeys = {
   modelKeys: () => ['model-keys'] as const,
   sandboxRuns: () => ['sandbox-runs'] as const,
   usage: (window: string) => ['usage', window] as const,
+  budgets: () => ['budgets'] as const,
   sandboxRunLog: (id: string) => ['sandbox-runs', id, 'log'] as const,
   githubInstallations: () => ['github', 'installations'] as const,
   platform: (source: string, days?: number) => ['platform', source, { days }] as const,
