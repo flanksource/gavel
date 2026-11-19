@@ -1,5 +1,6 @@
 // Gives each organization its own substrate template: a copy of the base template at the
-// organization's size, so substrate holds its environments to that size and tells them apart.
+// organization's size, so substrate holds its environments to that size and tells them apart, and
+// deletes the copies no organization runs from any more.
 package sandbox
 
 import (
@@ -9,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/google/uuid"
@@ -26,6 +29,9 @@ type OrgTemplates struct {
 	// Size is an organization's size unless a platform admin set one of its own; a field left
 	// zero is the base template's.
 	Size substrate.Size
+
+	// mu keeps Sweep from deleting a template Resolve is handing a run.
+	mu sync.Mutex
 }
 
 // OrgTemplate is the template an organization's runs are created from, and the size it gives them.
@@ -41,6 +47,8 @@ const orgTemplatePrefix = "gavel-org-"
 // template's UID and the size, so a new base, registered for the runner's next image, or a new
 // size gives the organization a new template: a template can't change.
 func (o *OrgTemplates) Resolve(ctx context.Context, org uuid.UUID) (OrgTemplate, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	base, err := o.Client.Template(ctx, o.Base)
 	if err != nil {
 		return OrgTemplate{}, fmt.Errorf("give organization %s its substrate template: %w", org, err)
@@ -72,6 +80,64 @@ func (o *OrgTemplates) wanted(ctx context.Context, org uuid.UUID, base substrate
 	}
 	sum := sha256.Sum256([]byte(base.UID + "/" + strconv.FormatInt(size.CPUMillicores, 10) + "/" + strconv.FormatInt(size.MemoryBytes, 10)))
 	return OrgTemplate{Name: orgTemplatePrefix + org.String() + "-" + hex.EncodeToString(sum[:4]), Size: *size}, nil
+}
+
+// Sweep deletes the organizations' templates that no actor runs and that are not their
+// organization's current one, or whose organization gavel no longer has, and returns their names.
+// A template an actor runs stays: env can't delete an environment whose template is gone. An
+// organization that hasn't run in a while keeps its current template, which, without a golden
+// snapshot, holds nothing.
+func (o *OrgTemplates) Sweep(ctx context.Context) ([]string, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	base, err := o.Client.Template(ctx, o.Base)
+	if err != nil {
+		return nil, err
+	}
+	templates, err := o.Client.ListTemplates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	actors, err := o.Client.ListActors(ctx, o.Atespace)
+	if err != nil {
+		return nil, err
+	}
+	running := map[string]bool{}
+	for _, actor := range actors {
+		running[actor.Template] = true
+	}
+	var swept []string
+	var errs []error
+	for _, template := range templates {
+		org, ok := templateOrg(template.Name)
+		if !ok || running[template.Name] {
+			continue
+		}
+		wanted, err := o.wanted(ctx, org, base)
+		if err != nil && !errors.Is(err, ErrOrgNotFound) {
+			errs = append(errs, err)
+			continue
+		}
+		if err == nil && wanted.Name == template.Name {
+			continue
+		}
+		if err := o.Client.DeleteTemplate(ctx, template.Name); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		swept = append(swept, template.Name)
+	}
+	return swept, errors.Join(errs...)
+}
+
+// templateOrg is the organization whose template name is, when it is one.
+func templateOrg(name string) (uuid.UUID, bool) {
+	rest, ok := strings.CutPrefix(name, orgTemplatePrefix)
+	if !ok || len(rest) <= 36 || rest[36] != '-' {
+		return uuid.Nil, false
+	}
+	org, err := uuid.Parse(rest[:36])
+	return org, err == nil
 }
 
 // ErrOrgNotFound reports an organization gavel doesn't have.

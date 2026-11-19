@@ -336,3 +336,21 @@ func TestSweepingSaysWhatRunsLeftBehind(t *testing.T) {
 	sweepSandbox(context.Background(), sweeper, time.Hour)
 	assert.Contains(t, logged.String(), "sweep the sandbox environments runs left behind: permission denied")
 }
+
+// fakeTemplateSweeper sweeps the names it was given, and fails with err.
+type fakeTemplateSweeper struct {
+	names []string
+	err   error
+}
+
+func (s *fakeTemplateSweeper) Sweep(context.Context) ([]string, error) { return s.names, s.err }
+
+func TestSweepingSaysWhichOrganizationTemplatesItDeleted(t *testing.T) {
+	logged := logtest.Capture(t)
+
+	sweepOrgTemplates(context.Background(), &fakeTemplateSweeper{names: []string{"gavel-org-a-1", "gavel-org-b-2"}})
+	assert.Contains(t, logged.String(), "deleted 2 organization substrate templates no run uses any more: gavel-org-a-1, gavel-org-b-2")
+
+	sweepOrgTemplates(context.Background(), &fakeTemplateSweeper{err: errors.New("permission denied")})
+	assert.Contains(t, logged.String(), "sweep the organizations' substrate templates: permission denied")
+}

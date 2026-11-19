@@ -129,3 +129,61 @@ func TestResolveSaysWhichOrganizationAndBaseTemplateWhenTheBaseIsMissing(t *test
 	assert.Contains(t, err.Error(), "organization "+org.String())
 	assert.Contains(t, err.Error(), "actor template ate-env/no-such-template")
 }
+
+func TestSweepDeletesTheTemplatesAnOrganizationNoLongerRunsFrom(t *testing.T) {
+	templates, server, org := newOrgTemplates(t, substrate.Size{})
+	ctx := context.Background()
+	old, err := templates.Resolve(ctx, org)
+	require.NoError(t, err)
+	require.NoError(t, SetOrgSize(ctx, templates.DB, org, &substrate.Size{CPUMillicores: 4000, MemoryBytes: 8 << 30}))
+	current, err := templates.Resolve(ctx, org)
+	require.NoError(t, err)
+	server.AddTemplate("ate-env", "someone-elses", baseSize)
+	server.AddTemplate("ate-env", orgTemplatePrefix+"not-an-organization", baseSize)
+
+	swept, err := templates.Sweep(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{old.Name}, swept)
+	_, ok := server.Template("ate-env", old.Name)
+	assert.False(t, ok, "the template of the organization's old size is deleted")
+	for _, kept := range []string{current.Name, "gavel-runner", "someone-elses", orgTemplatePrefix + "not-an-organization"} {
+		_, ok := server.Template("ate-env", kept)
+		assert.True(t, ok, "%s is kept: it is the organization's current template, or not an organization's", kept)
+	}
+}
+
+func TestSweepKeepsATemplateAnEnvironmentStillRuns(t *testing.T) {
+	templates, server, org := newOrgTemplates(t, substrate.Size{})
+	ctx := context.Background()
+	old, err := templates.Resolve(ctx, org)
+	require.NoError(t, err)
+	options := server.Options()
+	options.Template = old.Name
+	running, err := substrate.Dial(options)
+	require.NoError(t, err)
+	defer running.Close()
+	_, err = running.Create(ctx, substrate.Environment{ID: "gavel-run-1"})
+	require.NoError(t, err)
+	require.NoError(t, SetOrgSize(ctx, templates.DB, org, &substrate.Size{CPUMillicores: 4000, MemoryBytes: 8 << 30}))
+
+	swept, err := templates.Sweep(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, swept)
+	_, ok := server.Template("ate-env", old.Name)
+	assert.True(t, ok, "env can't delete an environment whose template is gone, so the template stays while it runs")
+}
+
+func TestSweepDeletesTheTemplatesOfOrganizationsGavelNoLongerHas(t *testing.T) {
+	templates, server, org := newOrgTemplates(t, substrate.Size{})
+	ctx := context.Background()
+	current, err := templates.Resolve(ctx, org)
+	require.NoError(t, err)
+	removed := orgTemplatePrefix + uuid.NewString() + "-0123abcd"
+	server.AddTemplate("ate-env", removed, baseSize)
+
+	swept, err := templates.Sweep(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{removed}, swept)
+	_, ok := server.Template("ate-env", current.Name)
+	assert.True(t, ok, "an organization that hasn't run in a while keeps its template: without a golden snapshot it costs nothing")
+}

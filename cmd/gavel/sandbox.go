@@ -100,18 +100,39 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 // sandboxSweepInterval is how often serve sweeps what runs left behind.
 const sandboxSweepInterval = 10 * time.Minute
 
-// sweepSandboxEvery sweeps what runs older than lifetime left behind, every sandboxSweepInterval
-// until ctx ends.
-func sweepSandboxEvery(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration) {
+// sweepSandboxEvery sweeps what runs older than lifetime left behind, and, when templates is set,
+// the organizations' templates no run uses any more, every sandboxSweepInterval until ctx ends.
+func sweepSandboxEvery(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration, templates templateSweeper) {
 	ticker := time.NewTicker(sandboxSweepInterval)
 	defer ticker.Stop()
 	for {
 		sweepSandbox(ctx, sweeper, lifetime)
+		if templates != nil {
+			sweepOrgTemplates(ctx, templates)
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// templateSweeper deletes the organizations' templates no run uses any more, and returns their
+// names.
+type templateSweeper interface {
+	Sweep(ctx context.Context) ([]string, error)
+}
+
+// sweepOrgTemplates deletes the organizations' templates no run uses any more, logging what it
+// deleted. A sweep that fails is a warning; the next one tries again.
+func sweepOrgTemplates(ctx context.Context, templates templateSweeper) {
+	swept, err := templates.Sweep(ctx)
+	if len(swept) > 0 {
+		logger.Infof("deleted %d organization substrate templates no run uses any more: %s", len(swept), strings.Join(swept, ", "))
+	}
+	if err != nil && ctx.Err() == nil {
+		logger.Warnf("sweep the organizations' substrate templates: %v", err)
 	}
 }
 
