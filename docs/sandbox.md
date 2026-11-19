@@ -269,7 +269,7 @@ Then run:
 
 ```sh
 GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui \
-  -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate|TestHostedTodoRunsOnSubstrate|TestOrgBudgetsHoldOnSubstrate'
+  -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate|TestHostedTodoRunsOnSubstrate|TestOrgBudgetsHoldOnSubstrate|TestOrgTokenBudgetsHoldAgentRunsOnSubstrate'
 ```
 
 `TestOrgBudgetsHoldOnSubstrate` (`pr/ui`) holds an organization's push checks to its budgets: they
@@ -278,6 +278,13 @@ run from its own copy of the runner template at its size (1 core, 1 GiB, read fr
 core and starts once it ends, and a used-up CPU budget stops a running check, deleting its
 environment, and refuses the next. It needs `gavel-e2e/gavel` to create and delete templates in
 `ate-env` (an `editor`), and deletes the template it made.
+
+`TestOrgTokenBudgetsHoldAgentRunsOnSubstrate` (`pr/ui`) holds an organization's agent runs to its
+token budget against the real model: a plan step runs from the organization's template and its
+tokens count, a run whose budget its first transcript uses up is stopped and its environment
+deleted, and the next is refused with 429. Like `TestHostedTodoRunsOnSubstrate` it needs the
+template's image to hold this tree's gavel: an environment whose captain is older than the host's
+refuses the run's spec (`invalid schemaStrictness "repair"` from a captain before v0.0.78).
 
 `TestHostedTodoRunsOnSubstrate` runs a hosted todo's plan step whole in an environment against the
 real model, so the `gavel-runner` template's image must hold this tree's gavel; on failure it logs the environment's

@@ -285,16 +285,8 @@ func TestHostedTodoRunsInASandboxJob(t *testing.T) {
 // the todo's outcome.
 func runsPlanStep(t *testing.T, h hostedRuns, title string, wait time.Duration) {
 	t.Helper()
-	db, base, workspace, creator := h.db, h.base, h.workspace, h.ada
-
-	status, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": title})
-	require.Equal(t, http.StatusCreated, status, created)
-	todo := created["id"].(string)
-
-	status, started := hostedCall(t, base, http.MethodPost, "/api/todos/run", creator, "org:member", map[string]any{"dir": workspace, "ref": todo, "step": "plan"})
-	require.Equal(t, http.StatusOK, status, started)
-	assert.Equal(t, "started", started["status"])
-	require.NotEmpty(t, started["promptRunId"])
+	db, creator := h.db, h.ada
+	todo, promptRunID := startPlanStep(t, h, title)
 
 	var run struct {
 		Status string
@@ -305,11 +297,11 @@ func runsPlanStep(t *testing.T, h hostedRuns, title string, wait time.Duration) 
 	if !assert.Eventually(t, func() bool {
 		require.NoError(t, db.Raw(`SELECT status, kind, user_id, sha FROM sandbox_runs WHERE todo_id = ?`, todo).Scan(&run).Error)
 		var finished bool
-		require.NoError(t, db.Raw(`SELECT count(*) > 0 FROM captain_prompt_runs WHERE id = ? AND state IN ('failed', 'cancelled', 'waiting')`, started["promptRunId"]).Scan(&finished).Error)
+		require.NoError(t, db.Raw(`SELECT count(*) > 0 FROM captain_prompt_runs WHERE id = ? AND state IN ('failed', 'cancelled', 'waiting')`, promptRunID).Scan(&finished).Error)
 		return run.Status == "succeeded" || run.Status == "failed" || finished
 	}, wait, 50*time.Millisecond, "the sandbox job ran") || run.Status != "succeeded" {
 		var captain string
-		require.NoError(t, db.Raw(`SELECT row_to_json(r)::text FROM captain_prompt_runs r WHERE id = ?`, started["promptRunId"]).Scan(&captain).Error)
+		require.NoError(t, db.Raw(`SELECT row_to_json(r)::text FROM captain_prompt_runs r WHERE id = ?`, promptRunID).Scan(&captain).Error)
 		t.Fatalf("the sandbox job didn't succeed: %+v; Captain's run: %s", run, captain)
 	}
 	assert.Equal(t, "agent", run.Kind)
@@ -318,7 +310,7 @@ func runsPlanStep(t *testing.T, h hostedRuns, title string, wait time.Duration) 
 
 	var promptRun struct{ State, Error string }
 	require.Eventually(t, func() bool {
-		require.NoError(t, db.Raw(`SELECT state, coalesce(error, '') AS error FROM captain_prompt_runs WHERE id = ?`, started["promptRunId"]).Scan(&promptRun).Error)
+		require.NoError(t, db.Raw(`SELECT state, coalesce(error, '') AS error FROM captain_prompt_runs WHERE id = ?`, promptRunID).Scan(&promptRun).Error)
 		return promptRun.State == "succeeded" || promptRun.State == "failed" || promptRun.State == "cancelled"
 	}, wait, 50*time.Millisecond, "Captain recorded the run's outcome")
 	require.Equal(t, "succeeded", promptRun.State, "Captain's run: %s", promptRun.Error)
@@ -340,6 +332,21 @@ func runsPlanStep(t *testing.T, h hostedRuns, title string, wait time.Duration) 
 	assert.Equal(t, "succeeded", outcome.RunState, "the plan the sandboxed agent wrote was accepted")
 	assert.True(t, outcome.Success)
 	assert.Equal(t, "new", outcome.Event)
+}
+
+// startPlanStep creates a todo titled title on h and starts its plan step, as its creator,
+// returning the todo and Captain's run of the step.
+func startPlanStep(t *testing.T, h hostedRuns, title string) (todo, promptRunID string) {
+	t.Helper()
+	status, created := hostedCall(t, h.base, http.MethodPost, "/api/todos", h.ada, "org:member", map[string]any{"dir": h.workspace, "title": title})
+	require.Equal(t, http.StatusCreated, status, created)
+	todo = created["id"].(string)
+
+	status, started := hostedCall(t, h.base, http.MethodPost, "/api/todos/run", h.ada, "org:member", map[string]any{"dir": h.workspace, "ref": todo, "step": "plan"})
+	require.Equal(t, http.StatusOK, status, started)
+	assert.Equal(t, "started", started["status"])
+	require.NotEmpty(t, started["promptRunId"])
+	return todo, started["promptRunId"].(string)
 }
 
 func TestHostedTodoRunsNeedASandbox(t *testing.T) {
