@@ -1,5 +1,6 @@
-// The platform dashboard's substrate metrics panel: the panels of the Mission Control View that
-// graphs substrate's Prometheus metrics, timeseries as line charts and single values as figures.
+// The platform dashboard's substrate metrics panel, and MetricsViewPanel, which draws any Mission
+// Control View gavel serves: timeseries as line charts and single values as figures.
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { StatStrip } from '@flanksource/clicky-ui/data';
@@ -27,7 +28,7 @@ export interface MetricPanel {
   unsupported?: string;
 }
 
-// MetricsView is a Mission Control View's panels, as /api/platform/substrate/metrics answers them.
+// MetricsView is a Mission Control View's panels, as gavel's View routes answer them.
 export interface MetricsView {
   missionControl: string;
   title?: string;
@@ -135,9 +136,21 @@ function SeriesLines({ panel }: { panel: MetricPanel }) {
 }
 
 export function SubstrateMetricsPanel() {
+  return <MetricsViewPanel heading="Substrate metrics" source="substrate-metrics" url="/api/platform/substrate/metrics" context="load substrate's metrics" />;
+}
+
+// MetricsViewPanel draws the View url answers under heading, with note below it; source names
+// its query, context its failures.
+export function MetricsViewPanel({ heading, source, url, context, note }: {
+  heading: string;
+  source: string;
+  url: string;
+  context: string;
+  note?: ReactNode;
+}) {
   const metrics = useQuery({
-    queryKey: queryKeys.platform('substrate-metrics'),
-    queryFn: ({ signal }) => fetchJSON<MetricsView>({ url: '/api/platform/substrate/metrics', signal, context: 'load substrate\'s metrics' }),
+    queryKey: queryKeys.platform(source),
+    queryFn: ({ signal }) => fetchJSON<MetricsView>({ url, signal, context }),
   });
   const view = metrics.data;
   const values = view?.panels.filter(panel => (panel.type === 'number' || panel.type === 'gauge') && !panel.unsupported) ?? [];
@@ -147,13 +160,14 @@ export function SubstrateMetricsPanel() {
   return (
     <section className="flex flex-col gap-3">
       <PanelHeading>
-        Substrate metrics
+        {heading}
         {view && (
           <> · <a className="underline" href={view.missionControl.replace(/\/api\/?$/, '')} target="_blank" rel="noreferrer">{view.title || 'Mission Control'}</a>
             <span className="font-normal"> · refreshed {formatDateTime(view.lastRefreshedAt)}</span>
           </>
         )}
       </PanelHeading>
+      {note && <p className="text-xs text-muted-foreground">{note}</p>}
       {metrics.error && <p role="alert" className="text-red-600">{metrics.error.message}</p>}
       {view?.refreshError && <p role="status" className="text-amber-600">Mission Control couldn't refresh the view, so what it shows may be old or missing: {view.refreshError}</p>}
       {values.length > 0 && (

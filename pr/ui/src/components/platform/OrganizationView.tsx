@@ -1,8 +1,10 @@
 // One organization's view of the platform dashboard: its summary from the tenant list, its sandbox
-// size, and the panels that can show one organization, each with only that organization's rows.
+// size, its measured CPU and memory, and the panels that can show one organization, each with only
+// that organization's rows.
 import { StatStrip } from '@flanksource/clicky-ui/data';
 import { CaptainHistoryPanel } from './CaptainHistoryPanel';
 import { GitHubPanel } from './GitHubPanel';
+import { MeasuredUsagePanel } from './MeasuredUsagePanel';
 import { ModelUsagePanel } from './ModelUsagePanel';
 import { PlatformSections } from './PlatformSections';
 import { SandboxSizePanel } from './SandboxSizePanel';
@@ -45,6 +47,7 @@ export function OrganizationView({ org, onBack }: { org: string; onBack: () => v
             { id: 'summary', label: tenant.name || tenant.clerkOrgId, content: summary },
             { id: 'sandbox-size', label: 'Sandbox size', content: <SandboxSizePanel org={org} /> },
             { id: 'sandbox-usage', label: 'Sandbox usage', content: <SandboxUsagePanel org={org} /> },
+            { id: 'measured-usage', label: 'Measured CPU and memory', content: <MeasuredUsagePanel org={org} /> },
             { id: 'model-usage', label: 'Model usage', content: <ModelUsagePanel org={org} /> },
             { id: 'captain-history', label: 'Captain history', content: <CaptainHistoryPanel org={org} /> },
             { id: 'substrate-inventory', label: 'Substrate inventory', content: <SubstrateInventoryPanel org={org} /> },

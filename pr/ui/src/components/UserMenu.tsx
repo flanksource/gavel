@@ -7,6 +7,7 @@ import { currentAuthMode } from '../query';
 import { ConnectGitHubButton } from './GitHubConnect';
 import { ModelKeysPanel } from './ModelKeysPanel';
 import { OrgBudgets } from './OrgBudgets';
+import { OwnMeasuredUsage } from './platform/MeasuredUsagePanel';
 import { meQuery } from './oneShotQueries';
 import { SSHKeysPanel } from './SSHKeysPanel';
 import { UsagePanel } from './UsagePanel';
@@ -25,6 +26,7 @@ export function UserMenu() {
           <OrganizationSwitcher.OrganizationProfilePage label="Usage and budgets" url="usage" labelIcon={<UiChartBar />}>
             <div className="flex flex-col gap-6">
               <UsagePanel />
+              <OwnMeasuredUsage />
               <OrgBudgets />
             </div>
           </OrganizationSwitcher.OrganizationProfilePage>
