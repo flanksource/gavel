@@ -215,6 +215,14 @@ table "repos" {
     on_delete = SET_NULL
     on_update = NO_ACTION
   }
+  # A repository comes only from its own organization's connection. NO ACTION is checked after
+  # repos_connection_id_fkey has nulled connection_id, so deleting a connection still works.
+  foreign_key "repos_org_connection_fkey" {
+    columns = [column.org_id, column.connection_id]
+    ref_columns = [table.connections.column.org_id, table.connections.column.id]
+    on_delete = NO_ACTION
+    on_update = NO_ACTION
+  }
   index "repos_org_source_name_key" {
     unique = true
     columns = [column.org_id, column.source, column.name]

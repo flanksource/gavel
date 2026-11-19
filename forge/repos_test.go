@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // listing is a fake provider API answering one path with a JSON body the test can change.
@@ -230,4 +231,20 @@ func TestARepositorysRemoteCarriesItsOwnOrgsConnection(t *testing.T) {
 
 	_, err = forge.Remote(context.Background(), db, scope, conn, "https://github.com/initech/api.git", git.ClientOptions{})
 	require.ErrorContains(t, err, "initech", "the connection reaches only its namespace")
+}
+
+func TestARepositoryCantComeFromAnotherOrgsConnection(t *testing.T) {
+	db := catalog(t)
+	scope, other := hostedOrg(t, db), hostedOrg(t, db)
+	conn := saveFor(t, db, scope, models.Connection{Name: "acme-gitlab", Type: models.ConnectionTypeGitlab, Password: "glpat",
+		Properties: map[string]string{"group": "acme"}})
+
+	quiet := db.Session(&gorm.Session{Logger: gormlogger.Discard})
+	err := quiet.Exec(`INSERT INTO repos (org_id, name, source, connection_id, provider_repo_id) VALUES (?, 'acme/api', 'gitlab', ?, '31')`, other.OrgID, conn).Error
+	require.ErrorContains(t, err, "repos_org_connection_fkey")
+
+	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, connection_id, provider_repo_id) VALUES (?, 'acme/api', 'gitlab', ?, '31')`, scope.OrgID, conn).Error)
+	require.NoError(t, db.Exec(`DELETE FROM connections WHERE id = ?`, conn).Error)
+	assert.Equal(t, []heldRepo{{Name: "acme/api", Source: "gitlab", ProviderRepoID: "31"}}, held(t, db, scope.OrgID),
+		"a connection deleted underneath its repositories leaves them without it")
 }

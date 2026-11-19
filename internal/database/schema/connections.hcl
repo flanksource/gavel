@@ -24,6 +24,11 @@ table "connections" {
     unique = true
     columns = [column.org_id, column.namespace, column.name]
   }
+  # What repos_org_connection_fkey refers to: a connection within its organization.
+  index "connections_org_id_id_key" {
+    unique = true
+    columns = [column.org_id, column.id]
+  }
   foreign_key "connections_org_id_fkey" {
     columns = [column.org_id]
     ref_columns = [table.orgs.column.id]
