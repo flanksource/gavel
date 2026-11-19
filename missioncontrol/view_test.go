@@ -33,7 +33,7 @@ func TestViewGroupsTimeseriesRowsIntoSeries(t *testing.T) {
 		},
 	})
 
-	view, err := missioncontrol.New(mc.URL, missioncontroltest.Token, "").View(t.Context(), "substrate/capacity")
+	view, err := missioncontrol.New(mc.URL, missioncontroltest.Token, "").View(t.Context(), "substrate/capacity", nil)
 	require.NoError(t, err)
 	assert.Equal(t, mc.URL, view.MissionControl)
 	assert.Equal(t, "Substrate", view.Title)
@@ -67,7 +67,7 @@ func TestViewSaysWhyAPanelCantBeRead(t *testing.T) {
 		},
 	})
 
-	view, err := missioncontrol.New(mc.URL, missioncontroltest.Token, "").View(t.Context(), "substrate/capacity")
+	view, err := missioncontrol.New(mc.URL, missioncontroltest.Token, "").View(t.Context(), "substrate/capacity", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "prometheus: connection refused", view.RefreshError)
 	require.Len(t, view.Panels, 2)
@@ -80,16 +80,26 @@ func TestViewExplainsFailures(t *testing.T) {
 	mc := missioncontroltest.New(t)
 	source := missioncontrol.New(mc.URL, missioncontroltest.Token, "")
 
-	_, err := source.View(t.Context(), "substrate/missing")
+	_, err := source.View(t.Context(), "substrate/missing", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "view substrate/missing not found in Mission Control at "+mc.URL)
 
-	_, err = source.View(t.Context(), "capacity")
+	_, err = source.View(t.Context(), "capacity", nil)
 	require.EqualError(t, err, `view "capacity" must be namespace/name`)
 
 	mc.SetView("substrate", "capacity", map[string]any{})
-	_, err = missioncontrol.New(mc.URL, "wrong-token", "").View(t.Context(), "substrate/capacity")
+	_, err = missioncontrol.New(mc.URL, "wrong-token", "").View(t.Context(), "substrate/capacity", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read view substrate/capacity from Mission Control at "+mc.URL)
 	assert.Contains(t, err.Error(), "check GAVEL_MISSION_CONTROL_TOKEN")
+}
+
+func TestViewPassesItsVariables(t *testing.T) {
+	mc := missioncontroltest.New(t)
+	mc.SetView("substrate", "org-usage", map[string]any{"title": "Measured use"})
+
+	view, err := missioncontrol.New(mc.URL, missioncontroltest.Token, "").View(t.Context(), "substrate/org-usage", map[string]string{"org": "f1af4645"})
+	require.NoError(t, err)
+	assert.Equal(t, "Measured use", view.Title)
+	assert.Equal(t, []map[string]any{{"variables": map[string]any{"org": "f1af4645"}}}, mc.ViewRequests())
 }

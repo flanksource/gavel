@@ -387,7 +387,7 @@ func (p *PlatformAPI) substrateMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
 	defer cancel()
-	view, err := p.MissionControl.View(ctx, p.SubstrateView)
+	view, err := p.MissionControl.View(ctx, p.SubstrateView, nil)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err)
 		return
