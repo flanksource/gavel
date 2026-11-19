@@ -1388,7 +1388,7 @@ func (s *Server) handleRepoFavicon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store := cache.Shared()
+	store := s.cacheStore()
 	data, mime, hit, err := store.GetFavicon(homepage)
 	if err != nil {
 		logger.Warnf("favicon cache read %s: %v", homepage, err)

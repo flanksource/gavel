@@ -84,6 +84,23 @@ func TestServerIndexesPRsInTheCacheItsGitHubOptionsName(t *testing.T) {
 	assert.Contains(t, indexed, key)
 }
 
+func TestServerServesRepoFaviconsFromTheCacheItsGitHubOptionsName(t *testing.T) {
+	db, store, org := openOrgDB(t)
+	// Without a process database the shared cache is disabled, so only the named cache holds
+	// the favicon.
+	t.Setenv(database.EnvDSN, "")
+	require.NoError(t, db.Create(&ghcache.FaviconCache{
+		Homepage: "https://acme.example", Data: []byte("icon"), MimeType: "image/png", FetchedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
+	}).Error)
+	srv := NewServer(gavelctx.New(t.Context()), time.Minute, github.Options{Cache: store.ForOrg(org)}, SearchConfig{})
+	srv.publishResults(github.PRSearchResults{{Repo: "acme/app", Number: 1, RepoHomepageURL: "https://acme.example"}})
+
+	response := httptest.NewRecorder()
+	srv.handleRepoFavicon(response, httptest.NewRequest(http.MethodGet, "/api/repos/favicon?homepage=https://acme.example", nil))
+	assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.Equal(t, "icon", response.Body.String())
+}
+
 func TestOrgConfigPersistsToOrgSettings(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	original := settingsPath
