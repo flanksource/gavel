@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,7 +107,7 @@ func TestBundleAGitHubRepositoryFromItsMirror(t *testing.T) {
 	assert.Equal(t, "second", unbundle(t, bundle.Bytes(), "README.md"))
 
 	assert.Equal(t, []int64{7, 7}, tokens, "every fetch uses a fresh installation token")
-	mirror := filepath.Join(dataDir, "mirrors", org.String(), "42.git")
+	mirror := filepath.Join(dataDir, "mirrors", org.String(), repo.String()+".git")
 	config, err := os.ReadFile(filepath.Join(mirror, "config"))
 	require.NoError(t, err)
 	assert.NotContains(t, string(config), "installation-token", "the token is never written to the mirror's config")
@@ -118,12 +120,15 @@ func TestAnInterruptedMirrorCloneLeavesNoMirror(t *testing.T) {
 	commitFile(t, work, "README.md", "first")
 	git(t, work, "clone", "-q", "--bare", work, filepath.Join(remotes, "acme", "app.git"))
 	// A remote that never answers, so the clone is killed partway, as a cancelled request kills it.
-	t.Setenv("GIT_CONFIG_COUNT", "1")
-	t.Setenv("GIT_CONFIG_KEY_0", "protocol.ext.allow")
-	t.Setenv("GIT_CONFIG_VALUE_0", "always")
+	silent := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	// The killed git's remote helper still holds its request open, so drop it before closing.
+	t.Cleanup(func() {
+		silent.CloseClientConnections()
+		silent.Close()
+	})
 	sources := &Sources{
 		DataDir:   dataDir,
-		GitHubURL: "ext::sh -c sleep% 2;:",
+		GitHubURL: silent.URL,
 		Token:     func(context.Context, int64) (string, error) { return "installation-token", nil },
 	}
 	github := Repo{ID: uuid.New(), Org: org, Source: "github", Name: "acme/app", GitHubRepoID: 42, InstallationID: 7}
@@ -157,5 +162,5 @@ func TestBundleRefusesOptionLikeRefsAndUnknownRefs(t *testing.T) {
 	assert.Contains(t, err.Error(), `resolve refs/heads/missing in `+repo.String())
 
 	_, err = sources.Bundle(context.Background(), Repo{ID: repo, Org: org, Source: "svn"}, "refs/heads/main", &bytes.Buffer{})
-	require.EqualError(t, err, `repository `+repo.String()+` has source "svn", not push or github`)
+	require.EqualError(t, err, `repository `+repo.String()+` has source "svn", not push, github, gitlab, azure_devops or git`)
 }

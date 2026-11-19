@@ -37,7 +37,7 @@ func (s *Sources) Checkout(ctx context.Context, repo Repo) (Checkout, error) {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return Checkout{}, fmt.Errorf("create the workspace directory for %s: %w", repo.label(), err)
 		}
-		if err := cloneWhole(ctx, dir, "clone", "--quiet", "--no-checkout", "--config", "core.symlinks=false", source); err != nil {
+		if err := cloneWhole(ctx, nil, dir, "clone", "--quiet", "--no-checkout", "--config", "core.symlinks=false", source); err != nil {
 			return Checkout{}, fmt.Errorf("clone the workspace of %s: %w", repo.label(), err)
 		}
 	} else if _, err := runGit(ctx, nil, "-C", dir, "fetch", "--quiet", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
@@ -66,10 +66,10 @@ func (s *Sources) sourceDir(ctx context.Context, repo Repo) (string, error) {
 	switch repo.Source {
 	case "push":
 		return filepath.Join(s.DataDir, "repos", repo.Org.String(), repo.ID.String()+".git"), nil
-	case "github":
+	case "github", "gitlab", "azure_devops", "git":
 		return s.updateMirror(ctx, repo)
 	default:
-		return "", fmt.Errorf("repository %s has source %q, not push or github", repo.ID, repo.Source)
+		return "", fmt.Errorf("repository %s has source %q, not push, github, gitlab, azure_devops or git", repo.ID, repo.Source)
 	}
 }
 

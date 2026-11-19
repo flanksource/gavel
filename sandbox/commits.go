@@ -107,11 +107,12 @@ func (s *Sources) PublishRunBranch(ctx context.Context, repo Repo, branch, sha s
 // pushNewBranch creates branch at sha on GitHub, from source, repo's mirror. A branch GitHub has
 // already is never moved: it's ErrBranchExists.
 func (s *Sources) pushNewBranch(ctx context.Context, repo Repo, source, branch, sha string) error {
-	header, err := s.authHeader(ctx, repo)
+	remote, err := s.remote(ctx, repo)
 	if err != nil {
 		return err
 	}
-	existing, err := runGit(ctx, nil, "-c", header, "ls-remote", s.githubURL(repo), "refs/heads/"+branch)
+	defer remote.done()
+	existing, err := runGitWith(ctx, remote.env, nil, "ls-remote", remote.url, "refs/heads/"+branch)
 	if err != nil {
 		return fmt.Errorf("look for branch %s of %s on GitHub: %w", branch, repo.label(), err)
 	}
@@ -120,8 +121,8 @@ func (s *Sources) pushNewBranch(ctx context.Context, repo Repo, source, branch, 
 	}
 	// The mirror's origin pushes everything; this pushes the one branch, to its URL. The lease
 	// refuses a branch created since the check above.
-	if _, err := runGit(ctx, nil, "-c", header, "-C", source, "push", "--quiet",
-		"--force-with-lease=refs/heads/"+branch+":", s.githubURL(repo), sha+":refs/heads/"+branch); err != nil {
+	if _, err := runGitWith(ctx, remote.env, nil, "-C", source, "push", "--quiet",
+		"--force-with-lease=refs/heads/"+branch+":", remote.url, sha+":refs/heads/"+branch); err != nil {
 		return fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), err)
 	}
 	return nil
@@ -227,12 +228,13 @@ func (s *Sources) ResetRunBranch(ctx context.Context, repo Repo, branch, tip, he
 // moveBranch pushes branch of repo on GitHub from one commit to another, from dir, the
 // repository's mirror. The lease refuses a branch that isn't at from.
 func (s *Sources) moveBranch(ctx context.Context, repo Repo, dir, branch, from, to string) error {
-	header, err := s.authHeader(ctx, repo)
+	remote, err := s.remote(ctx, repo)
 	if err != nil {
 		return err
 	}
-	_, err = runGit(ctx, nil, "-c", header, "-C", dir, "push", "--quiet", "--force-with-lease=refs/heads/"+branch+":"+from,
-		"--", s.githubURL(repo), to+":refs/heads/"+branch)
+	defer remote.done()
+	_, err = runGitWith(ctx, remote.env, nil, "-C", dir, "push", "--quiet", "--force-with-lease=refs/heads/"+branch+":"+from,
+		"--", remote.url, to+":refs/heads/"+branch)
 	return err
 }
 
@@ -261,11 +263,13 @@ func (s *Sources) PushPRHead(ctx context.Context, repo Repo, headURL, branch, ba
 		return "", err
 	}
 	defer done()
-	header, err := s.authHeader(ctx, repo)
+	// The remote's credentials are scoped to its host, which a fork on GitHub shares.
+	remote, err := s.remote(ctx, repo)
 	if err != nil {
 		return "", err
 	}
-	if _, err := runGit(ctx, nil, "-c", header, "-C", source, "push", "--quiet",
+	defer remote.done()
+	if _, err := runGitWith(ctx, remote.env, nil, "-C", source, "push", "--quiet",
 		"--force-with-lease=refs/heads/"+branch+":"+base, "--", headURL, sha+":refs/heads/"+branch); err != nil {
 		return "", fmt.Errorf("push the PR's source branch %s: %w", branch, err)
 	}
