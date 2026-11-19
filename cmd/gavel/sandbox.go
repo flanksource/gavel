@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -79,6 +81,11 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		dispatcher.Logs = cache.OrgBlobs
 	}
 	if opts.Sandbox == "substrate" {
+		templates, err := orgTemplates(opts, db)
+		if err != nil {
+			return nil, err
+		}
+		dispatcher.Templates = templates
 		dispatcher.Sources = sources
 		// Each run's requests carry its organization's keys, which the credential provider in
 		// substrate's cluster fetches from this gavel by the run.
@@ -118,6 +125,42 @@ func sweepSandbox(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Du
 	if err != nil && ctx.Err() == nil {
 		logger.Warnf("sweep the sandbox environments runs left behind: %v", err)
 	}
+}
+
+// orgTemplates gives each organization's runs their own copy of --substrate-template, at
+// --substrate-cpu and --substrate-memory unless a platform admin set the organization's size.
+func orgTemplates(opts DashboardOptions, db *gorm.DB) (*sandbox.OrgTemplates, error) {
+	size, err := substrateSize(opts)
+	if err != nil {
+		return nil, err
+	}
+	client, err := substrate.Dial(substrateOptions(opts))
+	if err != nil {
+		return nil, fmt.Errorf("--sandbox substrate: %w", err)
+	}
+	return &sandbox.OrgTemplates{DB: db, Client: client, Atespace: opts.SubstrateAtespace, Base: opts.SubstrateTemplate, Size: size}, nil
+}
+
+// substrateSize is --substrate-cpu and --substrate-memory; a flag left empty is zero, which the
+// base template's size fills.
+func substrateSize(opts DashboardOptions) (substrate.Size, error) {
+	var size substrate.Size
+	var errs []error
+	if opts.SubstrateCPU != "" {
+		cpu, err := resource.ParseQuantity(opts.SubstrateCPU)
+		if err != nil || cpu.Sign() <= 0 {
+			errs = append(errs, fmt.Errorf("--substrate-cpu must be a positive Kubernetes quantity such as 2 or 500m, got %q", opts.SubstrateCPU))
+		}
+		size.CPUMillicores = cpu.MilliValue()
+	}
+	if opts.SubstrateMemory != "" {
+		memory, err := resource.ParseQuantity(opts.SubstrateMemory)
+		if err != nil || memory.Sign() <= 0 {
+			errs = append(errs, fmt.Errorf("--substrate-memory must be a positive Kubernetes quantity such as 4Gi, got %q", opts.SubstrateMemory))
+		}
+		size.MemoryBytes = memory.Value()
+	}
+	return size, errors.Join(errs...)
 }
 
 // substrateOptions is how the --substrate-* flags reach the substrate jobs and agent runs execute

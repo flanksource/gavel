@@ -49,6 +49,8 @@ type DashboardOptions struct {
 	SubstrateClientKey          string   `flag:"substrate-client-key" help:"Key of --substrate-client-cert (substrate)"`
 	SubstrateAtespace           string   `flag:"substrate-atespace" help:"Atespace sandbox environments are created in (substrate)" default:"ate-env"`
 	SubstrateTemplate           string   `flag:"substrate-template" help:"Image template sandbox environments are created from, registered with ate-env manifest template --rootfs-image (substrate)"`
+	SubstrateCPU                string   `flag:"substrate-cpu" help:"CPU of an organization's sandbox environments unless a platform admin set its own, such as 2 or 500m; empty is --substrate-template's (substrate)"`
+	SubstrateMemory             string   `flag:"substrate-memory" help:"Memory of an organization's sandbox environments unless a platform admin set its own, such as 4Gi; empty is --substrate-template's (substrate)"`
 	SubstrateEgress             []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides gavel serve, the Go, npm and Python registries and GitHub; repeat for each (substrate)"`
 	SubstrateGavelName          string   `flag:"substrate-gavel-name" help:"The name substrate's credential provider knows this gavel by, in each run's model key URI, e.g. beta (substrate)"`
 	SubstrateTrustBundle        string   `flag:"substrate-trust-bundle" help:"Path in the environment of the egress gateway's CA, which jobs trust for hosts with an injected credential (substrate)"`
@@ -177,6 +179,9 @@ func (o DashboardOptions) Validate() error {
 			}
 		default:
 			add("--sandbox must be docker, podman, kubernetes or substrate, got %q", o.Sandbox)
+		}
+		if _, err := substrateSize(o); err != nil {
+			add("%v", err)
 		}
 		if o.Sandbox == "substrate" {
 			switch {

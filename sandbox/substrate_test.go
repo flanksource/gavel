@@ -242,6 +242,30 @@ func TestSubstrateWarnsWhenAFinishedJobsEnvironmentIsNotDeleted(t *testing.T) {
 		"delete substrate environment ate-env/gavel-run-"+run.String()+": rpc error: code = Internal desc = object-store plugin upload failed")
 }
 
+func TestSubstrateCreatesAJobsEnvironmentFromTheTemplateItNames(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	for template, want := range map[string]string{"gavel-org-acme": "gavel-org-acme", "": "gavel-runner"} {
+		run := uuid.New()
+		api := &fakeRunAPI{}
+		server, executor, _ := startSubstrate(t, api.handler())
+		var created string
+		api.onSpec = func(run string) {
+			if env, ok := server.Environment("ate-env", "gavel-run-"+run); ok {
+				created = env.Template
+			}
+		}
+		job := testJob(t, run, "0")
+		job.Template = template
+
+		handle, err := executor.Submit(ctx, job)
+		require.NoError(t, err)
+		_, err = handle.Wait(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, want, created, "a job naming no template gets the executor's")
+	}
+}
+
 func TestSubstrateCancelKillsTheJobAndRemovesItsEnvironment(t *testing.T) {
 	run := uuid.New()
 	server, executor, _ := startSubstrate(t, (&fakeRunAPI{}).handler())

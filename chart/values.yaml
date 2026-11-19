@@ -81,6 +81,12 @@ sandbox:
     # Image template environments are created from, which sets the runner image they run (see
     # sandbox/runner.Dockerfile): register it with `ate-env manifest template --rootfs-image`.
     template: ""
+    # Size of each organization's environments: a copy of the template at this CPU and memory is
+    # made for every organization. Empty is the template's own size. A platform admin can give an
+    # organization its own size on the platform dashboard.
+    size:
+      cpu: ""
+      memory: ""
     # Hosts environments may reach besides gavel serve, the Go, npm and Python registries and GitHub.
     egress: []
     # The name substrate's credential provider knows this gavel by, in each run's model key URI,

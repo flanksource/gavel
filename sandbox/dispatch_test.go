@@ -74,12 +74,17 @@ type sandboxRunRow struct {
 	SHA        string
 	StartedAt  *time.Time
 	FinishedAt *time.Time
+	// Template, CPUMillicores and MemoryBytes are the substrate template the run's environment
+	// came from and its size.
+	Template      string
+	CPUMillicores *int64
+	MemoryBytes   *int64
 }
 
 func readRun(t *testing.T, db *gorm.DB, id uuid.UUID) sandboxRunRow {
 	t.Helper()
 	var row sandboxRunRow
-	require.NoError(t, db.Raw(`SELECT status, exit_code, backend, backend_ref, log_key, kind, ref, sha, started_at, finished_at FROM sandbox_runs WHERE id = ?`, id).Scan(&row).Error)
+	require.NoError(t, db.Raw(`SELECT status, exit_code, backend, backend_ref, log_key, kind, ref, sha, started_at, finished_at, template, cpu_millicores, memory_bytes FROM sandbox_runs WHERE id = ?`, id).Scan(&row).Error)
 	return row
 }
 
@@ -132,6 +137,9 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.NotNil(t, row.StartedAt)
 	assert.NotNil(t, row.FinishedAt)
 	assert.Equal(t, "runs/"+run.ID.String()+"/log.txt", row.LogKey)
+	assert.Empty(t, row.Template, "without org templates a run records no template")
+	assert.Nil(t, row.CPUMillicores)
+	assert.Nil(t, row.MemoryBytes)
 
 	reader, err := logs.Read(ctx, "orgs/"+org.String()+"/"+row.LogKey)
 	require.NoError(t, err)
@@ -156,6 +164,7 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, "ghcr.io/flanksource/gavel-runner:1", job.Image)
 	assert.Equal(t, []string{"gavel", "runner", "exec", "--run", run.ID.String()}, job.Command)
 	assert.Nil(t, job.Source, "an executor that brings no source in leaves the job to download it")
+	assert.Empty(t, job.Template, "without org templates the executor's own template is used")
 	assert.Equal(t, map[string]string{"GAVEL_SERVER": "https://gavel.example", "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"}, job.Env)
 	tokenRun, tokenOrg, err := VerifyRunToken(dispatcher.TokenKey, job.SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(44*time.Minute))
 	require.NoError(t, err, "the token outlives the timeout by 15 minutes")
@@ -163,6 +172,46 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, org, tokenOrg)
 	_, _, err = VerifyRunToken(dispatcher.TokenKey, job.SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(46*time.Minute))
 	assert.Error(t, err, "and no longer")
+}
+
+func TestDispatcherRunsEachRunFromItsOrganizationsTemplateAndRecordsItsSize(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	templates, server := orgTemplatesOn(t, db, substrate.Size{CPUMillicores: 1000, MemoryBytes: 2 << 30})
+	dispatcher.Templates = templates
+	ctx := context.Background()
+	want, err := templates.Resolve(ctx, org)
+	require.NoError(t, err)
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.NoError(t, err)
+	_, err = run.Wait(ctx)
+	require.NoError(t, err)
+	require.Len(t, executor.submitted, 1)
+	assert.Equal(t, want.Name, executor.submitted[0].Template, "the job's environment comes from its organization's template")
+	row := readRun(t, db, run.ID)
+	assert.Equal(t, want.Name, row.Template)
+	require.NotNil(t, row.CPUMillicores)
+	require.NotNil(t, row.MemoryBytes)
+	assert.Equal(t, int64(1000), *row.CPUMillicores)
+	assert.Equal(t, int64(2<<30), *row.MemoryBytes)
+
+	recorded, err := dispatcher.RecordRun(ctx, uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
+	require.NoError(t, err)
+	recorded.Finish(true)
+	assert.Equal(t, want.Name, recorded.Template, "an agent run's environment comes from its organization's template too")
+	assert.Equal(t, want.Name, readRun(t, db, recorded.ID).Template)
+
+	require.NoError(t, templates.Client.DeleteTemplate(ctx, "gavel-runner"))
+	_, ok := server.Template("ate-env", "gavel-runner")
+	require.False(t, ok)
+	refused := uuid.New()
+	_, err = dispatcher.StartRun(ctx, refused, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "give organization "+org.String()+" its substrate template")
+	var rows int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM sandbox_runs WHERE id = ?`, refused).Scan(&rows).Error)
+	assert.Zero(t, rows, "a run with no template to run from isn't recorded")
 }
 
 func TestDispatcherGivesAJobItsSourceForAnExecutorThatBringsItIn(t *testing.T) {

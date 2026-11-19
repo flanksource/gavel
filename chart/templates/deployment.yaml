@@ -90,6 +90,16 @@ spec:
             - {{ .atespace | quote }}
             - --substrate-template
             - {{ .template | quote }}
+            {{- with .size }}
+            {{- if .cpu }}
+            - --substrate-cpu
+            - {{ .cpu | quote }}
+            {{- end }}
+            {{- if .memory }}
+            - --substrate-memory
+            - {{ .memory | quote }}
+            {{- end }}
+            {{- end }}
             {{- range .egress }}
             - --substrate-egress
             - {{ . | quote }}

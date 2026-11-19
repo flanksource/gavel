@@ -392,6 +392,16 @@ func TestChartRunsSandboxJobsOnSubstrate(t *testing.T) {
 	assert.NotContains(t, strings.Join(serveContainer(t, render(t)).Args, " "), "--sandbox", "the sandbox is off unless enabled")
 }
 
+func TestChartSizesEachOrganizationsSubstrateEnvironments(t *testing.T) {
+	requireHelm(t)
+	args := strings.Join(serveContainer(t, render(t, substrateSandbox()...)).Args, " ")
+	assert.NotContains(t, args, "--substrate-cpu", "by default an organization's environments are the template's size")
+	assert.NotContains(t, args, "--substrate-memory")
+
+	args = strings.Join(serveContainer(t, render(t, append(substrateSandbox(), "sandbox.substrate.size.cpu=500m", "sandbox.substrate.size.memory=2Gi")...)).Args, " ")
+	assert.Contains(t, args, " --substrate-cpu 500m --substrate-memory 2Gi")
+}
+
 func TestChartReachesSubstrateInAnotherCluster(t *testing.T) {
 	requireHelm(t)
 	m := render(t, append(substrateSandbox(),

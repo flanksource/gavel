@@ -34,6 +34,9 @@ type Job struct {
 	// Source is the repository the job's commit is in, for an executor that brings the source
 	// into the job itself; nil leaves the job to download it.
 	Source *JobSource
+	// Template is the substrate template the job's environment is created from, its
+	// organization's; empty is the executor's own. Other executors ignore it.
+	Template string
 }
 
 // JobSource is the repository on serve a job's commit is in.

@@ -105,6 +105,9 @@ func (e *substrateExecutor) Submit(ctx context.Context, job Job) (Handle, error)
 	options["env"] = env
 	options["credentials"] = SubstrateCredentialOptions(job.Credentials)
 	options["maxLifetime"] = (timeout + reportTime).String()
+	if job.Template != "" {
+		options["template"] = job.Template
+	}
 	logger.Infof("sandbox run %s in substrate environment %s/%s: the egress gateway injects %s", job.RunID, e.options.Atespace, JobName(job.RunID), injections(job.Credentials))
 
 	handle := newSubstrateHandle(JobName(job.RunID))
