@@ -85,6 +85,11 @@ export function OrgBudgets() {
   return (
     <section className="flex flex-col gap-2">
       <h3 className="font-medium">Budgets</h3>
+      <p className="text-xs text-muted-foreground">
+        A used-up budget refuses new runs and stops the ones running, saying why. CPU and memory budgets hold back every
+        run; token and model cost budgets hold back agent runs only, as only they call models. A run that would take the
+        organization over a budget at once waits its turn for room, and fails if none comes in time.
+      </p>
       {data && data.budgets.length === 0 && <p>No budgets: this organization's runs and model calls are not capped.</p>}
       {data && data.budgets.map(budget => (
         <div key={`${budget.resource}/${budget.kind}`} className="flex items-center justify-between gap-2 rounded border border-border px-3 py-1">
