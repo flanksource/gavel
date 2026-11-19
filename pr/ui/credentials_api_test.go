@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/gavel/budget"
 	"github.com/flanksource/gavel/internal/logtest"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/sandbox"
@@ -87,4 +88,38 @@ func TestCredentialFetch(t *testing.T) {
 	assert.Contains(t, logged.String(), "credential fetch for run "+running.String()+": organization "+org.String()+"'s anthropic key")
 	assert.Contains(t, logged.String(), "credential fetch for run "+finished.String()+"'s anthropic key refused: run "+finished.String()+" is succeeded, not active")
 	assert.NotContains(t, logged.String(), "route-test-key", "the key is never logged")
+}
+
+func TestCredentialFetchRefusesAnOrganizationWhoseModelBudgetIsUsedUp(t *testing.T) {
+	useModelKeyKeeper(t)
+	db, _, org := openOrgDB(t)
+	require.NoError(t, modelkeys.Store{DB: db}.Set(t.Context(), org, nil, "anthropic-api-key", modelKeysTestAPIKey))
+	run := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend, spec, created_at)
+		VALUES (?, ?, 'agent', 'running', 'substrate', '{"kind":"agent"}', now())`, run, org).Error)
+	session, turn := uuid.New(), uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO captain_sessions (id, source) VALUES (?, 'test')`, session).Error)
+	require.NoError(t, db.Exec(`INSERT INTO session_owners (session_id, org_id) VALUES (?, ?)`, session, org).Error)
+	require.NoError(t, db.Exec(`INSERT INTO captain_turns (id, session_id, turn_index, status) VALUES (?, ?, 0, 'ended')`, turn, session).Error)
+	require.NoError(t, db.Exec(`INSERT INTO captain_model_calls (id, turn_id, call_index, model, currency, input_tokens, created_at)
+		VALUES (?, ?, 0, 'claude-sonnet', 'USD', 5000, now())`, uuid.New(), turn).Error)
+	api := &CredentialsAPI{DB: db, Keys: modelkeys.Store{DB: db}, Atespace: "ate-env", RunLifetime: 75 * time.Minute, Token: "provider-token", Budgets: &budget.Store{DB: db}}
+	fetch := func() (int, string) {
+		body := `{"run":"` + run.String() + `","provider":"anthropic","actor":"` + sandbox.SubstrateActor("ate-env", run) + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/credentials/fetch", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer provider-token")
+		rec := httptest.NewRecorder()
+		api.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+
+	status, body := fetch()
+	require.Equal(t, http.StatusOK, status, "without a budget the key is handed out: %s", body)
+
+	_, err := budget.Store{DB: db}.Set(t.Context(), org, nil, budget.Budget{Resource: budget.Tokens, Kind: budget.Cumulative, Amount: 5000, Window: "now/M"})
+	require.NoError(t, err)
+	status, body = fetch()
+	assert.Equal(t, http.StatusForbidden, status)
+	assert.Contains(t, body, "this organization has used 5000 tokens of its 5000 tokens token budget")
+	assert.NotContains(t, body, modelKeysTestAPIKey)
 }

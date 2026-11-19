@@ -65,8 +65,12 @@ type Dispatcher struct {
 	// template, whose name and size the run records.
 	Templates *OrgTemplates
 	// Admission, when set with Templates, admits each run within its organization's budgets: a
-	// run is refused, or waits its turn, as they say.
+	// run is refused, or waits its turn, as they say, and Enforce stops running runs.
 	Admission *Admission
+
+	// active are the running runs Enforce can stop.
+	activeMu sync.Mutex
+	active   map[uuid.UUID]*activeRun
 }
 
 // ErrNoModelKey refuses an agent run whose organization has no model key.
@@ -262,6 +266,12 @@ func (d *Dispatcher) launch(ctx context.Context, run *Run, scope tenant.Scope, s
 	run.mu.Lock()
 	run.handle = handle
 	run.mu.Unlock()
+	d.track(run.ID, scope.OrgID, spec.Kind == "agent", func(reason error) {
+		d.setStatusMessage(context.WithoutCancel(ctx), run.ID, "stopped: "+reason.Error())
+		if err := handle.Cancel(context.WithoutCancel(ctx)); err != nil {
+			logger.Warnf("stop sandbox run %s: %v", run.ID, err)
+		}
+	})
 	logKey := "runs/" + run.ID.String() + "/log.txt"
 	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', status_message = '', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
 		handle.Ref(), logKey, run.ID).Error; err != nil {
@@ -356,8 +366,12 @@ type RecordedRun struct {
 	Template string
 	// Log takes the run's output, which is stored as its log and shown on its task.
 	Log    io.Writer
+	ctx    context.Context
 	finish func(succeeded bool)
 }
+
+// Context ends when the dispatcher stops the run, with why as its cause; the run executes within it.
+func (r *RecordedRun) Context() context.Context { return r.ctx }
 
 // Finish stores the run's log and records whether it succeeded.
 func (r *RecordedRun) Finish(succeeded bool) { r.finish(succeeded) }
@@ -398,10 +412,16 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 		JobName(id), logKey, id).Error; err != nil {
 		logger.Warnf("record sandbox run %s as running: %v", id, err)
 	}
-	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: recorded.credentials, Template: recorded.template.Name, Log: writer, finish: func(succeeded bool) {
+	runCtx, stop := context.WithCancelCause(ctx)
+	d.track(id, scope.OrgID, spec.Kind == "agent", func(reason error) {
+		d.setStatusMessage(context.WithoutCancel(ctx), id, "stopped: "+reason.Error())
+		stop(reason)
+	})
+	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: recorded.credentials, Template: recorded.template.Name, Log: writer, ctx: runCtx, finish: func(succeeded bool) {
 		_ = writer.Close()
 		<-stored
 		ticket.Release()
+		defer stop(nil)
 		status := "succeeded"
 		if !succeeded {
 			status = "failed"
@@ -453,6 +473,9 @@ func (d *Dispatcher) storeLog(ctx context.Context, id, org uuid.UUID, logKey str
 }
 
 func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, exitCode *int) {
+	if d.untrack(id) {
+		status = "cancelled"
+	}
 	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = ?, exit_code = ?, finished_at = now() WHERE id = ?`,
 		status, exitCode, id).Error; err != nil {
 		logger.Warnf("record sandbox run %s as %s: %v", id, status, err)

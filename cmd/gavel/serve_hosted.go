@@ -22,6 +22,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/api"
+	"github.com/flanksource/gavel/budget"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
@@ -193,6 +194,10 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 			}
 			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime(), templates)
 		}
+		if dispatcher.Admission != nil {
+			// Running runs stop once a cumulative budget of their organization is used up.
+			go dispatcher.WatchBudgets(ctx, dispatcher.Admission.Recheck)
+		}
 	}
 
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
@@ -270,6 +275,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		credentials := &ui.CredentialsAPI{
 			DB: db, Keys: modelkeys.Store{DB: db}, Atespace: opts.SubstrateAtespace,
 			RunLifetime: dispatcher.RunLifetime(), Token: opts.credentialProviderToken,
+			Budgets: &budget.Store{DB: db},
 		}
 		root.Handle("/api/credentials/", credentials.Handler())
 	}
