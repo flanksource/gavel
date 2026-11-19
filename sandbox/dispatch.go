@@ -441,14 +441,18 @@ func (d *Dispatcher) follow(ctx context.Context, id, org uuid.UUID, handle Handl
 	}
 	result, err := handle.Wait(ctx)
 	if err != nil {
-		d.finish(ctx, id, "failed", nil)
+		if stopped := d.finish(ctx, id, "failed", nil); stopped != nil {
+			return Result{}, fmt.Errorf("sandbox run %s stopped: %w", id, stopped)
+		}
 		return Result{}, fmt.Errorf("sandbox run %s: %w", id, err)
 	}
 	status := "succeeded"
 	if result.ExitCode != 0 {
 		status = "failed"
 	}
-	d.finish(ctx, id, status, &result.ExitCode)
+	if stopped := d.finish(ctx, id, status, &result.ExitCode); stopped != nil {
+		return result, fmt.Errorf("sandbox run %s stopped: %w", id, stopped)
+	}
 	return result, nil
 }
 
@@ -472,14 +476,18 @@ func (d *Dispatcher) storeLog(ctx context.Context, id, org uuid.UUID, logKey str
 	}
 }
 
-func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, exitCode *int) {
-	if d.untrack(id) {
+// finish records how run id ended, as cancelled when the dispatcher stopped it, and returns why it
+// was stopped: nil when it wasn't.
+func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, exitCode *int) (stopped error) {
+	stopped = d.untrack(id)
+	if stopped != nil {
 		status = "cancelled"
 	}
 	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = ?, exit_code = ?, finished_at = now() WHERE id = ?`,
 		status, exitCode, id).Error; err != nil {
 		logger.Warnf("record sandbox run %s as %s: %v", id, status, err)
 	}
+	return stopped
 }
 
 // finishWith records how run id ended, and why.
