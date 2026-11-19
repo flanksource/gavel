@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"strings"
 
 	shared "github.com/flanksource/commons-db/cmd/query/connections"
 	connectioncli "github.com/flanksource/commons-db/cmd/query/connections/cli"
 	catalog "github.com/flanksource/gavel/connections"
+	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/tenant"
 	"gorm.io/gorm"
 )
@@ -37,7 +40,7 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	result, err := connectionResult(service, w, r, scope)
+	result, err := connectionResult(service, w, r, scope, s.hosted)
 	if closeErr := close(); closeErr != nil {
 		writeJSONError(w, http.StatusServiceUnavailable, errors.Join(err, closeErr))
 		return
@@ -68,7 +71,7 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, safe)
 }
 
-func connectionResult(service *shared.Service, w http.ResponseWriter, r *http.Request, scope tenant.Scope) (any, error) {
+func connectionResult(service *shared.Service, w http.ResponseWriter, r *http.Request, scope tenant.Scope, hosted bool) (any, error) {
 	ref := r.PathValue("reference")
 	switch {
 	case r.Method == http.MethodGet && ref == "":
@@ -99,9 +102,30 @@ func connectionResult(service *shared.Service, w http.ResponseWriter, r *http.Re
 	if _, supplied := body["created_by"]; supplied {
 		return nil, fmt.Errorf("creator comes from the authenticated scope")
 	}
+	if hosted {
+		if err := hostedConnectionType(body["type"], ref == ""); err != nil {
+			return nil, err
+		}
+	}
 	if ref == "" {
 		body["created_by"] = scope.UserID
 		return service.Create(r.Context(), body)
 	}
 	return service.Update(r.Context(), ref, body)
+}
+
+// hostedConnectionType refuses a type other than the git ones a hosted organization's
+// repositories come from: any other would have serve connect to whatever the organization names.
+// An update that leaves the type alone needs none.
+func hostedConnectionType(value any, required bool) error {
+	kind, _ := value.(string)
+	switch {
+	case kind == "" && !required:
+		return nil
+	case kind == "":
+		return fmt.Errorf("a hosted organization's connection needs a type: one of %s", strings.Join(forge.GitTypes, ", "))
+	case !slices.Contains(forge.GitTypes, kind):
+		return fmt.Errorf("a hosted organization keeps only git connections (%s), not %s", strings.Join(forge.GitTypes, ", "), kind)
+	}
+	return nil
 }

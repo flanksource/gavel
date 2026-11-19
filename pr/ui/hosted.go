@@ -27,6 +27,10 @@ var hostedPassThrough = []string{
 	"GET /api/ssh-keys", "POST /api/ssh-keys", "DELETE /api/ssh-keys/{id}",
 	"GET /api/filters", "GET /api/filters/{name}", "POST /api/filters/{name}/values", "DELETE /api/filters/{name}/values",
 	"GET /api/model-keys", "PUT /api/model-keys/{provider}", "DELETE /api/model-keys/{provider}",
+	// The organization's git connections (see connections.go). Validating one dials it, which
+	// stays off until hosted dials are limited to public addresses.
+	"GET /api/connections/storage", "GET /api/connections", "POST /api/connections", "GET /api/connections/{reference}",
+	"PATCH /api/connections/{reference}", "DELETE /api/connections/{reference}",
 	"GET /api/sandbox-runs", "GET /api/sandbox-runs/{id}/log",
 
 	"/api/prs", "/api/prs/stream", "/api/prs/refresh", "/api/prs/bots", "/api/prs/closed",
