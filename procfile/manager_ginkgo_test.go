@@ -1,9 +1,10 @@
+// Tests a Supervisor's named starts: which processes it registers and starts when given names, and
+// that it refuses an unknown name or conflicting selections.
 package procfile_test
 
 import (
 	"os"
 	"path/filepath"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -32,7 +33,7 @@ var _ = Describe("Manager named starts", func() {
 		Expect(supervisor.Start()).To(Succeed())
 		DeferCleanup(supervisor.Shutdown)
 
-		waitFor(3*time.Second, func() bool {
+		waitFor(runningTimeout, func() bool {
 			return statusOf(supervisor, "storybook") == pf.StatusRunning
 		})
 		Expect(supervisor.State().Processes).To(HaveLen(2))
@@ -40,7 +41,7 @@ var _ = Describe("Manager named starts", func() {
 
 		_, err = pf.Start(root, "", []string{"sink"}, "")
 		Expect(err).NotTo(HaveOccurred())
-		waitFor(3*time.Second, func() bool {
+		waitFor(runningTimeout, func() bool {
 			return statusOf(supervisor, "sink") == pf.StatusRunning
 		})
 	})
@@ -57,7 +58,7 @@ var _ = Describe("Manager named starts", func() {
 		Expect(supervisor.Start()).To(Succeed())
 		DeferCleanup(supervisor.Shutdown)
 
-		waitFor(3*time.Second, func() bool {
+		waitFor(runningTimeout, func() bool {
 			return statusOf(supervisor, "storybook") == pf.StatusRunning
 		})
 		Expect(supervisor.State().Processes).To(HaveLen(1))
