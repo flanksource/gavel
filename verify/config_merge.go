@@ -46,5 +46,12 @@ func MergeGavelConfig(base, override GavelConfig) GavelConfig {
 // The lists that accumulate across layers instead of being replaced say so on the
 // field, with a `merge:"append"` tag.
 func configPolicy() merge.Policy {
-	return api.MergePolicy().With(merge.Policy{Merger: []any{PromptSpec{}, processruntime.Options{}, runconfig.Test{}, runconfig.Lint{}}})
+	return api.MergePolicy().With(merge.Policy{Merger: []any{PromptSpec{}, processruntime.Options{}, runconfig.Test{}, runconfig.Lint{}, LintLinterConfig{}}})
+}
+
+func (c LintLinterConfig) Merge(override LintLinterConfig) LintLinterConfig {
+	type structural LintLinterConfig
+	out := LintLinterConfig(merge.Apply(structural(c), structural(override), configPolicy()))
+	out.Config = merge.Apply(c.Config, override.Config, merge.Policy{})
+	return out
 }

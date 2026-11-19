@@ -8,7 +8,7 @@ import (
 )
 
 func lintSchema() map[string]any {
-	return object(
+	schema := object(
 		"Settings for `gavel lint`.",
 		map[string]any{
 			"options": runconfig.Schema(runconfig.Lint{}, false),
@@ -53,7 +53,7 @@ func lintSchema() map[string]any {
 					map[string]any{
 						"options": runconfig.Schema(runconfig.Lint{}, true),
 						"runtime": runtimeSchema(),
-						"config":  map[string]any{"type": "object", "description": "Native UIR configuration document, passed to the executable through a temporary project .uir.d fragment. UIR validates its contents.", "additionalProperties": true},
+						"config":  map[string]any{"type": "object", "description": "Native linter configuration. UIR accepts its native document; github has typed repository-selection settings.", "additionalProperties": true},
 						"args":    stringArray("Native linter arguments. Nonempty lists replace inherited arguments."),
 						"enabled": boolProp(
 							"Force the linter on (true) or off (false). Omit to keep the linter's built-in " +
@@ -67,6 +67,9 @@ func lintSchema() map[string]any {
 			),
 		},
 	)
+	linters := schema["properties"].(map[string]any)["linters"].(map[string]any)
+	linters["properties"] = map[string]any{"github": githubLinterSchema(linters["additionalProperties"].(map[string]any))}
+	return schema
 }
 
 // commitTypeNames is the vocabulary offered for commit.types, read from the same

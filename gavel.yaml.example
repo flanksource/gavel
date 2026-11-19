@@ -88,6 +88,19 @@ lint:
     vale:
       enabled: false
 
+    # Runs only with `gavel lint github` or `--linters github`.
+    # `config` is also used by the UIR linter for its native document.
+    github:
+      config:
+        orgs: [acme]
+        # Names or GitHub search queries; queries add to org discovery.
+        # Set orgs: [] for topic-only selection. Add fork:true to include forks.
+        repos: [personal/service, "org:acme topic:mission-control"]
+        # Case-insensitive full owner/repo globs; exclusions always win.
+        excludeRepos: ["acme/legacy-*", "retired-org/*"]
+        # Positive Go duration; native --stale-after overrides it.
+        staleAfter: 720h
+
 commit:
   # Each AI operation accepts a bare prompt string, an object like these, or a
   # `file` path relative to this .gavel.yaml. Unset model fields inherit from ai.

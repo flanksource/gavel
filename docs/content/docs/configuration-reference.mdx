@@ -229,11 +229,17 @@ Settings for `gavel lint`.
 | `lint.schemas` | map[glob]string | `{}` | later layer wins per glob | JSON Schemas for files and Markdown frontmatter that declare none (see below). |
 | `lint.linters.<name>.enabled` | bool | linter default | later layer wins per linter | Force a linter on/off. Omit to use the linter's built-in default. |
 | `lint.linters.uir.config` | object | — | standard config layering | Complete native UIR document, written to a temporary project `.uir.d/` fragment; [UIR integration](/docs/linter-uir). |
+| `lint.linters.github.config.orgs` | string[] | `[]` | replaces, including `[]` | Discover all visible repositories in these GitHub organizations, including forks and archived repositories. |
+| `lint.linters.github.config.repos` | string[] | `[]` | replaces, including `[]` | `owner/repo` names or qualified GitHub repository queries such as `org:acme topic:mission-control`, combined with organization discovery. With neither selector, use the checkout origin; zero query matches do not fall back to the origin. |
+| `lint.linters.github.config.excludeRepos` | string[] | `[]` | replaces, including `[]` | Case-insensitive doublestar globs against full `owner/repo`; exclusions always win. `owner/*` excludes an organization. |
+| `lint.linters.github.config.staleAfter` | string | `720h` | later value wins | Positive Go duration since the PR's last activity; overridden by native `--stale-after`. |
 | `lint.linters.<name>.command` | string[] | — | standard config layering | Declares an external linter named `<name>` (not a built-in's name): the argv of a command that prints one gavel `LinterResult` report; [command linters](/docs/linter-command). |
 | `lint.linters.<name>.includes` | string[] | every file | standard config layering | Globs of the files a command linter lints. |
 
 An ignore rule matches only when **every** populated field matches; an empty
 rule (no `rule`/`source`/`file`/`fingerprint`) never matches.
+
+The GitHub linter runs only when explicitly selected with `gavel lint github` or `--linters github`. Native `--repo owner/repo` replaces configured `orgs`/`repos` selection and retains exclusions. An empty final selection produces a skipped audit. `gavel pr status` uses only the selected PR's CodeQL findings and ignores repository selection. See [repository GitHub lint](/docs/pull-requests#repository-github-lint) for examples. The shared `config` nesting is also used by UIR's native document.
 
 `lint.schemas` maps doublestar file globs to the JSON Schema (path or HTTP(S) URL) of JSON/YAML files, and of Markdown frontmatter, that declare no `$schema`. Globs and relative schema paths resolve against the directory of the `.gavel.yaml` that declares them, and entries merge across layers by glob, so a subdirectory's `.gavel.yaml` can map its own pages. A file matching more than one glob is an error. The `json` linter validates against the mapped schema and `gavel edit` builds its forms from it.
 

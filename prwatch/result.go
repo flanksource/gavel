@@ -159,6 +159,7 @@ func (r PRWatchResult) prettyWorkflows() api.Text {
 		if model.IsFailureConclusion(check.Conclusion) && check.DetailsURL != "" {
 			text = text.NewLine().Append("    "+check.DetailsURL, "text-blue-600")
 		}
+		text = text.Add(prettyCheckLint(check))
 	}
 
 	return text

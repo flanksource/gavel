@@ -149,16 +149,25 @@ func resolveBaseConfig(workDir string, configs []string) (string, error) {
 
 	var merged tomlConfig
 	for _, p := range configs {
-		data, err := os.ReadFile(p)
+		cfg, err := loadTOMLConfig(p, maxExtendDepth)
 		if err != nil {
-			return "", fmt.Errorf("read %s: %w", p, err)
-		}
-		var cfg tomlConfig
-		if err := toml.Unmarshal(data, &cfg); err != nil {
-			return "", fmt.Errorf("parse %s: %w", p, err)
+			return "", err
 		}
 		merged = mergeTOMLConfigs(merged, cfg)
 	}
+	// betterleaks applies extend.disabledRules only to rules of an extended
+	// config; inlined rules are local to this file, so drop disabled ones here.
+	disabled := make(map[string]struct{}, len(merged.Extend.DisabledRules))
+	for _, id := range merged.Extend.DisabledRules {
+		disabled[id] = struct{}{}
+	}
+	enabled := merged.Rules[:0]
+	for _, rule := range merged.Rules {
+		if _, off := disabled[rule.ID]; !off {
+			enabled = append(enabled, rule)
+		}
+	}
+	merged.Rules = enabled
 
 	tmpDir, err := linters.ScratchDir(workDir, "betterleaks")
 	if err != nil {
@@ -173,6 +182,41 @@ func resolveBaseConfig(workDir string, configs []string) (string, error) {
 		return "", fmt.Errorf("write %s: %w", out, err)
 	}
 	return out, nil
+}
+
+// maxExtendDepth bounds extend.path chains so a cycle fails instead of recursing forever.
+const maxExtendDepth = 4
+
+// loadTOMLConfig parses path and inlines its extend.path chain: the extended
+// file (resolved relative to the file declaring it) is loaded first and the
+// declaring config merged over it, then Path is cleared. A merged config may
+// then carry useDefault from another layer without also naming a path, which
+// betterleaks rejects, and no relative path outlives the file it was written for.
+func loadTOMLConfig(path string, depth int) (tomlConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return tomlConfig{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var cfg tomlConfig
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return tomlConfig{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if cfg.Extend.Path == "" {
+		return cfg, nil
+	}
+	if depth == 0 {
+		return tomlConfig{}, fmt.Errorf("%s: extend.path chain deeper than %d", path, maxExtendDepth)
+	}
+	extended := cfg.Extend.Path
+	if !filepath.IsAbs(extended) {
+		extended = filepath.Join(filepath.Dir(path), extended)
+	}
+	parent, err := loadTOMLConfig(extended, depth-1)
+	if err != nil {
+		return tomlConfig{}, fmt.Errorf("%s extend.path: %w", path, err)
+	}
+	cfg.Extend.Path = ""
+	return mergeTOMLConfigs(parent, cfg), nil
 }
 
 func writeScanConfig(opts ResolveConfigOptions, base string) (string, error) {
@@ -274,6 +318,7 @@ type tomlAllowlist struct {
 //     rules across configs, not override them).
 //   - Extend.DisabledRules: unioned and deduped.
 //   - Extend.UseDefault/Path/URL: last-write-wins (override only if set).
+//     Path is already inlined and cleared by loadTOMLConfig on resolve.
 func mergeTOMLConfigs(base, override tomlConfig) tomlConfig {
 	if override.Title != "" {
 		base.Title = override.Title

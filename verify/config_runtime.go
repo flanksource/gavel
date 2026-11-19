@@ -113,8 +113,12 @@ func (c GavelConfig) validateRuntime() error {
 		case len(config.Includes) > 0 && len(config.Command) == 0:
 			return fmt.Errorf("lint.linters.%s.includes applies only to a linter declared by command", name)
 		}
-		if len(config.Config) > 0 && name != "uir" {
-			return fmt.Errorf("lint.linters.%s.config: native config documents are supported only for uir", name)
+		if name == "github" {
+			if _, err := DecodeGitHubLintConfig(config.Config); err != nil {
+				return fmt.Errorf("lint.linters.github.config: %w", err)
+			}
+		} else if len(config.Config) > 0 && name != "uir" {
+			return fmt.Errorf("lint.linters.%s.config: native config documents are supported only for uir and github", name)
 		}
 		if err := config.Runtime.Validate(); err != nil {
 			return fmt.Errorf("lint.linters.%s: %w", name, err)
@@ -140,7 +144,7 @@ func (c GavelConfig) validateRuntime() error {
 	return nil
 }
 
-var BuiltinLinterNames = []string{"golangci-lint", "ruff", "eslint", "oxlint", "react-doctor", "pyright", "tsc", "markdownlint", "vale", "jscpd", "betterleaks", "uir", "json"}
+var BuiltinLinterNames = []string{"golangci-lint", "ruff", "eslint", "oxlint", "react-doctor", "pyright", "tsc", "markdownlint", "vale", "jscpd", "betterleaks", "uir", "json", "github"}
 
 func RuntimeConfigDirectory(executionDir, invocationDir string) string {
 	if invocationDir == "" {

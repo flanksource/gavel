@@ -219,6 +219,9 @@ func fetchGitHubSnapshot(ctx context.Context, opts WatchOptions) (*PRWatchResult
 	}
 	annotateReproduceCommands(gavelResults, opts.Repo, pr.Number)
 	comments := removeRenderedArtifactComments(MergeAndFilter(pr.Comments, pr.ReviewThreads), gavelResults)
+	clientOptions := opts.Options
+	clientOptions.Context = ctx
+	fetchCodeQLFindings(clientOptions, pr)
 	return &PRWatchResult{PR: pr, Runs: runs, Conflicts: github.DetectMergeConflicts(opts.Options, pr), GavelResults: gavelResults, Comments: comments}, nil
 }
 
@@ -300,6 +303,13 @@ func statusExitCode(result *PRWatchResult) int {
 	}
 	if result.PR != nil && result.PR.StatusCheckRollup.HasFailure() {
 		return 1
+	}
+	if result.PR != nil {
+		for _, check := range result.PR.StatusCheckRollup {
+			if check.LintError != "" {
+				return 1
+			}
+		}
 	}
 	for _, summary := range result.GavelResults {
 		if summary != nil && summary.HasFailure() {

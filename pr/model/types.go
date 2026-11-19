@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
+	"github.com/flanksource/gavel/models"
 )
 
 type PRInfo struct {
@@ -88,13 +89,18 @@ type PRAuthor struct {
 type StatusChecks []StatusCheck
 
 type StatusCheck struct {
-	RunID        int64  `json:"runId,omitempty"`
-	JobID        string `json:"jobId,omitempty"`
-	Name         string `json:"name"`
-	Status       string `json:"status"`
-	Conclusion   string `json:"conclusion"`
-	WorkflowName string `json:"workflowName"`
-	DetailsURL   string `json:"detailsUrl"`
+	Required     *bool              `json:"required,omitempty"`
+	NodeID       string             `json:"nodeId,omitempty"`
+	AppSlug      string             `json:"appSlug,omitempty"`
+	Lint         []models.Violation `json:"lint,omitempty"`
+	LintError    string             `json:"lintError,omitempty"`
+	RunID        int64              `json:"runId,omitempty"`
+	JobID        string             `json:"jobId,omitempty"`
+	Name         string             `json:"name"`
+	Status       string             `json:"status"`
+	Conclusion   string             `json:"conclusion"`
+	WorkflowName string             `json:"workflowName"`
+	DetailsURL   string             `json:"detailsUrl"`
 }
 
 type WorkflowRun struct {

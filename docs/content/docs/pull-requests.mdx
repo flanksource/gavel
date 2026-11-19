@@ -9,6 +9,55 @@ order: 20
 
 Use `pr status` to inspect or follow GitHub Actions state for a pull request. It can resolve the current branch's PR automatically, fall back to the most recent PR, and optionally fetch failed job logs.
 
+The GitHub linter supplies CodeQL findings for this PR beneath its CodeQL result check, including every file, line, title, and message. Findings from a required failing CodeQL check are lint errors; otherwise they are warnings. Another failing check never changes their severity. All annotation pages are fetched without requiring `--logs` or Gavel artifacts. `--json` includes findings in each check's `lint` field; retrieval failures appear in `lintError`. `--actions` scopes findings and errors with their check. PR status exit codes still reflect all failed checks, including optional ones. This invocation never audits other PRs, Dependabot, default-branch alerts, or PR health rules.
+
+### Repository GitHub lint
+
+`gavel lint github` explicitly audits all open PRs (including drafts and bots), open Dependabot security alerts, default-branch CodeQL alerts, and CodeQL annotations on open PRs. It does not run during ordinary lint unless selected with `--linters github`.
+
+```bash
+gavel lint github
+gavel lint github -- --repo acme/service --stale-after 720h
+gavel lint github --exclude 'github:pr-stale'
+```
+
+Configure repository selection under `lint.linters.github.config`:
+
+```yaml
+lint:
+  linters:
+    github:
+      config:
+        orgs: [acme]
+        repos: [personal/service]
+        excludeRepos: ["acme/legacy-*", "retired-org/*"]
+        staleAfter: 720h
+```
+
+`orgs` discovers every repository visible to your credentials, including forks and archived repositories. `repos` adds explicit `owner/repo` entries or qualified GitHub repository search queries. Results are combined and deduplicated, then `excludeRepos` removes matching repositories. These are case-insensitive doublestar globs against the full `owner/repo`; `owner/*` excludes an entire organization. With neither `orgs` nor `repos`, the linter uses the checkout's GitHub origin. If queries or exclusions leave no repositories, it reports a skipped audit with a reason, without falling back to the origin.
+
+To select repositories by topic:
+
+```yaml
+lint:
+  linters:
+    github:
+      config:
+        orgs: []
+        repos:
+          - "org:flanksource topic:mission-control"
+```
+
+Clear inherited `orgs` for topic-only selection; queries add repositories rather than filtering organization discovery. Query strings use native GitHub search semantics, including `fork:true` to include forks. All pages are fetched; incomplete results or queries exceeding GitHub's 1,000-result search limit fail visibly while retaining repositories already discovered. Narrow the query to resolve these errors.
+
+Native `--repo owner/repo` overrides configured organization/repository selection; exclusions still apply. `--stale-after` overrides `staleAfter`, a positive Go duration measured from the PR's last activity, defaulting to 720 hours (30 days). These native arguments can also be set in `lint.linters.github.args`. Across config layers, each authored list replaces its inherited list, including `[]`; omitted fields inherit. Settings do not activate the linter automatically. PR status ignores repository-selection settings and fetches CodeQL findings only for its selected PR.
+
+Local file scopes, `--changed`, `--since`, and artifact-based `--pr` narrowing are unsupported; use `--cwd` to choose the directory whose configuration to load.
+
+Rules are `pr-stale` (warning), `pr-conflicting` (error), `pr-check-failed` (error for a required check, warning otherwise), `dependabot-alert` (error), `codeql-alert` (GitHub rule severity), and `codeql-pr` (error for a required failing check, warning otherwise). Pending checks and closed/merged PRs are not failures. Dependabot findings include the manifest, advisory, vulnerable range, and patched version when available. Healthy Dependabot update PRs are not security-alert findings.
+
+The linter uses Gavel's existing GitHub credentials. Security endpoints require Dependabot alerts and Code scanning alerts read access. Missing permissions or disabled security APIs fail the audit visibly, retaining findings collected from successful sources. `--fix` cannot mutate GitHub. Standard JSON, baselines, and rule exclusions apply.
+
 This is the fastest command for:
 
 - Checking whether a PR is green
