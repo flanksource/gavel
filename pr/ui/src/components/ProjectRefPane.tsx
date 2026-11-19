@@ -7,6 +7,7 @@ import type { BranchMergeResult, GitBranchInfo, GitWorktree, Project, ProjectGit
 import { GIT_HOT_REFRESH_MS, useGitFocus } from '../useGitFocus';
 import { useNow } from '../useNow';
 import { useIsMobile } from '../useIsMobile';
+import { CheckoutSwitch } from './CheckoutSwitch';
 import { ProjectBranchChanges } from './ProjectBranchChanges';
 import { ProjectStatusView } from './ProjectStatusView';
 import { ProjectRebase } from './ProjectRebase';
@@ -147,6 +148,7 @@ function RefBar({ projectName, git, scannedAt, loading, error, notices, value, o
             {scannedAt && <GitStateAge scannedAt={scannedAt} />}
           </div>
         )}
+        {git && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 empty:hidden"><CheckoutSwitch projectName={projectName} git={git} /></div>}
         {notices.length > 0 && <div className="flex flex-col gap-0.5 px-3 pb-1"><GitNotices notices={notices} /></div>}
       </div>
     );
@@ -157,6 +159,7 @@ function RefBar({ projectName, git, scannedAt, loading, error, notices, value, o
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2 md:px-4">
         {picker}
         {selected && <RefSummary entry={selected} compact />}
+        {git && <CheckoutSwitch projectName={projectName} git={git} />}
         <GitNotices notices={notices} />
         {scannedAt && <GitStateAge scannedAt={scannedAt} />}
       </div>

@@ -23,6 +23,10 @@ func stash(ctx context.Context, op *Operation) error {
 	if err != nil || dirty == "" {
 		return err
 	}
+	before, err := stashTip(ctx, op.Worktree)
+	if err != nil {
+		return err
+	}
 	if _, err := git(ctx, op.Worktree, "stash", "push", "--include-untracked", "--message", "gavel-rebase:"+op.ID); err != nil {
 		return err
 	}
@@ -30,9 +34,22 @@ func stash(ctx context.Context, op *Operation) error {
 		return err
 	}
 	if op.StashSHA == "" {
-		return errors.New("stash was created but its operation identity cannot be found")
+		after, err := stashTip(ctx, op.Worktree)
+		if err != nil {
+			return err
+		}
+		if after != before {
+			return errors.New("stash was created but its operation identity cannot be found")
+		}
 	}
 	return save(op)
+}
+
+// stashTip is "" when the stash is empty; an unchanged tip after a push means
+// git found nothing it can save (e.g. only submodule checkouts differ).
+func stashTip(ctx context.Context, dir string) (string, error) {
+	out, err := gitOutput(ctx, dir, "for-each-ref", "--format=%(objectname)", "refs/stash")
+	return strings.TrimSpace(out), err
 }
 
 func check(ctx context.Context, op *Operation) error {
@@ -75,7 +92,7 @@ func finish(ctx context.Context, op *Operation) error {
 		return err
 	}
 	if op.Phase != "restore" && op.Phase != "restore-conflict" && op.Phase != "restored" && op.Phase != "aborting" {
-		dirty, err := git(ctx, op.Worktree, "status", "--porcelain", "--untracked-files=all")
+		dirty, err := git(ctx, op.Worktree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=all")
 		if err != nil {
 			return err
 		}

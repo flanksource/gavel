@@ -423,7 +423,7 @@ func projectsOpenAPI() map[string]any {
 					jsonRequestBody("ProjectIgnoreRequest"),
 					map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam())}),
 			},
-		}, withEntries(projectGitOpenAPIPaths(), projectIndexOpenAPIPaths())),
+		}, withEntries(projectGitOpenAPIPaths(), withEntries(projectCheckoutSwitchOpenAPIPaths(), projectIndexOpenAPIPaths()))),
 		"components": map[string]any{"schemas": withEntries(map[string]any{
 			"Project":                   projectSchema(),
 			"ProjectFileStatus":         projectFileStatusSchema(),
@@ -436,7 +436,7 @@ func projectsOpenAPI() map[string]any {
 			"ProjectDiff":               projectDiffResponseSchema(),
 			"ProjectIgnoreRequest":      projectIgnoreRequestSchema(),
 			"ProjectIgnoreResponse":     projectIgnoreResponseSchema(),
-		}, withEntries(projectGitOpenAPISchemas(), projectIndexOpenAPISchemas()))},
+		}, withEntries(projectGitOpenAPISchemas(), withEntries(projectCheckoutSwitchOpenAPISchemas(), projectIndexOpenAPISchemas())))},
 	}
 }
 

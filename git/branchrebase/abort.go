@@ -20,13 +20,17 @@ func abort(ctx context.Context, op *Operation) error {
 	if err != nil {
 		return err
 	}
-	if head != op.OriginalHead {
-		return errors.New("HEAD no longer matches the original commit; refusing to reset it")
-	}
 	if op.Phase == "stash" {
 		if err := recoverStash(ctx, op); err != nil {
 			return err
 		}
+	}
+	if head != op.OriginalHead {
+		if op.StashSHA != "" {
+			return fmt.Errorf("HEAD %s no longer matches the original commit %s; saved edits stay in stash %s: check out %s and abort again, or finish the rebase on %s", head, op.OriginalHead, op.StashSHA, op.OriginalHead, op.Branch)
+		}
+		op.Aborted, op.Phase, op.Error, op.Conflicts = true, "aborted", "", []string{}
+		return save(op)
 	}
 	op.Aborted, op.Phase = true, "aborting"
 	if err := save(op); err != nil {
