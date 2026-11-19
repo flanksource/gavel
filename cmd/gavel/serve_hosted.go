@@ -200,6 +200,12 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 	}
 
+	var missionControl *missioncontrol.Source
+	if opts.MissionControlURL != "" {
+		missionControl = missioncontrol.New(opts.MissionControlURL, opts.missionControlToken, opts.MissionControlInfra)
+	}
+	measured := ui.MeasuredUsage{MissionControl: missionControl, View: opts.MissionControlOrgView}
+
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
 		cfg, err := ui.LoadOrgSearchConfig(ctx, db, scope.OrgID)
 		if err != nil {
@@ -215,6 +221,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		srv.SetHostedMode(true)
 		srv.SetHostedWorkspaces(ui.HostedWorkspaces{DB: db, Sources: sources})
 		srv.SetFixtureSchemaProvider(func() (any, error) { return fixturesSchemaDocument() })
+		srv.SetMeasuredUsage(measured)
 		if dispatcher != nil {
 			srv.SetAgentRuns(ui.AgentRuns{
 				Dispatcher: dispatcher, Substrate: substrateBackend, Sources: sources,
@@ -230,10 +237,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	}, orgIdleTTL)
 	// The platform dashboard reads across organizations, so it is served beside the
 	// per-org servers, not by them.
-	platformAPI := &ui.PlatformAPI{Store: platform.Store{DB: db, Issuer: issuer}, Clerk: backend, App: app}
-	if opts.MissionControlURL != "" {
-		platformAPI.MissionControl = missioncontrol.New(opts.MissionControlURL, opts.missionControlToken, opts.MissionControlInfra)
-		platformAPI.SubstrateView = opts.MissionControlSubstrateView
+	platformAPI := &ui.PlatformAPI{
+		Store: platform.Store{DB: db, Issuer: issuer}, Clerk: backend, App: app,
+		MissionControl: missionControl, SubstrateView: opts.MissionControlSubstrateView, OrgView: opts.MissionControlOrgView,
 	}
 	// With --sandbox substrate the executor lists substrate's inventory over its own connection.
 	if dispatcher != nil {

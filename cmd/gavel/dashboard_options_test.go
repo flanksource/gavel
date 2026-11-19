@@ -161,6 +161,20 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		{"substrate's metrics view without its URL", func(o *DashboardOptions) { o.MissionControlSubstrateView = "substrate/capacity" }, []string{
 			"--mission-control-substrate-view needs --mission-control-url",
 		}},
+		{"mission control with the organizations' measured use view", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+			o.MissionControlOrgView = "substrate/org-usage"
+		}, nil},
+		{"organizations' measured use view without its namespace", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+			o.MissionControlOrgView = "org-usage"
+		}, []string{`--mission-control-org-view must name a View as namespace/name, got "org-usage"`}},
+		{"organizations' measured use view without its URL", func(o *DashboardOptions) { o.MissionControlOrgView = "substrate/org-usage" }, []string{
+			"--mission-control-org-view needs --mission-control-url",
+		}},
+		{"organizations' measured use view without clerk", func(o *DashboardOptions) {
+			*o = DashboardOptions{Auth: "none", MissionControlOrgView: "substrate/org-usage"}
+		}, []string{"--mission-control-* flags serve the platform dashboard and need --auth clerk"}},
 		{"substrate environments at a size of their own", func(o *DashboardOptions) { o.SubstrateCPU, o.SubstrateMemory = "500m", "2Gi" }, nil},
 		{"substrate size that isn't a quantity", func(o *DashboardOptions) { o.SubstrateCPU, o.SubstrateMemory = "two", "-1Gi" }, []string{
 			`--substrate-cpu must be a positive Kubernetes quantity such as 2 or 500m, got "two"`,

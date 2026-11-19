@@ -57,6 +57,7 @@ type DashboardOptions struct {
 	MissionControlURL           string   `flag:"mission-control-url" help:"Mission Control backend the platform dashboard reads gavel's infrastructure from, e.g. https://mc.example.com/api (or GAVEL_MISSION_CONTROL_URL; its token is GAVEL_MISSION_CONTROL_TOKEN; --auth clerk)"`
 	MissionControlInfra         string   `flag:"mission-control-infra" help:"Mission Control resource search selecting gavel's infrastructure for the platform dashboard, e.g. namespace=gavel"`
 	MissionControlSubstrateView string   `flag:"mission-control-substrate-view" help:"Mission Control View, as namespace/name, whose panels graph substrate's metrics on the platform dashboard"`
+	MissionControlOrgView       string   `flag:"mission-control-org-view" help:"Mission Control View, as namespace/name, whose panels measure one organization's CPU and memory from its variable org, the organization's ID, for platform admins and the organization's admins"`
 	PropertiesFile              string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
 
 	clerkSecretKey string
@@ -120,7 +121,7 @@ func (o DashboardOptions) Validate() error {
 		if githubApp {
 			add("--github-app-* flags serve hosted orgs and need --auth clerk")
 		}
-		if o.MissionControlURL != "" || o.MissionControlInfra != "" || o.MissionControlSubstrateView != "" {
+		if o.MissionControlURL != "" || o.MissionControlInfra != "" || o.MissionControlSubstrateView != "" || o.MissionControlOrgView != "" {
 			add("--mission-control-* flags serve the platform dashboard and need --auth clerk")
 		}
 	case authClerk:
@@ -240,18 +241,24 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // validateMissionControl checks the Mission Control the platform dashboard reads: a URL
 // needs its token and the search selecting gavel's infrastructure.
 func (o DashboardOptions) validateMissionControl(add func(format string, args ...any)) {
+	views := []struct{ flag, view string }{
+		{"--mission-control-substrate-view", o.MissionControlSubstrateView},
+		{"--mission-control-org-view", o.MissionControlOrgView},
+	}
 	if o.MissionControlURL == "" {
 		if o.MissionControlInfra != "" {
 			add("--mission-control-infra needs --mission-control-url")
 		}
-		if o.MissionControlSubstrateView != "" {
-			add("--mission-control-substrate-view needs --mission-control-url")
+		for _, v := range views {
+			if v.view != "" {
+				add("%s needs --mission-control-url", v.flag)
+			}
 		}
 		return
 	}
-	if view := o.MissionControlSubstrateView; view != "" {
-		if namespace, name, ok := strings.Cut(view, "/"); !ok || namespace == "" || name == "" || strings.Contains(name, "/") {
-			add("--mission-control-substrate-view must name a View as namespace/name, got %q", view)
+	for _, v := range views {
+		if namespace, name, ok := strings.Cut(v.view, "/"); v.view != "" && (!ok || namespace == "" || name == "" || strings.Contains(name, "/")) {
+			add("%s must name a View as namespace/name, got %q", v.flag, v.view)
 		}
 	}
 	if u, err := url.Parse(o.MissionControlURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {

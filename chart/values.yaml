@@ -70,6 +70,11 @@ missionControl:
   # Optional: namespace/name of the Mission Control View whose panels graph substrate's metrics,
   # e.g. substrate/capacity (docs/platform-dashboard.md has an example View).
   substrateView: ""
+  # Optional: namespace/name of the Mission Control View measuring one organization's CPU and
+  # memory, which gavel passes the organization's ID as variable org, e.g. substrate/org-usage
+  # (docs/platform-dashboard.md has an example View). Platform admins see every organization's,
+  # an organization's admins their own.
+  orgView: ""
   # Secret holding a Mission Control access token with the viewer role.
   token:
     secretName: ""

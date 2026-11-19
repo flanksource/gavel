@@ -74,6 +74,10 @@ spec:
             - --mission-control-substrate-view
             - {{ .substrateView | quote }}
             {{- end }}
+            {{- if .orgView }}
+            - --mission-control-org-view
+            - {{ .orgView | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.sandbox.enabled }}
