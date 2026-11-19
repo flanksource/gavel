@@ -53,7 +53,7 @@ func admitted(t *testing.T, waiting <-chan error) bool {
 func TestARunWithoutBudgetsIsAdmittedAtOnce(t *testing.T) {
 	a, _, org := newAdmission(t)
 
-	ticket, err := a.Enter(context.Background(), org, cores(8))
+	ticket, err := a.Enter(context.Background(), org, Demand{Size: cores(8)})
 	require.NoError(t, err)
 	queued, _ := ticket.Queued()
 	assert.False(t, queued)
@@ -66,7 +66,7 @@ func TestARunIsRefusedWhenACumulativeBudgetIsUsedUp(t *testing.T) {
 		VALUES (?, ?, 'agent', 'succeeded', 'substrate', 4000, 1073741824, now() - interval '40 minutes', now() - interval '10 minutes')`, uuid.New(), org).Error)
 	setBudget(t, a, org, budget.Budget{Resource: budget.CPU, Kind: budget.Cumulative, Amount: 1.5, Window: "now-1d"})
 
-	_, err := a.Enter(context.Background(), org, cores(1))
+	_, err := a.Enter(context.Background(), org, Demand{Size: cores(1)})
 	require.ErrorIs(t, err, ErrBudgetUsedUp)
 	assert.Contains(t, err.Error(), "this organization has used 2 core-hours of its 1.5 core-hours cpu budget since ")
 	assert.Contains(t, err.Error(), "an organization admin can raise it")
@@ -77,7 +77,7 @@ func TestARunThatCanNeverFitAConcurrentBudgetIsRefused(t *testing.T) {
 	setBudget(t, a, org, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 1})
 	setBudget(t, a, org, budget.Budget{Resource: budget.Memory, Kind: budget.Concurrent, Amount: 0.5})
 
-	_, err := a.Enter(context.Background(), org, cores(2))
+	_, err := a.Enter(context.Background(), org, Demand{Size: cores(2)})
 	require.ErrorIs(t, err, ErrBudgetUsedUp)
 	assert.Contains(t, err.Error(), "a run of 2 cores can never start under this organization's concurrent cpu budget of 1 core")
 	assert.Contains(t, err.Error(), "a run of 1 GiB can never start under this organization's concurrent memory budget of 0.5 GiB")
@@ -88,18 +88,18 @@ func TestRunsWaitTheirTurnWhileTheOrganizationHoldsTooMuch(t *testing.T) {
 	setBudget(t, a, org, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
 	ctx := context.Background()
 
-	first, err := a.Enter(ctx, org, cores(2))
+	first, err := a.Enter(ctx, org, Demand{Size: cores(2)})
 	require.NoError(t, err)
-	second, err := a.Enter(ctx, org, cores(1))
+	second, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 	queued, reason := second.Queued()
 	assert.True(t, queued)
 	assert.Equal(t, "queued: this organization's runs hold 2 of its 2 concurrent cores, and no run is ahead of this one", reason)
-	third, err := a.Enter(ctx, org, cores(2))
+	third, err := a.Enter(ctx, org, Demand{Size: cores(2)})
 	require.NoError(t, err)
 	_, reason = third.Queued()
 	assert.Equal(t, "queued: this organization's runs hold 2 of its 2 concurrent cores, and 1 run is ahead of this one", reason)
-	fourth, err := a.Enter(ctx, org, cores(1))
+	fourth, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 	secondWaits, thirdWaits, fourthWaits := waitFor(second), waitFor(third), waitFor(fourth)
 
@@ -120,16 +120,16 @@ func TestAWaitingRunGivesUpAfterTheLongestWait(t *testing.T) {
 	a.Wait = 50 * time.Millisecond
 	setBudget(t, a, org, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 1})
 	ctx := context.Background()
-	holding, err := a.Enter(ctx, org, cores(1))
+	holding, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 	defer holding.Release()
-	waiting, err := a.Enter(ctx, org, cores(1))
+	waiting, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 
 	err = waiting.Wait(ctx, func(string) {})
 	require.ErrorIs(t, err, ErrQueueTimeout)
 	assert.Contains(t, err.Error(), "waited 50ms for room and gave up: this organization's runs hold 1 of its 1 concurrent core")
-	next, err := a.Enter(ctx, org, cores(1))
+	next, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 	_, reason := next.Queued()
 	assert.Contains(t, reason, "no run is ahead of this one", "a run that gave up leaves the line")
@@ -140,10 +140,10 @@ func TestAWaitingRunStartsWhenAnAdminRaisesTheBudget(t *testing.T) {
 	a.Recheck = 20 * time.Millisecond
 	setBudget(t, a, org, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 1})
 	ctx := context.Background()
-	holding, err := a.Enter(ctx, org, cores(1))
+	holding, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 	defer holding.Release()
-	waiting, err := a.Enter(ctx, org, cores(1))
+	waiting, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 
 	waits := waitFor(waiting)
@@ -157,10 +157,10 @@ func TestAWaitingRunIsRefusedWhenACumulativeBudgetIsUsedUpMeanwhile(t *testing.T
 	a.Recheck = 20 * time.Millisecond
 	setBudget(t, a, org, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 1})
 	ctx := context.Background()
-	holding, err := a.Enter(ctx, org, cores(1))
+	holding, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 	defer holding.Release()
-	waiting, err := a.Enter(ctx, org, cores(1))
+	waiting, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 
 	require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend, cpu_millicores, memory_bytes, started_at, finished_at)
@@ -176,9 +176,9 @@ func TestAWaitingRunReportsWhatItWaitsFor(t *testing.T) {
 	a, _, org := newAdmission(t)
 	setBudget(t, a, org, budget.Budget{Resource: budget.Memory, Kind: budget.Concurrent, Amount: 1})
 	ctx := context.Background()
-	holding, err := a.Enter(ctx, org, cores(1))
+	holding, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
-	waiting, err := a.Enter(ctx, org, cores(1))
+	waiting, err := a.Enter(ctx, org, Demand{Size: cores(1)})
 	require.NoError(t, err)
 	var reports []string
 	done := make(chan error)
@@ -188,4 +188,24 @@ func TestAWaitingRunReportsWhatItWaitsFor(t *testing.T) {
 	require.NoError(t, <-done)
 	assert.Equal(t, []string{"queued: this organization's runs hold 1 of its 1 concurrent GiB, and no run is ahead of this one", "started after waiting for room"}, reports)
 	waiting.Release()
+}
+
+func TestAUsedUpModelBudgetRefusesAgentRunsOnly(t *testing.T) {
+	a, db, org := newAdmission(t)
+	session, turn := uuid.New(), uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO captain_sessions (id, source) VALUES (?, 'test')`, session).Error)
+	require.NoError(t, db.Exec(`INSERT INTO session_owners (session_id, org_id) VALUES (?, ?)`, session, org).Error)
+	require.NoError(t, db.Exec(`INSERT INTO captain_turns (id, session_id, turn_index, status) VALUES (?, ?, 0, 'ended')`, turn, session).Error)
+	require.NoError(t, db.Exec(`INSERT INTO captain_model_calls (id, turn_id, call_index, model, currency, input_tokens, input_cost, created_at)
+		VALUES (?, ?, 0, 'claude-sonnet', 'USD', 1000, 5, now())`, uuid.New(), turn).Error)
+	setBudget(t, a, org, budget.Budget{Resource: budget.USD, Kind: budget.Cumulative, Amount: 5, Window: "now-1d"})
+	setBudget(t, a, org, budget.Budget{Resource: budget.Tokens, Kind: budget.Cumulative, Amount: 1000, Window: "now-1d"})
+
+	job, err := a.Enter(context.Background(), org, Demand{Size: cores(1)})
+	require.NoError(t, err, "a job makes no model calls, so model budgets don't hold it back")
+	job.Release()
+	_, err = a.Enter(context.Background(), org, Demand{Size: cores(1), ModelCalls: true})
+	require.ErrorIs(t, err, ErrBudgetUsedUp)
+	assert.Contains(t, err.Error(), "this organization has used $5.00 of its $5.00 model cost budget")
+	assert.Contains(t, err.Error(), "this organization has used 1000 tokens of its 1000 tokens token budget")
 }
