@@ -58,11 +58,12 @@ func (r *Repository) CreateWorkspace(ctx context.Context, input CreateWorkspaceI
 		result := tx.Exec(`
 			INSERT INTO todo_workspaces
 				(id, org_id, user_id, repo_key, display_name, created_at, updated_at)
-			VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), now(), now())`,
+			VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), now(), now())
+			ON CONFLICT DO NOTHING`,
 			id, r.org, tenant.FromContext(ctx).UserID, repoKey, strings.TrimSpace(input.DisplayName),
 		)
-		if result.Error != nil {
-			return mapUniqueError(result.Error, ErrWorkspaceConflict, "workspace repo key %q", repoKey)
+		if err := insertedOrConflict(result, ErrWorkspaceConflict, "workspace repo key %q", repoKey); err != nil {
+			return err
 		}
 		if rootPath != "" {
 			return setWorkspacePrimaryPath(tx, id, rootPath)

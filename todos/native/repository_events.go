@@ -188,11 +188,12 @@ func insertAliases(tx *gorm.DB, workspaceID, issueID uuid.UUID, aliases []AliasI
 	for _, alias := range aliases {
 		result := tx.Exec(`
 			INSERT INTO todo_issue_aliases (workspace_id, alias, issue_id, kind, created_at)
-			VALUES (?, ?, ?, NULLIF(?, ''), now())`,
+			VALUES (?, ?, ?, NULLIF(?, ''), now())
+			ON CONFLICT DO NOTHING`,
 			workspaceID, alias.Alias, issueID, alias.Kind,
 		)
-		if result.Error != nil {
-			return mapUniqueError(result.Error, ErrAliasConflict, "workspace %s alias %q", workspaceID, alias.Alias)
+		if err := insertedOrConflict(result, ErrAliasConflict, "workspace %s alias %q", workspaceID, alias.Alias); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -260,12 +261,13 @@ func insertEvent(tx *gorm.DB, issueID uuid.UUID, sequence int64, input EventInpu
 		INSERT INTO todo_issue_events
 			(id, issue_id, sequence, kind, actor, actor_user_id, body, payload, source, source_id, created_at)
 		VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), CAST(? AS jsonb), ?, NULLIF(?, ''), now())
+		ON CONFLICT DO NOTHING
 		RETURNING id, issue_id, sequence, kind, actor, body, payload, source, source_id, created_at`,
 		uuid.New(), issueID, sequence, kind, strings.TrimSpace(input.Actor), requestUser(tx), input.Body,
 		string(payload), source, strings.TrimSpace(input.SourceID),
 	).Scan(&record)
-	if result.Error != nil {
-		return nil, mapUniqueError(result.Error, ErrEventConflict, "event source %q/%q", source, input.SourceID)
+	if err := insertedOrConflict(result, ErrEventConflict, "event source %q/%q", source, input.SourceID); err != nil {
+		return nil, err
 	}
 	return &Event{
 		ID:        record.ID,

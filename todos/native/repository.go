@@ -173,6 +173,18 @@ func escapeLike(value string) string {
 	return strings.ReplaceAll(value, `_`, `\_`)
 }
 
+// insertedOrConflict reports an INSERT ... ON CONFLICT DO NOTHING that inserted nothing as
+// sentinel: the row it would add exists, and the database refused no statement saying so.
+func insertedOrConflict(result *gorm.DB, sentinel error, format string, args ...any) error {
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("%w: %s", sentinel, fmt.Sprintf(format, args...))
+	}
+	return nil
+}
+
 func mapUniqueError(err, sentinel error, format string, args ...any) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {

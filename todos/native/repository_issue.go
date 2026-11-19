@@ -279,11 +279,12 @@ func (r *Repository) MoveIssueWorkspace(
 			result := tx.Exec(`
 				INSERT INTO todo_issue_aliases
 					(workspace_id, alias, issue_id, kind, created_at)
-				VALUES (?, ?, ?, NULLIF(?, ''), ?)`,
+				VALUES (?, ?, ?, NULLIF(?, ''), ?)
+				ON CONFLICT DO NOTHING`,
 				targetWorkspaceID, alias.Alias, issueID, alias.Kind, alias.CreatedAt,
 			)
-			if result.Error != nil {
-				return mapUniqueError(result.Error, ErrAliasConflict, "workspace %s alias %q", targetWorkspaceID, alias.Alias)
+			if err := insertedOrConflict(result, ErrAliasConflict, "workspace %s alias %q", targetWorkspaceID, alias.Alias); err != nil {
+				return err
 			}
 		}
 

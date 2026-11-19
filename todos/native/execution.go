@@ -116,12 +116,13 @@ func (s *ExecutionIntegration) activatePromptRun(ctx context.Context, input Prom
 				INSERT INTO todo_issue_prompt_runs
 					(issue_id, prompt_run_id, step_kind, ordinal, requested_by_user_id, created_at,
 					 owner_host_id, owner_pid, owner_started_at, owner_token, owner_heartbeat_at)
-				VALUES (?, ?, ?, ?, ?, now(), ?, ?, ?, ?, now())`,
+				VALUES (?, ?, ?, ?, ?, now(), ?, ?, ?, ?, now())
+				ON CONFLICT DO NOTHING`,
 				input.IssueID, input.PromptRunID, input.StepKind, input.Ordinal, requestUser(tx),
 				owner.HostID, owner.PID, owner.StartedAt.UTC(), owner.Token,
 			)
-			if insert.Error != nil {
-				return mapUniqueError(insert.Error, ErrLinkConflict, "prompt run %s", input.PromptRunID)
+			if err := insertedOrConflict(insert, ErrLinkConflict, "prompt run %s", input.PromptRunID); err != nil {
+				return err
 			}
 			dispatchOwned = true
 		}
@@ -223,10 +224,11 @@ func selectPlanLocked(tx *gorm.DB, issue *executionIssue, input PlanAttachment, 
 	if result.RowsAffected == 0 {
 		insert := tx.Exec(`
 			INSERT INTO todo_issue_plans (issue_id, plan_id, ordinal, created_by_user_id, created_at)
-			VALUES (?, ?, ?, ?, now())`, input.IssueID, input.PlanID, input.Ordinal, requestUser(tx),
+			VALUES (?, ?, ?, ?, now())
+			ON CONFLICT DO NOTHING`, input.IssueID, input.PlanID, input.Ordinal, requestUser(tx),
 		)
-		if insert.Error != nil {
-			return mapUniqueError(insert.Error, ErrLinkConflict, "plan %s", input.PlanID)
+		if err := insertedOrConflict(insert, ErrLinkConflict, "plan %s", input.PlanID); err != nil {
+			return err
 		}
 	}
 	if !exactSelection {

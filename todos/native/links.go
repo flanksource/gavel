@@ -42,12 +42,13 @@ func (r *Repository) LinkPromptRun(
 			INSERT INTO todo_issue_prompt_runs
 				(issue_id, prompt_run_id, step_kind, ordinal, requested_by_user_id, created_at)
 			VALUES (?, ?, ?, ?, ?, now())
+			ON CONFLICT DO NOTHING
 			RETURNING issue_id, prompt_run_id, step_kind, ordinal, created_at,
 			          owner_host_id, owner_pid, owner_started_at, owner_token, owner_heartbeat_at`,
 			issueID, promptRunID, stepKind, ordinal, requestUser(tx),
 		).Scan(&link)
-		if result.Error != nil {
-			return mapUniqueError(result.Error, ErrLinkConflict, "prompt run %s", promptRunID)
+		if err := insertedOrConflict(result, ErrLinkConflict, "prompt run %s", promptRunID); err != nil {
+			return err
 		}
 		_, err = recordMutation(tx, locked, EventInput{
 			Kind:  "prompt_run_linked",
@@ -232,11 +233,12 @@ func (r *Repository) LinkPlan(
 			INSERT INTO todo_issue_plans
 				(issue_id, plan_id, ordinal, created_by_user_id, created_at)
 			VALUES (?, ?, ?, ?, now())
+			ON CONFLICT DO NOTHING
 			RETURNING issue_id, plan_id, ordinal, created_at`,
 			issueID, planID, ordinal, requestUser(tx),
 		).Scan(&link)
-		if result.Error != nil {
-			return mapUniqueError(result.Error, ErrLinkConflict, "plan %s", planID)
+		if err := insertedOrConflict(result, ErrLinkConflict, "plan %s", planID); err != nil {
+			return err
 		}
 		_, err = recordMutation(tx, locked, EventInput{
 			Kind:  "plan_linked",

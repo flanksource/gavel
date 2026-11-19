@@ -78,11 +78,12 @@ func (r *Repository) LinkIssuePR(ctx context.Context, issueID uuid.UUID, expecte
 		result := tx.Raw(`
 			INSERT INTO todo_pr_links (`+prLinkColumns+`)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())
+			ON CONFLICT DO NOTHING
 			RETURNING `+prLinkColumns,
 			locked.WorkspaceID, issueID, ref.Provider, ref.Repo, ref.Number, ref.URL, input.Relation, input.Source,
 		).Scan(&created)
-		if result.Error != nil {
-			return mapUniqueError(result.Error, ErrPRLinkExists, "issue %s already links %s", issueID, ref.URL)
+		if err := insertedOrConflict(result, ErrPRLinkExists, "issue %s already links %s", issueID, ref.URL); err != nil {
+			return err
 		}
 		_, err = recordMutation(tx, locked, EventInput{Kind: "pr_linked", Actor: input.Actor, Payload: prLinkPayload(ref, map[string]any{
 			"relation": input.Relation, "source": input.Source,

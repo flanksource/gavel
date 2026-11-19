@@ -79,11 +79,12 @@ func (r *Repository) AddRelationship(
 			INSERT INTO todo_issue_relationships
 				(workspace_id, issue_id, target_issue_id, relation, created_at)
 			VALUES (?, ?, ?, ?, now())
+			ON CONFLICT DO NOTHING
 			RETURNING workspace_id, issue_id, target_issue_id, relation, created_at`,
 			workspaceID, storedIssueID, storedTargetID, relation,
 		).Scan(&created)
-		if result.Error != nil {
-			return mapUniqueError(result.Error, ErrRelationshipExists, "%s %s %s", issueID, relation, targetIssueID)
+		if err := insertedOrConflict(result, ErrRelationshipExists, "%s %s %s", issueID, relation, targetIssueID); err != nil {
+			return err
 		}
 		_, err = recordMutation(tx, locked, EventInput{
 			Kind:  "relationship_added",
