@@ -273,7 +273,21 @@ func serveHostedRuns(t *testing.T, backend map[string]any, configure func(*sandb
 		Substrate: backend,
 	})
 	h.base = serveActingAs(t, srv, org)
+	t.Cleanup(func() { settleRuns(t, db) })
 	return h
+}
+
+// settleRuns waits until the runs a test started have finished: every sandbox run recorded as
+// ended and every todo run's ownership claim released, so none writes to the database after the
+// test closes it.
+func settleRuns(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	assert.Eventually(t, func() bool {
+		var live int64
+		require.NoError(t, db.Raw(`SELECT (SELECT count(*) FROM sandbox_runs WHERE status IN ('queued', 'running'))
+			+ (SELECT count(*) FROM todo_issue_prompt_runs WHERE owner_token IS NOT NULL)`).Scan(&live).Error)
+		return live == 0
+	}, 30*time.Second, 50*time.Millisecond, "the test's runs finished")
 }
 
 func TestHostedTodoRunsInASandboxJob(t *testing.T) {

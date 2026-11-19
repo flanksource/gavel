@@ -74,6 +74,12 @@ var _ = Describe("todo sessions served through Captain", Ordered, func() {
 			runtimetest.Started(providerSessionID))
 		Expect(err).NotTo(HaveOccurred())
 		promptR = admission.PromptRunID
+		// The admitted run stays running for every spec here; ending it afterwards stops this
+		// process's heartbeat on it before the database closes.
+		DeferCleanup(func(ctx SpecContext) {
+			failed := types.StatusFailed
+			Expect(provider.UpdateState(ctx, todo, todos.StateUpdate{Status: &failed})).To(Succeed())
+		})
 		run, err := provider.Captain().GetPromptRun(ctx, promptR)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(run.ExecutionSessionID).NotTo(BeNil())
