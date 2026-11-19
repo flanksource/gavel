@@ -180,6 +180,12 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		return hostedStack{}, err
 	}
 	if dispatcher != nil {
+		// A run left waiting for room when serve stopped lost its caller with it.
+		if failed, err := dispatcher.FailQueuedRuns(ctx); err != nil {
+			logger.Warnf("%v", err)
+		} else if failed > 0 {
+			logger.Infof("failed %d sandbox runs left waiting for room when serve stopped", failed)
+		}
 		if sweeper, ok := dispatcher.Executor.(sandbox.Sweeper); ok {
 			var templates templateSweeper
 			if dispatcher.Templates != nil {

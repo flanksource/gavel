@@ -20,21 +20,23 @@ const sandboxRunsLimit = 200
 
 // sandboxRun is one run as the runs tab shows it.
 type sandboxRun struct {
-	ID         uuid.UUID  `json:"id"`
-	Kind       string     `json:"kind"`
-	Status     string     `json:"status"`
-	ExitCode   *int       `json:"exitCode,omitempty"`
-	Ref        string     `json:"ref,omitempty"`
-	SHA        string     `json:"sha,omitempty"`
-	Repo       string     `json:"repo,omitempty"`
-	User       string     `json:"user,omitempty"`
-	TodoID     *uuid.UUID `json:"todoId,omitempty"`
-	TodoTitle  string     `json:"todoTitle,omitempty"`
-	Backend    string     `json:"backend"`
-	HasLog     bool       `json:"hasLog"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	StartedAt  *time.Time `json:"startedAt,omitempty"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	ID     uuid.UUID `json:"id"`
+	Kind   string    `json:"kind"`
+	Status string    `json:"status"`
+	// StatusMessage says why the run waits, or why it was refused or failed before it ran.
+	StatusMessage string     `json:"statusMessage,omitempty"`
+	ExitCode      *int       `json:"exitCode,omitempty"`
+	Ref           string     `json:"ref,omitempty"`
+	SHA           string     `json:"sha,omitempty"`
+	Repo          string     `json:"repo,omitempty"`
+	User          string     `json:"user,omitempty"`
+	TodoID        *uuid.UUID `json:"todoId,omitempty"`
+	TodoTitle     string     `json:"todoTitle,omitempty"`
+	Backend       string     `json:"backend"`
+	HasLog        bool       `json:"hasLog"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
 }
 
 var errNoSandboxRuns = errors.New("sandbox runs exist only on a hosted dashboard with a sandbox (gavel serve --auth clerk --sandbox ...)")
@@ -43,7 +45,7 @@ var errNoSandboxRuns = errors.New("sandbox runs exist only on a hosted dashboard
 // is seen by those who see the todo.
 func (s *Server) sandboxRunsQuery(r *http.Request, where string, args ...any) (string, []any) {
 	visible, visibleArgs := native.VisibleIssue(r.Context(), "todo")
-	query := `SELECT run.id, run.kind, run.status, run.exit_code, run.ref, run.sha, repo.name AS repo,
+	query := `SELECT run.id, run.kind, run.status, run.status_message, run.exit_code, run.ref, run.sha, repo.name AS repo,
 			COALESCE(NULLIF(u.name, ''), u.email, '') AS "user", run.todo_id, todo.title AS todo_title, run.backend,
 			run.log_key <> '' AS has_log, run.created_at, run.started_at, run.finished_at
 		FROM sandbox_runs AS run

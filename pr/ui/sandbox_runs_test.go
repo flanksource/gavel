@@ -96,3 +96,14 @@ func TestSandboxRunsListTheRunsAMemberMaySee(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, log)
 	assert.Equal(t, "grace's run\n", log, "its creator reads it")
 }
+
+func TestSandboxRunsSayWhyARunWaitsOrWasRefused(t *testing.T) {
+	h := newHostedRuns(t, nil)
+	id := uuid.New()
+	require.NoError(t, h.db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, status_message, backend, spec)
+		VALUES (?, ?, 'push-check', 'queued', 'queued: this organization''s runs hold 8 of its 8 concurrent cores, and no run is ahead of this one', 'substrate', '{}')`, id, h.org).Error)
+
+	status, body := hostedGet(t, h.base, "/api/sandbox-runs", h.ada)
+	require.Equal(t, http.StatusOK, status, body)
+	assert.Contains(t, body, `"statusMessage":"queued: this organization's runs hold 8 of its 8 concurrent cores, and no run is ahead of this one"`)
+}

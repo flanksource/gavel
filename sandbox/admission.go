@@ -46,7 +46,7 @@ type Admission struct {
 }
 
 // Ticket is a run's place in its organization's budgets: it holds room once admitted, which
-// Release gives back.
+// Release gives back. A nil Ticket is a run admitted without budgets, holding nothing.
 type Ticket struct {
 	admission *Admission
 	org       uuid.UUID
@@ -84,6 +84,9 @@ func (a *Admission) Enter(ctx context.Context, org uuid.UUID, size substrate.Siz
 
 // Queued reports whether the ticket's run waits for room, and what for.
 func (t *Ticket) Queued() (bool, string) {
+	if t == nil {
+		return false, ""
+	}
 	t.admission.mu.Lock()
 	defer t.admission.mu.Unlock()
 	return !t.admitted, t.reason
@@ -94,11 +97,11 @@ func (t *Ticket) Queued() (bool, string) {
 // Admission's Wait, when a cumulative budget is used up meanwhile, or when ctx ends, leaving the
 // line.
 func (t *Ticket) Wait(ctx context.Context, report func(string)) error {
-	a := t.admission
 	queued, reason := t.Queued()
 	if !queued {
 		return nil
 	}
+	a := t.admission
 	report(reason)
 	deadline := time.NewTimer(a.Wait)
 	defer deadline.Stop()
@@ -137,6 +140,9 @@ func (t *Ticket) Wait(ctx context.Context, report func(string)) error {
 
 // Release gives back the room the ticket's run held, so the runs waiting can start.
 func (t *Ticket) Release() {
+	if t == nil {
+		return
+	}
 	a := t.admission
 	a.mu.Lock()
 	defer a.mu.Unlock()

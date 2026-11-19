@@ -114,6 +114,10 @@ func (s *Server) startHostedProjectAction(w http.ResponseWriter, r *http.Request
 	// The job outlives the request that starts it.
 	run, err := s.agentRuns.Dispatcher.Start(context.WithoutCancel(r.Context()), tenant.FromContext(r.Context()),
 		sandbox.RunSpec{Kind: string(request.Action), RepoID: repo.ID, Ref: "refs/heads/" + request.Branch, SHA: sha}, nil)
+	if errors.Is(err, sandbox.ErrBudgetUsedUp) {
+		writeJSONError(w, http.StatusTooManyRequests, err)
+		return
+	}
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err)
 		return

@@ -32,6 +32,10 @@ secret:
 
 # Settings gavel serve reads from /etc/gavel/gavel.properties, such as retention windows:
 #   retention.job_logs: 30d
+# With the substrate sandbox, how long a run waits for room under its organization's concurrent
+# budgets before it fails, and how often a waiting run checks its budgets again:
+#   sandbox.queue.timeout: 15m
+#   sandbox.budget.interval: 30s
 properties: {}
 
 service:
