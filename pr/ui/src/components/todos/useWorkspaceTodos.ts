@@ -85,7 +85,6 @@ export function useWorkspaceTodos(
   // empty lists, which must not be read as workspaces that hold no todos.
   const listReady = listQuery.data !== undefined;
   const [selected, setSelected] = useState<SelectedTodo | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
   // Status / priority / external-issue facets applied to the lists. Defaults to
   // excluding completed (closed) and persists the user's choice across reloads.
   const [filters, setFiltersState] = useState<TodoFilters>(loadTodoFilters);
@@ -221,7 +220,6 @@ export function useWorkspaceTodos(
   }, [queryClient]);
 
   const created = useCallback((dir: string, todo: TodoItem) => {
-    setShowCreate(false);
     setTodoQueryData(queryClient, dir, todo);
     select({ dir, ref: todo.ref });
   }, [queryClient, select]);
@@ -262,8 +260,6 @@ export function useWorkspaceTodos(
     detail,
     loadingDetail,
     refresh,
-    showCreate,
-    setShowCreate,
     created,
     updateItem,
     deleted,
@@ -287,7 +283,7 @@ export function useWorkspaceTodos(
     setDetailView,
   }), [
     workspaces, byDir, loadingList, listReady, error, detailError, aggregate,
-    selected, setSelection, select, detail, loadingDetail, refresh, showCreate,
+    selected, setSelection, select, detail, loadingDetail, refresh,
     created, updateItem, deleted, transferred, filters, setFilters, toggleStatus,
     density, setDensity, groupBy, setGroupBy, layout, setLayout, sortBy, setSortBy,
     timeRange, setTimeRange, selection, tagsByDir, detailView, setDetailView,

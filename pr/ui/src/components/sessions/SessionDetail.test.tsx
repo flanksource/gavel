@@ -1,24 +1,41 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it, vi } from 'vitest';
+import { useState, type ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentSession } from '../../types';
 import { SessionDetail } from './SessionDetail';
+
+const loadState = vi.hoisted(() => ({ report: null as null | ((state: { status: 'ready' }) => void) }));
 
 vi.mock('@flanksource/clicky-ui/ai', () => ({
   formatCost: (usd: number) => `$${usd.toFixed(2)}`,
   ContextMeter: () => <div data-testid="header-context-meter" />,
-  SessionInspector: ({ hostTabs, session: input }: {
+  SessionInspector: ({ hostTabs, session: input, composer, onLoadStateChange }: {
     hostTabs?: { id: string; label: string }[];
     session?: { currentSessionId: string; sessions: { id: string; parentId?: string }[] };
-  }) => (
-    <div
-      data-testid="inspector"
-      data-current={input?.currentSessionId}
-      data-items={input?.sessions.map(item => `${item.id}<${item.parentId ?? ''}`).join(',')}
-    >
-      {(hostTabs ?? []).map(tab => <span key={tab.id}>{tab.label}</span>)}
-    </div>
-  ),
+    composer?: ReactNode;
+    onLoadStateChange?: (state: { status: 'ready' }) => void;
+  }) => {
+    loadState.report = onLoadStateChange ?? null;
+    return (
+      <div
+        data-testid="inspector"
+        data-current={input?.currentSessionId}
+        data-items={input?.sessions.map(item => `${item.id}<${item.parentId ?? ''}`).join(',')}
+      >
+        {(hostTabs ?? []).map(tab => <span key={tab.id}>{tab.label}</span>)}
+        {composer}
+      </div>
+    );
+  },
+  SessionChatComposer: function MessageBar({ onSubmit, disabledReason }: { onSubmit: (text: string) => void; disabledReason?: string }) {
+    const [text, setText] = useState('');
+    return (
+      <form aria-label="Message bar" onSubmit={event => { event.preventDefault(); onSubmit(text); }}>
+        <input aria-label="Message" disabled={!!disabledReason} placeholder={disabledReason} value={text} onChange={event => setText(event.currentTarget.value)} />
+      </form>
+    );
+  },
 }));
 vi.mock('../BranchLandActions', () => ({ BranchLandActions: () => <div data-testid="land-actions" /> }));
 
@@ -45,6 +62,10 @@ function renderDetail(value: AgentSession, sessions: AgentSession[] = [value]) {
     </QueryClientProvider>,
   );
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('SessionDetail', () => {
   it("hands the inspector the session with its sub-sessions nested under it, for the inspector's menu", () => {
@@ -114,6 +135,26 @@ describe('SessionDetail', () => {
       pr: 'no PR',
       headerWarnings: null,
     });
+  });
+
+  it('pins a message bar under the transcript that is disabled until the session loads, then posts to the session', async () => {
+    const fetchMock = vi.fn(async (url: string) => url.endsWith('/message')
+      ? new Response(JSON.stringify({ runId: 'run-1', messageId: 'm-1', status: 'running', capabilities: { interrupt: true, steer: true, followUp: true, resume: false } }), { status: 202 })
+      : new Response(JSON.stringify({ error: 'no live chat' }), { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderDetail(session());
+
+    const input = within(screen.getByTestId('inspector')).getByRole<HTMLInputElement>('textbox', { name: 'Message' });
+    expect(input.disabled).toBe(true);
+    act(() => loadState.report!({ status: 'ready' }));
+    expect(input.disabled).toBe(false);
+
+    fireEvent.change(input, { target: { value: 'run the tests' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'Message bar' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/captain/sessions/session-1/message', expect.anything()));
+    const [, init] = fetchMock.mock.calls.find(([url]) => url.endsWith('/message')) as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({ text: 'run the tests' });
   });
 
   it('summarises uncommitted work as a header toggle for the work-state panel', () => {

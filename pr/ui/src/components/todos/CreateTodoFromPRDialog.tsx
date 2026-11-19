@@ -21,7 +21,7 @@ import { usePRTodoProjectWorkspace } from './usePRTodoProjectWorkspace';
 import { useIsMobile } from '../../useIsMobile';
 import { UiArrowLeft, UiBeaker, UiComment, UiError, UiLinkExternal, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { inputClass, priorities, statuses, statusLabel } from './format';
-import { TodoMutationError, useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
+import { createTodoSubmissionResult, useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
 import { RunAfterCreation, useRunAfterCreation, type RunAfterCreationState } from './RunAfterCreation';
 import { savePRTodoDraft, type PRTodoDraft } from './prTodoDraft';
 import {
@@ -310,14 +310,7 @@ export function CreateTodoFromPRDialog({
       };
       await submitHosted({
         draft: savePRTodoDraft(pr, { dir, title, priority, status, notes, selectedKeys: selected.map(candidate => candidate.key), candidates, step: runAfter.step }),
-        request: async () => {
-          try {
-            return { status: 'success', value: await createTodo.mutateAsync(mutation) };
-          } catch (cause) {
-            if (cause instanceof TodoMutationError && cause.status < 500) return { status: 'rejected', error: cause.message };
-            return { status: 'unknown', error: cause instanceof Error ? cause.message : 'Could not create todo' };
-          }
-        },
+        request: () => createTodoSubmissionResult(() => createTodo.mutateAsync(mutation)),
         onSuccess: data => onResult(data, runFields.step ? { dir, ...runFields, step: runFields.step } : null),
       });
     } catch (err) {

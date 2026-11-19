@@ -8,7 +8,7 @@ import { TodoBucketGroup } from './todos/TodoBucketGroup';
 import { TodoDetail } from './todos/TodoDetail';
 import { TodoDetailStack } from './todos/TodoDetailStack';
 import { TodoToolbar } from './todos/TodoToolbar';
-import { CreateTodoDialog } from './todos/CreateTodoDialog';
+import { useOpenCreateTodo } from './todos/CreateTodoDialog';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
 import { isChildTodo, isWorkspaceShown } from './todos/todoFilter';
 import { useTodoFamily } from './todos/useTodoFamily';
@@ -33,9 +33,10 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
   projectError?: string;
 }) {
   const todos = useWorkspaceTodos(projects);
+  const openCreateTodo = useOpenCreateTodo();
   const {
     workspaces, byDir, loadingList, selected, select, detail, loadingDetail, detailError, error,
-    updateItem, deleted, filters, setFilters, toggleStatus, groupBy, showCreate, setShowCreate, created, selection,
+    updateItem, deleted, filters, setFilters, toggleStatus, groupBy, created, selection,
     tagsByDir,
   } = todos;
   const { selecting, setSelecting, rowSelection, onFocusStatus } = useTodoListMode({ filters, setFilters, selection });
@@ -62,7 +63,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
           <Button
             variant="ghost"
             type="button"
-            onClick={() => setShowCreate(true)}
+            onClick={() => openCreateTodo({ workspaces, onOpen: created })}
             title="New todo"
             className="inline-flex h-8 shrink-0 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           >
@@ -125,8 +126,6 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
           </ListMenu>
         )}
       </div>
-
-      <CreateTodoDialog open={showCreate} onClose={() => setShowCreate(false)} workspaces={workspaces} onCreated={created} />
     </div>
   );
 

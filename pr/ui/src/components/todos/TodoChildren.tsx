@@ -1,11 +1,11 @@
-import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import { useMemo, type MouseEvent, type ReactNode } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiAdd, UiCoins, UiListTree, UiTimer } from '@flanksource/clicky-ui/icons';
 import { TODO_PHASES, type TodoItem } from '../../types';
 import { buildRoute, emptyRouteState } from '../../routes';
 import { useNow } from '../../useNow';
 import { RelativeTime } from '../RelativeTime';
-import { CreateTodoDialog } from './CreateTodoDialog';
+import { useOpenCreateTodo } from './CreateTodoDialog';
 import { StatusIcon, TodoDiffBadge } from './format';
 import { TodoPhaseStrip } from './TodoPhaseCell';
 import { formatCost, formatDuration } from './TodoSessionTimer';
@@ -136,24 +136,17 @@ export function TodoChildren({ todo, dir, childTodos, familyStatus = { state: 'r
   familyStatus?: TodoFamilyStatus;
   onOpenTodo?: (ref: string) => void;
 }) {
-  const [adding, setAdding] = useState(false);
+  const openCreateTodo = useOpenCreateTodo();
   const card = {
     // Only one level: a child has no children of its own, so it cannot be given any.
     canAdd: !todo.parentId,
     childTodos,
     familyStatus,
     onOpenTodo,
-    onAdd: () => setAdding(true),
+    onAdd: () => openCreateTodo({
+      parent: { ref: todo.ref, title: todo.title, dir },
+      ...(onOpenTodo ? { onOpen: (_dir: string, child: TodoItem) => onOpenTodo(child.ref) } : {}),
+    }),
   };
-  return (
-    <>
-      {childTodos.some(childHasLivePhase) ? <LiveChildrenCard {...card} /> : <ChildrenCard {...card} nowMs={Date.now()} />}
-      <CreateTodoDialog
-        open={adding}
-        onClose={() => setAdding(false)}
-        parent={{ ref: todo.ref, title: todo.title, dir }}
-        onCreated={() => setAdding(false)}
-      />
-    </>
-  );
+  return childTodos.some(childHasLivePhase) ? <LiveChildrenCard {...card} /> : <ChildrenCard {...card} nowMs={Date.now()} />;
 }

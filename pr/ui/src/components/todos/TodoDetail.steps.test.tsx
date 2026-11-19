@@ -40,6 +40,7 @@ vi.mock('./TodoSessionDetail', async importOriginal => ({ ...(await importOrigin
 vi.mock('./tagQueries', () => ({ useTodoTagIndex: () => ({}), useTodoTagCounts: () => ({}) }));
 vi.mock('./TodoTag', () => ({ TodoTagField: () => null, TodoTagRow: () => null }));
 vi.mock('./TodoTimeline', () => ({ TodoTimeline: () => null }));
+vi.mock('./CreateTodoDialog', () => ({ useOpenCreateTodo: () => vi.fn() }));
 vi.mock('./TodoRunBranch', () => ({ TodoRunBranch: () => null }));
 vi.mock('./TodoSession', () => ({
   TodoSession: ({ sessionTab, sessionIds, onSessionTabChange, onSessionIdsChange }: {

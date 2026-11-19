@@ -1,15 +1,13 @@
-import { useMemo, useState, type ReactNode } from 'react';
-import { SessionChatComposer, SessionInspector, type SessionInspectorLoadState } from '@flanksource/clicky-ui/ai';
+import type { ReactNode } from 'react';
+import { SessionInspector } from '@flanksource/clicky-ui/ai';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiArrowLeft } from '@flanksource/clicky-ui/icons';
-import type { AgentSession } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { captainSessionUrl } from '../todos/TodoSessionDetail';
 import { SessionActivityIcon } from './SessionList';
 import type { SessionsQueryView } from './SessionsView';
-import { useSessionMessageComposer } from './sessionChat';
 import { attentionReasons } from './sessionView';
-import { sessionCollection } from './sessionCollection';
+import { SessionChatInspector } from './SessionChatInspector';
 
 function BackButton({ onBack }: { onBack: () => void }) {
   return (
@@ -33,34 +31,6 @@ function ScreenFrame({ header, children }: { header: ReactNode; children: ReactN
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-2">{header}</div>
       {children}
     </div>
-  );
-}
-
-// Why the always-present composer is disabled until the inspector reports the
-// session loaded: messaging a session the user cannot see would be blind.
-const COMPOSER_DISABLED_REASON = {
-  loading: 'Loading session…',
-  error: 'This session cannot be read',
-} as const;
-
-// The composer goes in the inspector's `composer` slot, which pins it (padded by
-// the bottom safe area) below the scrolling transcript in every load state, so
-// the input never disappears: while loading or after a load failure it is
-// rendered disabled with the reason instead.
-function SessionScreenBody({ session, sessions }: { session: AgentSession; sessions: AgentSession[] }) {
-  const { follow, send, ...composerProps } = useSessionMessageComposer(session);
-  const [load, setLoad] = useState<SessionInspectorLoadState>({ status: 'loading' });
-  const disabledReason = load.status === 'ready' ? undefined : COMPOSER_DISABLED_REASON[load.status];
-  const collection = useMemo(() => sessionCollection(session, sessions), [session, sessions]);
-  return (
-    <SessionInspector
-      session={collection}
-      follow={follow}
-      layout="compact"
-      className="min-h-0 flex-1 text-xs"
-      onLoadStateChange={setLoad}
-      composer={<SessionChatComposer {...composerProps} {...(disabledReason ? { disabledReason } : {})} onSubmit={send} />}
-    />
   );
 }
 
@@ -104,7 +74,7 @@ export function MobileSessionScreen({ query, sessionId, onBack }: {
         </>
       )}
     >
-      <SessionScreenBody key={session.id} session={session} sessions={query.data?.sessions ?? []} />
+      <SessionChatInspector key={session.id} session={session} sessions={query.data?.sessions ?? []} />
     </ScreenFrame>
   );
 }

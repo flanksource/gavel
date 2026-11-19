@@ -6,7 +6,8 @@ import { ChatWindowManagerProvider } from '@flanksource/clicky-ui/ai';
 import type { AgentSession, Project } from './types';
 import { App } from './App';
 
-const { isMobileMock, refreshMock, saveConfigMock, setProjectHiddenMock, agentSessionsMock, inspectorProps } = vi.hoisted(() => ({
+const { isMobileMock, refreshMock, saveConfigMock, setProjectHiddenMock, agentSessionsMock, inspectorProps, openCreateTodoMock } = vi.hoisted(() => ({
+  openCreateTodoMock: vi.fn(),
   isMobileMock: vi.fn(() => false),
   refreshMock: vi.fn(),
   saveConfigMock: vi.fn(),
@@ -68,8 +69,6 @@ vi.mock('./components/todos/useWorkspaceTodos', () => ({
     setFilters: vi.fn(),
     layout: 'split',
     selected: null,
-    showCreate: true,
-    setShowCreate: vi.fn(),
   }),
 }));
 
@@ -165,11 +164,7 @@ vi.mock('./components/todos/TodoNewPage', () => ({
 }));
 
 vi.mock('./components/todos/CreateTodoDialog', () => ({
-  CreateTodoDialog: ({ open, workspaces, defaultDir }: { open: boolean; workspaces: Project[]; defaultDir?: string }) => open ? (
-    <div data-testid="create-dialog-projects" data-default-dir={defaultDir}>
-      {workspaces.map(project => <span key={project.name}>{project.name}</span>)}
-    </div>
-  ) : null,
+  useOpenCreateTodo: () => openCreateTodoMock,
 }));
 
 vi.mock('./components/AddProjectDialog', () => ({ AddProjectDialog: () => null }));
@@ -229,11 +224,15 @@ describe('todo creation project choices', () => {
   it('keeps every project available in the dashboard new-todo dialog', () => {
     window.history.replaceState({}, '', '/todos?project=gavel');
 
-    renderApp();
+    openCreateTodoMock.mockClear();
 
-    const dialog = screen.getByTestId('create-dialog-projects');
-    expect(dialog.textContent).toBe('gavelclicky');
-    expect(dialog.dataset.defaultDir).toBe('/work/gavel');
+    renderApp();
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+
+    expect(openCreateTodoMock).toHaveBeenCalledOnce();
+    const draft = openCreateTodoMock.mock.calls[0][0] as { workspaces: Project[]; defaultDir?: string };
+    expect(draft.workspaces.map(project => project.name)).toEqual(['gavel', 'clicky']);
+    expect(draft.defaultDir).toBe('/work/gavel');
   });
 });
 

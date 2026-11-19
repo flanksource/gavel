@@ -31,7 +31,7 @@ vi.mock('./todos/useWorkspaceTodos', async importOriginal => ({
   ...(await importOriginal<object>()),
   useWorkspaceTodos: workspaceHook,
 }));
-vi.mock('./todos/CreateTodoDialog', () => ({ CreateTodoDialog: () => null }));
+vi.mock('./todos/CreateTodoDialog', () => ({ useOpenCreateTodo: () => vi.fn() }));
 
 // The full-width pane's two halves are stubbed: DataTable and the detail's
 // tabs both pull in @floating-ui/react, and what is under test here is which of

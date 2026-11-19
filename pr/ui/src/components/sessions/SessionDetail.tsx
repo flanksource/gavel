@@ -1,6 +1,6 @@
-import { useId, useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { useId, useState, type ComponentType, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { SessionInspector, formatCost } from '@flanksource/clicky-ui/ai';
+import { formatCost } from '@flanksource/clicky-ui/ai';
 import { cn } from '@flanksource/clicky-ui/utils';
 import {
   UiChevronDown,
@@ -19,7 +19,7 @@ import { useProjectGit } from '../../projectGitQueries';
 import { BranchLandActions } from '../BranchLandActions';
 import { CommitRangeChanges } from '../CommitRangeChanges';
 import { branchRangeRequests, branchRangeSummary } from '../ProjectBranchChanges';
-import { sessionCollection } from './sessionCollection';
+import { SessionChatInspector } from './SessionChatInspector';
 import { SessionActivityIcon } from './SessionList';
 import { attentionReasons, sessionDirtyCount, sessionFailed, workStateBadge } from './sessionView';
 
@@ -237,11 +237,11 @@ function BranchChanges({ project, branch }: { project: string; branch: string })
 /**
  * One session: what it is doing, where its work sits (worktree, uncommitted
  * and unmerged changes, merge into base, PR), then its transcript — read and
- * followed from Captain's session handler — and the branch's changes.
+ * followed from Captain's session handler, with a message bar at the bottom
+ * to continue it — and the branch's changes.
  */
 export function SessionDetail({ session, sessions, onOpenTodo, onOpenWorktree }: SessionDetailProps) {
   const [workOpen, setWorkOpen] = useState(false);
-  const collection = useMemo(() => sessionCollection(session, sessions), [session, sessions]);
   const workStateId = useId();
   const branch = session.worktree?.branch;
   const canShowChanges = !!(session.project && branch && session.git && session.git.ahead > 0);
@@ -269,15 +269,9 @@ export function SessionDetail({ session, sessions, onOpenTodo, onOpenWorktree }:
       >
         <WorkStateLine session={session} onOpenWorktree={onOpenWorktree} />
       </div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-        <SessionInspector
-          key={session.id}
-          session={collection}
-          follow={session.processActive}
-          layout="compact"
-          hostTabs={hostTabs}
-          className="min-h-0 flex-1 text-xs"
-        />
+      {/* The transcript scrolls inside the inspector, so the message bar stays pinned at the bottom. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <SessionChatInspector key={session.id} session={session} sessions={sessions} hostTabs={hostTabs} />
       </div>
     </div>
   );

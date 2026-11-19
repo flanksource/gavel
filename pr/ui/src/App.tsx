@@ -10,7 +10,7 @@ import { ActivityView } from './components/ActivityView';
 import { TodoNewButton, TodoNavbarDensityPicker, TodoNavbarLayoutPicker, TodoWorkspaceList, TodoDetailPane, TodoFullPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { PlanReviewBar, TodoReviewButton, useReviewMode } from './components/todos/PlanReview';
-import { CreateTodoDialog } from './components/todos/CreateTodoDialog';
+import { useOpenCreateTodo } from './components/todos/CreateTodoDialog';
 import { TodoNewPage } from './components/todos/TodoNewPage';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
@@ -341,6 +341,12 @@ export function App() {
     view: todoView,
     onViewChange: navigateTodoView,
     enabled: onTodosTab || paletteOpen,
+  });
+  const openCreateTodo = useOpenCreateTodo();
+  const newTodo = () => openCreateTodo({
+    workspaces: visibleProjects.filter(project => !!project.dir),
+    defaultDir: todos.selected?.dir ?? scopedProjects[0]?.dir,
+    onOpen: todos.created,
   });
   // Selecting a prompt encodes its id in the path (/prompts/{id}) and keeps the
   // dashboard project scope in the query so the page remains deep-linkable.
@@ -718,7 +724,7 @@ export function App() {
       {activeTab === 'todos' && <TodoNavbarLayoutPicker todos={todos} />}
       {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
       {activeTab === 'todos' && <GrabberExtensionHelp />}
-      {activeTab === 'todos' && <TodoNewButton todos={todos} />}
+      {activeTab === 'todos' && <TodoNewButton todos={todos} onNew={newTodo} />}
       {!overflow && chatButton}
       {hostControls && <TaskManagerButton basePath="/api/v1" />}
       {hostControls && <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />}
@@ -934,7 +940,6 @@ export function App() {
         onOpenUUID={openUUIDFromPalette}
       />
 
-      <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={visibleProjects.filter(project => !!project.dir)} onCreated={todos.created} defaultDir={todos.selected?.dir ?? scopedProjects[0]?.dir} />
       {projectDialogs}
     </>
   );

@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import type { ModalSubmissionResult } from '@flanksource/clicky-ui/components';
 import type { TodoChildDisposition, TodoItem, TodoLandResponse, TodoListResponse, TodoRunLanding, TodoRunResponse } from '../../types';
 import { isProjectGitKey, queryKeys } from '../../query';
 import { todoQuery } from './format';
@@ -62,6 +63,17 @@ export async function todoMutationResponseError(response: Response, context: str
   }
   const detail = typeof response.text === 'function' ? (await response.text().catch(() => '')).trim() : '';
   return new TodoMutationError(detail ? `${context}: ${detail}` : `${context} (${response.status})`, response.status);
+}
+
+/** Maps a create request onto a hosted modal outcome: a 4xx means the server
+ *  refused the todo, anything else may have saved it, so the outcome is unknown. */
+export async function createTodoSubmissionResult(create: () => Promise<CreateTodoResponse>): Promise<ModalSubmissionResult<CreateTodoResponse>> {
+  try {
+    return { status: 'success', value: await create() };
+  } catch (cause) {
+    if (cause instanceof TodoMutationError && cause.status < 500) return { status: 'rejected', error: cause.message };
+    return { status: 'unknown', error: cause instanceof Error ? cause.message : 'Could not create todo' };
+  }
 }
 
 export async function invalidateTodoCollections(client: QueryClient, dir: string) {
