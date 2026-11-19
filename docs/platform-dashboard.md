@@ -20,7 +20,9 @@ Windows are limited to 60 days, because sandbox runs are kept for 60 days by def
 starts at UTC midnight, so every day on a chart is a whole day.
 
 Click an organization on the Tenants panel to open its own view at `/platform/<organization ID>`:
-its members, repositories, GitHub installations and last run, then the sandbox usage, model usage,
+its members, repositories, GitHub installations and last run, its sandbox size (the CPU and memory
+each of its substrate environments gets, which a platform admin sets there or returns to serve's
+default, `--substrate-cpu` and `--substrate-memory`), then the sandbox usage, model usage,
 Captain history, substrate actors and GitHub installations panels with only its rows. Budgets,
 substrate's workers, its metrics and gavel's infrastructure belong to no one organization, so they
 show only on the dashboard of every organization.
