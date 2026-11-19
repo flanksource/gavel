@@ -119,18 +119,25 @@ func (o *TestOrchestrator) pathsLabel() string {
 }
 
 // failedTestOptions focuses each framework on the tests a previous run failed.
+// Node runners match their name filter against the full name (suite titles
+// joined before the test title), so their leaf titles are end-anchored.
 func failedTestOptions(names map[Framework][]string) map[Framework]runners.FileSelection {
 	out := map[Framework]runners.FileSelection{}
+	quote := func(list []string, suffix string) []string {
+		var quoted []string
+		for _, name := range list {
+			quoted = append(quoted, regexp.QuoteMeta(name)+suffix)
+		}
+		return quoted
+	}
 	for fw, list := range names {
 		switch fw {
 		case parsers.GoTest:
 			out[fw] = runners.FileSelection{Exact: list}
 		case parsers.Ginkgo:
-			var quoted []string
-			for _, name := range list {
-				quoted = append(quoted, regexp.QuoteMeta(name))
-			}
-			out[fw] = runners.FileSelection{Regex: quoted}
+			out[fw] = runners.FileSelection{Regex: quote(list, "")}
+		case parsers.Vitest, parsers.Jest, parsers.Playwright:
+			out[fw] = runners.FileSelection{Regex: quote(list, "$")}
 		}
 	}
 	return out

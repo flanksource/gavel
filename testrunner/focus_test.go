@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -170,22 +172,58 @@ var _ = Describe("--failed", func() {
 		path := writeSnapshot(
 			parsers.Test{Name: "TestFoo", PackagePath: "./go", Framework: parsers.GoTest, Failed: true},
 			parsers.Test{Name: "does (work)", PackagePath: "./ginkgo", Framework: parsers.Ginkgo, Failed: true},
+			parsers.Test{Name: "renders [a] map", PackagePath: "./web", Framework: parsers.Vitest, Failed: true},
+			parsers.Test{Name: "opens page", PackagePath: "./jest", Framework: parsers.Jest, Failed: true},
+			parsers.Test{Name: "logs in", PackagePath: "./e2e", Framework: parsers.Playwright, Failed: true},
 		)
 		filtered, names, err := applyFailedFilter(map[Framework][]string{
-			parsers.GoTest: {"./go", "./passing"},
-			parsers.Ginkgo: {"./ginkgo"},
-		}, path)
+			parsers.GoTest:     {"./go", "./passing"},
+			parsers.Ginkgo:     {"./ginkgo"},
+			parsers.Vitest:     {"./web"},
+			parsers.Jest:       {"./jest"},
+			parsers.Playwright: {"./e2e"},
+		}, "", path)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(filtered).To(Equal(map[Framework][]string{parsers.GoTest: {"./go"}, parsers.Ginkgo: {"./ginkgo"}}))
+		Expect(filtered).To(Equal(map[Framework][]string{
+			parsers.GoTest: {"./go"}, parsers.Ginkgo: {"./ginkgo"}, parsers.Vitest: {"./web"}, parsers.Jest: {"./jest"}, parsers.Playwright: {"./e2e"},
+		}))
 		Expect(failedTestOptions(names)).To(Equal(map[Framework]runners.FileSelection{
-			parsers.GoTest: {Exact: []string{"TestFoo"}},
-			parsers.Ginkgo: {Regex: []string{`does \(work\)`}},
+			parsers.GoTest:     {Exact: []string{"TestFoo"}},
+			parsers.Ginkgo:     {Regex: []string{`does \(work\)`}},
+			parsers.Vitest:     {Regex: []string{`renders \[a\] map$`}},
+			parsers.Jest:       {Regex: []string{`opens page$`}},
+			parsers.Playwright: {Regex: []string{`logs in$`}},
 		}))
 	})
 
 	It("rejects failed packages missing from discovery", func() {
 		path := writeSnapshot(parsers.Test{Name: "fails in CI", PackagePath: "./ci-only", Framework: parsers.Ginkgo, Failed: true})
-		_, _, err := applyFailedFilter(map[Framework][]string{parsers.Ginkgo: {"./local"}}, path)
+		_, _, err := applyFailedFilter(map[Framework][]string{parsers.Ginkgo: {"./local"}}, "", path)
 		Expect(err).To(MatchError(ContainSubstring("did not match any detected packages")))
+	})
+
+	It("unions the failures of every run started within a duration window", func() {
+		stateRoot := GinkgoT().TempDir()
+		now := time.Now().UTC()
+		record := func(age time.Duration, tests ...parsers.Test) {
+			_, err := snapshots.SavePerRun(stateRoot, &testui.Snapshot{Tests: tests}, now.Add(-age), "")
+			Expect(err).NotTo(HaveOccurred())
+		}
+		web := func(name string, failed bool) parsers.Test {
+			return parsers.Test{Name: name, PackagePath: "./web", Framework: parsers.Vitest, Failed: failed, Passed: !failed}
+		}
+		record(48*time.Hour, web("failed before the window", true))
+		record(3*time.Hour, web("times out under load", true), web("renders map", true))
+		record(time.Hour, web("renders map", true), web("times out under load", false))
+
+		filtered, names, err := applyFailedFilter(map[Framework][]string{parsers.Vitest: {"./web", "./other"}}, stateRoot, "1d")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(filtered).To(Equal(map[Framework][]string{parsers.Vitest: {"./web"}}))
+		Expect(names).To(Equal(map[Framework][]string{parsers.Vitest: {"renders map", "times out under load"}}))
+	})
+
+	It("rejects a duration window with no failed runs", func() {
+		_, _, err := applyFailedFilter(map[Framework][]string{parsers.Vitest: {"./web"}}, GinkgoT().TempDir(), "1d")
+		Expect(err).To(MatchError(ContainSubstring("no failed tests found in runs started within 1d")))
 	})
 })

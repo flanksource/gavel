@@ -110,7 +110,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	var loopErr error
 	loopStopReason := "loop-error"
 	loopRes, err := captainai.RunUntil(ctx, captainai.LoopOptions{
-		Provider:      streamer,
+		Provider:      repairTaskProvider{streamer},
 		MaxIterations: req.MaxIterations,
 		MaxCostUSD:    req.AIConfig.Budget.Cost,
 		SessionReuse:  true,
