@@ -120,6 +120,6 @@ func TestCredentialFetchRefusesAnOrganizationWhoseModelBudgetIsUsedUp(t *testing
 	require.NoError(t, err)
 	status, body = fetch()
 	assert.Equal(t, http.StatusForbidden, status)
-	assert.Contains(t, body, "this organization has used 5000 tokens of its 5000 tokens token budget")
+	assert.Contains(t, body, "this organization has used 5000 tokens of its 5000 tokens budget")
 	assert.NotContains(t, body, modelKeysTestAPIKey)
 }

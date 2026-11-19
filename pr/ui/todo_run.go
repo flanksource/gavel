@@ -294,7 +294,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if stream != nil {
-			stream.failed(http.StatusBadRequest, err)
+			stream.failed(todoErrorStatus(http.StatusBadRequest, err), err)
 			return
 		}
 		writeTodoError(w, http.StatusBadRequest, err)
