@@ -38,6 +38,9 @@ type PlatformAPI struct {
 	SubstrateView string
 	// Substrate lists substrate's workers and actors; nil when serve runs without --sandbox substrate.
 	Substrate SubstrateInventory
+	// Sizes are the organizations' substrate templates, whose size platform admins set; nil when
+	// serve runs without --sandbox substrate.
+	Sizes *sandbox.OrgTemplates
 
 	now        func() time.Time
 	clerkMu    sync.Mutex
@@ -73,6 +76,9 @@ func (p *PlatformAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/platform/infrastructure", p.infrastructure)
 	mux.HandleFunc("GET /api/platform/substrate/metrics", p.substrateMetrics)
 	mux.HandleFunc("GET /api/platform/substrate/inventory", p.substrateInventory)
+	mux.HandleFunc("GET /api/platform/orgs/{id}/sandbox-size", p.sandboxSize)
+	mux.HandleFunc("PUT /api/platform/orgs/{id}/sandbox-size", p.setSandboxSize)
+	mux.HandleFunc("DELETE /api/platform/orgs/{id}/sandbox-size", p.resetSandboxSize)
 	return platformAdminsOnly(mux)
 }
 

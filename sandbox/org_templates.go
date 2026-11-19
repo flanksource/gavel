@@ -63,20 +63,36 @@ func (o *OrgTemplates) Resolve(ctx context.Context, org uuid.UUID) (OrgTemplate,
 	return template, nil
 }
 
+// DefaultSize is the size of an organization without one of its own: Size, with what it leaves
+// unset from the base template.
+func (o *OrgTemplates) DefaultSize(ctx context.Context) (substrate.Size, error) {
+	base, err := o.Client.Template(ctx, o.Base)
+	if err != nil {
+		return substrate.Size{}, err
+	}
+	return o.defaultSize(base), nil
+}
+
+func (o *OrgTemplates) defaultSize(base substrate.Template) substrate.Size {
+	size := o.Size
+	if size.CPUMillicores == 0 {
+		size.CPUMillicores = base.Size.CPUMillicores
+	}
+	if size.MemoryBytes == 0 {
+		size.MemoryBytes = base.Size.MemoryBytes
+	}
+	return size
+}
+
 // wanted is the template org's runs should be created from, given the base template.
 func (o *OrgTemplates) wanted(ctx context.Context, org uuid.UUID, base substrate.Template) (OrgTemplate, error) {
-	size, err := orgSize(ctx, o.DB, org)
+	size, err := OrgSize(ctx, o.DB, org)
 	if err != nil {
 		return OrgTemplate{}, err
 	}
 	if size == nil {
-		size = &substrate.Size{CPUMillicores: o.Size.CPUMillicores, MemoryBytes: o.Size.MemoryBytes}
-		if size.CPUMillicores == 0 {
-			size.CPUMillicores = base.Size.CPUMillicores
-		}
-		if size.MemoryBytes == 0 {
-			size.MemoryBytes = base.Size.MemoryBytes
-		}
+		defaults := o.defaultSize(base)
+		size = &defaults
 	}
 	sum := sha256.Sum256([]byte(base.UID + "/" + strconv.FormatInt(size.CPUMillicores, 10) + "/" + strconv.FormatInt(size.MemoryBytes, 10)))
 	return OrgTemplate{Name: orgTemplatePrefix + org.String() + "-" + hex.EncodeToString(sum[:4]), Size: *size}, nil
@@ -143,8 +159,11 @@ func templateOrg(name string) (uuid.UUID, bool) {
 // ErrOrgNotFound reports an organization gavel doesn't have.
 var ErrOrgNotFound = errors.New("organization not found")
 
-// orgSize is the size a platform admin set for org, or nil.
-func orgSize(ctx context.Context, db *gorm.DB, org uuid.UUID) (*substrate.Size, error) {
+// ErrInvalidOrgSize refuses a size without both CPU and memory, which substrate needs.
+var ErrInvalidOrgSize = errors.New("an organization's sandbox size needs both CPU and memory")
+
+// OrgSize is the size a platform admin set for org, or nil.
+func OrgSize(ctx context.Context, db *gorm.DB, org uuid.UUID) (*substrate.Size, error) {
 	var row struct {
 		SandboxCPUMillicores *int64 `gorm:"column:sandbox_cpu_millicores"`
 		SandboxMemoryBytes   *int64 `gorm:"column:sandbox_memory_bytes"`
@@ -168,8 +187,8 @@ func SetOrgSize(ctx context.Context, db *gorm.DB, org uuid.UUID, size *substrate
 	var cpu, memory *int64
 	if size != nil {
 		if size.CPUMillicores <= 0 || size.MemoryBytes <= 0 {
-			return fmt.Errorf("set the sandbox size of organization %s to %d millicores and %d bytes: an organization's sandbox size needs both CPU and memory",
-				org, size.CPUMillicores, size.MemoryBytes)
+			return fmt.Errorf("set the sandbox size of organization %s to %d millicores and %d bytes: %w",
+				org, size.CPUMillicores, size.MemoryBytes, ErrInvalidOrgSize)
 		}
 		cpu, memory = &size.CPUMillicores, &size.MemoryBytes
 	}
