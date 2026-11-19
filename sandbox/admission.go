@@ -45,12 +45,19 @@ type Admission struct {
 	changed map[uuid.UUID]chan struct{}
 }
 
+// Demand is what a run asks of its organization's budgets: its size, and whether it makes model
+// calls, which only agent runs do and only token and model cost budgets count.
+type Demand struct {
+	Size       substrate.Size
+	ModelCalls bool
+}
+
 // Ticket is a run's place in its organization's budgets: it holds room once admitted, which
 // Release gives back. A nil Ticket is a run admitted without budgets, holding nothing.
 type Ticket struct {
 	admission *Admission
 	org       uuid.UUID
-	size      substrate.Size
+	demand    Demand
 	admitted  bool
 	reason    string
 }
@@ -60,18 +67,19 @@ type limits struct {
 	cores, gib *float64
 }
 
-// Enter refuses a run of size that org's budgets leave no room for, and otherwise gives it a
+// Enter refuses a run demanding what org's budgets leave no room for, and otherwise gives it a
 // ticket: admitted at once when the organization holds little enough and no run is waiting, or
 // in line behind the runs waiting.
-func (a *Admission) Enter(ctx context.Context, org uuid.UUID, size substrate.Size) (*Ticket, error) {
-	caps, err := a.limits(ctx, org, size)
+func (a *Admission) Enter(ctx context.Context, org uuid.UUID, demand Demand) (*Ticket, error) {
+	caps, err := a.limits(ctx, org, demand)
 	if err != nil {
 		return nil, err
 	}
+	size := demand.Size
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.init()
-	ticket := &Ticket{admission: a, org: org, size: size}
+	ticket := &Ticket{admission: a, org: org, demand: demand}
 	line := a.lines[org]
 	if len(line) == 0 && caps.fit(a.held[org], size) {
 		a.hold(ticket)
@@ -108,21 +116,21 @@ func (t *Ticket) Wait(ctx context.Context, report func(string)) error {
 	recheck := time.NewTicker(a.Recheck)
 	defer recheck.Stop()
 	for {
-		caps, err := a.limits(ctx, t.org, t.size)
+		caps, err := a.limits(ctx, t.org, t.demand)
 		if err != nil {
 			a.leave(t)
 			return err
 		}
 		a.mu.Lock()
 		line := a.lines[t.org]
-		if len(line) > 0 && line[0] == t && caps.fit(a.held[t.org], t.size) {
+		if len(line) > 0 && line[0] == t && caps.fit(a.held[t.org], t.demand.Size) {
 			a.lines[t.org] = line[1:]
 			a.hold(t)
 			a.mu.Unlock()
 			report("started after waiting for room")
 			return nil
 		}
-		reason := a.waitingFor(t.org, t.size, caps, slices.Index(line, t))
+		reason := a.waitingFor(t.org, t.demand.Size, caps, slices.Index(line, t))
 		changed := a.changed[t.org]
 		a.mu.Unlock()
 		select {
@@ -150,8 +158,8 @@ func (t *Ticket) Release() {
 		return
 	}
 	t.admitted = false
-	held := a.held[t.org]
-	a.held[t.org] = substrate.Size{CPUMillicores: held.CPUMillicores - t.size.CPUMillicores, MemoryBytes: held.MemoryBytes - t.size.MemoryBytes}
+	held, size := a.held[t.org], t.demand.Size
+	a.held[t.org] = substrate.Size{CPUMillicores: held.CPUMillicores - size.CPUMillicores, MemoryBytes: held.MemoryBytes - size.MemoryBytes}
 	a.changeLocked(t.org)
 }
 
@@ -164,8 +172,8 @@ func (a *Admission) init() {
 // hold admits ticket, adding its size to what its organization holds. a.mu is held.
 func (a *Admission) hold(ticket *Ticket) {
 	ticket.admitted = true
-	held := a.held[ticket.org]
-	a.held[ticket.org] = substrate.Size{CPUMillicores: held.CPUMillicores + ticket.size.CPUMillicores, MemoryBytes: held.MemoryBytes + ticket.size.MemoryBytes}
+	held, size := a.held[ticket.org], ticket.demand.Size
+	a.held[ticket.org] = substrate.Size{CPUMillicores: held.CPUMillicores + size.CPUMillicores, MemoryBytes: held.MemoryBytes + size.MemoryBytes}
 	a.changeLocked(ticket.org)
 }
 
@@ -185,9 +193,11 @@ func (a *Admission) changeLocked(org uuid.UUID) {
 	a.changed[org] = make(chan struct{})
 }
 
-// limits are org's concurrent budgets, refusing a run of size its cumulative budgets have no room
-// for, or that is bigger than a concurrent budget on its own.
-func (a *Admission) limits(ctx context.Context, org uuid.UUID, size substrate.Size) (limits, error) {
+// limits are org's concurrent budgets, refusing a run demanding what its cumulative budgets have
+// no room for, or bigger than a concurrent budget on its own. Token and model cost budgets hold
+// back only runs that make model calls.
+func (a *Admission) limits(ctx context.Context, org uuid.UUID, demand Demand) (limits, error) {
+	size := demand.Size
 	statuses, err := a.Budgets.Status(ctx, org, a.RunLifetime)
 	if err != nil {
 		return limits{}, fmt.Errorf("check the budgets of organization %s: %w", org, err)
@@ -195,7 +205,9 @@ func (a *Admission) limits(ctx context.Context, org uuid.UUID, size substrate.Si
 	var caps limits
 	var refusals []string
 	for _, status := range statuses {
+		modelBudget := status.Resource == budget.Tokens || status.Resource == budget.USD
 		switch {
+		case modelBudget && !demand.ModelCalls:
 		case status.Kind == budget.Cumulative && status.Reached():
 			refusals = append(refusals, fmt.Sprintf("this organization has used %s of its %s %s budget since %s",
 				amount(status.Budget, status.Used), amount(status.Budget, status.Amount), resourceName(status.Resource), status.Since.UTC().Format(time.RFC3339)))
@@ -267,8 +279,11 @@ func amount(b budget.Budget, v float64) string {
 }
 
 func resourceName(resource budget.Resource) string {
-	if resource == budget.USD {
+	switch resource {
+	case budget.USD:
 		return "model cost"
+	case budget.Tokens:
+		return "token"
 	}
 	return string(resource)
 }

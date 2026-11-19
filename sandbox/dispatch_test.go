@@ -452,7 +452,7 @@ func TestDispatcherQueuesARunUntilItsOrganizationHasRoom(t *testing.T) {
 	ctx := context.Background()
 	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
 	require.NoError(t, err)
-	holding, err := dispatcher.Admission.Enter(ctx, org, substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	holding, err := dispatcher.Admission.Enter(ctx, org, Demand{Size: substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30}})
 	require.NoError(t, err)
 	var streamed bytes.Buffer
 
@@ -502,7 +502,7 @@ func TestDispatcherFailsAQueuedRunThatWaitsTooLong(t *testing.T) {
 	ctx := context.Background()
 	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
 	require.NoError(t, err)
-	holding, err := dispatcher.Admission.Enter(ctx, org, substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	holding, err := dispatcher.Admission.Enter(ctx, org, Demand{Size: substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30}})
 	require.NoError(t, err)
 	defer holding.Release()
 
@@ -522,7 +522,7 @@ func TestCancellingAQueuedRunTakesItOutOfLine(t *testing.T) {
 	ctx := context.Background()
 	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
 	require.NoError(t, err)
-	holding, err := dispatcher.Admission.Enter(ctx, org, substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	holding, err := dispatcher.Admission.Enter(ctx, org, Demand{Size: substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30}})
 	require.NoError(t, err)
 
 	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
@@ -542,7 +542,7 @@ func TestAnAgentRunWaitsForRoomWritingWhyToItsLog(t *testing.T) {
 	ctx := context.Background()
 	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.Memory, Kind: budget.Concurrent, Amount: 4})
 	require.NoError(t, err)
-	holding, err := dispatcher.Admission.Enter(ctx, org, substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	holding, err := dispatcher.Admission.Enter(ctx, org, Demand{Size: substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30}})
 	require.NoError(t, err)
 	id := uuid.New()
 	recorded := make(chan *RecordedRun)

@@ -167,7 +167,7 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 		return nil, err
 	}
 	run := &Run{ID: id, done: make(chan struct{})}
-	ticket, err := d.admit(ctx, id, scope.OrgID, recorded.template)
+	ticket, err := d.admit(ctx, id, scope.OrgID, Demand{Size: recorded.template.Size, ModelCalls: spec.Kind == "agent"})
 	if err != nil {
 		return run, err
 	}
@@ -192,13 +192,13 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 	return run, d.launch(ctx, run, scope, spec, recorded, ticket, output)
 }
 
-// admit admits run of org at its template's size within the organization's budgets, recording
-// why when it is refused. Without Admission or Templates every run is admitted, holding nothing.
-func (d *Dispatcher) admit(ctx context.Context, run, org uuid.UUID, template OrgTemplate) (*Ticket, error) {
+// admit admits run of org within the organization's budgets, recording why when it is refused.
+// Without Admission or Templates every run is admitted, holding nothing.
+func (d *Dispatcher) admit(ctx context.Context, run, org uuid.UUID, demand Demand) (*Ticket, error) {
 	if d.Admission == nil || d.Templates == nil {
 		return nil, nil
 	}
-	ticket, err := d.Admission.Enter(ctx, org, template.Size)
+	ticket, err := d.Admission.Enter(ctx, org, demand)
 	if err != nil {
 		d.finishWith(context.WithoutCancel(ctx), run, "failed", nil, err.Error())
 		return nil, fmt.Errorf("start sandbox run %s: %w", run, err)
@@ -371,7 +371,7 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 	if err != nil {
 		return nil, err
 	}
-	ticket, err := d.admit(ctx, id, scope.OrgID, recorded.template)
+	ticket, err := d.admit(ctx, id, scope.OrgID, Demand{Size: recorded.template.Size, ModelCalls: spec.Kind == "agent"})
 	if err != nil {
 		return nil, err
 	}
