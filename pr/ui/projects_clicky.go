@@ -363,6 +363,7 @@ func projectsOpenAPI() map[string]any {
 			},
 			"/api/projects/{name}/commit-queue": map[string]any{
 				"post": projectLifecycleOp("projects_commit_queue_add", "Add a serial commit task to the project's current task group", "202", "ProjectCommitRun", map[string]any{
+					"parameters": append(nameParam()["parameters"].([]any), gitLockPromptParam()),
 					"requestBody": map[string]any{
 						"required": true,
 						"content": map[string]any{"application/json": map[string]any{

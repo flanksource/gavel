@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/flanksource/clicky/prompt"
 )
 
 // ErrIndexPatchExclusive rejects --index-patch combined with an option that
@@ -116,7 +118,10 @@ func SnapshotStagedPatch(ctx context.Context, opts SnapshotOptions) error {
 	if err := os.WriteFile(opts.PatchFile, []byte(patch), 0o644); err != nil {
 		return fmt.Errorf("write staged snapshot: %w", err)
 	}
-	ctx = withRealIndex(withGitLockPolicy(ctx, gitLockPolicy{Mode: CheckModeFail}))
+	if !prompt.PreferSink(ctx) {
+		ctx = withGitLockPolicy(ctx, gitLockPolicy{Mode: CheckModeFail})
+	}
+	ctx = withRealIndex(ctx)
 	if out, err := runGitRetryingLocks(ctx, root, append([]string{"--literal-pathspecs", "reset", "--quiet", "--"}, opts.Paths...)...); err != nil {
 		return fmt.Errorf("remove snapshot paths from the index (snapshot kept at %s): %w: %s", opts.PatchFile, err, strings.TrimSpace(string(out)))
 	}

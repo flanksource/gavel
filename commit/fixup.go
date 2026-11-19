@@ -112,7 +112,7 @@ func runFixup(ctx context.Context, opts Options) (*Result, error) {
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
 
 	if !opts.Force {
-		hookResults, hookErr := RunHooks(opts.WorkDir, opts.Config.Hooks, source.Files)
+		hookResults, hookErr := RunHooks(ctx, opts.WorkDir, opts.Config.Hooks, source.Files)
 		result.Hooks = hookResults
 		if hookErr != nil {
 			return result, hookErr

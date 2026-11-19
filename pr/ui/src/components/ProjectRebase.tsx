@@ -1,20 +1,19 @@
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SessionTail } from '@flanksource/clicky-ui/ai';
-import { Button, Combobox, DropdownMenu, Modal } from '@flanksource/clicky-ui/components';
+import { Button, Combobox, Modal, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
 import { AnsiHtml } from '@flanksource/clicky-ui/data';
-import { UiDotsVertical, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { UiGitMerge, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import { fetchJSON, HttpError, mutationJSON, queryKeys } from '../query';
 import type { RebaseContext, RebaseOperation } from '../types/branchRebase';
-import { useIsMobile } from '../useIsMobile';
 import { projectDiffQueryKey } from './projectMutations';
 import { usePromptRun } from './promptRun';
 
 export const BRANCH_REBASE_PROMPT = 'branch-rebase';
 
 interface RebaseParts {
-  // The Rebase… entry point, sized for the ref bar's picker line.
-  trigger: ReactNode;
+  // The Rebase… entry point, as an option for the PR split buttons' menus.
+  action: DropdownMenuItem;
   // Notices, failures, recovery actions and the Rebase dialog; a block of its own.
   status: ReactNode;
 }
@@ -29,7 +28,6 @@ interface Props {
 
 export function ProjectRebase({ projectName, worktree, branch, generation, children }: Props) {
   const client = useQueryClient();
-  const mobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [target, setTarget] = useState('refs/remotes/origin/main');
@@ -69,14 +67,7 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
   const openDialog = () => { mutation.reset(); setOpen(true); void context.refetch(); };
   const disabled = !!reason || busy || !!active;
 
-  const trigger = mobile
-    ? <DropdownMenu
-      align="right"
-      menuLabel="Rebase"
-      trigger={<Button variant="ghost" size="icon" className="size-8 shrink-0" aria-label="Rebase actions" title="Rebase actions"><UiDotsVertical /></Button>}
-      items={[{ label: 'Rebase…', title: reason || undefined, disabled, onSelect: openDialog }]}
-    />
-    : <Button variant="outline" size="sm" disabled={disabled} title={reason || undefined} onClick={openDialog}>Rebase…</Button>;
+  const action: DropdownMenuItem = { label: <span className="flex items-center gap-2"><UiGitMerge />Rebase…</span>, title: reason || undefined, disabled, onSelect: openDialog };
 
   const showStatus = (notice && !active) || error || active || ai.active || ai.state.status === 'failed';
   const status = <>
@@ -111,7 +102,7 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
     </Modal>
   </>;
 
-  return <>{children({ trigger, status })}</>;
+  return <>{children({ action, status })}</>;
 }
 
 function ConflictPaths({ paths }: { paths: string[] }) {

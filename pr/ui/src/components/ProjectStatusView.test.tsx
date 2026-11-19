@@ -661,6 +661,36 @@ describe('ProjectStatusView', () => {
     expect(await screen.findByRole('region', { name: 'Commit tasks' })).toBeTruthy();
   });
 
+  it('contains advanced commit render errors and can reopen the dialog', async () => {
+    const storageKey = 'gavel.project-action-options.v2';
+    localStorage.setItem(storageKey, '{');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/actions/schema?action=commit')) {
+        return jsonResponse({
+          schemaVersion: 2,
+          action: 'commit',
+          schema: { type: 'object', properties: {} },
+          defaults: {},
+        });
+      }
+      return jsonResponse(statusWithStates({ 'one.go': 'staged' }));
+    }));
+    renderStatus(<ProjectStatusView project={statusResponse.project} />);
+
+    const advanced = await screen.findByRole('button', { name: 'Commit options: advanced' });
+    fireEvent.click(advanced);
+    const alert = await screen.findByText('Could not render advanced commit options.');
+    const dialog = screen.getByLabelText('Advanced commit options');
+    expect(dialog.contains(alert)).toBe(true);
+    expect(within(dialog).queryByRole('button', { name: 'Commit staged' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Commit staged (1)' })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+    localStorage.removeItem(storageKey);
+    fireEvent.click(advanced);
+    expect(await screen.findByTestId('advanced-options')).toBeTruthy();
+  });
+
   it.each([
     ['test', 'Test changed', 'Test details · gavel'],
     ['lint', 'Lint project', 'Lint details · gavel'],

@@ -334,8 +334,8 @@ var _ = Describe("pushAfterCommit with PushModeBranch on an already-pushed branc
 				created = append(created, in)
 				return &model.CreatePRResult{Number: prNumber, NodeID: "PR_node", Base: in.Base, URL: "http://x/42"}, nil
 			},
-			enableAutoMerge: func(_ github.Options, nodeID, method string) error {
-				merged = append(merged, nodeID+":"+method)
+			enableAutoMerge: func(_ github.Options, pr *model.CreatePRResult, method string) error {
+				merged = append(merged, pr.NodeID+":"+method)
 				return nil
 			},
 		}
@@ -374,7 +374,7 @@ func pushAfterCommitForTest(ctx context.Context, opts Options, result *Result, d
 		return err
 	}
 	// Fill missing deps from defaults so the test only specifies what matters.
-	d := defaultPushDeps(opts)
+	d := defaultPushDeps(ctx, opts)
 	if deps.searchPRs != nil {
 		d.searchPRs = deps.searchPRs
 	}

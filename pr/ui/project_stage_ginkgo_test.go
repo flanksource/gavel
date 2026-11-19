@@ -12,7 +12,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sync"
+	"time"
 
+	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/gavel/projects"
 
 	"github.com/flanksource/gavel/commit"
@@ -131,6 +134,111 @@ var _ = Describe("project index staging", func() {
 		Expect(filepath.Join(dir, "scratch")).NotTo(BeAnExistingFile())
 		Expect(filepath.Join(dir, "added.txt")).NotTo(BeAnExistingFile())
 	})
+
+	It("discards a file with conflict markers while retaining unrelated staged and unstaged changes", func() {
+		conflict := "<<<<<<< Updated upstream\ncurrent\n=======\nsaved\n>>>>>>> Stashed changes\n"
+		writeDiffFile(dir, "lines.txt", conflict)
+		writeDiffFile(dir, "untracked.txt", conflict)
+		writeDiffFile(dir, "src/staged.go", "staged\n")
+		runDiffGit(dir, "add", "src/staged.go")
+		writeDiffFile(dir, "src/unstaged.go", "unstaged\n")
+		staged := gitText(dir, "diff", "--cached")
+		unstaged := gitText(dir, "diff", "--", "src/unstaged.go")
+
+		stage := postIndex(server, "stage", `{"paths":["lines.txt"]}`)
+		Expect(stage.Code).To(Equal(http.StatusBadRequest), stage.Body.String())
+		Expect(stage.Body.String()).To(ContainSubstring("unresolved conflicts"))
+		discard := postIndex(server, "discard", `{"paths":["lines.txt","untracked.txt"]}`)
+		Expect(discard.Code).To(Equal(http.StatusOK), discard.Body.String())
+		Expect(gitText(dir, "status", "--porcelain", "--", "lines.txt", "untracked.txt")).To(BeEmpty())
+		Expect(gitText(dir, "diff", "--cached")).To(Equal(staged))
+		Expect(gitText(dir, "diff", "--", "src/unstaged.go")).To(Equal(unstaged))
+	})
+
+	It("discards one unmerged file without discarding another or ending the merge", func() {
+		paths := []string{"lines.txt", "src/staged.go"}
+		for _, branch := range []string{"other", "main"} {
+			if branch == "other" {
+				runDiffGit(dir, "switch", "-c", branch)
+			} else {
+				runDiffGit(dir, "switch", branch)
+			}
+			for _, path := range paths {
+				writeDiffFile(dir, path, branch+"\n")
+			}
+			runDiffGit(dir, "commit", "-qam", branch)
+		}
+		merge := exec.Command("git", "-C", dir, "merge", "other")
+		output, err := merge.CombinedOutput()
+		Expect(err).To(HaveOccurred(), string(output))
+		Expect(gitText(dir, "diff", "--name-only", "--diff-filter=U")).To(Equal("lines.txt\nsrc/staged.go\n"))
+
+		discard := postIndex(server, "discard", `{"paths":["lines.txt"]}`)
+		Expect(discard.Code).To(Equal(http.StatusOK), discard.Body.String())
+		Expect(gitText(dir, "status", "--porcelain")).To(Equal("UU src/staged.go\n"))
+		Expect(filepath.Join(dir, ".git", "MERGE_HEAD")).To(BeAnExistingFile())
+	})
+
+	It("retries staging when a temporary Git index lock clears", func() {
+		writeDiffFile(dir, "lines.txt", "changed\n")
+		lock := filepath.Join(dir, ".git", "index.lock")
+		Expect(os.WriteFile(lock, nil, 0o600)).To(Succeed())
+		released := make(chan error, 1)
+		time.AfterFunc(time.Second, func() { released <- os.Remove(lock) })
+		response := postIndex(server, "stage", `{"paths":["lines.txt"]}`)
+		Eventually(released).Should(Receive(Succeed()))
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		Expect(gitText(dir, "diff", "--cached", "--name-only")).To(Equal("lines.txt\n"))
+	})
+
+	DescribeTable("confirms stale lock removal and resumes the same request", func(route string, code int) {
+		snapshot := route == "commit-queue"
+		writeDiffFile(dir, "lines.txt", "changed\n")
+		if snapshot {
+			runDiffGit(dir, "add", "lines.txt")
+			server.SetProjectCommitRunner(func(context.Context, []string, io.Writer) error { return nil })
+		}
+		lock := filepath.Join(dir, ".git", "index.lock")
+		Expect(os.WriteFile(lock, nil, 0o600)).To(Succeed())
+		aged := time.Now().Add(-time.Minute)
+		Expect(os.Chtimes(lock, aged, aged)).To(Succeed())
+
+		body := `{"paths":["lines.txt"]}`
+		if snapshot {
+			body = `{"action":"commit","files":["lines.txt"]}`
+		}
+		ctx, cancel := context.WithCancel(GinkgoT().Context())
+		defer cancel()
+		const owner = "project-index-test"
+		request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/projects/gavel/"+route, bytes.NewBufferString(body))
+		request.SetPathValue("name", "gavel")
+		request.Header.Set(gitLockPromptOwnerHeader, owner)
+		recorder := httptest.NewRecorder()
+		finished := make(chan struct{})
+		handler := server.handleProjectStage
+		if snapshot {
+			handler = server.handleCommitQueue
+		}
+		go func() { handler(recorder, request); close(finished) }()
+
+		filter := prompt.Filter{Owner: owner, State: "pending"}
+		var pending []prompt.PromptSnapshot
+		Eventually(func() []prompt.PromptSnapshot {
+			pending = ensurePromptManager().List(filter)
+			return pending
+		}, 15*time.Second).Should(HaveLen(1))
+		Expect(pending[0].Title).To(ContainSubstring("Stale git lock"))
+		Expect(lock).To(BeAnExistingFile())
+		Expect(ensurePromptManager().Resolve(pending[0].ID, prompt.Answer{Values: map[string]any{"choice": "0"}})).To(Succeed())
+		Eventually(finished).Should(BeClosed())
+		Expect(recorder.Code).To(Equal(code), recorder.Body.String())
+		Expect(lock).NotTo(BeAnExistingFile())
+		if snapshot {
+			Expect(gitText(dir, "diff", "--cached", "--name-only")).To(BeEmpty())
+		} else {
+			Expect(gitText(dir, "diff", "--cached", "--name-only")).To(Equal("lines.txt\n"))
+		}
+	}, Entry("stage", "stage", http.StatusOK), Entry("queue a commit", "commit-queue", http.StatusAccepted))
 })
 
 var _ = Describe("committing what is staged through the commit queue", func() {
@@ -143,7 +251,15 @@ var _ = Describe("committing what is staged through the commit queue", func() {
 		runDiffGit(dir, "commit", "-qm", "lines")
 		Expect(seedProjects([]projects.Project{{Name: "gavel", Dir: dir}})).To(Succeed())
 		server := &Server{}
+		ready := make(chan struct{})
+		releaseCommits := sync.OnceFunc(func() { close(ready) })
+		DeferCleanup(releaseCommits)
 		server.SetProjectCommitRunner(func(ctx context.Context, args []string, _ io.Writer) error {
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			_, err := commit.Run(ctx, commit.Options{WorkDir: args[2], IndexPatch: args[slices.Index(args, "--index-patch")+1]})
 			return err
 		})
@@ -158,6 +274,8 @@ var _ = Describe("committing what is staged through the commit queue", func() {
 		second := postCommitQueue(server, map[string]any{"action": "commit", "files": []string{"src/staged.go"}})
 		Expect(second.Code).To(Equal(http.StatusAccepted), second.Body.String())
 		run := decodeCommitRun(second).RunID
+		Expect(run).To(Equal(decodeCommitRun(first).RunID))
+		releaseCommits()
 		Eventually(func() []string { return commitTaskStatuses(run) }, "30s").Should(Equal([]string{"success", "success"}))
 		Eventually(func() bool {
 			queue := gavelCommitQueue(server)

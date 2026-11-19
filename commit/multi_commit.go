@@ -48,7 +48,7 @@ func prepareMultiCommit(ctx context.Context, opts Options) (stagedSource, *Resul
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
 
 	if !opts.Force {
-		hookResults, hookErr := RunHooks(opts.WorkDir, opts.Config.Hooks, source.Files)
+		hookResults, hookErr := RunHooks(ctx, opts.WorkDir, opts.Config.Hooks, source.Files)
 		result.Hooks = hookResults
 		if hookErr != nil {
 			return source, result, hookErr

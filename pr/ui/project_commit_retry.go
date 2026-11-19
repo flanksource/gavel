@@ -157,7 +157,7 @@ func (s *Server) enqueueCommitRetry(run retryableCommitRun) (projectCommitRun, e
 	if len(queued) == 0 {
 		return projectCommitRun{}, fmt.Errorf("no commits to retry for project %s", run.project.Name)
 	}
-	return s.projectCommitQueue(run.project, queued[0].workDir).enqueue(s, run.project, queued)
+	return s.projectCommitQueue(run.project, queued[0].workDir).enqueue(s.context(), s, run.project, queued)
 }
 
 func commitRetryable(status clickytask.Status) bool {

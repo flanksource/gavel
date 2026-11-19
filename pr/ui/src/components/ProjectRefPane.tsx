@@ -11,6 +11,7 @@ import { ProjectBranchChanges } from './ProjectBranchChanges';
 import { ProjectStatusView } from './ProjectStatusView';
 import { ProjectRebase } from './ProjectRebase';
 import { CommitStatusSlotContext } from './commitStatusSlot';
+import { RebaseActionContext } from './rebaseAction';
 import { dirtyFileCount, gitStateAge, gitStateScannedAt, projectRefAges, projectRefEntries, type ProjectRefEntry } from './projectGitView';
 
 type WorktreeView = 'work' | 'branch';
@@ -87,23 +88,25 @@ export function ProjectRefPane({ project, projectRef, diffPath, showResults, onR
 
   return (
     <CommitStatusSlotContext.Provider value={commitSlot}>
-    <div className="flex h-full min-h-0 flex-col">
-      <div hidden={reviewing} className={reviewing ? 'hidden' : 'contents'}>
-      <ProjectRebase key={`${project.name}:${shownWorktree?.path ?? projectRef}`} projectName={project.name} worktree={shownWorktree?.path} branch={shownWorktree?.branch} generation={git?.generation}>
-        {({ trigger, status }) => <>
-          <RefBar projectName={project.name} git={git} scannedAt={git ? gitStateScannedAt(git.computedAt, shownWorktree) : ''} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} notices={notices} value={projectRef} onChange={onRefChange} actions={trigger} commitSlotRef={setCommitSlot} />
+    <ProjectRebase key={`${project.name}:${projectRef}`}projectName={project.name} worktree={shownWorktree?.path} branch={shownWorktree?.branch} generation={git?.generation}>
+      {({ action, status }) => (
+        <RebaseActionContext.Provider value={action}>
+        <div className="flex h-full min-h-0 flex-col">
+          <div hidden={reviewing} className={reviewing ? 'hidden' : 'contents'}>
+          <RefBar projectName={project.name} git={git} scannedAt={git ? gitStateScannedAt(git.computedAt, shownWorktree) : ''} loading={gitQuery.isPending} error={gitQuery.error?.message ?? ''} notices={notices} value={projectRef} onChange={onRefChange} commitSlotRef={setCommitSlot} />
           {status}
-        </>}
-      </ProjectRebase>
-      {landed && <LandedBanner landed={landed} onDismiss={() => setLanded(null)} />}
-      </div>
-      <div className="min-h-0 flex-1">{body}</div>
-    </div>
+          {landed && <LandedBanner landed={landed} onDismiss={() => setLanded(null)} />}
+          </div>
+          <div className="min-h-0 flex-1">{body}</div>
+        </div>
+        </RebaseActionContext.Provider>
+      )}
+    </ProjectRebase>
     </CommitStatusSlotContext.Provider>
   );
 }
 
-function RefBar({ projectName, git, scannedAt, loading, error, notices, value, onChange, actions, commitSlotRef }: { projectName: string; git: ProjectGit | undefined; scannedAt: string; loading: boolean; error: string; notices: string[]; value: string; onChange: (ref: string) => void; actions: ReactNode; commitSlotRef: (slot: HTMLElement | null) => void }) {
+function RefBar({ projectName, git, scannedAt, loading, error, notices, value, onChange, commitSlotRef }: { projectName: string; git: ProjectGit | undefined; scannedAt: string; loading: boolean; error: string; notices: string[]; value: string; onChange: (ref: string) => void; commitSlotRef: (slot: HTMLElement | null) => void }) {
   const mobile = useIsMobile();
   const entries = git ? projectRefEntries(git) : [];
   const selected = entries.find(entry => entry.value === value);
@@ -137,7 +140,6 @@ function RefBar({ projectName, git, scannedAt, loading, error, notices, value, o
         <div data-slot="ref-bar-picker" className="flex items-center gap-2 px-3 pt-1.5">
           <div className="min-w-0 flex-1">{picker}</div>
           <span ref={commitSlotRef} data-slot="commit-status" className="flex shrink-0 items-center empty:hidden" />
-          {actions}
         </div>
         {(selected || scannedAt) && (
           <div data-slot="ref-bar-summary" className="flex items-center justify-between gap-2 px-3 py-1 text-xs">
@@ -156,7 +158,6 @@ function RefBar({ projectName, git, scannedAt, loading, error, notices, value, o
         {picker}
         {selected && <RefSummary entry={selected} compact />}
         <GitNotices notices={notices} />
-        {actions}
         {scannedAt && <GitStateAge scannedAt={scannedAt} />}
       </div>
     </div>

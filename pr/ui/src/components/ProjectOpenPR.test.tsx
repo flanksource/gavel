@@ -3,7 +3,9 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { DropdownMenuItem } from '@flanksource/clicky-ui/components';
 import { ProjectStatusView } from './ProjectStatusView';
+import { RebaseActionContext } from './rebaseAction';
 
 // The focus lease has its own spec (useGitFocus.test.tsx); here it would only
 // add a POST to the requests these tests assert on.
@@ -48,7 +50,7 @@ afterEach(() => {
 const project = { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] };
 const changedFile = 'one.go';
 
-function renderProject(state = 'unstaged') {
+function renderProject(state = 'unstaged', rebaseAction: DropdownMenuItem | null = null) {
   const status = {
     project,
     workDir: project.dir,
@@ -76,7 +78,9 @@ function renderProject(state = 'unstaged') {
   vi.stubGlobal('fetch', fetchMock);
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <ProjectStatusView project={project} />
+      <RebaseActionContext.Provider value={rebaseAction}>
+        <ProjectStatusView project={project} />
+      </RebaseActionContext.Provider>
     </QueryClientProvider>,
   );
   return fetchMock;
@@ -110,6 +114,14 @@ describe('Project Open PR action', () => {
       url: '/api/projects/gavel/commit-queue',
       body: { action: 'open-pr', files: [changedFile] },
     });
+  });
+
+  it('offers the ref pane\'s Rebase… on the Open PR split button', async () => {
+    const onSelect = vi.fn();
+    renderProject('unstaged', { label: 'Rebase…', onSelect });
+    const prGroup = await screen.findByRole('group', { name: 'Pull request options' });
+    fireEvent.click(within(prGroup).getByRole('button', { name: 'Rebase…' }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
   it('no longer offers Open PR inside the Commit split button', async () => {

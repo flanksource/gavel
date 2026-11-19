@@ -6,6 +6,7 @@ import { useProjectGit } from '../projectGitQueries';
 import type { BranchMergeMode, BranchMergeResult } from '../types';
 import { useBranchAIMerge } from './branchAIMerge';
 import { landConflicts, useBranchLandMutation, type BranchLandRequest } from './projectGitMutations';
+import { useRebaseAction } from './rebaseAction';
 
 export interface BranchLandReasonInput {
   base: string;
@@ -87,6 +88,7 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
   const land = useBranchLandMutation({ projectName, onMerged });
   const ai = useBranchAIMerge({ projectName, onMerged });
   const repo = useProjectGit(projectName).data?.worktrees.find(worktree => worktree.primary)?.path;
+  const rebaseAction = useRebaseAction();
   const [open, setOpen] = useState(false);
   const [method, setMethod] = useState<LandMethod>('squash');
   const [message, setMessage] = useState('');
@@ -189,15 +191,16 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
           <SplitButton
             variant="outline"
             size="sm"
-            disabled={!!reasons.pr || busy}
+            primaryDisabled={!!reasons.pr || busy}
             loading={opening}
             title={reasons.pr || 'Pull request options'}
             label={<span className="flex items-center gap-1"><UiGitPr />Create PR</span>}
             onClick={() => submit({ via: 'pr', branch, draft: false })}
             items={[{
               label: <span className="flex items-center gap-2"><UiGitPr />Create draft PR</span>,
+              disabled: !!reasons.pr || busy,
               onSelect: () => submit({ via: 'pr', branch, draft: true }),
-            }]}
+            }, ...(rebaseAction ? [rebaseAction] : [])]}
           />
         </span>
       </span>

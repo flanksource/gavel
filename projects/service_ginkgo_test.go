@@ -54,6 +54,17 @@ func catalogContract(newService func() Service) {
 		Expect(err).To(MatchError(ErrNotFound))
 	})
 
+	It("resolves a directory reached through a symlink leaving the project to that project", func() {
+		project, outside := GinkgoT().TempDir(), GinkgoT().TempDir()
+		Expect(os.Symlink(outside, filepath.Join(project, ".tmp"))).To(Succeed())
+		_, err := service.Create(ctx, Project{Name: "linked", Dir: project})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(service.ForDir(ctx, filepath.Join(project, ".tmp"))).To(HaveField("Name", "linked"))
+		_, err = service.ForDir(ctx, outside)
+		Expect(err).To(MatchError(ErrNotFound))
+	})
+
 	It("rejects a duplicate name and a project without a dir", func() {
 		_, err := service.Create(ctx, Project{Name: "alpha", Dir: "/srv/alpha"})
 		Expect(err).NotTo(HaveOccurred())

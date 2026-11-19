@@ -221,7 +221,7 @@ function ProjectFileTreeRow({
   const state = stageStateOf(descendants);
   const unstage = state === 'all';
   const targets = stageRequestPaths({ files: descendants, locked, unstage });
-  const untracked = descendants.length > 0 && descendants.every(file => file.state === 'untracked');
+  const untracked = descendants.length > 0 && descendants.every(file => file.state === 'untracked' || file.workKind === '?');
   const file = node.file;
   const lockedGroup = file ? locked.get(file.path) : undefined;
   const blockReason = targets.length > 0 ? null : file

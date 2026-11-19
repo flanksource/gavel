@@ -1,6 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RebaseContext, RebaseOperation } from '../types/branchRebase';
 import { ProjectRebase } from './ProjectRebase';
@@ -14,14 +13,6 @@ vi.mock('./promptRun', () => ({
   },
 }));
 vi.mock('@flanksource/clicky-ui/ai', () => ({ SessionTail: () => null }));
-const viewport = vi.hoisted(() => ({ mobile: false }));
-vi.mock('../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
-vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
-  ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
-  DropdownMenu: ({ trigger, items, menuLabel }: { trigger: ReactNode; items: { label: ReactNode; onSelect: () => void; disabled?: boolean }[]; menuLabel: string }) => (
-    <div>{trigger}<div role="menu" aria-label={menuLabel}>{items.map((item, index) => <button key={index} type="button" role="menuitem" disabled={item.disabled} onClick={item.onSelect}>{item.label}</button>)}</div></div>
-  ),
-}));
 
 const WORKTREE = '/src/acme/.worktrees/topic';
 const operation: RebaseOperation = { id: 'op-123', worktree: WORKTREE, branch: 'topic', target: 'refs/heads/main', targetSha: 'target', originalHead: 'before', stashSha: 'saved', phase: 'rebase', error: 'Conflicting rebase', conflicts: ['shared file.txt'], aborted: false };
@@ -40,12 +31,12 @@ function setup(value = context, fail = false) {
   vi.stubGlobal('fetch', fetch);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(<QueryClientProvider client={client}><ProjectRebase projectName="acme" worktree={WORKTREE} branch={value.branch}>
-    {({ trigger, status }) => <><div data-testid="bar">{trigger}</div><div data-testid="status">{status}</div></>}
+    {({ action, status }) => <><div data-testid="bar"><button type="button" disabled={action.disabled} onClick={action.onSelect}>{action.label}</button></div><div data-testid="status">{status}</div></>}
   </ProjectRebase></QueryClientProvider>);
   return { fetch, client, setContext: (next: RebaseContext) => { live = next; } };
 }
 
-afterEach(() => { viewport.mobile = false; cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe('Project rebase', () => {
   it('previews the source and local edits and defaults to origin/main', async () => {
@@ -136,18 +127,10 @@ describe('Project rebase', () => {
     });
   });
 
-  describe('mobile', () => {
-    it('folds Rebase… into a compact overflow menu', async () => {
-      viewport.mobile = true;
-      const { fetch } = setup();
-      await waitFor(() => expect(fetch).toHaveBeenCalled());
-      const bar = screen.getByTestId('bar');
-      expect(within(bar).queryByRole('button', { name: 'Rebase…' })).toBeNull();
-      expect(within(bar).getByRole('button', { name: 'Rebase actions' })).toBeTruthy();
-
-      fireEvent.click(within(bar).getByRole('menuitem', { name: 'Rebase…' }));
-
-      expect(await screen.findByRole('combobox', { name: 'Rebase from' })).toBeTruthy();
-    });
+  it('disables the Rebase… action, saying why, for a detached worktree', async () => {
+    const { fetch } = setup({ ...context, branch: '' });
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    const action = within(screen.getByTestId('bar')).getByRole('button', { name: 'Rebase…' }) as HTMLButtonElement;
+    expect(action.disabled).toBe(true);
   });
 });

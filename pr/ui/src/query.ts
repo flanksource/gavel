@@ -63,6 +63,8 @@ interface MutationRequest {
   url: string;
   method: 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
   // token is a Clerk session token sent as a bearer token instead of relying on the
   // session cookie, which may have lapsed.
   token?: string;
@@ -140,18 +142,21 @@ export async function fetchText({ url, signal, context }: QueryRequest): Promise
   return payload;
 }
 
-export async function mutationJSON<T>({ url, method, body, token, context }: MutationRequest): Promise<T> {
+export async function mutationJSON<T>({ url, method, body, token, headers: extraHeaders, signal, context }: MutationRequest): Promise<T> {
   const headers: Record<string, string> = {
+    ...extraHeaders,
     ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
   const init: RequestInit = { method };
+  if (signal) init.signal = signal;
   if (Object.keys(headers).length > 0) init.headers = headers;
   if (body !== undefined) init.body = JSON.stringify(body);
   let response: Response;
   try {
     response = await fetch(url, init);
   } catch (cause) {
+    if (signal?.aborted) throw cause;
     throw new Error(`${context}: ${cause instanceof Error ? cause.message : 'request failed'}`, { cause });
   }
   reloadWhenSignedOut(response);

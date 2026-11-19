@@ -10,6 +10,7 @@ import (
 	cexec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/clicky/prompt"
 	clickytask "github.com/flanksource/clicky/task"
+	commonscontext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
@@ -17,6 +18,43 @@ import (
 )
 
 var _ = Describe("dashboard commit prompts", func() {
+	It("starts while the only worker is occupied and leaves that worker to its pre-commit tasks", func() {
+		clickytask.SetMaxConcurrent(1)
+		DeferCleanup(func() { clickytask.SetMaxConcurrent(4) })
+		occupied, release := make(chan struct{}), make(chan struct{})
+		blocker := clickytask.StartTask("occupy the worker", func(ctx commonscontext.Context, _ *clickytask.Task) (struct{}, error) {
+			close(occupied)
+			select {
+			case <-release:
+				return struct{}{}, nil
+			case <-ctx.Done():
+				return struct{}{}, ctx.Err()
+			}
+		}, clickytask.WithContext(GinkgoT().Context()), clickytask.WithCancellationDrain())
+		DeferCleanup(func() { blocker.Cancel(); _, _ = blocker.GetResult() })
+		Eventually(occupied).Should(BeClosed())
+
+		server := &Server{}
+		started, checked := make(chan struct{}), make(chan struct{})
+		server.SetProjectCommitRunner(func(ctx context.Context, _ []string, _ io.Writer) error {
+			close(started)
+			check := clickytask.StartTask("pre-commit check", func(commonscontext.Context, *clickytask.Task) (struct{}, error) {
+				close(checked)
+				return struct{}{}, nil
+			}, clickytask.WithContext(ctx))
+			_, err := check.GetResult()
+			return err
+		})
+		group := clickytask.StartGroup[cexec.ExecResult]("Commit worker test", clickytask.WithConcurrency(1))
+		DeferCleanup(group.Cancel)
+		commitTask := server.runProjectCommit(group.Context(), GinkgoT().TempDir(), []string{"commit"}, group.Group)
+		Eventually(started).Should(BeClosed())
+		Expect(checked).NotTo(BeClosed())
+		close(release)
+		Eventually(commitTask.Status).Should(Equal(clickytask.StatusSuccess))
+		Expect(checked).To(BeClosed())
+	})
+
 	DescribeTable("handles a stale lock through the running task", func(action string) {
 		repo := createDiffRepository()
 		writeDiffFile(repo, "change.txt", "pending change\n")

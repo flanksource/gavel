@@ -47,6 +47,8 @@ gavel commit --force
 | `--force` | Skip pre-commit hooks |
 | `-p` / `--push[=branch]` | Push to a matching open PR or open a new one. `branch` includes every commit ahead of the default base, including commits already pushed |
 | `--target [remote/]base[:topic]` | With `--push`, choose the PR base, optional remote (default `origin`), and optional remote topic branch name. Without a topic override, use the current branch, or generate a topic when on a protected branch or the selected base |
+| `--auto-merge` | With `--push`, enable automatic completion of a new GitHub or Azure DevOps PR once required checks and approvals pass |
+| `--merge-type` | Set the auto-merge method to `rebase` (default), `squash`, or `merge` |
 | `--no-cache` | Bypass the LLM response cache |
 | `--precommit` | How to handle gitignore + linked-dependency precommit checks: `prompt`, `fail`, `skip`, or `false` |
 | `--ai-fix[=true\|false]` | Override automatic AI repair for commit lint findings |

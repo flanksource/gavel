@@ -74,15 +74,28 @@ func heldGitLock(output string) (string, bool) {
 	return match[1], true
 }
 
-// runGitRetryingLocks runs `git args...` in workDir and returns its combined
-// output. When git fails because a lock file is held, it retries up to
-// gitLockRetries times with jittered backoff. If the lock is still there and is
-// stale — older than gitStaleLockAge with no writer holding it open — it is
-// removed (after asking, per the gitLockPolicy on ctx) and the command runs once
-// more. At most one lock is removed per call.
+type GitLockCommand struct {
+	WorkDir string
+	Command string
+	Run     func() ([]byte, error)
+	Prompt  bool
+}
+
 func runGitRetryingLocks(ctx context.Context, workDir string, args ...string) ([]byte, error) {
+	return RetryGitLocks(ctx, GitLockCommand{
+		WorkDir: workDir, Command: args[0], Prompt: true,
+		Run: func() ([]byte, error) { return execGit(ctx, workDir, args) },
+	})
+}
+
+// RetryGitLocks retries Git lock contention. Run must include Git's diagnostic
+// output when it returns an error. Stale lock removal requires confirmation.
+func RetryGitLocks(ctx context.Context, command GitLockCommand) ([]byte, error) {
 	for retry := 1; ; retry++ {
-		out, err := execGit(ctx, workDir, args)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		out, err := command.Run()
 		if err == nil {
 			return out, nil
 		}
@@ -91,12 +104,18 @@ func runGitRetryingLocks(ctx context.Context, workDir string, args ...string) ([
 			return out, err
 		}
 		if retry > gitLockRetries {
-			return retryAfterStaleLock(ctx, workDir, args, lock, err)
+			return retryAfterStaleLock(ctx, command, lock, err)
 		}
 		delay := gitLockRetryDelay(retry)
 		logger.Warnf("git %s: %s is held by another git process, retrying in %s (%d/%d)",
-			args[0], lock, delay.Round(time.Millisecond), retry, gitLockRetries)
-		time.Sleep(delay)
+			command.Command, lock, delay.Round(time.Millisecond), retry, gitLockRetries)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 
@@ -109,20 +128,23 @@ func execGit(ctx context.Context, workDir string, args []string) ([]byte, error)
 	return cmd.CombinedOutput()
 }
 
-func retryAfterStaleLock(ctx context.Context, workDir string, args []string, lock string, gitErr error) ([]byte, error) {
+func retryAfterStaleLock(ctx context.Context, command GitLockCommand, lock string, gitErr error) ([]byte, error) {
 	if !filepath.IsAbs(lock) {
-		lock = filepath.Join(workDir, lock)
+		lock = filepath.Join(command.WorkDir, lock)
 	}
-	if reason := removeStaleGitLock(ctx, lock); reason != nil {
+	if reason := removeStaleGitLock(ctx, lock, command.Prompt); reason != nil && !errors.Is(reason, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s still held after %d retries (%w): %w",
 			ErrGitLockHeld, lock, gitLockRetries, reason, gitErr)
 	}
-	out, err := execGit(ctx, workDir, args)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out, err := command.Run()
 	if err == nil {
 		return out, nil
 	}
 	if next, held := heldGitLock(string(out)); held {
-		return out, fmt.Errorf("%w: %s held after removing stale %s: %w", ErrGitLockHeld, next, lock, err)
+		return out, fmt.Errorf("%w: %s held on final retry: %w", ErrGitLockHeld, next, err)
 	}
 	return out, err
 }
@@ -227,13 +249,16 @@ func parseLockHolders(output string) ([]string, error) {
 
 // removeStaleGitLock removes lock when it is stale and the policy allows it,
 // returning nil once removed or the reason it was kept.
-func removeStaleGitLock(ctx context.Context, lock string) error {
+func removeStaleGitLock(ctx context.Context, lock string, allowPrompt bool) error {
 	diag, err := diagnoseGitLock(lock)
 	if err != nil {
 		return err
 	}
 	if !diag.stale() {
 		return fmt.Errorf("not stale: %s", diag)
+	}
+	if !allowPrompt {
+		return fmt.Errorf("stale: %s; remove the lock after confirming Git is idle, then retry", diag)
 	}
 	if err := confirmStaleLockRemoval(ctx, lock, diag); err != nil {
 		return err
@@ -247,6 +272,9 @@ func removeStaleGitLock(ctx context.Context, lock string) error {
 	}
 	if !current.stale() {
 		return fmt.Errorf("not stale after confirmation: %s", current)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := os.Remove(lock); err != nil {
 		return fmt.Errorf("remove stale lock: %w", err)

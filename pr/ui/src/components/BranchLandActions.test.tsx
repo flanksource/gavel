@@ -24,16 +24,17 @@ vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => ({
   InputField: ({ value, onChange, disabled, ...props }: { value?: string; onChange?: (value: string) => void; disabled?: boolean; 'aria-label'?: string; placeholder?: string }) => (
     <input value={value} disabled={disabled} onChange={event => onChange?.(event.currentTarget.value)} {...props} />
   ),
-  SplitButton: ({ label, onClick, items, disabled, loading, title }: {
+  SplitButton: ({ label, onClick, items, disabled, primaryDisabled, loading, title }: {
     label: ReactNode;
     onClick: () => void;
     items: { label: ReactNode; onSelect?: () => void; disabled?: boolean; title?: string }[];
     disabled?: boolean;
+    primaryDisabled?: boolean;
     loading?: boolean;
     title?: string;
   }) => (
     <div role="group" aria-label={title}>
-      <button type="button" onClick={onClick} disabled={disabled || loading}>{label}</button>
+      <button type="button" onClick={onClick} disabled={disabled || primaryDisabled || loading}>{label}</button>
       {/* react-doctor-disable-next-line react-doctor/no-array-index-as-key -- test stub renders a fixed menu list */}
       {items.map((item, index) => <button key={index} type="button" title={item.title} onClick={item.onSelect} disabled={disabled || item.disabled}>{item.label}</button>)}
     </div>
@@ -267,6 +268,7 @@ describe('BranchLandActions', () => {
 
     expect(screen.queryByText(reason)).toBeNull();
     expect((screen.getByRole('button', { name: /^Create PR$/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Create draft PR/ }) as HTMLButtonElement).disabled).toBe(true);
     const dialog = openMergeDialog();
     expect(dialog.textContent).toContain(reason);
     expect(confirmButton(/^Squash & merge$/).disabled).toBe(true);

@@ -1,7 +1,15 @@
 package ui
 
-func worktreeOnly() map[string]any {
-	return map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam())}
+func gitLockPromptParam() map[string]any {
+	return map[string]any{
+		"name": gitLockPromptOwnerHeader, "in": "header",
+		"description": "Owner for a stale Git lock prompt delivered through the prompt API",
+		"schema":      map[string]any{"type": "string"},
+	}
+}
+
+func indexMutationParams() map[string]any {
+	return map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam(), gitLockPromptParam())}
 }
 
 // projectIndexOpenAPIPaths documents the git index routes of the project page:
@@ -11,19 +19,19 @@ func projectIndexOpenAPIPaths() map[string]any {
 	return map[string]any{
 		"/api/projects/{name}/stage": map[string]any{
 			"post": projectLifecycleOp("projects_stage", "Stage (git add) or unstage (git restore --staged) current changes", "200", "ProjectOK",
-				jsonRequestBody("ProjectStageRequest"), worktreeOnly()),
+				jsonRequestBody("ProjectStageRequest"), indexMutationParams()),
 		},
 		"/api/projects/{name}/stage/lines": map[string]any{
 			"post": projectLifecycleOp("projects_stage_lines", "Stage or unstage individual changed lines of one file", "200", "ProjectOK",
-				jsonRequestBody("ProjectStageLinesRequest"), worktreeOnly()),
+				jsonRequestBody("ProjectStageLinesRequest"), indexMutationParams()),
 		},
 		"/api/projects/{name}/discard": map[string]any{
-			"post": projectLifecycleOp("projects_discard", "Discard changes: restore tracked paths to HEAD and delete untracked ones", "200", "ProjectOK",
-				jsonRequestBody("ProjectDiscardRequest"), worktreeOnly()),
+			"post": projectLifecycleOp("projects_discard", "Restore selected tracked paths, including conflicts, to HEAD and delete selected untracked paths", "200", "ProjectOK",
+				jsonRequestBody("ProjectDiscardRequest"), indexMutationParams()),
 		},
 		"/api/projects/{name}/open": map[string]any{
 			"post": projectLifecycleOp("projects_open", "Open a project file in an editor installed on the gavel host", "200", "ProjectOK",
-				jsonRequestBody("ProjectOpenRequest"), worktreeOnly()),
+				jsonRequestBody("ProjectOpenRequest"), map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam())}),
 		},
 		"/api/editors": map[string]any{
 			"get": map[string]any{

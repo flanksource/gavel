@@ -10,6 +10,7 @@ import {
   projectActionSchemaQuery,
   type ProjectActionName,
 } from './oneShotQueries';
+import { ErrorBoundary } from './ErrorBoundary';
 import { RuntimeOptions } from './project-action/RuntimeOptions';
 import { runtimeKeys, withoutRemovedAIOptions } from './project-action/runtime';
 
@@ -50,7 +51,31 @@ const commitControls: PreExtension = field => {
 };
 const commitExtensions = [...formExtensions, commitControls];
 
-export function ProjectActionDialog({ projectName, action, stagedFiles, onClose, onRun }: Props) {
+export function ProjectActionDialog(props: Props) {
+  const { action, projectName, onClose } = props;
+  return (
+    <ErrorBoundary
+      key={`${projectName}/${action ?? ''}`}
+      fallback={error => (
+        <Modal
+          open={action !== null}
+          onClose={onClose}
+          title={`Advanced ${action} options`}
+          footer={<Button type="button" variant="ghost" onClick={onClose}>Close</Button>}
+        >
+          <div role="alert">
+            <p className="text-sm font-medium">Could not render advanced {action} options.</p>
+            <p className="text-sm text-muted-foreground">{error.message}</p>
+          </div>
+        </Modal>
+      )}
+    >
+      <ProjectActionFormDialog {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function ProjectActionFormDialog({ projectName, action, stagedFiles, onClose, onRun }: Props) {
   const [value, setValue] = useState<Record<string, unknown>>({});
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState('');

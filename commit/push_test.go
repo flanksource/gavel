@@ -78,7 +78,7 @@ func TestChoosePRReturnsSelectedPR(t *testing.T) {
 		if title != "Pick a PR" {
 			t.Fatalf("unexpected title: %q", title)
 		}
-		if len(options) != 2 {
+		if len(options) != 3 {
 			t.Fatalf("unexpected option count: %d", len(options))
 		}
 		return options[1], true
@@ -92,16 +92,16 @@ func TestChoosePRReturnsSelectedPR(t *testing.T) {
 		{Number: 23, Title: "Second", Source: "feat/b", Target: "main"},
 	}
 
-	selected, err := choosePR("Pick a PR", prs)
+	selected, err := choosePR(t.Context(), "Pick a PR", prs)
 	if err != nil {
 		t.Fatalf("choosePR returned error: %v", err)
 	}
-	if selected == nil || selected.Number != 23 {
+	if selected.kind != pushTargetAncestorPR || selected.pr == nil || selected.pr.Number != 23 {
 		t.Fatalf("expected PR #23, got %#v", selected)
 	}
 }
 
-func TestChoosePRReturnsNilWhenCancelled(t *testing.T) {
+func TestChoosePRReturnsNoneWhenCancelled(t *testing.T) {
 	previous := promptSelectFunc
 	promptSelectFunc = func(_ context.Context, options []promptSelectOption, title string) (promptSelectOption, bool) {
 		return promptSelectOption{}, false
@@ -110,14 +110,13 @@ func TestChoosePRReturnsNilWhenCancelled(t *testing.T) {
 		promptSelectFunc = previous
 	}()
 
-	selected, err := choosePR("Pick a PR", []github.PRListItem{
-		{Number: 17, Title: "First", Source: "feat/a", Target: "main"},
-	})
+	selected, err := choosePR(t.Context(), "Pick a PR", []github.PRListItem{{Number: 17, Title: "First", Source: "feat/a", Target: "main"}})
+
 	if err != nil {
 		t.Fatalf("choosePR returned error: %v", err)
 	}
-	if selected != nil {
-		t.Fatalf("expected nil selection, got %#v", selected)
+	if selected.kind != pushTargetNone || selected.pr != nil {
+		t.Fatalf("expected cancelled selection, got %#v", selected)
 	}
 }
 
@@ -126,7 +125,7 @@ var _ = Describe("decidePushTarget", func() {
 	otherOpenPR := github.PRListItem{Number: 17, Source: "feat/bar", Target: "main"}
 
 	newDeps := func(prs []github.PRListItem, ancestors map[string]bool) pushDeps {
-		d := defaultPushDeps(Options{})
+		d := defaultPushDeps(GinkgoT().Context(), Options{})
 		d.searchPRs = func(_ github.Options, _ github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error) {
 			return prs, nil, nil
 		}
@@ -174,7 +173,7 @@ var _ = Describe("decidePushTarget", func() {
 	})
 
 	It("surfaces search errors", func() {
-		deps := defaultPushDeps(Options{})
+		deps := defaultPushDeps(GinkgoT().Context(), Options{})
 		deps.searchPRs = func(_ github.Options, _ github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error) {
 			return nil, nil, errors.New("boom")
 		}

@@ -3,6 +3,7 @@ package commit
 import (
 	"bytes"
 	"context"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,8 +143,12 @@ var _ = Describe("commit push target", func() {
 
 	It("validates the provider of the selected remote before fetching or committing", func() {
 		runGit(workDir, "remote", "set-url", "zim", "https://dev.azure.com/acme/product/_git/service")
+		mockAzurePush(func(w http.ResponseWriter, r *http.Request) {
+			Expect(r.URL.Path).To(Equal("/acme/product/_apis/git/repositories/service"))
+			w.WriteHeader(http.StatusForbidden)
+		})
 		_, err := Run(context.Background(), Options{WorkDir: workDir, Push: true, Target: "zim/stable", AutoMerge: true})
-		Expect(err).To(MatchError(ContainSubstring("--auto-merge is not supported for Azure DevOps")))
+		Expect(err).To(MatchError(ContainSubstring("HTTP 403")))
 	})
 
 	It("fetches, rebases and pushes only the selected local remote", func() {
@@ -160,7 +165,7 @@ var _ = Describe("commit push target", func() {
 		var err error
 		opts.target, err = parseCommitTarget(workDir, opts.Target)
 		Expect(err).NotTo(HaveOccurred())
-		actual := defaultPushDeps(opts)
+		actual := defaultPushDeps(GinkgoT().Context(), opts)
 		Expect(actual.rebaseOnto(workDir, "stable")).To(Succeed())
 		Expect(os.ReadFile(filepath.Join(workDir, "base.txt"))).To(Equal([]byte("advanced remote base")))
 		Expect(actual.gitPush(workDir, "HEAD:feat/selected")).To(Succeed())

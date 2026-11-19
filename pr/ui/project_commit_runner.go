@@ -20,6 +20,10 @@ var executeProjectCommit = (*Server).runProjectCommit
 
 func (s *Server) runProjectCommit(ctx context.Context, _ string, args []string, group *clickytask.Group, opts ...clickytask.Option) clickytask.TypedTask[cexec.ExecResult] {
 	ensurePromptManager()
+	opts = append([]clickytask.Option{
+		clickytask.WithGroup(group), clickytask.WithContext(ctx),
+		clickytask.WithSlots(0), clickytask.WithCancellationDrain(),
+	}, opts...)
 	task := clickytask.StartTask("Run gavel commit", func(ctx commonscontext.Context, task *clickytask.Task) (cexec.ExecResult, error) {
 		if s.projectCommitRunner == nil {
 			return cexec.ExecResult{ExitCode: 1}, fmt.Errorf("project commit runner is not configured")
@@ -28,7 +32,7 @@ func (s *Server) runProjectCommit(ctx context.Context, _ string, args []string, 
 			return cexec.ExecResult{ExitCode: 1}, err
 		}
 		return cexec.ExecResult{}, nil
-	}, append([]clickytask.Option{clickytask.WithGroup(group), clickytask.WithContext(ctx)}, opts...)...)
+	}, opts...)
 	task.SetController(&projectCommitController{task: task.Task})
 	return task
 }

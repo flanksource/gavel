@@ -9,6 +9,7 @@ import type { ProjectBranchChangesProps } from './ProjectBranchChanges';
 import { ProjectRefPane } from './ProjectRefPane';
 import { queryTestWrapper } from './todos/queryTestWrapper';
 import { useCommitStatusSlot } from './commitStatusSlot';
+import { useRebaseAction } from './rebaseAction';
 
 const viewport = vi.hoisted(() => ({ mobile: false }));
 vi.mock('../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
@@ -16,10 +17,12 @@ vi.mock('../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
 vi.mock('./ProjectStatusView', () => ({
   ProjectStatusView: function StatusView({ project, worktree, diffPath }: { project: Project; worktree?: string; diffPath?: string }) {
     const slot = useCommitStatusSlot();
+    const rebase = useRebaseAction();
     return (
-      <div>
+      <div data-testid="status-view">
         Status {project.name} in {worktree ?? 'main checkout'} diff={diffPath}
         {slot && createPortal(<button type="button" aria-label="Show commit details" />, slot)}
+        {rebase && <button type="button" disabled={rebase.disabled} onClick={rebase.onSelect}>{rebase.label}</button>}
       </div>
     );
   },
@@ -377,6 +380,17 @@ describe('ProjectRefPane', () => {
     expect(onRefChange).toHaveBeenCalledWith('');
   });
 
+  it('offers Rebase… to the PR actions below the ref bar rather than as a ref bar button', async () => {
+    stubGit();
+    renderPane('wt:/work/gavel-feat');
+
+    const picker = await screen.findByRole('listbox', { name: 'Worktree or branch' });
+    const refBar = picker.closest('.\\@container\\/project-ref') as HTMLElement;
+    expect(within(refBar).queryByRole('button', { name: /Rebase/ })).toBeNull();
+    fireEvent.click(within(await screen.findByTestId('status-view')).getByRole('button', { name: 'Rebase…' }));
+    expect(await screen.findByRole('dialog', { name: 'Rebase branch' })).toBeTruthy();
+  });
+
   it('returns to the main checkout after a merge and reports what landed', async () => {
     stubGit();
     const { onRefChange } = renderPane('br:spike');
@@ -396,14 +410,13 @@ describe('ProjectRefPane', () => {
     beforeEach(() => { viewport.mobile = true; });
     afterEach(() => { viewport.mobile = false; });
 
-    it('puts the picker and a compact overflow menu on one line, and the stats and age on a single small line below', async () => {
+    it('puts the picker on one line, and the stats and age on a single small line below', async () => {
       stubGit();
       renderPane('wt:/work/gavel-feat');
 
       const picker = await screen.findByRole('listbox', { name: 'Worktree or branch' });
       const pickerRow = picker.closest('[data-slot="ref-bar-picker"]') as HTMLElement;
-      expect(within(pickerRow).getByRole('button', { name: 'Rebase actions' })).toBeTruthy();
-      expect(screen.queryByRole('button', { name: 'Rebase…' })).toBeNull();
+      expect(within(pickerRow).queryByRole('button', { name: /Rebase/ })).toBeNull();
 
       const summary = pickerRow.nextElementSibling as HTMLElement;
       expect(summary.getAttribute('data-slot')).toBe('ref-bar-summary');

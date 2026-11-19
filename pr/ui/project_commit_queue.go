@@ -127,12 +127,12 @@ func (q *commitQueue) labels(project projects.Project) map[string]string {
 	return labels
 }
 
-func (s *Server) enqueueCommitGroup(project projects.Project, request projectActionRequest) (projectCommitRun, error) {
+func (s *Server) enqueueCommitGroup(ctx context.Context, project projects.Project, request projectActionRequest) (projectCommitRun, error) {
 	queued, err := s.commitQueueActionArgs(project, request)
 	if err != nil {
 		return projectCommitRun{}, err
 	}
-	return s.projectCommitQueue(project, queued.workDir).enqueue(s, project, []commitQueueRequest{queued})
+	return s.projectCommitQueue(project, queued.workDir).enqueue(ctx, s, project, []commitQueueRequest{queued})
 }
 
 func (s *Server) commitQueueActionArgs(project projects.Project, request projectActionRequest) (commitQueueRequest, error) {
@@ -248,7 +248,7 @@ func commitGroupFiles(request projectActionRequest) ([]string, error) {
 // enqueue appends requests, in order, to the project's current generation as
 // one atomic batch: every file is checked for conflicts before any commit
 // starts, and all of them land in the same run.
-func (q *commitQueue) enqueue(s *Server, project projects.Project, requests []commitQueueRequest) (projectCommitRun, error) {
+func (q *commitQueue) enqueue(ctx context.Context, s *Server, project projects.Project, requests []commitQueueRequest) (projectCommitRun, error) {
 	if len(requests) == 0 {
 		return projectCommitRun{}, fmt.Errorf("no commits to queue for project %s", project.Name)
 	}
@@ -257,7 +257,7 @@ func (q *commitQueue) enqueue(s *Server, project projects.Project, requests []co
 		q.mu.Unlock()
 		return projectCommitRun{}, &commitQueueConflictError{files: duplicates}
 	}
-	if err := q.snapshotLocked(s.context(), requests); err != nil {
+	if err := q.snapshotLocked(ctx, requests); err != nil {
 		q.mu.Unlock()
 		return projectCommitRun{}, err
 	}
@@ -327,7 +327,7 @@ func (q *commitQueue) snapshotLocked(ctx context.Context, requests []commitQueue
 		err := commit.SnapshotStagedPatch(ctx, commit.SnapshotOptions{WorkDir: q.workDir, Paths: request.snapshot, PatchFile: request.indexPatch})
 		if err != nil {
 			for _, done := range taken {
-				err = errors.Join(err, commit.RestoreStagedPatch(ctx, q.workDir, done.indexPatch))
+				err = errors.Join(err, commit.RestoreStagedPatch(context.WithoutCancel(ctx), q.workDir, done.indexPatch))
 			}
 			return err
 		}
@@ -452,10 +452,10 @@ func (s *Server) handleCommitQueue(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	run, err := s.enqueueCommitGroup(project, request)
+	run, err := s.enqueueCommitGroup(projectGitLockContext(r), project, request)
 	if err != nil {
 		var conflict *commitQueueConflictError
-		if errors.As(err, &conflict) {
+		if errors.As(err, &conflict) || errors.Is(err, commit.ErrGitLockHeld) {
 			respondError(w, http.StatusConflict, err.Error())
 			return
 		}

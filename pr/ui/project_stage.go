@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/clicky/prompt"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/git/patchselect"
 	"github.com/flanksource/gavel/status"
 )
@@ -50,7 +52,7 @@ func (s *Server) handleProjectStage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := stageEntries(r.Context(), target, request.Unstage)
+	err := stageEntries(projectGitLockContext(r), target, request.Unstage)
 	s.respondIndexMutation(w, target, err)
 }
 
@@ -62,7 +64,7 @@ func (s *Server) handleProjectStageLines(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	err := stageLines(r.Context(), target, request)
+	err := stageLines(projectGitLockContext(r), target, request)
 	s.respondIndexMutation(w, target, err)
 }
 
@@ -74,8 +76,19 @@ func (s *Server) handleProjectDiscard(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := discardEntries(r.Context(), target)
+	err := discardEntries(projectGitLockContext(r), target)
 	s.respondIndexMutation(w, target, err)
+}
+
+const gitLockPromptOwnerHeader = "X-Gavel-Prompt-Owner"
+
+func projectGitLockContext(r *http.Request) context.Context {
+	ctx := r.Context()
+	if owner := r.Header.Get(gitLockPromptOwnerHeader); owner != "" {
+		ensurePromptManager()
+		ctx = prompt.WithScope(ctx, prompt.Scope{Owner: owner})
+	}
+	return ctx
 }
 
 func (s *Server) decodeIndexRequest(w http.ResponseWriter, r *http.Request, request any, paths func() []string) (projectIndexTarget, bool) {
@@ -108,6 +121,9 @@ func indexRequestErrorf(format string, args ...any) error {
 }
 
 func indexErrorStatus(err error) int {
+	if errors.Is(err, commit.ErrGitLockHeld) {
+		return http.StatusConflict
+	}
 	if errors.Is(err, errIndexRequest) || errors.Is(err, patchselect.ErrBinary) || errors.Is(err, patchselect.ErrNoSelection) {
 		return http.StatusBadRequest
 	}
@@ -129,7 +145,9 @@ func resolveIndexTarget(ctx context.Context, workDir string, requested []string)
 		return projectIndexTarget{}, indexRequestErrorf("at least one path is required")
 	}
 	// Read live, never memoized: a mutation must validate against the files as they are now.
-	result, err := gatherProjectStatus(workDir, status.Options{Context: ctx, NoRepomap: true, NoResults: true})
+	result, err := gatherProjectStatus(workDir, status.Options{
+		Context: ctx, NoRepomap: true, NoResults: true, GitConfig: []string{"--no-optional-locks"},
+	})
 	if err != nil {
 		return projectIndexTarget{}, fmt.Errorf("gather project status: %w", err)
 	}
@@ -166,9 +184,6 @@ func resolveProjectChanges(requested []string, files []status.FileStatus) ([]sta
 			return nil, indexRequestErrorf("%q is not a current project change", raw)
 		}
 		for _, match := range matches {
-			if match.State == status.StateConflict {
-				return nil, indexRequestErrorf("%q has unresolved conflicts", match.Path)
-			}
 			add(match)
 		}
 	}
@@ -204,7 +219,19 @@ func pathspecs(entries []status.FileStatus, includePrevious bool) []string {
 	return paths
 }
 
+func (t projectIndexTarget) requireResolved() error {
+	for _, entry := range t.entries {
+		if entry.State == status.StateConflict {
+			return indexRequestErrorf("%q has unresolved conflicts", entry.Path)
+		}
+	}
+	return nil
+}
+
 func stageEntries(ctx context.Context, target projectIndexTarget, unstage bool) error {
+	if err := target.requireResolved(); err != nil {
+		return err
+	}
 	if unstage {
 		for _, entry := range target.entries {
 			if entry.State == status.StateUntracked {
@@ -233,7 +260,7 @@ func stageEntries(ctx context.Context, target projectIndexTarget, unstage bool) 
 func discardEntries(ctx context.Context, target projectIndexTarget) error {
 	var tracked, untracked []status.FileStatus
 	for _, entry := range target.entries {
-		if entry.State == status.StateUntracked {
+		if entry.WorkKind == status.KindUntracked {
 			untracked = append(untracked, entry)
 		} else {
 			tracked = append(tracked, entry)
@@ -277,6 +304,9 @@ func removeEmptyParents(workDir string, paths []string) error {
 }
 
 func stageLines(ctx context.Context, target projectIndexTarget, request projectStageLinesRequest) error {
+	if err := target.requireResolved(); err != nil {
+		return err
+	}
 	if len(target.entries) != 1 || target.entries[0].Path != request.Path {
 		return indexRequestErrorf("%q must name a single changed file", request.Path)
 	}
@@ -335,18 +365,35 @@ type projectGitCommand struct {
 }
 
 func runProjectGit(ctx context.Context, command projectGitCommand) (string, error) {
-	stopGit := rpchttp.Track(ctx, "git")
-	defer stopGit()
-	cmd := exec.CommandContext(ctx, "git", command.args...)
-	cmd.Dir = command.dir
-	if command.stdin != "" {
-		cmd.Stdin = strings.NewReader(command.stdin)
+	verb := command.args[0]
+	if verb == "--literal-pathspecs" {
+		verb = command.args[1]
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+	output, err := commit.RetryGitLocks(ctx, commit.GitLockCommand{
+		WorkDir: command.dir, Command: verb, Prompt: prompt.PreferSink(ctx),
+		Run: func() ([]byte, error) {
+			stopGit := rpchttp.Track(ctx, "git")
+			defer stopGit()
+			cmd := exec.CommandContext(ctx, "git", command.args...)
+			cmd.Dir = command.dir
+			if command.stdin != "" {
+				cmd.Stdin = strings.NewReader(command.stdin)
+			}
+			var stderr strings.Builder
+			cmd.Stderr = &stderr
+			out, err := cmd.Output()
+			if err != nil {
+				return []byte(stderr.String()), err
+			}
+			return out, nil
+		},
+	})
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(command.args, " "), err, strings.TrimSpace(stderr.String()))
+		args := strings.Join(command.args, " ")
+		if detail := strings.TrimSpace(string(output)); detail != "" {
+			return "", fmt.Errorf("git %s: %w: %s", args, err, detail)
+		}
+		return "", fmt.Errorf("git %s: %w", args, err)
 	}
 	return string(output), nil
 }

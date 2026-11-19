@@ -210,13 +210,38 @@ func sortProjects(ps []Project) []Project {
 	return ps
 }
 
-// mostSpecific resolves dir to the most-specific project root in ps,
-// comparing both through their symlinks. source names the catalog in errors.
-func mostSpecific(ps []Project, dir, source string) (Project, error) {
-	absolute, err := CanonicalPath(dir)
-	if err != nil {
-		return Project{}, fmt.Errorf("resolve project directory %q using %s: %w", dir, source, err)
+// Within places path under root and returns it relative to root. path is under
+// root by its logical location (symlinks unresolved, so a link inside root that
+// points elsewhere stays under root) or by its canonical one (so a root reached
+// through a symlink, such as /tmp on macOS, still holds its files).
+func Within(root, path string) (rel string, ok bool, err error) {
+	for _, resolve := range []func(string) (string, error){logicalPath, CanonicalPath} {
+		resolvedRoot, err := resolve(root)
+		if err != nil {
+			return "", false, fmt.Errorf("resolve %q: %w", root, err)
+		}
+		resolvedPath, err := resolve(path)
+		if err != nil {
+			return "", false, fmt.Errorf("resolve %q: %w", path, err)
+		}
+		rel, err := filepath.Rel(resolvedRoot, resolvedPath)
+		if err != nil {
+			return "", false, fmt.Errorf("place %q under %q: %w", path, root, err)
+		}
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return rel, true, nil
+		}
 	}
+	return "", false, nil
+}
+
+func logicalPath(path string) (string, error) {
+	return filepath.Abs(strings.TrimSpace(path))
+}
+
+// mostSpecific resolves dir to the most-specific project root in ps that holds
+// it, as Within places it. source names the catalog in errors.
+func mostSpecific(ps []Project, dir, source string) (Project, error) {
 	var match Project
 	matchLength := -1
 	for _, project := range ps {
@@ -227,19 +252,16 @@ func mostSpecific(ps []Project, dir, source string) (Project, error) {
 		if err != nil {
 			return Project{}, fmt.Errorf("resolve project %q directory %q from %s: %w", project.Name, project.Dir, source, err)
 		}
-		relative, err := filepath.Rel(root, absolute)
+		_, ok, err := Within(project.ResolvedDir(), dir)
 		if err != nil {
-			return Project{}, fmt.Errorf("compare project %q directory %q using %s: %w", project.Name, root, source, err)
+			return Project{}, fmt.Errorf("compare project %q directory using %s: %w", project.Name, source, err)
 		}
-		if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			continue
-		}
-		if len(root) > matchLength {
+		if ok && len(root) > matchLength {
 			match, matchLength = project, len(root)
 		}
 	}
 	if matchLength < 0 {
-		return Project{}, fmt.Errorf("%w: project for directory %q was not found in %s", ErrNotFound, absolute, source)
+		return Project{}, fmt.Errorf("%w: project for directory %q was not found in %s", ErrNotFound, dir, source)
 	}
 	return match, nil
 }

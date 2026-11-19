@@ -68,7 +68,7 @@ func applyGoModReplaceUpgrade(ctx context.Context, workDir, gitRoot, file string
 	}
 
 	modDir := filepath.Dir(absGoMod)
-	if err := runGoModTidy(modDir); err != nil {
+	if err := runGoModTidy(ctx, modDir); err != nil {
 		return fmt.Errorf("tidy %s: %w", modDir, err)
 	}
 
@@ -136,7 +136,7 @@ func restoreOneGoMod(gitRoot string, r pendingRestore) error {
 	}
 
 	modDir := filepath.Dir(absGoMod)
-	if err := runGoModTidy(modDir); err != nil {
+	if err := runGoModTidy(context.Background(), modDir); err != nil {
 		// Non-fatal here: go.mod has the replace back, go.sum may be slightly
 		// stale until the user's next build/tidy. Logged for visibility.
 		logger.Warnf("go mod tidy in %s after restore: %v — working-tree go.sum may be stale", modDir, err)

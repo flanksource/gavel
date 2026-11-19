@@ -25,6 +25,8 @@ import { ProjectCommitTasks } from './ProjectCommitTasks';
 import { ProjectDiffView } from './ProjectDiffView';
 import { ProjectChangesView } from './ProjectChangesView';
 import { ProjectFileTree } from './ProjectFileTree';
+import { ProjectGitLockPrompt, useProjectGitLockRequest } from './ProjectGitLockPrompt';
+import { useRebaseAction } from './rebaseAction';
 import {
   emptyProjectFileFilters,
   filterProjectFiles,
@@ -100,6 +102,8 @@ const RUNNER_MAIN_CHECKOUT_ONLY = 'Lint and test run in the main checkout only';
 
 export function ProjectStatusView({ project, diffPath = '', showResults = false, worktree, onDiffPathChange = ignoreDiffPathChange, onChanged = ignoreChanged }: Props) {
   const queryClient = useQueryClient();
+  const gitLock = useProjectGitLockRequest();
+  const rebaseAction = useRebaseAction();
   const mobile = useIsMobile();
   const visible = useDocumentVisible();
   const focus = useGitFocus({ project: project.name, worktree });
@@ -201,6 +205,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     }) => {
       const label = action === 'open-pr' ? 'open PR' : 'commit';
       const result = await mutationJSON<ProjectCommitRun>({
+        ...gitLock.request(),
         url: `/api/projects/${encodeURIComponent(project.name)}/commit-queue`,
         method: 'POST',
         body: { ...(options ? { action, options } : { action, files }), ...(worktree ? { worktree } : {}) },
@@ -243,6 +248,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess invalidates the project status and diff queries via refreshProjectData
   const indexMutation = useMutation({
     mutationFn: ({ resource, body, context }: ProjectIndexRequest) => mutationJSON({
+      ...(resource === 'ignore' ? {} : gitLock.request()),
       url: projectApiUrl({ projectName: project.name, resource, worktree }),
       method: 'POST',
       body,
@@ -376,6 +382,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
         disabled: commitTaskError !== '',
         onSelect: () => void queueStaged('open-pr'),
       }] : []),
+      ...(mobile && rebaseAction ? [rebaseAction] : []),
       { label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>, onSelect: () => setAdvancedAction('commit') },
     ]}
   />;
@@ -417,16 +424,15 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
               }]}
             />
             {commitButton}
-            <Button
-              type="button"
+            <SplitButton
               variant="outline"
               size="sm"
-              disabled={queueCommitMutation.isPending || commitTaskError !== ''}
-              title={stagedFiles.length > 0 ? 'Commit the staged files, push, and open a PR' : 'Push local commits and open or update the branch PR'}
+              primaryDisabled={queueCommitMutation.isPending || commitTaskError !== ''}
+              title="Pull request options"
+              label={<span className="flex items-center gap-1" title={stagedFiles.length > 0 ? 'Commit the staged files, push, and open a PR' : 'Push local commits and open or update the branch PR'}><UiGitPr />{stagedFiles.length > 0 ? `Commit & open PR (${stagedFiles.length})` : 'Open PR'}</span>}
               onClick={() => void queueStaged('open-pr')}
-            >
-              <span className="flex items-center gap-1"><UiGitPr />{stagedFiles.length > 0 ? `Commit & open PR (${stagedFiles.length})` : 'Open PR'}</span>
-            </Button>
+              items={rebaseAction ? [rebaseAction] : []}
+            />
             <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status">
               <UiRefresh />
             </Button>
@@ -498,6 +504,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
         onClose={() => setAdvancedAction(null)}
         onRun={(action, options) => startAction(action, options)}
       />
+      <ProjectGitLockPrompt owner={gitLock.owner} enabled={indexMutation.isPending || queueCommitMutation.isPending} />
       {activeRun && (
         <ProjectActionRunDialog
           projectName={project.name}

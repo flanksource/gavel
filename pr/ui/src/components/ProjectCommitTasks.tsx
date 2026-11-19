@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { TaskProgress, type TaskControlAction, type TaskSnapshot } from '@flanksource/clicky-ui/data';
+import { Icon, TaskProgress, taskStatusColor, taskStatusIcon, type TaskControlAction, type TaskSnapshot } from '@flanksource/clicky-ui/data';
 import { useTaskRun, useTaskRuns } from '@flanksource/clicky-ui/hooks';
 import { Button } from '@flanksource/clicky-ui/components';
-import { UiCheck } from '@flanksource/clicky-ui/icons';
+import { UiCheck, UiChevronDown, UiChevronUp } from '@flanksource/clicky-ui/icons';
+import { formatDuration } from '@flanksource/clicky-ui/utils';
 import { createPortal } from 'react-dom';
 import { useIsMobile } from '../useIsMobile';
 import { useCommitStatusSlot } from './commitStatusSlot';
@@ -147,11 +148,15 @@ export function ProjectCommitTasks({
     );
   }
   const collapsed = mobile && succeeded;
-  const expanded = !collapsed || expandedRun === runId;
+  // On a wide screen a successful run reads as one line until it is opened; a
+  // run in flight keeps its live progress and a failed one its retry controls.
+  const summarized = !mobile && succeeded;
+  const expanded = (!collapsed && !summarized) || expandedRun === runId;
+  const toggleExpanded = () => setExpandedRun(expanded ? '' : runId);
   const chip = collapsed && (
     <Button variant="ghost" size="icon" type="button" className="size-8 shrink-0 text-green-700 dark:text-green-400" aria-expanded={expanded}
       aria-label={expanded ? 'Hide commit details' : 'Show commit details'} title={expanded ? 'Hide commit details' : 'Commit complete · show details'}
-      onClick={() => setExpandedRun(expanded ? '' : runId)}>
+      onClick={toggleExpanded}>
       <UiCheck />
     </Button>
   );
@@ -160,12 +165,14 @@ export function ProjectCommitTasks({
     <>
       {chip && slot && createPortal(chip, slot)}
       {!chipOnly && (
-        <section aria-label="Commit tasks" className={`shrink-0 border-b border-border bg-muted/30 ${collapsed ? 'px-3 py-1' : 'px-4 py-3'}`}>
+        <section aria-label="Commit tasks" className={`shrink-0 border-b border-border bg-muted/30 ${collapsed ? 'px-3 py-1' : summarized ? 'px-4 py-1.5' : 'px-4 py-3'}`}>
+          {summarized && <CommitRunSummary snapshots={snapshots} expanded={expanded} onToggle={toggleExpanded} />}
           {confirming && <div role="status" className="flex items-center gap-1.5 text-xs font-medium text-green-700 dark:text-green-400"><UiCheck />Commit complete</div>}
           {chip && !slot && !confirming && <div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">Commit complete</span>{chip}</div>}
           {reportedError && <div role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{reportedError}</div>}
           {!ownership.error && expanded && !confirming && (
             <TaskProgress
+              className={summarized ? 'mt-1.5' : undefined}
               snapshots={snapshots}
               compact
               onControl={controlGroup}
@@ -176,5 +183,33 @@ export function ProjectCommitTasks({
         </section>
       )}
     </>
+  );
+}
+
+/** A finished commit run on one line: its outcome, its steps, how long it took, and a toggle for the full progress. */
+function CommitRunSummary({ snapshots, expanded, onToggle }: { snapshots: TaskSnapshot[]; expanded: boolean; onToggle: () => void }) {
+  const group = snapshots.find(snapshot => snapshot.type === 'group');
+  if (!group) throw new Error('commit run has no group snapshot');
+  const tasks = snapshots.filter(snapshot => snapshot.type === 'task');
+  const done = tasks.filter(task => task.status !== 'running' && task.status !== 'pending').length;
+  const elapsed = group.startedAt && group.finishedAt ? Date.parse(group.finishedAt) - Date.parse(group.startedAt) : undefined;
+  return (
+    <button type="button" aria-expanded={expanded} onClick={onToggle} data-commit-run-summary=""
+      title={expanded ? 'Hide commit details' : 'Show commit details'}
+      className="flex w-full min-w-0 items-center gap-2 text-left text-xs hover:text-foreground">
+      <Icon icon={taskStatusIcon(group.status)} className={`shrink-0 ${taskStatusColor(group.status)}`} />
+      <span className="shrink-0 font-medium text-foreground">{group.name}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-2 truncate text-muted-foreground">
+        {tasks.map(task => (
+          <span key={task.id} className="inline-flex min-w-0 items-center gap-0.5" title={task.error || task.status}>
+            <Icon icon={taskStatusIcon(task.status)} className={`shrink-0 ${taskStatusColor(task.status)}`} />
+            <span className="truncate">{task.name}</span>
+          </span>
+        ))}
+      </span>
+      {tasks.length > 0 && <span className="shrink-0 tabular-nums text-muted-foreground">{done}/{tasks.length}</span>}
+      {elapsed !== undefined && <span className="shrink-0 tabular-nums text-muted-foreground">{formatDuration(elapsed)}</span>}
+      <Icon icon={expanded ? UiChevronUp : UiChevronDown} className="shrink-0 text-muted-foreground" />
+    </button>
   );
 }

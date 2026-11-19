@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -20,7 +21,7 @@ type HookResult struct {
 	Err      error  `json:"-"`
 }
 
-func RunHooks(workDir string, hooks []verify.CommitHook, stagedFiles []string) ([]HookResult, error) {
+func RunHooks(ctx context.Context, workDir string, hooks []verify.CommitHook, stagedFiles []string) ([]HookResult, error) {
 	var results []HookResult
 	for _, hook := range hooks {
 		matches, err := hookMatchesFiles(hook, stagedFiles)
@@ -33,16 +34,18 @@ func RunHooks(workDir string, hooks []verify.CommitHook, stagedFiles []string) (
 			continue
 		}
 
-		logger.Infof("Running commit hook: %s", hook.Name)
-		cmd := exec.Command("sh", "-c", hook.Run)
-		cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		err = cmd.Run()
+		err = runMaintenanceTask(ctx, "Commit hook: "+hook.Name, func(ctx context.Context) error {
+			logger.Infof("Running commit hook: %s", hook.Name)
+			cmd := exec.CommandContext(ctx, "sh", "-c", hook.Run)
+			cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
+			cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+			return cmd.Run()
+		})
 
 		result := HookResult{Name: hook.Name}
 		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
 				result.ExitCode = exitErr.ExitCode()
 			} else {
 				result.ExitCode = -1

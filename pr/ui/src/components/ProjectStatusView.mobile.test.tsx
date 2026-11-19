@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectStatusView } from './ProjectStatusView';
 import { projectStatusResponse, statusWithStates } from './ProjectStatusView.fixture';
+import { RebaseActionContext } from './rebaseAction';
 
 vi.mock('../useIsMobile', () => ({ useIsMobile: () => true }));
 vi.mock('../useGitFocus', () => ({ useGitFocus: () => ({ error: '' }) }));
@@ -37,6 +38,18 @@ describe('mobile project commit staging', () => {
     const request = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
     expect(request?.[0]).toBe('/api/projects/gavel/commit-queue');
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({ action: 'open-pr', files: [], ...(worktree ? { worktree } : {}) });
+  });
+
+  it('folds the ref pane\'s Rebase… into the commit options menu', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ...projectStatusResponse, files: [] })));
+    const onSelect = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><RebaseActionContext.Provider value={{ label: 'Rebase…', onSelect }}><Review /></RebaseActionContext.Provider></QueryClientProvider>);
+
+    await screen.findByText('Working tree clean');
+    fireEvent.click(screen.getByRole('button', { name: 'Commit options' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rebase…' }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
   it('leaves project and branch identity to the ref header', async () => {

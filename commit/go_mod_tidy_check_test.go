@@ -25,7 +25,7 @@ func withStubbedTidyRecording(t *testing.T, sideEffect func(modDir string) error
 		calls []string
 	)
 	prev := runGoModTidy
-	runGoModTidy = func(modDir string) error {
+	runGoModTidy = func(_ context.Context, modDir string) error {
 		mu.Lock()
 		calls = append(calls, modDir)
 		mu.Unlock()

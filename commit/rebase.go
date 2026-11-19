@@ -76,7 +76,10 @@ func runGitRebaseAbort(workDir string) error {
 // rebaseOnto fetches the remote branch then attempts to rebase HEAD
 // onto it. On conflict it aborts the rebase and prompts the user to retry
 // with -Xours, -Xtheirs, or cancel the push entirely.
-func rebaseOnto(opts remoteRef) error {
+func rebaseOnto(ctx context.Context, opts remoteRef) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if opts.Ref == "" {
 		return nil
 	}
@@ -90,7 +93,7 @@ func rebaseOnto(opts remoteRef) error {
 		return err
 	}
 	if clean {
-		return nil
+		return ctx.Err()
 	}
 
 	if abortErr := runGitRebaseAbort(opts.WorkDir); abortErr != nil {
@@ -99,7 +102,7 @@ func rebaseOnto(opts remoteRef) error {
 	logger.Warnf("Rebase onto %s hit conflicts and was aborted.", upstream)
 
 	choice, ok := promptSelectIndex(
-		context.Background(),
+		ctx,
 		fmt.Sprintf("Rebase onto %s conflicted. Retry with which strategy?", upstream),
 		[]string{
 			"Cancel push",
@@ -107,6 +110,9 @@ func rebaseOnto(opts remoteRef) error {
 			"Retry with -Xtheirs (prefer remote changes)",
 		},
 	)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !ok || choice == 0 {
 		return fmt.Errorf("push cancelled: rebase onto %s conflicted", upstream)
 	}
@@ -123,5 +129,5 @@ func rebaseOnto(opts remoteRef) error {
 		_ = runGitRebaseAbort(opts.WorkDir)
 		return fmt.Errorf("rebase onto %s still conflicted with -X%s; resolve manually", upstream, strategy)
 	}
-	return nil
+	return ctx.Err()
 }

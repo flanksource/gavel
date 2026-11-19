@@ -5,6 +5,7 @@ import { UiDiff } from '@flanksource/clicky-ui/icons';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import { projectApiUrl } from './projectApiUrl';
 import { invalidateProjectData } from './projectMutations';
+import { ProjectGitLockPrompt, useProjectGitLockRequest } from './ProjectGitLockPrompt';
 
 interface Props {
   projectName: string;
@@ -27,6 +28,7 @@ type LineTarget = { side: 'old' | 'new'; line: number };
 
 export function ProjectDiffView({ projectName, path, refreshKey = 0, worktree }: Props) {
   const queryClient = useQueryClient();
+  const gitLock = useProjectGitLockRequest();
   const diff = useQuery({
     queryKey: queryKeys.projectDiff(projectName, path, refreshKey, worktree),
     queryFn: ({ signal }) => fetchJSON<ProjectDiffPayload>({
@@ -39,6 +41,7 @@ export function ProjectDiffView({ projectName, path, refreshKey = 0, worktree }:
   });
   const stageLines = useMutation({
     mutationFn: ({ targets, unstage }: { targets: LineTarget[]; unstage: boolean }) => mutationJSON({
+      ...gitLock.request(),
       url: projectApiUrl({ projectName, resource: 'stage/lines', worktree }),
       method: 'POST',
       body: { path, ...(unstage ? { unstage: true } : {}), lines: targets.map(({ side, line }) => ({ side, line })) },
@@ -68,6 +71,7 @@ export function ProjectDiffView({ projectName, path, refreshKey = 0, worktree }:
         <h3 className="min-w-0 flex-1 truncate font-mono text-sm font-semibold" title={path}>{path}</h3>
       </div>
       {stageLines.error && <div role="alert" className="shrink-0 border-b border-border px-4 py-2 text-xs text-red-600 dark:text-red-400">{stageLines.error.message}</div>}
+      <ProjectGitLockPrompt owner={gitLock.owner} enabled={stageLines.isPending} />
       {gutter ? (
         <div className="min-h-0 flex-1 overflow-auto">
           {data.unstaged !== '' && <DiffSection title="Unstaged changes" payload={{ ...data, diff: data.unstaged }} selection={unstagedSelection} />}

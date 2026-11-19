@@ -173,7 +173,7 @@ var _ = Describe("commit AI agent lifecycle", func() {
 	It("closes PR content generation before a dry-run returns", func() {
 		agent := &agentLifecycleProbe{response: &clickyai.PromptResponse{StructuredData: json.RawMessage(`{"title":"fix: close agent","branch":"fix/close-agent"}`)}}
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return agent, nil }
-		deps := defaultPushDeps(Options{})
+		deps := defaultPushDeps(GinkgoT().Context(), Options{})
 		deps.defaultBranch = func(github.Options) (string, error) { return "main", nil }
 		opts := promptTestOptions()
 		opts.DryRun = true
@@ -189,7 +189,7 @@ var _ = Describe("commit AI agent lifecycle", func() {
 		promptErr := errors.New("generate PR content")
 		agent := &agentLifecycleProbe{executeErr: promptErr}
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return agent, nil }
-		deps := defaultPushDeps(Options{})
+		deps := defaultPushDeps(GinkgoT().Context(), Options{})
 		deps.defaultBranch = func(github.Options) (string, error) { return "main", nil }
 		opts := promptTestOptions()
 		opts.DryRun = true

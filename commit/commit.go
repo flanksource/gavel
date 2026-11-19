@@ -95,8 +95,8 @@ type Options struct {
 	// searching for the PR to push to: the caller already knows which PR it is
 	// working on, and may be committing on a scratch branch no PR is open for.
 	PushBranch string
-	// AutoMerge, with Push, enables GitHub auto-merge on a newly opened PR so
-	// it merges once required checks pass. Only applies to PRs this run opens.
+	// AutoMerge, with Push, enables automatic completion on a newly opened PR
+	// once the provider's requirements are met.
 	AutoMerge bool
 	// MergeType is the merge method used when AutoMerge is set: rebase|squash|merge.
 	MergeType string
@@ -354,7 +354,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
 
 	if !opts.Force {
-		hookResults, hookErr := RunHooks(opts.WorkDir, opts.Config.Hooks, source.Files)
+		hookResults, hookErr := RunHooks(ctx, opts.WorkDir, opts.Config.Hooks, source.Files)
 		result.Hooks = hookResults
 		if hookErr != nil {
 			return result, hookErr
