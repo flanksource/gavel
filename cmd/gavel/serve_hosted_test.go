@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -336,6 +337,36 @@ func TestHostedGitHubThroughTheGHCLI(t *testing.T) {
 	assert.Equal(t, []string{"acme/api"}, held, "the org holds the named repository for sandbox runs and todos")
 
 	assert.Equal(t, http.StatusNotFound, call(http.MethodPost, "/api/github/install").StatusCode, "there is no App to install")
+}
+
+func TestAHostedOrgSyncsASavedConnectionThroughPublicAddressesOnly(t *testing.T) {
+	logged := logtest.Capture(t)
+	f := newHostedFixture(t)
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", f.opts.secretKey)
+	var reached atomic.Int64
+	gitlab := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Add(1)
+		_, _ = w.Write([]byte("[]"))
+	}))
+	t.Cleanup(gitlab.Close)
+
+	body := `{"name":"acme-gitlab","type":"gitlab","url":"` + gitlab.URL + `","password":"glpat","properties":{"group":"acme"}}`
+	req, err := http.NewRequest(http.MethodPost, f.server.URL+"/api/connections", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+	req.Header.Set("Origin", hostedPublicURL)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, readAll(t, resp))
+	require.NoError(t, resp.Body.Close())
+
+	assert.Eventually(t, func() bool {
+		lines := logged.String()
+		return strings.Contains(lines, `list the repositories of connection "acme-gitlab"`) && strings.Contains(lines, "refuses localhost address 127.0.0.1")
+	}, 10*time.Second, 20*time.Millisecond, "saving the connection syncs it, refusing an address that isn't public: %s", logged.String())
+	assert.Zero(t, reached.Load(), "nothing reached the loopback API")
 }
 
 func TestStoppingTheHostedStackLetsARepositorySyncFinish(t *testing.T) {

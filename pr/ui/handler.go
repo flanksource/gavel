@@ -173,6 +173,8 @@ type Server struct {
 	filters *filters.Store
 	// catalogDB holds a local dashboard's encrypted connections; a hosted one's are in orgDB.
 	catalogDB *gorm.DB
+	// connectionsChanged, when set, is told the organization's connections changed.
+	connectionsChanged func()
 
 	// blobs is the storage: store from ~/.gavel.yaml; nil keeps attachments in
 	// attachmentsDir.
@@ -193,6 +195,10 @@ type Server struct {
 func (s *Server) SetOrg(org uuid.UUID, db *gorm.DB) {
 	s.org, s.orgDB, s.filters = org, db, filters.NewStore(db)
 }
+
+// SetConnectionsChanged has changed run after an admin creates, changes or deletes one of the
+// organization's connections, so the repositories they bring are re-read.
+func (s *Server) SetConnectionsChanged(changed func()) { s.connectionsChanged = changed }
 
 // SetConnectionCatalog keeps a local dashboard's encrypted connections in db. Call it before
 // serving.

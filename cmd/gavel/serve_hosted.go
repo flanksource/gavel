@@ -19,11 +19,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/flanksource/commons-db/git"
 	commonssecret "github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/api"
 	gavelctx "github.com/flanksource/gavel/context"
+	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/installations"
@@ -226,8 +228,16 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		if account != nil {
 			poller := ui.NewPoller(srv, orgPRSearch(srv, account, cache, scope.OrgID), interval)
 			orgWork.Go(func() { poller.Run(ctx) })
-			orgWork.Go(func() { syncReposEvery(ctx, account, srv, scope.OrgID, repoSyncInterval) })
 		}
+		changed := make(chan struct{}, 1)
+		srv.SetConnectionsChanged(func() {
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		})
+		sync := orgRepoSync(db, account, scope.OrgID)
+		orgWork.Go(func() { syncReposEvery(ctx, sync, srv, scope.OrgID, changed, repoSyncInterval) })
 		return srv, nil
 	}, orgIdleTTL)
 	next := orgs.Handler()
@@ -291,14 +301,28 @@ const repoSyncInterval = 10 * time.Minute
 // stopping the organization's dashboard can wait for it.
 const repoSyncTimeout = 2 * time.Minute
 
-// syncReposEvery re-reads org's repositories now, refreshing srv's PRs from them, and then
-// every interval until ctx ends. A sync in flight when ctx ends runs to completion rather
-// than being cancelled partway through its queries.
-func syncReposEvery(ctx context.Context, account hostedGitHub, srv *ui.Server, org uuid.UUID, every time.Duration) {
+// orgRepoSync re-reads org's repositories: from the server's GitHub account, when it has one,
+// and from org's git connections, whose clients reach only public addresses since the
+// organization, not the operator, chose them.
+func orgRepoSync(db *gorm.DB, account hostedGitHub, org uuid.UUID) func(context.Context) error {
+	return func(ctx context.Context) error {
+		var errs []error
+		if account != nil {
+			errs = append(errs, account.SyncAll(ctx, org))
+		}
+		errs = append(errs, forge.SyncRepos(ctx, db, tenant.Scope{OrgID: org}, git.ClientOptions{Defensive: true}))
+		return errors.Join(errs...)
+	}
+}
+
+// syncReposEvery re-reads org's repositories with sync now, refreshing srv's PRs from them,
+// then whenever changed signals and every interval until ctx ends. A sync in flight when ctx
+// ends runs to completion rather than being cancelled partway through its queries.
+func syncReposEvery(ctx context.Context, sync func(context.Context) error, srv *ui.Server, org uuid.UUID, changed <-chan struct{}, every time.Duration) {
 	syncRepos := func() {
 		syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), repoSyncTimeout)
 		defer cancel()
-		if err := account.SyncAll(syncCtx, org); err != nil {
+		if err := sync(syncCtx); err != nil {
 			logger.Warnf("sync the repositories of org %s: %v", org, err)
 		}
 	}
@@ -314,6 +338,8 @@ func syncReposEvery(ctx context.Context, account hostedGitHub, srv *ui.Server, o
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			syncRepos()
+		case <-changed:
 			syncRepos()
 		}
 	}

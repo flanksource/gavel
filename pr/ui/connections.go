@@ -53,6 +53,9 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, status, err)
 		return
 	}
+	if r.Method != http.MethodGet && s.connectionsChanged != nil {
+		s.connectionsChanged()
+	}
 	if result == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
