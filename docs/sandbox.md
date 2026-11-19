@@ -153,6 +153,9 @@ created from the runner image. The environment is deleted once the job exits or 
   of token at the model's price for it; a call priced in another currency counts its tokens but
   not its cost. Counted tokens are input, cache writes, output and reasoning; cache reads are
   shown but not counted, as the providers leave them out of their input limits.
+  Its admins also see its measured CPU and memory there, sampled from substrate's Prometheus
+  through Mission Control (`--mission-control-org-view`, see
+  [platform-dashboard.md](platform-dashboard.md#measured-cpu-and-memory)).
 - **Budgets.** An organization admin sets its budgets on the same page (`/api/budgets`), at most
   one per resource and kind; without one, nothing is capped. A cumulative budget caps what the
   organization uses in a window, such as this month (`now/M`): core-hours, GiB-hours, counted
