@@ -4,9 +4,12 @@ package forge_test
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -206,4 +209,25 @@ func TestDeletingAConnectionRemovesTheRepositoriesOnlyItBrings(t *testing.T) {
 	assert.Zero(t, left)
 
 	require.ErrorContains(t, forge.DeleteConnection(context.Background(), db, scope, "acme-gitlab"), `connection "acme-gitlab"`)
+}
+
+func TestARepositorysRemoteCarriesItsOwnOrgsConnection(t *testing.T) {
+	db := catalog(t)
+	scope, other := hostedOrg(t, db), hostedOrg(t, db)
+	conn := saveFor(t, db, scope, models.Connection{Name: "acme-github", Type: models.ConnectionTypeGithub, Password: "ghp_acme",
+		Properties: map[string]string{"organization": "acme"}})
+
+	remote, err := forge.Remote(context.Background(), db, scope, conn, "https://github.com/acme/api.git", git.ClientOptions{})
+	require.NoError(t, err)
+	env, cleanup, err := remote.CommandEnv(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+	header := "=Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:ghp_acme"))
+	assert.True(t, slices.ContainsFunc(env, func(entry string) bool { return strings.HasSuffix(entry, header) }), "git authenticates with the connection's token")
+
+	_, err = forge.Remote(context.Background(), db, other, conn, "https://github.com/acme/api.git", git.ClientOptions{})
+	require.ErrorContains(t, err, "record not found", "another organization can't use the connection")
+
+	_, err = forge.Remote(context.Background(), db, scope, conn, "https://github.com/initech/api.git", git.ClientOptions{})
+	require.ErrorContains(t, err, "initech", "the connection reaches only its namespace")
 }

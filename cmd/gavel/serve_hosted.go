@@ -158,11 +158,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 		account = installations.Store{DB: db, App: app}
 	}
-	// Sandbox jobs and hosted todo workspaces read repositories from the pushed ones and
-	// from GitHub mirrors.
-	sources := &sandbox.Sources{DataDir: opts.DataDir}
-	if account != nil {
-		sources.Token = account.RepoToken
+	sources, err := hostedSources(opts.DataDir, db, account)
+	if err != nil {
+		return hostedStack{}, err
 	}
 	blobs, err := verify.OpenGlobalStorage(ctx)
 	if err != nil {
@@ -278,6 +276,24 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	}
 	root.Handle("/", auth.Middleware(next, shell.Handler()))
 	return hostedStack{handler: root, members: auth.Members, stop: stop, dispatcher: dispatcher}, nil
+}
+
+// hostedSources is where sandbox jobs and hosted todo workspaces read repositories from: the
+// pushed ones, and mirrors of the rest, fetched with the GitHub account's tokens or the
+// repository's own git connection, whose remote is reached only at public addresses since the
+// organization, not the operator, chose it. Mirrors named by GitHub repository id are removed.
+func hostedSources(dataDir string, db *gorm.DB, account hostedGitHub) (*sandbox.Sources, error) {
+	sources := &sandbox.Sources{DataDir: dataDir}
+	if account != nil {
+		sources.Token = account.RepoToken
+	}
+	sources.Connection = func(ctx context.Context, repo sandbox.Repo) (*git.Repository, error) {
+		return forge.Remote(ctx, db, tenant.Scope{OrgID: repo.Org}, *repo.ConnectionID, repo.RemoteURL, git.ClientOptions{Defensive: true})
+	}
+	if err := sources.RemoveGitHubIDMirrors(); err != nil {
+		return nil, err
+	}
+	return sources, nil
 }
 
 // hostedGitHub is how hosted orgs reach GitHub: their GitHub App installations

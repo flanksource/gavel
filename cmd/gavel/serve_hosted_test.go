@@ -24,8 +24,10 @@ import (
 	"time"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/api/clerktest"
+	"github.com/flanksource/gavel/connections"
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/githubtest"
@@ -33,7 +35,9 @@ import (
 	"github.com/flanksource/gavel/internal/logtest"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/sshkeys"
+	"github.com/flanksource/gavel/tenant"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -367,6 +371,31 @@ func TestAHostedOrgSyncsASavedConnectionThroughPublicAddressesOnly(t *testing.T)
 		return strings.Contains(lines, `list the repositories of connection "acme-gitlab"`) && strings.Contains(lines, "refuses localhost address 127.0.0.1")
 	}, 10*time.Second, 20*time.Millisecond, "saving the connection syncs it, refusing an address that isn't public: %s", logged.String())
 	assert.Zero(t, reached.Load(), "nothing reached the loopback API")
+}
+
+func TestHostedSourcesDropGitHubIDMirrorsAndReachConnectionsDefensively(t *testing.T) {
+	dataDir := t.TempDir()
+	byGitHubID := filepath.Join(dataDir, "mirrors", uuid.NewString(), "42.git")
+	require.NoError(t, os.MkdirAll(filepath.Join(byGitHubID, "objects"), 0o755))
+	f := newHostedFixture(t, func(o *DashboardOptions) { o.DataDir = dataDir })
+	assert.NoDirExists(t, byGitHubID, "a mirror named by GitHub repository id is mirrored again under its repository")
+
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", f.opts.secretKey)
+	org := uuid.New()
+	require.NoError(t, f.db.Gorm().Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Acme')`, org, org.String()).Error)
+	store, closeStore, err := connections.OpenStore(t.Context(), connections.Options{DB: f.db.Gorm(), Scope: tenant.Scope{OrgID: org}})
+	require.NoError(t, err)
+	remote := "https://127.0.0.1:9/acme/app.git"
+	saved, err := store.SaveConnection(t.Context(), &models.Connection{Name: "app", Type: models.ConnectionTypeGit, URL: remote, Password: "secret"})
+	require.NoError(t, err)
+	require.NoError(t, closeStore())
+
+	sources, err := hostedSources(dataDir, f.db.Gorm(), nil)
+	require.NoError(t, err)
+	_, err = sources.Bundle(t.Context(), sandbox.Repo{ID: uuid.New(), Org: org, Source: "git", Name: "acme/app", ConnectionID: &saved.ID, RemoteURL: remote},
+		"refs/heads/main", io.Discard)
+	require.ErrorContains(t, err, "refuses localhost address 127.0.0.1", "a connection's remote is reached only at a public address")
 }
 
 func TestStoppingTheHostedStackLetsARepositorySyncFinish(t *testing.T) {

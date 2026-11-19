@@ -80,6 +80,29 @@ func syncConnection(ctx context.Context, db *gorm.DB, org uuid.UUID, connection 
 	})
 }
 
+// Remote is the remote at remoteURL of a repository scope's connection brings, with that
+// connection's credentials, as stored and never hydrated. Another organization's connection is
+// not found, and the connection reaches only the repositories its scope owns.
+func Remote(ctx context.Context, db *gorm.DB, scope tenant.Scope, connectionID uuid.UUID, remoteURL string, options git.ClientOptions) (*git.Repository, error) {
+	store, closeStore, err := connections.OpenStore(ctx, connections.Options{DB: db, Scope: scope})
+	if err != nil {
+		return nil, fmt.Errorf("open the organization's connection catalog: %w", err)
+	}
+	connection, err := store.ResolveConnection(dbcontext.NewContext(ctx), connectionID.String())
+	if err := errors.Join(err, closeStore()); err != nil {
+		return nil, fmt.Errorf("read the connection of %s: %w", remoteURL, err)
+	}
+	client, err := git.FromConnection(dbcontext.NewContext(ctx), *connection, options)
+	if err != nil {
+		return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
+	}
+	remote, err := client.Repository(remoteURL)
+	if err != nil {
+		return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
+	}
+	return remote, nil
+}
+
 // DeleteConnection deletes scope's connection reference and, in the same transaction, the
 // repositories it brings: one a sandbox run refers to, or its installation grants, is kept
 // without the connection.
