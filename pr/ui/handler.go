@@ -640,6 +640,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/model-keys/{provider}", s.handleModelKeyDelete)
 	mux.HandleFunc("GET /api/sandbox-runs", s.handleSandboxRuns)
 	mux.HandleFunc("GET /api/sandbox-runs/{id}/log", s.handleSandboxRunLog)
+	mux.HandleFunc("GET /api/usage", s.handleUsage)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
 	mux.HandleFunc("/react-grab", handleReactGrabInstall)
