@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { OrganizationList, Show, SignIn, useOrganization, useUser } from '@clerk/react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { PRDialogProvider } from './PRDialogProvider';
 
 // AuthGate wraps the whole app, outside App, so pages App returns early for
 // (processes, new todo) are gated too. Pending sessions count as signed out,
@@ -26,7 +27,8 @@ function ActiveOrganization({ children }: { children: ReactNode }) {
     );
   }
   if (!user) return null;
-  return <AccountQueryScope key={`${organization.id}:${user.id}`}>{children}</AccountQueryScope>;
+  const scope = `hosted:${organization.id}:${user.id}`;
+  return <AccountQueryScope key={scope}><PRDialogProvider scope={scope}>{children}</PRDialogProvider></AccountQueryScope>;
 }
 
 function AccountQueryScope({ children }: { children: ReactNode }) {

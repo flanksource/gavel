@@ -1,6 +1,6 @@
 import { branchRef, worktreeRef } from '../projectRef';
 import type { GitWorktree, GitWorktreeChanges, ProjectGit } from '../types';
-import { ageShort, timeAgoShort } from '../utils';
+import { ageShort, timeAgo } from '../utils';
 
 export function dirtyFileCount({ staged, unstaged, both, untracked, conflict }: GitWorktreeChanges): number {
   return staged + unstaged + both + untracked + conflict;
@@ -97,7 +97,7 @@ export function projectRefAges({ lastCommitAt, touchedAt }: { lastCommitAt: stri
 
 /** How old the git state a pane shows is, e.g. "git state 8s ago". */
 export function gitStateAge(scannedAt: string): string {
-  return `git state ${timeAgoShort(scannedAt)}`;
+  return `git state ${timeAgo(scannedAt)}`;
 }
 
 /**

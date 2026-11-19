@@ -9,8 +9,9 @@ import {
   ListMenuItem,
   ListMenuHeader,
   useListMenuSelection,
+  type HostedModalProps,
 } from '@flanksource/clicky-ui/components';
-import type { AcceptanceCriterion, PRDetail, PRItem, Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { AcceptanceCriterion, PRDetail, PRItem, Project, TodoPriority, TodoStatus } from '../../types';
 import { ansiToHtml } from '../../ansi';
 import { Markdown } from '../Markdown';
 import { Avatar } from '../Avatar';
@@ -18,10 +19,11 @@ import { AddProjectDialog } from '../AddProjectDialog';
 import { PRTodoWorkspaceField } from './PRTodoWorkspaceField';
 import { usePRTodoProjectWorkspace } from './usePRTodoProjectWorkspace';
 import { useIsMobile } from '../../useIsMobile';
-import { UiArrowLeft, UiBeaker, UiComment, UiError, UiLinkExternal, UiPass, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
+import { UiArrowLeft, UiBeaker, UiComment, UiError, UiLinkExternal, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { inputClass, priorities, statuses, statusLabel } from './format';
-import { useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
-import { RunAfterCreation, RunCreationRecovery, useRunAfterCreation } from './RunAfterCreation';
+import { TodoMutationError, useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
+import { RunAfterCreation, useRunAfterCreation, type RunAfterCreationState } from './RunAfterCreation';
+import { savePRTodoDraft, type PRTodoDraft } from './prTodoDraft';
 import {
   buildPRTodoBody,
   buildPRTodoCandidates,
@@ -85,12 +87,6 @@ function buildSections(candidates: PRTodoCandidate[]): Section[] {
     }
   }
   return out;
-}
-
-// todoHref builds the /todos/{ref} deep link the same way routes.buildRoute does,
-// encoding each path segment so unusual native references round-trip.
-function todoHref(todo: TodoItem): string {
-  return `/todos/${todo.ref.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 // DetailPane renders the focused candidate's full content in the right column:
@@ -169,25 +165,26 @@ function SignalPanes({ mobile, showDetail, onBack, list, detail }: {
 // details and acceptance criteria; selected comments add body context, while
 // checks/comments remain verification gates.
 export function CreateTodoFromPRDialog({
-  open,
-  onClose,
   pr,
   detail,
   workspaces,
-  onCreated,
   onProjectsChanged,
+  hosted,
+  recovered,
+  onResult,
 }: {
-  open: boolean;
-  onClose: () => void;
   pr: PRItem;
   detail: PRDetail | null;
   workspaces: Project[];
-  // onCreated lets the host refresh todo counts after a todo is added.
-  onCreated?: () => void;
   // onProjectsChanged lets the host refresh the project catalog after one is registered.
   onProjectsChanged?: () => void;
+  hosted: HostedModalProps;
+  recovered?: PRTodoDraft;
+  onResult: (result: CreateTodoResponse, run: RunAfterCreationState['submitted']) => void;
 }) {
-  const candidates = useMemo(() => buildPRTodoCandidates(pr, detail), [pr, detail]);
+  const { modalProps, submit: submitHosted } = hosted;
+  const { open, onClose } = modalProps;
+  const candidates = useMemo(() => recovered?.candidates ?? buildPRTodoCandidates(pr, detail), [pr, detail, recovered]);
   // Prefer the workspace whose repos include this PR's repo, else the first.
   const defaultDir = useMemo(() => {
     const match = workspaces.find(w => (w.repos ?? []).includes(pr.repo));
@@ -206,8 +203,8 @@ export function CreateTodoFromPRDialog({
   // start unchecked so a long nitpick list isn't dumped in.
   const defaultKeys = useMemo(() => candidates.filter(c => c.group !== 'comments').map(c => c.key), [candidates]);
 
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
-  const touched = useRef(false);
+  const [selectedKeys, setSelectedKeys] = useState<string[]>(recovered?.selectedKeys ?? []);
+  const touched = useRef(!!recovered);
   const selection = useListMenuSelection({
     keys,
     selectedKeys,
@@ -217,19 +214,17 @@ export function CreateTodoFromPRDialog({
     },
   });
 
-  const [dir, setDir] = useState(defaultDir);
-  const [title, setTitle] = useState('');
-  const [priority, setPriority] = useState<TodoPriority>('medium');
-  const [status, setStatus] = useState<TodoStatus>('pending');
-  const [notes, setNotes] = useState('');
+  const [dir, setDir] = useState(recovered?.dir ?? defaultDir);
+  const [title, setTitle] = useState(recovered?.title ?? '');
+  const [priority, setPriority] = useState<TodoPriority>(recovered?.priority ?? 'medium');
+  const [status, setStatus] = useState<TodoStatus>(recovered?.status ?? 'pending');
+  const [notes, setNotes] = useState(recovered?.notes ?? '');
   const [activeKey, setActiveKey] = useState<string | null>(null);
   // A phone shows the signal list or one signal's detail, not both side by side.
   const mobile = useIsMobile();
   const [detailOpen, setDetailOpen] = useState(false);
   const [error, setError] = useState('');
-  const [created, setCreated] = useState<TodoItem | null>(null);
-  const [runFailure, setRunFailure] = useState<CreateTodoResponse | null>(null);
-  const runAfter = useRunAfterCreation({ dir, status, enabled: open });
+  const runAfter = useRunAfterCreation({ dir, status, enabled: open, initialStep: recovered?.step });
   const createTodo = useCreateTodoMutation(dir);
   const busy = createTodo.isPending;
   const projectWorkspace = usePRTodoProjectWorkspace({
@@ -250,16 +245,14 @@ export function CreateTodoFromPRDialog({
     }
     if (!wasOpen.current) {
       wasOpen.current = true;
-      touched.current = false;
-      setDir(defaultDir);
-      setTitle(`Address feedback on ${pr.repo}#${pr.number}`);
-      setPriority('medium');
-      setStatus('pending');
-      setNotes('');
+      touched.current = !!recovered;
+      setDir(recovered?.dir ?? defaultDir);
+      setTitle(recovered?.title ?? `Address feedback on ${pr.repo}#${pr.number}`);
+      setPriority(recovered?.priority ?? 'medium');
+      setStatus(recovered?.status ?? 'pending');
+      setNotes(recovered?.notes ?? '');
       setError('');
       createTodo.reset();
-      setCreated(null);
-      setRunFailure(null);
     }
     if (!touched.current) {
       setSelectedKeys(defaultKeys);
@@ -267,7 +260,7 @@ export function CreateTodoFromPRDialog({
         prev && candidates.some(c => c.key === prev) ? prev : (defaultKeys[0] ?? candidates[0]?.key ?? null),
       );
     }
-  }, [open, defaultDir, pr.repo, pr.number, candidates, defaultKeys, createTodo.reset]);
+  }, [open, defaultDir, pr.repo, pr.number, candidates, defaultKeys, createTodo.reset, recovered]);
 
   if (!open) return null;
 
@@ -310,13 +303,23 @@ export function CreateTodoFromPRDialog({
         pr: { number: number; url: string };
       } = { title: title.trim(), body: buildPRTodoBody(pr, notes, selected), priority, status, criteria, pr: { number: pr.number, url: pr.url } };
       if (prVerification) payload.prVerification = prVerification;
-      const data = await createTodo.mutateAsync({
+      const runFields = runAfter.capture();
+      const mutation = {
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, ...runAfter.capture() }),
+        body: JSON.stringify({ ...payload, ...runFields }),
+      };
+      await submitHosted({
+        draft: savePRTodoDraft(pr, { dir, title, priority, status, notes, selectedKeys: selected.map(candidate => candidate.key), candidates, step: runAfter.step }),
+        request: async () => {
+          try {
+            return { status: 'success', value: await createTodo.mutateAsync(mutation) };
+          } catch (cause) {
+            if (cause instanceof TodoMutationError && cause.status < 500) return { status: 'rejected', error: cause.message };
+            return { status: 'unknown', error: cause instanceof Error ? cause.message : 'Could not create todo' };
+          }
+        },
+        onSuccess: data => onResult(data, runFields.step ? { dir, ...runFields, step: runFields.step } : null),
       });
-      setCreated(data.todo);
-      if (data.run?.status === 'failed') setRunFailure(data);
-      onCreated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create todo');
     }
@@ -331,18 +334,11 @@ export function CreateTodoFromPRDialog({
   return (
     <>
       <Modal
-      open
-      onClose={onClose}
-      title={created ? 'Todo created' : 'New todo from PR'}
-      size="xl"
-      className="max-w-6xl"
-      footer={
-        runFailure ? null : created ? (
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => { setCreated(null); setRunFailure(null); }}>Create another</Button>
-            <Button onClick={onClose}>Done</Button>
-          </div>
-        ) : (
+        {...modalProps}
+        error={error || modalProps.error}
+        size="xl"
+        className="max-w-6xl"
+        footer={
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="min-w-0 text-xs text-muted-foreground">
               {selectedCriteriaCount} acceptance criteri{selectedCriteriaCount === 1 ? 'on' : 'a'}
@@ -353,34 +349,9 @@ export function CreateTodoFromPRDialog({
               <Button onClick={submit} loading={busy} disabled={!title.trim() || !dir || runAfter.blocked}>Add todo</Button>
             </div>
           </div>
-        )
-      }
-    >
-      {created ? (
-        runFailure ? <RunCreationRecovery result={runFailure} request={runAfter.submitted} onDone={() => setRunFailure(null)} /> :
+        }
+      >
         <div className="space-y-3">
-          <div className="flex items-start gap-2 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
-            <UiPass className="mt-0.5 shrink-0 text-green-600" />
-            <div className="min-w-0">
-              <div className="font-medium">{created.title}</div>
-              <div className="mt-0.5 text-xs text-green-700">
-                {(created.criteria?.length ?? 0)} acceptance criteri{(created.criteria?.length ?? 0) === 1 ? 'on' : 'a'} added
-                {created.verificationMarkdown ? ' · verification fixture added' : ''}
-              </div>
-            </div>
-          </div>
-          <a
-            href={todoHref(created)}
-            className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 hover:underline"
-          >
-            <UiLinkExternal />
-            Open todo
-          </a>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {error && <div className="text-sm text-destructive">{error}</div>}
-
           {presets.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Quick todo:</span>
@@ -514,10 +485,9 @@ export function CreateTodoFromPRDialog({
             />
           </Field>
         </div>
-      )}
       </Modal>
       <AddProjectDialog
-        open={projectWorkspace.addProjectOpen}
+        open={projectWorkspace.addProjectOpen && !modalProps.minimized}
         onClose={projectWorkspace.closeAddProject}
         onSaved={projectWorkspace.projectSaved}
         repoOptions={projectWorkspace.repoOptions}

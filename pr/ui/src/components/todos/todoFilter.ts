@@ -150,6 +150,19 @@ export function toggleStatusFilter(statuses: FacetModes, status: TodoStatus): Fa
   return next;
 }
 
+// isStatusFocused reports whether the status facet shows exactly one status —
+// the state a phone's action-count chip applies.
+export function isStatusFocused(statuses: FacetModes, status: TodoStatus): boolean {
+  const entries = Object.entries(statuses);
+  return entries.length === 1 && entries[0][0] === status && entries[0][1] === 'include';
+}
+
+// focusStatusFilter is the action-count chip's tap: show only this status, or,
+// when that is already the filter, go back to the default status facet.
+export function focusStatusFilter(statuses: FacetModes, status: TodoStatus): FacetModes {
+  return isStatusFocused(statuses, status) ? defaultTodoFilters().statuses : { [status]: 'include' };
+}
+
 function isFacetModes(value: unknown): value is FacetModes {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.values(value).every(mode => mode === 'include' || mode === 'exclude');

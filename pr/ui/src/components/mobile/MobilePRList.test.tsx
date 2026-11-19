@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { PRItem } from '../../types';
 import { MobilePRList } from './MobilePRList';
 
 const origin = { identifier: 1, clientX: 100, clientY: 100 };
@@ -16,6 +18,24 @@ function pull(list: HTMLElement, point = pastThreshold) {
   fireEvent.touchStart(list, { touches: [origin] });
   fireEvent.touchMove(list, { touches: [point] });
 }
+
+describe('mobile PR list layout', () => {
+  it('renders the list in its mobile layout: no coloured edge on a failing PR, one action count on its header', () => {
+    const failing: PRItem = {
+      number: 3, title: 'Broken build', author: 'ada', repo: 'acme/api', source: 'feat/x', target: 'main', state: 'OPEN',
+      isDraft: false, url: 'https://github.com/acme/api/pull/3', updatedAt: '2026-10-15T09:00:00Z',
+      checkStatus: { passed: 0, failed: 2, running: 0, pending: 0 },
+    };
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MobilePRList prs={[failing]} selected={null} onSelect={vi.fn()} onRefresh={vi.fn()} refreshing={false} />
+      </QueryClientProvider>,
+    );
+
+    expect(container.querySelector('.border-red-400')).toBeNull();
+    expect(screen.getAllByLabelText('1 failing')).toHaveLength(2);
+  });
+});
 
 describe('mobile PR pull to refresh', () => {
   it('refreshes an empty list once on release after showing pull and release feedback', () => {

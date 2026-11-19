@@ -53,6 +53,7 @@ import { RunPrompts } from './components/RunPrompts';
 import { RunHistory } from './components/RunHistory';
 import { RunProcesses } from './components/RunProcesses';
 import { RunSwitcher } from './components/RunSwitcher';
+import { ShardFilter, type ResultsShards } from './components/ShardFilter';
 import { apiBase, apiUrl } from './config';
 import { fetchProcessMetricsFromSamples } from './processMetrics';
 import { useProcessTrace } from './hooks/use-process-trace';
@@ -577,16 +578,21 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     </>
   );
   const status = notice ?? streamError ?? statusText;
-  const backTo = (window as unknown as { __gavelBackTo?: string }).__gavelBackTo;
+  const { __gavelBackTo: backTo, __gavelShards: shards } = window as unknown as { __gavelBackTo?: string; __gavelShards?: ResultsShards | null };
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      {backTo && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-4 py-1.5 text-sm">
-          <a href={backTo} className="inline-flex items-center gap-1 text-primary no-underline hover:underline">
-            <UiArrowLeft />
-            Back to PR
-          </a>
+      {(backTo || shards) && (
+        <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-4 py-1.5 text-sm">
+          {backTo && (
+            <a href={backTo} className="inline-flex shrink-0 items-center gap-1 text-primary no-underline hover:underline">
+              <UiArrowLeft />
+              Back to PR
+            </a>
+          )}
+          {shards && (
+            <ShardFilter page={shards} location={{ basePath: apiBase(), pathname: window.location.pathname, search: window.location.search }} />
+          )}
         </div>
       )}
       {showTabsRow && (

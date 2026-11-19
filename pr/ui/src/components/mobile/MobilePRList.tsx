@@ -25,7 +25,7 @@ export function MobilePRList({ onRefresh, refreshing, ...props }: Props) {
       <div role="status" className="flex items-center justify-center gap-2 overflow-hidden text-xs text-muted-foreground" style={{ height: refreshing ? 48 : Math.min(distance / 2, 64) }}>
         {refreshing ? <><Spinner />Requesting refresh…</> : distance > 0 ? (distance >= REFRESH_DISTANCE ? 'Release to refresh' : 'Pull down to refresh') : null}
       </div>
-      <PRList {...props} />
+      <PRList {...props} mobile />
     </div>
   );
 }

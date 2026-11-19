@@ -132,6 +132,7 @@ export function App() {
   const [projectResults, setProjectResults] = useState(initialRoute.projectResults);
   const [projectRef, setProjectRef] = useState(initialRoute.projectRef);
   const [todoView, setTodoView] = useState(initialRoute.todoView);
+  const [taskTimeRange, setTaskTimeRange] = useState(initialRoute.taskTimeRange);
   const authMode = currentAuthMode();
   const hostControls = hostControlsVisible(authMode);
   const [activeTab, setActiveTab] = useState<Tab>(() => tabFor(authMode, initialRoute.tab));
@@ -175,7 +176,6 @@ export function App() {
     projectError,
     processError,
     updateSnapshot,
-    refreshProjects,
     refreshProjectsAndProcesses,
   } = useAppQueries({ enabled: streamsActive, prsEnabled: (!isTodoNewPage && !isProcessesPage && (isMenubar ? menubarTab === 'prs' : activeTab === 'prs')) || paletteOpen || statusOpen, hostData: hostControls, initialConfig });
   const {
@@ -231,8 +231,8 @@ export function App() {
   const scopedPRs = projectScope.prs;
 
   const routeState: RouteState = useMemo(
-    () => ({ tab: activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, filters }),
-    [activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, filters],
+    () => ({ tab: activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, taskTimeRange, filters }),
+    [activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, taskTimeRange, filters],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
@@ -245,6 +245,7 @@ export function App() {
     setProjectResults(next.projectResults);
     setProjectRef(next.projectRef);
     setTodoView(next.todoView);
+    setTaskTimeRange(next.taskTimeRange);
     setFilters(next.filters);
     const url = buildRoute(next);
     const current = `${window.location.pathname}${window.location.search}`;
@@ -285,8 +286,12 @@ export function App() {
   }, [commitRoute, filters, scopeProject]);
 
   const navigateTask = useCallback((id: string | null) => {
-    commitRoute({ tab: 'tasks', selectedPath: id ?? '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
-  }, [commitRoute, filters, scopeProject]);
+    commitRoute({ ...routeState, selectedPath: id ?? '' });
+  }, [commitRoute, routeState]);
+
+  const changeTaskTimeRange = useCallback((from: string, to: string) => {
+    commitRoute({ ...routeState, taskTimeRange: { from, to } });
+  }, [commitRoute, routeState]);
 
   const navigateRun = useCallback((id: string) => {
     commitRoute({ tab: 'runs', selectedPath: id, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
@@ -375,6 +380,7 @@ export function App() {
       setProjectResults(next.projectResults);
       setProjectRef(next.projectRef);
       setTodoView(next.todoView);
+      setTaskTimeRange(next.taskTimeRange);
       setFilters(next.filters);
     };
     window.addEventListener('popstate', onPopState);
@@ -761,9 +767,25 @@ export function App() {
   // The PR filters, count and exports describe the list, so a phone showing a
   // PR's detail page leaves them out.
   const prListChrome = activeTab === 'prs' && !(isMobile && selected);
-  const prListProps = { prs: filtered, selected, onSelect: handleSelect, unread, syncStatus, gavelResults: gavelResultsMap, projectsByRepo, onProcChanged };
+  const prListProps = { prs: filtered, selected, onSelect: handleSelect, unread, syncStatus, gavelResults: gavelResultsMap, projectsByRepo, onProcChanged, viewer };
+  const prCount = prListChrome ? (
+    <span className="whitespace-nowrap text-xs text-muted-foreground">
+      {filtered.length} pull request{filtered.length !== 1 ? 's' : ''}
+    </span>
+  ) : undefined;
+  const prExports = prListChrome ? (
+    <ExportButtons
+      onJSON={onDownloadJSON}
+      onMarkdown={onDownloadMarkdown}
+      onCopy={onCopyForAgent}
+      copyState={copyState}
+      copyError={copyError}
+    />
+  ) : undefined;
+  // A phone keeps the list's chrome to one row: the count sits beside the
+  // Filters button and the exports move under ⋮.
   const prFilterBar = prListChrome
-    ? <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} />
+    ? <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} trailing={isMobile ? prCount : undefined} />
     : undefined;
   // A phone gets the playground's AppShell header: tabs move into the
   // navigation drawer, the header keeps search, the assistant and ⋮, and ⋮
@@ -771,6 +793,7 @@ export function App() {
   const mobileToolbar = mobileMoreOpen || prFilterBar ? (
     <>
       {mobileMoreOpen && shellActions(true)}
+      {mobileMoreOpen && prExports}
       {prFilterBar && <div className="basis-full">{prFilterBar}</div>}
     </>
   ) : undefined;
@@ -813,24 +836,8 @@ export function App() {
               toolbar: prFilterBar,
             })}
         actions={shellActions(false)}
-        bodyHeader={
-          prListChrome ? (
-            <span className="text-xs text-muted-foreground">
-              {filtered.length} pull request{filtered.length !== 1 ? 's' : ''}
-            </span>
-          ) : undefined
-        }
-        bodyActions={
-          prListChrome ? (
-            <ExportButtons
-              onJSON={onDownloadJSON}
-              onMarkdown={onDownloadMarkdown}
-              onCopy={onCopyForAgent}
-              copyState={copyState}
-              copyError={copyError}
-            />
-          ) : undefined
-        }
+        bodyHeader={isMobile ? undefined : prCount}
+        bodyActions={isMobile ? undefined : prExports}
         bodySidebar={
           activeTab === 'prs' ? (
             isMobile && !selected
@@ -859,7 +866,7 @@ export function App() {
       >
         {activeTab === 'prs' ? (
           selected ? (
-            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={scopedProjects} onTodoCreated={refreshProjects} onActionDone={() => { if (selected) loadPR(selected); }} onClose={closeSelectedPR} />
+            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={scopedProjects} onActionDone={refreshDetail} onClose={closeSelectedPR} />
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
               <div className="text-center">
@@ -892,7 +899,13 @@ export function App() {
           <SessionsDetailPane query={agentSessions} selectedId={selectedPath} onOpenTodo={navigateTodo} onOpenWorktree={navigateSessionWorktree} />
         ) : activeTab === 'tasks' ? (
           <div className="h-full overflow-y-auto p-4">
-            <TaskManager basePath="/api/v1" selectedId={selectedPath || undefined} onSelectRun={navigateTask} />
+            <TaskManager
+              basePath="/api/v1"
+              selectedId={selectedPath || undefined}
+              onSelectRun={navigateTask}
+              {...(taskTimeRange ? { timeRange: taskTimeRange } : {})}
+              onTimeRangeChange={changeTaskTimeRange}
+            />
           </div>
         ) : activeTab === 'runs' ? (
           <RunsView selectedId={selectedPath} onSelect={navigateRun} />

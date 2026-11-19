@@ -41,6 +41,7 @@ export interface PRItem {
   repo: string;
   repoAvatarUrl?: string;
   repoHomepageUrl?: string;
+  repoDefaultBranch?: string;
   source: string;
   target: string;
   state: string;

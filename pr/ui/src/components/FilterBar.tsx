@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { FilterBar as ClickyFilterBar } from '@flanksource/clicky-ui/components';
 import type { FilterBarFilter, MultiSelectOption } from '@flanksource/clicky-ui/components';
 import { UiFolderGit2, UiUser } from '@flanksource/clicky-ui/icons';
@@ -33,6 +33,8 @@ interface Props {
   };
   repos: string[];
   authors: string[];
+  // Rendered at the end of the filter row, beside the phone Filters button.
+  trailing?: ReactNode;
 }
 
 // `always` keeps a chip visible even at count 0 so it can be used to opt in.
@@ -67,7 +69,7 @@ function authorLabel(author: string): string {
 // The project's record-based Filters contract flows straight through to each
 // `kind:"multi"` filter's `value`/`onChange`, and on to filterPRs / routes /
 // storage unchanged.
-export function FilterBar({ filters, onChange, counts, repos, authors }: Props) {
+export function FilterBar({ filters, onChange, counts, repos, authors, trailing }: Props) {
   const pendingFilters = useRef(filters);
   useEffect(() => { pendingFilters.current = filters; }, [filters]);
   const setFacet = (key: keyof Filters, value: Record<string, FilterMode>) => {
@@ -93,5 +95,5 @@ export function FilterBar({ filters, onChange, counts, repos, authors }: Props) 
   if (repos.length > 1) fb.push({ key: 'repos', kind: 'multi', label: 'Repos', icon: <UiFolderGit2 />, options: repoOpts, value: filters.repos, onChange: (v) => setFacet('repos', v) });
   if (authors.length > 1) fb.push({ key: 'authors', kind: 'multi', label: 'Authors', icon: <UiUser />, options: authorOpts, value: filters.authors, onChange: (v) => setFacet('authors', v) });
 
-  return <ClickyFilterBar overflowMode="wrap" filters={fb} />;
+  return <ClickyFilterBar overflowMode="wrap" filters={fb} trailing={trailing} />;
 }

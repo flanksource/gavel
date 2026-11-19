@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentSession } from '../../types';
 import {
+  DEFAULT_SESSION_FILTERS,
   attentionReasons,
   contextUsedPercent,
-  parentSessionIds,
   sessionFamilies,
   sessionState,
   visibleFamilies,
-  workStateSummary,
+  workStateBadge,
   type SessionFamily,
 } from './sessionView';
 
@@ -57,14 +57,26 @@ describe('visibleFamilies', () => {
     session('Busy subagent', { parentId: 'Quiet parent', lastActivityAt: ago(1), activityState: 'ask', project: 'gavel' }),
     session('Recent root', { lastActivityAt: ago(2), startedAt: ago(3), costUsd: 1, project: 'gavel', worktree: { path: '/w', branch: 'fix/pgproxy', base: 'main', primary: false } }),
   ]);
-  const unfiltered = { search: '', project: '', state: '', sort: 'activity-desc' } as const;
+  const unfiltered = DEFAULT_SESSION_FILTERS;
 
   it('orders families by the latest activity anywhere in them', () => {
     expect(outline(visibleFamilies(families, unfiltered))).toEqual([['Quiet parent', [['Busy subagent', []]]], ['Recent root', []]]);
   });
 
   it('keeps a matching subagent with its parent and drops non-matching siblings', () => {
-    expect(outline(visibleFamilies(families, { ...unfiltered, state: 'ask' }))).toEqual([['Quiet parent', [['Busy subagent', []]]]]);
+    expect(outline(visibleFamilies(families, { ...unfiltered, state: { ask: 'include' } }))).toEqual([['Quiet parent', [['Busy subagent', []]]]]);
+  });
+
+  it('drops excluded states and projects, keeping sessions with no project when a project is only excluded', () => {
+    expect({
+      excludeAsk: outline(visibleFamilies(families, { ...unfiltered, state: { ask: 'exclude' } })),
+      excludeGavel: outline(visibleFamilies(families, { ...unfiltered, project: { gavel: 'exclude' } })),
+      includeGavelExcludeAsk: outline(visibleFamilies(families, { ...unfiltered, project: { gavel: 'include' }, state: { ask: 'exclude' } })),
+    }).toEqual({
+      excludeAsk: [['Recent root', []], ['Quiet parent', []]],
+      excludeGavel: [['Quiet parent', []]],
+      includeGavelExcludeAsk: [['Recent root', []]],
+    });
   });
 
   it('matches search text against the branch as well as the title', () => {
@@ -74,10 +86,6 @@ describe('visibleFamilies', () => {
   it('sorts by start time and by cost', () => {
     expect(outline(visibleFamilies(families, { ...unfiltered, sort: 'started-desc' })).map(([title]) => title)).toEqual(['Recent root', 'Quiet parent']);
     expect(outline(visibleFamilies(families, { ...unfiltered, sort: 'cost-desc' })).map(([title]) => title)).toEqual(['Quiet parent', 'Recent root']);
-  });
-
-  it('lists every session with subagents for collapse-all', () => {
-    expect(parentSessionIds(families)).toEqual(['Quiet parent']);
   });
 });
 
@@ -105,6 +113,7 @@ describe('attentionReasons', () => {
     expect(attentionReasons(flagged)).toEqual([
       'Needs approval', 'Session failed', '1 conflicts', 'PR #12 checks failing', 'Uncommitted changes left behind',
     ]);
+    expect(attentionReasons(flagged, { work: false })).toEqual(['Needs approval', 'Session failed']);
   });
 
   it('does not flag a live session for its uncommitted work, nor a merged PR for old check failures', () => {
@@ -125,25 +134,41 @@ describe('contextUsedPercent', () => {
   });
 });
 
-describe('workStateSummary', () => {
+describe('workStateBadge', () => {
   const worktree = { path: '/w', branch: 'fix/pgproxy', base: 'main', primary: false };
+  const pr = { number: 12, url: '', state: 'open', checkStatus: 'none' as const };
   it.each([
     {
-      name: 'a dirty branch ahead of its base with an open PR',
-      overrides: { worktree, git: { changes: { ...CLEAN, unstaged: 1, untracked: 157 }, ahead: 2874, behind: 72, baseCheckedOut: true, worktreeLive: true }, pr: { number: 12, url: '', state: 'open', checkStatus: 'none' } },
-      expected: ['fix/pgproxy', '158 uncommitted', '2874 ahead', 'PR #12 open'],
+      name: 'conflicts before any other state',
+      overrides: { worktree, git: { changes: { ...CLEAN, conflict: 2, untracked: 5 }, ahead: 3, behind: 0, baseCheckedOut: true, worktreeLive: true } },
+      expected: { label: '2 conflicted', tone: 'warning' },
     },
     {
-      name: 'a clean branch level with its base and no PR',
+      name: 'uncommitted work before commits ahead',
+      overrides: { worktree, git: { changes: { ...CLEAN, unstaged: 1, untracked: 157 }, ahead: 2874, behind: 72, baseCheckedOut: true, worktreeLive: true }, pr },
+      expected: { label: '158 uncommitted', tone: 'warning' },
+    },
+    {
+      name: 'commits ahead on a clean branch',
+      overrides: { worktree, git: { changes: CLEAN, ahead: 4, behind: 0, baseCheckedOut: true, worktreeLive: true }, pr },
+      expected: { label: '4 ahead' },
+    },
+    {
+      name: 'the PR of a clean branch level with its base',
+      overrides: { worktree, git: { changes: CLEAN, ahead: 0, behind: 3, baseCheckedOut: true, worktreeLive: true }, pr },
+      expected: { label: 'PR #12' },
+    },
+    {
+      name: 'a clean branch with no PR',
       overrides: { worktree, git: { changes: CLEAN, ahead: 0, behind: 3, baseCheckedOut: true, worktreeLive: true } },
-      expected: ['fix/pgproxy', 'clean', 'nothing to merge', 'no PR'],
+      expected: { label: 'clean' },
     },
     {
-      name: 'a session with no worktree or git state',
+      name: 'a session with no git state',
       overrides: { cwd: '/repo' },
-      expected: ['/repo', 'no PR'],
+      expected: { label: 'no git' },
     },
-  ] satisfies { name: string; overrides: Partial<AgentSession>; expected: string[] }[])('summarises $name', ({ overrides, expected }) => {
-    expect(workStateSummary(session('s', overrides))).toEqual(expected);
+  ] satisfies { name: string; overrides: Partial<AgentSession>; expected: { label: string; tone?: 'warning' } }[])('shows $name', ({ overrides, expected }) => {
+    expect(workStateBadge(session('s', overrides))).toEqual(expected);
   });
 });

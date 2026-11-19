@@ -18,6 +18,18 @@ describe('mobile PR filters', () => {
     expect(within(screen.getByRole('dialog', { name: 'Filters' })).getByRole('combobox', { name: 'Age since update' })).toBeDefined();
   });
 
+  it('puts trailing content in the same row as the phone Filters button', () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
+      matches: query.includes('max-width'), media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(),
+      removeEventListener: vi.fn(), dispatchEvent: () => false,
+    }));
+    render(<FilterBar filters={emptyFilters()} onChange={vi.fn()} repos={[]} authors={[]} counts={{ open: 0, merged: 0, closed: 0, draft: 0, failing: 0, passing: 0, running: 0 }} trailing={<span>13 pull requests</span>} />);
+
+    const row = screen.getByRole('button', { name: 'Filters' }).closest('[data-slot="filter-bar"]');
+    expect(row?.textContent).toContain('13 pull requests');
+  });
+
   it('clears age and author selections together when applying the phone sheet', () => {
     vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
       matches: query.includes('max-width'), media: query, onchange: null,

@@ -1,4 +1,5 @@
 import type { AgentSession } from '../../types';
+import { passFacet, type FacetModes } from '../../utils';
 import { dirtyFileCount } from '../projectGitView';
 
 export type SessionState = 'working' | 'approval' | 'ask' | 'completed' | 'failed';
@@ -42,23 +43,28 @@ export function sessionDirtyCount(session: AgentSession): number {
   return session.git ? dirtyFileCount(session.git.changes) : 0;
 }
 
-/** The work state in a few short parts, for the collapsed panel on narrow screens. */
-export function workStateSummary(session: AgentSession): string[] {
-  const { worktree, git, pr } = session;
+/** The most pressing work-state fact, for the header badge that opens the panel on narrow screens. */
+export function workStateBadge(session: AgentSession): { label: string; tone?: 'warning' } {
+  const { git, pr } = session;
+  if (!git) return { label: 'no git' };
+  if (git.changes.conflict) return { label: `${git.changes.conflict} conflicted`, tone: 'warning' };
   const dirty = sessionDirtyCount(session);
-  return [
-    worktree ? worktree.branch || 'detached' : session.cwd || 'unknown directory',
-    ...(git ? [dirty > 0 ? `${dirty} uncommitted` : 'clean', git.ahead > 0 ? `${git.ahead} ahead` : 'nothing to merge'] : []),
-    pr ? `PR #${pr.number} ${pr.state}` : 'no PR',
-  ];
+  if (dirty > 0) return { label: `${dirty} uncommitted`, tone: 'warning' };
+  if (git.ahead > 0) return { label: `${git.ahead} ahead` };
+  return { label: pr ? `PR #${pr.number}` : 'clean' };
 }
 
-/** Why a session needs a person: input it waits on, or work it left in a bad state. */
-export function attentionReasons(session: AgentSession): string[] {
+/**
+ * Why a session needs a person: input it waits on, or work it left in a bad
+ * state. `work: false` leaves out the work-state reasons (conflicts, failing PR
+ * checks, abandoned changes) for a view that shows the work state itself.
+ */
+export function attentionReasons(session: AgentSession, { work = true }: { work?: boolean } = {}): string[] {
   const reasons: string[] = [];
   if (session.activityState === 'approval') reasons.push('Needs approval');
   if (session.activityState === 'ask') reasons.push('Asked a question');
   if (sessionFailed(session)) reasons.push('Session failed');
+  if (!work) return reasons;
   if (session.git?.changes.conflict) reasons.push(`${session.git.changes.conflict} conflicts`);
   if (session.pr?.checkStatus === 'failure' && session.pr.state !== 'merged') reasons.push(`PR #${session.pr.number} checks failing`);
   if (!session.processActive && sessionDirtyCount(session) > 0) reasons.push('Uncommitted changes left behind');
@@ -98,11 +104,6 @@ export function flattenFamilies(families: SessionFamily[]): AgentSession[] {
   return families.flatMap(family => [family.session, ...flattenFamilies(family.children)]);
 }
 
-/** Every session in the families that has subagents — what "collapse all" folds. */
-export function parentSessionIds(families: SessionFamily[]): string[] {
-  return families.flatMap(family => family.children.length ? [family.session.id, ...parentSessionIds(family.children)] : []);
-}
-
 /** The most recent activity anywhere in the family, as epoch ms. */
 export function latestActivity(family: SessionFamily): number {
   return Math.max(Date.parse(family.session.lastActivityAt), ...family.children.map(latestActivity));
@@ -114,16 +115,14 @@ function startedAt(session: AgentSession): number {
 
 export interface SessionFilters {
   search: string;
-  project: string;
-  state: SessionState | '';
+  /** Projects to include or exclude; absent projects are neutral. */
+  project: FacetModes;
+  /** States to include or exclude; absent states are neutral. */
+  state: FacetModes;
   sort: SessionSort;
 }
 
-export const DEFAULT_SESSION_FILTERS: SessionFilters = { search: '', project: '', state: '', sort: 'activity-desc' };
-
-export function hasNarrowingFilters({ search, project, state }: SessionFilters): boolean {
-  return Boolean(search.trim() || project || state);
-}
+export const DEFAULT_SESSION_FILTERS: SessionFilters = { search: '', project: {}, state: {}, sort: 'activity-desc' };
 
 function compareFamilies(sort: SessionSort): (a: SessionFamily, b: SessionFamily) => number {
   switch (sort) {
@@ -141,8 +140,8 @@ function compareFamilies(sort: SessionSort): (a: SessionFamily, b: SessionFamily
 export function visibleFamilies(families: SessionFamily[], filters: SessionFilters): SessionFamily[] {
   const query = filters.search.trim().toLowerCase();
   const matches = ({ session }: SessionFamily) =>
-    (!filters.project || session.project === filters.project)
-    && (!filters.state || sessionState(session) === filters.state)
+    passFacet(filters.project, session.project ? [session.project] : [])
+    && passFacet(filters.state, [sessionState(session)])
     && (!query || [session.title, session.project, session.worktree?.branch, session.todo?.title, session.model]
       .some(value => value?.toLowerCase().includes(query)));
   return families

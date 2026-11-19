@@ -45,10 +45,13 @@ export function checkSummaryText(cs: CheckSummary): string {
   return parts.join(' ');
 }
 
+// timeAgo is the 'X ago' phrase for prose and status readouts ('Synced 42s ago');
+// list rows use the single-token ageShort instead.
 export function timeAgo(iso: string): string {
-  const d = new Date(iso);
-  const s = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (s < 60) return 'just now';
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (!Number.isFinite(s)) return 'unknown';
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
@@ -65,20 +68,6 @@ export function ageShort(iso: string): string {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   if (s < 604800) return `${Math.floor(s / 86400)}d`;
   return `${Math.floor(s / 604800)}w`;
-}
-
-// timeAgoShort is timeAgo with second-level granularity for fresh timestamps
-// ('Xs ago'), used by the header status/sync readouts where the most recent
-// poll is only seconds old.
-export function timeAgoShort(iso: string): string {
-  const d = new Date(iso);
-  const s = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (!Number.isFinite(s)) return 'unknown';
-  if (s < 5) return 'just now';
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
 
 export interface RepoGroup {

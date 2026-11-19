@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
 import { Button, ListMenu } from '@flanksource/clicky-ui/components';
 import { UiAdd, UiCheck } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
@@ -8,6 +8,7 @@ import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoBucketGroup } from './todos/TodoBucketGroup';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
 import { isChildTodo, isWorkspaceShown } from './todos/todoFilter';
+import { useTodoListMode } from './todos/useTodoListMode';
 import { useChildCounts, useParentTitles, useTodoFamily } from './todos/useTodoFamily';
 import { resolveRange } from './todos/todoTimeRange';
 import { TodoDetail } from './todos/TodoDetail';
@@ -73,8 +74,8 @@ export function TodoNavbarLayoutPicker({ todos }: { todos: WorkspaceTodos }) {
 // TodoSidebarActions sits above the todo tree in the AppShell bodySidebar. It is
 // the shared TodoToolbar — the same row the menubar and mobile layouts render —
 // so there is one filter surface rather than a weaker duplicate per layout.
-export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
-  return <TodoToolbar todos={todos} />;
+export function TodoSidebarActions(props: ComponentProps<typeof TodoToolbar>) {
+  return <TodoToolbar {...props} />;
 }
 
 // TodoWorkspaceList is the AppShell bodySidebar: every configured workspace's
@@ -91,7 +92,8 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
   projectsLoaded: boolean;
   projectError?: string;
 }) {
-  const { workspaces, byDir, filters, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, loadingList, error, selection, tagsByDir } = todos;
+  const { workspaces, byDir, filters, setFilters, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, loadingList, error, selection, tagsByDir } = todos;
+  const { selecting, setSelecting, rowSelection, onFocusStatus } = useTodoListMode({ filters, setFilters, selection });
   // Resolve the activity range to absolute bounds so every group filters against
   // the same instant. Keyed on a minute-granularity clock rather than a raw
   // Date.now(): a relative range ("last 7 days") only needs minute accuracy, and
@@ -144,12 +146,13 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             data={byDir[ws.dir]}
             filters={filters}
             onToggleStatus={toggleStatus}
+            onFocusStatus={onFocusStatus}
             range={range}
             density={density}
             sortBy={sortBy}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
             onSelect={select}
-            selection={selection}
+            selection={rowSelection}
             tags={tagsByDir?.get(ws.dir)}
           />
         ))}
@@ -170,9 +173,10 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             selected={selected}
             onSelect={select}
             filters={filters}
+            onFocusStatus={onFocusStatus}
             range={range}
             density={density}
-            selection={selection}
+            selection={rowSelection}
             tagsByDir={tagsByDir}
           />
         ))}
@@ -182,7 +186,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <TodoSidebarActions todos={todos} />
+      <TodoSidebarActions todos={todos} selecting={selecting} onSelectingChange={setSelecting} />
       {error && (
         <div role="alert" className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           {error}

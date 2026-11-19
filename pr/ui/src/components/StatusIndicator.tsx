@@ -7,7 +7,7 @@ import { UiWarningTriangle, UiPause, UiPlay, UiSync, UiRefresh } from '@flanksou
 import type { HealthStatus, RateLimit, Severity } from '../types';
 import { fetchJSON, queryKeys } from '../query';
 import { useDocumentVisible } from '../useDocumentVisible';
-import { timeAgoShort } from '../utils';
+import { timeAgo } from '../utils';
 import { useNow } from '../useNow';
 import { Spinner } from '../icons/Spinner';
 import { RelativeTime } from './RelativeTime';
@@ -102,7 +102,7 @@ export function StatusIndicator({ onOpenChange, fetchedAt, nextFetchIn, paused, 
                 <ComponentLine label="Database" c={health.database} />
                 <ComponentLine label="GitHub" c={health.github} />
                 <div className="text-[11px] text-muted-foreground">
-                  Checked <RelativeTime iso={health.checkedAt} short />
+                  Checked <RelativeTime iso={health.checkedAt} />
                 </div>
               </div>
             ) : (
@@ -229,7 +229,7 @@ function SyncStatus({ fetchedAt, nextFetchIn, paused, error, networkBusy, health
   // Subscribe to the shared clock so 'Last synced' and the refresh countdown
   // stay live while this dropdown is open, without an App-level tick.
   useNow();
-  const ago = fetchedAt ? timeAgoShort(fetchedAt) : 'never';
+  const ago = fetchedAt ? timeAgo(fetchedAt) : 'never';
   const countdown = fetchedAt
     ? Math.max(0, nextFetchIn - Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 1000))
     : nextFetchIn;

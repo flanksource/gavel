@@ -1,6 +1,6 @@
 import type React from 'react';
-import { render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FilterBarFilter } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoListResponse } from '../../types';
 import { addCounts, emptyCounts } from './format';
@@ -25,7 +25,20 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   ListMenu: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   ListMenuHeader: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   ListMenuSection: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenu: ({ trigger, items }: { trigger?: React.ReactNode; items: { label: string; onSelect: () => void; disabled?: boolean }[] }) => (
+    <div>
+      {trigger}
+      {items.map(item => (
+        // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky DropdownMenu.
+        <button key={item.label} type="button" role="menuitem" disabled={item.disabled} onClick={item.onSelect}>{item.label}</button>
+      ))}
+    </div>
+  ),
 }));
+
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock('../../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
+afterEach(() => { viewport.mobile = false; });
 
 vi.mock('@flanksource/clicky-ui/icons', async (importOriginal) => {
   const Icon = (props: React.SVGProps<SVGSVGElement>) => <svg {...props} />;
@@ -199,10 +212,82 @@ describe('TodoToolbar', () => {
     expect((facet as { value: unknown }).value).toEqual({ '/repos/captain': 'include' });
   });
 
+  it('keeps the group and sort menus inline on desktop', () => {
+    renderToolbar([todo('a')]);
+    expect(captured.props.leading).toBeTruthy();
+    expect(renderToolbar([todo('a')]).filters.map(f => f.key)).not.toContain('groupBy');
+  });
+
   it('binds each facet to its own slice of the shared filter state', () => {
     const filters = { statuses: { failed: 'include' as const }, priorities: { high: 'exclude' as const }, external: {} , tags: {}, workspaces: {} };
     const built = renderToolbar([todo('a', { priority: 'high', status: 'failed' })], filters).filters;
     expect((built.find(f => f.key === 'status') as { value: unknown }).value).toEqual({ failed: 'include' });
     expect((built.find(f => f.key === 'priority') as { value: unknown }).value).toEqual({ high: 'exclude' });
+  });
+});
+
+type EnumFacet = { kind: string; value: string; placeholder?: string; options: { value: string; label?: string }[]; onChange: (v: string) => void };
+
+describe('TodoToolbar on a phone', () => {
+  function renderPhone(overrides: Partial<WorkspaceTodos> = {}, selecting = false) {
+    viewport.mobile = true;
+    captured.props = {};
+    const todos = { ...toolbarProps([[workspace, [todo('a')]]], defaultTodoFilters()), ...overrides } as WorkspaceTodos;
+    const onSelectingChange = vi.fn();
+    render(<TodoToolbar todos={todos} selecting={selecting} onSelectingChange={onSelectingChange} />);
+    const filters = (captured.props.filters ?? []) as FilterBarFilter[];
+    const facet = (key: string) => filters.find(f => f.key === key) as unknown as EnumFacet;
+    return { todos, filters, facet, onSelectingChange };
+  }
+
+  // The unlabelled Group and Sort dropdowns move into the Filters sheet, so the
+  // row is just Filters and the overflow menu.
+  it('folds the group and sort menus into the Filters sheet', () => {
+    const { filters } = renderPhone();
+    expect(captured.props.leading).toBeFalsy();
+    expect(filters.map(f => f.key)).toEqual(['status', 'priority', 'activity', 'groupBy', 'sortBy']);
+  });
+
+  it('offers grouping as a single choice that only counts as a filter once moved off the default', () => {
+    const { todos, facet } = renderPhone();
+    const group = facet('groupBy');
+    expect(group).toMatchObject({ kind: 'enum', value: '', placeholder: 'Workspace' });
+    expect(group.options.map(o => o.label)).toEqual(['Workspace', 'Severity', 'Age', 'None']);
+    group.onChange('severity');
+    expect(todos.setGroupBy).toHaveBeenLastCalledWith('severity');
+    group.onChange('');
+    expect(todos.setGroupBy).toHaveBeenLastCalledWith('workspace');
+  });
+
+  it('reflects a non-default grouping as the chosen value', () => {
+    expect(renderPhone({ groupBy: 'age' }).facet('groupBy').value).toBe('age');
+  });
+
+  it('offers sort column and direction as one choice', () => {
+    const { todos, facet } = renderPhone({ sortBy: { column: 'updated', dir: 'asc' } });
+    const sort = facet('sortBy');
+    expect(sort).toMatchObject({ kind: 'enum', value: 'updated:asc', placeholder: 'Priority, high first' });
+    expect(sort.options).toContainEqual({ value: 'created:desc', label: 'Created, newest first' });
+    sort.onChange('created:desc');
+    expect(todos.setSortBy).toHaveBeenLastCalledWith({ column: 'created', dir: 'desc' });
+    sort.onChange('');
+    expect(todos.setSortBy).toHaveBeenLastCalledWith({ column: 'priority', dir: 'desc' });
+  });
+
+  it('enters select mode and refreshes from the overflow menu', () => {
+    const { todos, onSelectingChange } = renderPhone();
+    render(<>{captured.props.trailing as React.ReactNode}</>);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Select todos' }));
+    expect(onSelectingChange).toHaveBeenCalledWith(true);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh todos' }));
+    expect(todos.refresh).toHaveBeenCalled();
+  });
+
+  it('takes over the row in select mode with a way back out before anything is checked', () => {
+    const { onSelectingChange } = renderPhone({}, true);
+    render(<>{captured.props.overlay as React.ReactNode}</>);
+    expect(screen.getByText('Tap todos to select')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSelectingChange).toHaveBeenCalledWith(false);
   });
 });

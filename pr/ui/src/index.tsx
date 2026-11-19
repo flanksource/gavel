@@ -9,6 +9,7 @@ import { ClerkProvider } from "@clerk/react";
 import { App } from "./App";
 import { type AuthConfig, loadAuthConfig } from "./authConfig";
 import { AuthGate } from "./components/AuthGate";
+import { PRDialogProvider } from "./components/PRDialogProvider";
 import { GitHubSetupPage } from "./components/GitHubConnect";
 import { setAuthMode } from "./query";
 import { ChatLayer, chatLayerEnabled } from "./components/ChatLayer";
@@ -61,10 +62,10 @@ function render(auth: AuthConfig) {
                   {window.location.pathname === "/github/setup" ? <GitHubSetupPage /> : <App />}
                 </AuthGate>
               ) : (
-                <>
+                <PRDialogProvider scope="local">
                   <App />
                   {chatLayerEnabled(window.location.pathname) && <ChatLayer />}
-                </>
+                </PRDialogProvider>
               )}
             </ChatWindowManagerProvider>
           </ToastProvider>

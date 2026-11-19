@@ -119,11 +119,13 @@ vi.mock('./components/StatusIndicator', () => ({ StatusIndicator: () => null }))
 vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
   ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
   // Keep the shell slots under test while leaving layout to the browser checks.
-  AppShell: ({ brand, navSections, mobileActions, toolbar, bodySidebar, bodyPane, onBodyBack, bodyBackLabel }: {
+  AppShell: ({ brand, navSections, mobileActions, toolbar, bodyHeader, bodyActions, bodySidebar, bodyPane, onBodyBack, bodyBackLabel }: {
     brand?: ReactNode;
     navSections?: { items: { key: string; label: string; to: string; active?: boolean }[] }[];
     mobileActions?: ReactNode;
     toolbar?: ReactNode;
+    bodyHeader?: ReactNode;
+    bodyActions?: ReactNode;
     bodySidebar?: ReactNode;
     bodyPane?: 'sidebar' | 'main';
     onBodyBack?: () => void;
@@ -138,7 +140,9 @@ vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
         ))}
       </nav>
       {mobileActions}
-      {toolbar}
+      <div data-testid="toolbar">{toolbar}</div>
+      {bodyHeader}
+      {bodyActions}
       {bodyPane === 'sidebar' && navSections.some(section => section.items.some(item => item.key === 'prs' && item.active)) && bodySidebar}
     </div>
   ) : null,
@@ -322,6 +326,26 @@ describe('mobile shell', () => {
     expect(refreshMock).toHaveBeenCalledTimes(1);
     expect(window.location.pathname).toBe('/prs');
     expect(new URLSearchParams(window.location.search).get('project')).toBe('gavel');
+  });
+
+  it('puts the PR count beside Filters in one toolbar row and the exports under More actions', () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
+      matches: query.includes('max-width'), media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(),
+      removeEventListener: vi.fn(), dispatchEvent: () => false,
+    }));
+    window.history.replaceState({}, '', '/prs?project=gavel');
+    renderApp();
+
+    const exports =['Download current view as JSON', 'Download current view as Markdown', 'Copy Markdown export for agent'];
+    const filterRow = screen.getByRole('button', { name: 'Filters' }).closest('[data-slot="filter-bar"]');
+    expect(filterRow?.textContent).toContain('0 pull requests');
+    expect(screen.getAllByText('0 pull requests')).toHaveLength(1);
+    expect(exports.filter(title => screen.queryByTitle(title))).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+
+    expect(exports.filter(title => within(screen.getByTestId('toolbar')).queryByTitle(title))).toEqual(exports);
   });
 
   it.each(['/sessions', '/prs/acme/gavel/7'])('leaves %s outside the pull-to-refresh region', path => {

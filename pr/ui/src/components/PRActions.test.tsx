@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PRActions, type ExtraAction } from './PRActions';
+import { prActionForms } from './PRActionDialog';
+import { ModalProvider } from '@flanksource/clicky-ui/components';
 import { queryKeys } from '../query';
 import type { PRDetail, PRItem } from '../types';
 import { UiAdd, type IconProps } from '@flanksource/clicky-ui/icons';
@@ -13,11 +15,14 @@ import { UiAdd, type IconProps } from '@flanksource/clicky-ui/icons';
 // closed DropdownMenu renders only its trigger — mirror that so hidden menu items
 // stay out of the DOM.
 vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => {
-  const { Button, SegmentedControl, Switch } = await importOriginal<typeof import('@flanksource/clicky-ui/components')>();
+  const { Button, SegmentedControl, Switch, ModalProvider, useModal, zIndex } = await importOriginal<typeof import('@flanksource/clicky-ui/components')>();
   return {
   Button,
   SegmentedControl,
   Switch,
+  ModalProvider,
+  useModal,
+  zIndex,
   SplitButton: ({ label, onClick, title, disabled, items }: { label: ReactNode; onClick?: () => void; title?: string; disabled?: boolean; items?: Array<{ label: ReactNode; onSelect?: () => void }> }) => (
     <div><Button onClick={onClick} title={title} disabled={disabled}>{label}</Button>
       {/* react-doctor-disable-next-line react-doctor/no-array-index-as-key -- test stub renders a fixed menu list */}
@@ -25,9 +30,9 @@ vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => {
     </div>
   ),
   DropdownMenu: ({ trigger }: { trigger: ReactNode }) => <div>{trigger}</div>,
-  Modal: ({ children, footer, title }: { children: ReactNode; footer: ReactNode; title: string }) => (
+  Modal: ({ children, footer, title, error, minimized }: { children: ReactNode; footer: ReactNode; title: string; error?: ReactNode; minimized?: boolean }) => !minimized && (
     // oxlint-disable-next-line clicky-ui/no-adhoc-overlay -- this IS the stub standing in for clicky's Modal.
-    <div role="dialog" aria-label={title}>{children}{footer}</div>
+    <div role="dialog" aria-label={title}>{children}{error && <div role="alert">{error}</div>}{footer}</div>
   ),
   };
 });
@@ -75,17 +80,14 @@ const detail = { pr: { nodeId: 'PR_node_7', state: 'OPEN' } } as PRDetail;
 
 function renderActions(props: Partial<React.ComponentProps<typeof PRActions>> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return {
-    client,
-    ...render(
-      <QueryClientProvider client={client}>
-        <PRActions pr={makePR()} detail={detail} {...props} />
-      </QueryClientProvider>,
-    ),
-  };
+  const tree = (child: ReactNode) => <QueryClientProvider client={client}>
+    <ModalProvider scope="gavel:pr-actions-test" forms={prActionForms}>{child}</ModalProvider>
+  </QueryClientProvider>;
+  return { client, tree, ...render(tree(<PRActions pr={makePR()} detail={detail} {...props} />)) };
 }
 
 afterEach(() => {
+  window.sessionStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -94,7 +96,7 @@ describe('PRActions responsive collapse', () => {
   it('disables mutations while the parent TODO run is active, including an open confirmation', () => {
     const view = renderActions();
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
-    view.rerender(<QueryClientProvider client={view.client}><PRActions pr={makePR()} detail={detail} disabled /></QueryClientProvider>);
+    view.rerender(view.tree(<PRActions pr={makePR()} detail={detail} disabled />));
     expect(screen.getAllByRole('button', { name: 'Merge' }).every(button => (button as HTMLButtonElement).disabled)).toBe(true);
     expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -211,6 +213,23 @@ describe('PRActions responsive collapse', () => {
     expect(await screen.findByText('Merge pull request: branch protection denied the merge')).toBeTruthy();
     expect(screen.getByRole('dialog', { name: 'Merge pull request' })).toBeTruthy();
     expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('reopens the chosen merge settings after leaving the PR while the request is pending', async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+    const view = renderActions();
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Squash/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Merge' }).at(-1)!);
+    expect(screen.getByRole('status').textContent).toContain('Submitting');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    view.rerender(view.tree(<h1>Activity</h1>));
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    await act(async () => finish(new Response(JSON.stringify({ error: 'Head changed' }), { status: 409 })));
+    expect(screen.getByRole('heading', { name: 'Activity' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Merge pull request' }).textContent).toContain('Head changed');
+    expect(screen.getByRole('radio', { name: /Squash/, checked: true })).toBeTruthy();
   });
 });
 

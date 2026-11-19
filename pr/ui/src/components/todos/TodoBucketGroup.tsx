@@ -1,9 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Button, ListMenuHeader, ListMenuItems, ListMenuSection } from '@flanksource/clicky-ui/components';
-import type { TodoDensity } from '../../types';
+import type { TodoDensity, TodoStatus } from '../../types';
 import { UiChevronDown, UiChevronRight } from '@flanksource/clicky-ui/icons';
 import { MetaDueDate, SeverityHigh, SeverityLow, SeverityMedium } from '../../icons/issues';
-import { countsFromItems, TodoCountsBar, TodoRow, type TodoRowTarget } from './format';
+import { countsFromItems, TodoActionCounts, TodoCountsBar, TodoRow, type TodoRowTarget } from './format';
 import type { TagIndex } from './tagResolve';
 import { defaultTodoFilters, isEntryVisible, type TodoFilters } from './todoFilter';
 import { GroupSelectAll } from './TodoGroupSelectAll';
@@ -28,7 +28,9 @@ function BucketIcon({ bucket }: { bucket: TodoBucket }) {
 // owning workspace and there is no batch-run control (a run targets a single
 // workspace directory). The Closed/Status filter hides matching rows but
 // leaves the header counts whole, mirroring the workspace grouping.
-export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, density = 'comfortable', selection, tagsByDir }: {
+// On a phone (`onFocusStatus` set) the header counts only what needs action,
+// exactly as WorkspaceTodoGroup's does.
+export function TodoBucketGroup({ bucket, selected, onSelect, filters, onFocusStatus, range, density = 'comfortable', selection, tagsByDir }: {
   bucket: TodoBucket;
   selected: SelectedTodo | null;
   // The row's identity, not the entry: a bucket row already carries its own
@@ -36,6 +38,7 @@ export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, de
   // instead of minting a closure per row.
   onSelect: (target: TodoRowTarget) => void;
   filters?: TodoFilters;
+  onFocusStatus?: (status: TodoStatus) => void;
   range?: ResolvedRange | null;
   density?: TodoDensity;
   selection?: TodoSelection;
@@ -82,7 +85,11 @@ export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, de
           <BucketIcon bucket={bucket} />
           <span className={`min-w-0 flex-1 truncate text-sm font-semibold ${bucket.tone}`}>{bucket.label}</span>
         </Button>
-        <TodoCountsBar counts={counts} />
+        {onFocusStatus ? (
+          <TodoActionCounts counts={counts} statusFilter={active.statuses} onFocus={onFocusStatus} />
+        ) : (
+          <TodoCountsBar counts={counts} />
+        )}
       </ListMenuHeader>
       {open && <ListMenuItems items={visible} getItemKey={entry => `${entry.workspace.dir}\t${entry.todo.ref}`}>{entry => (
         <TodoRow
@@ -96,6 +103,7 @@ export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, de
           selected={selection?.isSelected({ dir: entry.workspace.dir, ref: entry.todo.ref })}
           onToggleSelect={handleToggleSelect}
           tags={tagsByDir?.get(entry.workspace.dir)}
+          mobile={Boolean(onFocusStatus)}
         />
       )}</ListMenuItems>}
       {open && visible.length === 0 && (

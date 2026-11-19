@@ -32,8 +32,8 @@ export interface RunAfterCreationState {
 /** Owns the "run after creation" choice for a create form: the steps the server
  *  offers for `status`, refetched when the status changes, and the last choice
  *  remembered across forms. */
-export function useRunAfterCreation({ dir, status, enabled = true }: { dir: string; status: string; enabled?: boolean }): RunAfterCreationState {
-  const [chosen, setChosen] = useState(readCreateStepChoice);
+export function useRunAfterCreation({ dir, status, enabled = true, initialStep }: { dir: string; status: string; enabled?: boolean; initialStep?: string }): RunAfterCreationState {
+  const [chosen, setChosen] = useState(() => initialStep ?? readCreateStepChoice());
   const query = useNewTodoSteps({ dir, status, enabled });
   const steps = query.data ?? [];
   const step = steps.some(step => step.name === chosen) ? chosen : NONE;

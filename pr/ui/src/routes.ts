@@ -8,7 +8,7 @@ export type ExportFormat = 'json' | 'md';
 
 // Tab is the top-level view, encoded as the first path segment. PRs, projects,
 // todos, sessions, tasks, prompts and sandbox runs carry their selection in the path;
-// filters only apply to PRs.
+// PR facets and the task time range are encoded in the query.
 export type Tab = 'prs' | 'projects' | 'processes' | 'todos' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs';
 
 const SPA_TABS: readonly Tab[] = ['projects', 'processes', 'todos', 'sessions', 'activity', 'tasks', 'prompts', 'runs'];
@@ -31,6 +31,7 @@ export interface RouteState {
   // segments, because a todo ref may itself contain "/". Unset fields mean the
   // pane's defaults (and are left out of the URL).
   todoView: TodoDetailView;
+  taskTimeRange?: { from: string; to: string } | undefined;
   filters: Filters;
 }
 
@@ -65,7 +66,7 @@ function splitCSV(value: string | null): string[] {
 
 // Tri-state facets are encoded in the URL as a CSV where excluded keys carry a
 // leading "-" (e.g. repos=foo,-bar means include foo, exclude bar).
-function parseFacet(value: string | null): Record<string, FilterMode> {
+export function parseFacet(value: string | null): Record<string, FilterMode> {
   const out: Record<string, FilterMode> = {};
   for (const raw of splitCSV(value)) {
     if (raw.startsWith('-')) out[raw.slice(1)] = 'exclude';
@@ -74,7 +75,7 @@ function parseFacet(value: string | null): Record<string, FilterMode> {
   return out;
 }
 
-function buildFacet(modes: Record<string, FilterMode>): string {
+export function buildFacet(modes: Record<string, FilterMode>): string {
   return Object.entries(modes)
     .map(([k, m]) => (m === 'exclude' ? `-${k}` : k))
     .join(',');
@@ -106,6 +107,9 @@ export function parseRoute(location: Location): RouteState {
     projectResults: tab === 'projects' && params.get('results') === 'true',
     projectRef: tab === 'projects' && !projectRunId && selectedPath && isProjectRefParam(params.get('ref') ?? '') ? params.get('ref') ?? '' : '',
     todoView: tab === 'todos' && selectedPath ? parseTodoView(params) : {},
+    ...(tab === 'tasks' && (params.has('from') || params.has('to'))
+      ? { taskTimeRange: { from: params.get('from') ?? '', to: params.get('to') ?? '' } }
+      : {}),
     filters: {
       state: parseFacet(params.get('state')),
       checks: parseFacet(params.get('checks')),
@@ -143,6 +147,10 @@ export function buildRoute(state: RouteState): string {
     if (!state.projectRunId && state.projectRef) params.set('ref', state.projectRef);
   } else if (state.tab === 'todos' && state.selectedPath) {
     setTodoViewParams(params, state.todoView);
+  } else if (state.tab === 'tasks' && state.taskTimeRange) {
+    const { from, to } = state.taskTimeRange;
+    if (from || !to) params.set('from', from);
+    if (to) params.set('to', to);
   }
 
   const query = params.toString();

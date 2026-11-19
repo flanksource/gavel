@@ -1,8 +1,8 @@
 import type React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionStats, TodoItem } from '../../types';
-import { TodoRow, todoQuery } from './format';
+import { TodoActionCounts, TodoCountsBar, TodoRow, emptyCounts, todoQuery } from './format';
 
 const useSessionStats = vi.hoisted(() => vi.fn(() => ({ stats: null as SessionStats | null, elapsedMs: 0, error: '' })));
 
@@ -21,7 +21,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     </button>
   ),
   ListMenuItem: ({ children, active: _active, selected: _selected, ...props }: { children?: React.ReactNode; active?: boolean; selected?: boolean }) => (
-    <div {...props}>{children}</div>
+    <div data-testid="todo-row" {...props}>{children}</div>
   ),
 }));
 
@@ -186,5 +186,96 @@ describe('TodoRow session badge', () => {
 
     expect(useSessionStats).not.toHaveBeenCalled();
     expect(screen.getByTitle('draft')).toBeTruthy();
+  });
+});
+
+const DAY_MS = 86_400_000;
+const daysAgo = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString();
+
+describe('TodoRow on a phone', () => {
+  const settledRun = {
+    found: true, inProgress: false, state: 'completed' as const, durationMs: RUN_MS, costUsd: RUN_COST, updatedAt: new Date().toISOString(),
+  };
+
+  it('leads the title line with the status icon and moves the run duration and cost to the meta line', () => {
+    render(
+      <TodoRow
+        todo={{ ...baseTodo, status: 'review', sessionId: SESSION_ID, sessionSummary: settledRun }}
+        active={false}
+        onSelect={() => {}}
+        dir="/work/repo"
+        mobile
+      />,
+    );
+
+    const titleLine = screen.getByText('Ship the feature').parentElement!;
+    expect(titleLine.firstElementChild?.getAttribute('aria-label')).toBe('review');
+    expect(titleLine.textContent).not.toContain('5m 15s');
+    expect(screen.queryByTitle('Done · agent session')).toBeNull();
+    const run = screen.getByTitle('Agent run: 5m 15s, $1.54');
+    expect(run.textContent).toBe('5m 15s$1.54');
+    expect(titleLine.contains(run)).toBe(false);
+  });
+
+  it('shows one compact last-activity age and keeps the created age in its tooltip', () => {
+    render(
+      <TodoRow
+        todo={{ ...baseTodo, created: daysAgo(10), lastRun: daysAgo(3) }}
+        active={false}
+        onSelect={() => {}}
+        mobile
+      />,
+    );
+
+    const age = screen.getByText('3d');
+    expect(age.closest('[title]')?.getAttribute('title')).toMatch(/^Updated .+\nCreated .+$/);
+    expect(screen.queryByText(/ago/)).toBeNull();
+    expect(screen.queryByText('1w')).toBeNull();
+  });
+
+  it('drops the severity edge so the status icon is the row\'s one indicator', () => {
+    render(<TodoRow todo={{ ...baseTodo, priority: 'high' }} active={false} onSelect={() => {}} mobile />);
+    expect((screen.getByTestId('todo-row') as HTMLElement).style.borderLeftColor).toBe('');
+  });
+
+  it('keeps the severity edge on desktop', () => {
+    render(<TodoRow todo={{ ...baseTodo, priority: 'high' }} active={false} onSelect={() => {}} />);
+    expect((screen.getByTestId('todo-row') as HTMLElement).style.borderLeftColor).not.toBe('');
+  });
+});
+
+describe('TodoCountsBar', () => {
+  it('names the status behind every count for assistive tech', () => {
+    render(<TodoCountsBar counts={{ ...emptyCounts, total: 9, open: 9, failed: 7, ask: 2 }} />);
+    expect(screen.getByLabelText('7 failed')).toBeTruthy();
+    expect(screen.getByLabelText('2 ask')).toBeTruthy();
+    expect(screen.getByLabelText('9 open todos')).toBeTruthy();
+  });
+});
+
+describe('TodoActionCounts', () => {
+  const counts = { ...emptyCounts, total: 148, open: 148, draft: 17, failed: 7, ask: 2, review: 1, verified: 40, completed: 51 };
+
+  it('shows only the statuses that need action, each named for assistive tech', () => {
+    render(<TodoActionCounts counts={counts} statusFilter={{}} onFocus={() => {}} />);
+    expect(screen.getAllByRole('button').map(b => b.getAttribute('aria-label'))).toEqual([
+      '7 failed', '2 need input', '1 needs review',
+    ]);
+    expect(screen.queryByText('148')).toBeNull();
+    expect(screen.queryByText('17')).toBeNull();
+  });
+
+  it('omits an actionable status with no todos', () => {
+    render(<TodoActionCounts counts={{ ...counts, ask: 0 }} statusFilter={{}} onFocus={() => {}} />);
+    expect(screen.getAllByRole('button').map(b => b.getAttribute('aria-label'))).toEqual(['7 failed', '1 needs review']);
+  });
+
+  it('applies the tapped status as the list filter and marks the chip whose filter is applied', () => {
+    const onFocus = vi.fn();
+    render(<TodoActionCounts counts={counts} statusFilter={{ failed: 'include' }} onFocus={onFocus} />);
+    fireEvent.click(screen.getByLabelText('2 need input'));
+    expect(onFocus).toHaveBeenCalledWith('ask');
+    expect(screen.getByLabelText('7 failed').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByLabelText('2 need input').getAttribute('aria-pressed')).toBe('false');
   });
 });

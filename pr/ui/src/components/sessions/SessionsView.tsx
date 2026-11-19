@@ -52,9 +52,10 @@ export function SessionsSidebar({ query, selectedId, scopeProject, onSelect }: {
 export function SessionsDetailPane({ query, selectedId, ...actions }: {
   query: SessionsQueryView;
   selectedId: string;
-} & Omit<SessionDetailProps, 'session'>) {
-  const session = query.data?.sessions.find(candidate => candidate.id === selectedId);
-  if (session) return <SessionDetail key={session.id} session={session} {...actions} />;
+} & Omit<SessionDetailProps, 'session' | 'sessions'>) {
+  const sessions = query.data?.sessions ?? [];
+  const session = sessions.find(candidate => candidate.id === selectedId);
+  if (session) return <SessionDetail key={session.id} session={session} sessions={sessions} {...actions} />;
   if (selectedId) {
     return <SessionInspector key={selectedId} src={captainSessionUrl(selectedId)} className="h-full min-h-0" />;
   }

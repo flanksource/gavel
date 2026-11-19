@@ -1,10 +1,13 @@
 import type React from 'react';
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useState } from 'react';
 import { fireEvent, render as rtlRender, screen, waitFor, type RenderOptions } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PRDetail, PRItem, Project } from '../../types';
-import { CreateTodoFromPRDialog } from './CreateTodoFromPRDialog';
-import { queryTestWrapper } from './queryTestWrapper';
+import { CreateTodoFromPRDialog as PRTodoForm } from './CreateTodoFromPRDialog';
+import { queryTestWrapper, queryToastTestWrapper } from './queryTestWrapper';
+import { Button, ModalProvider, useModal } from '@flanksource/clicky-ui/components';
+import { prTodoForms } from './HostedPRTodoDialog';
+import { newPRTodoFormKey } from './prTodoDraft';
 import { CREATE_RUNTIME, CREATE_RUNTIME_CONTEXT } from './createRuntimeTestHelpers';
 
 const viewport = vi.hoisted(() => ({ mobile: false }));
@@ -20,6 +23,23 @@ function render(ui: React.ReactElement, options?: RenderOptions) {
   return rtlRender(ui, { wrapper: queryTestWrapper(), ...options });
 }
 
+function CreateTodoFromPRDialog({ open, onClose, onCreated, ...props }: Omit<React.ComponentProps<typeof PRTodoForm>, 'hosted' | 'onResult'> & {
+  open: boolean;
+  onClose: () => void;
+  onCreated?: () => void;
+}) {
+  const [error, setError] = useState<string>();
+  return <PRTodoForm {...props} hosted={{
+    initialDraft: {},
+    modalProps: { open, onClose, title: 'New todo from PR', error },
+    submit: async ({ request, onSuccess }) => {
+      const result = await request();
+      if (result.status === 'success') await onSuccess?.(result.value);
+      else setError(result.error);
+    },
+  }} onResult={() => onCreated?.()} />;
+}
+
 interface Selection {
   isSelected: (key: string) => boolean;
   toggle: (key: string) => void;
@@ -27,7 +47,8 @@ interface Selection {
 
 const SelectionContext = createContext<Selection | null>(null);
 
-vi.mock('@flanksource/clicky-ui/components', () => ({
+vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
+  ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
   // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky Button itself.
   Button: ({ children, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => <button {...props}>{children}</button>,
   Combobox: ({
@@ -69,7 +90,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
       </div>
     );
   },
-  Modal: ({ open, title, children, footer }: { open: boolean; title: string; children: React.ReactNode; footer?: React.ReactNode }) => open ? <section aria-label={title}>{children}{footer}</section> : null,
+  Modal: ({ open, minimized, title, children, footer, error }: { open: boolean; minimized?: boolean; title: string; children: React.ReactNode; footer?: React.ReactNode; error?: React.ReactNode }) => open && !minimized ? <section aria-label={title}>{children}{error && <div role="alert">{error}</div>}{footer}</section> : null,
   // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky Select itself.
   Select: (props: React.SelectHTMLAttributes<HTMLSelectElement>) => <select {...props} />,
   SplitPane: ({ left, right }: { left: React.ReactNode; right: React.ReactNode }) => <div>{left}{right}</div>,
@@ -114,6 +135,7 @@ vi.mock('./newTodoSteps', () => ({
 
 afterEach(() => {
   viewport.mobile = false;
+  window.sessionStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -205,17 +227,45 @@ function createdResponse() {
 }
 
 describe('CreateTodoFromPRDialog', () => {
+  it('recovers the submitted PR todo draft after reload without creating another todo', async () => {
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal('fetch', fetchMock);
+    const modal = <HostedTestDialog />;
+    const first = render(modal, { wrapper: queryToastTestWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: 'New todo' }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Repair the failing check' } });
+    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Keep the public API stable.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+    expect(screen.getByRole('status').textContent).toContain('Submitting');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    first.unmount();
+    render(modal, { wrapper: queryToastTestWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore draft' }));
+    expect(screen.getByLabelText<HTMLInputElement>('Title').value).toBe('Repair the failing check');
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Notes').value).toBe('Keep the public API stable.');
+    expect(screen.getByText(/Submission outcome unknown/)).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('offers recovery for the saved PR todo without another create', async () => {
-    const onCreated = vi.fn();
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ todo: { ref: 'saved-pr', title: 'Repair parser' }, run: { status: 'failed', error: 'Admission unavailable' } }) }));
     vi.stubGlobal('fetch', fetchMock);
-    render(<CreateTodoFromPRDialog open onClose={vi.fn()} pr={pr} detail={detail} workspaces={workspaces} onCreated={onCreated} />);
+    render(<HostedTestDialog />, { wrapper: queryToastTestWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: 'New todo' }));
     fireEvent.change(screen.getByLabelText('Run after creation'), { target: { value: 'triage.new' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
     expect(await screen.findByRole('button', { name: 'Retry triage.new' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Create another' })).toBeNull();
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(onCreated).toHaveBeenCalledOnce();
+  });
+
+  it('reports a successful creation with a link without reopening the form', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => createdResponse()));
+    render(<HostedTestDialog />, { wrapper: queryToastTestWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: 'New todo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
+    expect((await screen.findByRole('link', { name: 'Open todo' })).getAttribute('href')).toBe('/todos/todo/123');
+    expect(screen.queryByLabelText('Title')).toBeNull();
   });
   it('defaults run after creation to None and posts the chosen step instead of a triage flag', async () => {
     const fetchMock = vi.fn(async () => createdResponse());
@@ -316,7 +366,6 @@ describe('CreateTodoFromPRDialog', () => {
     expect(payload.body).toContain('expected record to persist');
     expect(payload.body).not.toContain('golangci-lint');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Create another' }));
     expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe('/work/widget');
     expect(screen.getByRole('option', { name: 'widget' })).toBeTruthy();
   });
@@ -451,7 +500,6 @@ describe('CreateTodoFromPRDialog', () => {
       actions: ['*'],
     });
     expect(onCreated).toHaveBeenCalledTimes(1);
-    expect((await screen.findByRole('link', { name: 'Open todo' })).getAttribute('href')).toBe('/todos/todo/123');
   });
 
   it('uses the same deselected candidates for the body and criteria', async () => {
@@ -532,3 +580,12 @@ describe('CreateTodoFromPRDialog', () => {
     expect(screen.getAllByRole('checkbox')).toHaveLength(signals);
   });
 });
+
+function HostedTestDialog() {
+  return <ModalProvider scope="gavel:pr-todo-test" forms={prTodoForms}><LaunchPRTodo /></ModalProvider>;
+}
+
+function LaunchPRTodo() {
+  const { openModal } = useModal();
+  return <Button type="button" onClick={() => openModal(newPRTodoFormKey, { pr, detail, workspaces })}>New todo</Button>;
+}

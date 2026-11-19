@@ -139,6 +139,17 @@ describe('prompt routes', () => {
 });
 
 describe('task routes', () => {
+  it.each([
+    ['/tasks/run-123?from=now-7d&to=now', { from: 'now-7d', to: 'now' }],
+    ['/tasks?from=', { from: '', to: '' }],
+    ['/tasks?to=2026-11-18T12%3A00%3A00Z', { from: '', to: '2026-11-18T12:00:00Z' }],
+  ])('round-trips the time range on %s', (url, range) => {
+    const parsed = parseRoute(new URL(`http://localhost:9092${url}`) as unknown as Location);
+
+    expect(parsed.taskTimeRange).toEqual(range);
+    expect(buildRoute(parsed)).toBe(url);
+  });
+
   it('round-trips a selected task generation', () => {
     const location = new URL('http://localhost:9092/tasks/run-123');
 

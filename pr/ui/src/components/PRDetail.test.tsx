@@ -8,11 +8,10 @@ import type { GavelResultsSummary, PRItem } from '../types';
 // clicky-ui's SplitButton / DropdownMenu pull @floating-ui/react, which resolves
 // a duplicate React 18 under vitest and crashes on render (see PRActions.test.tsx).
 // Stub the components so the test exercises PRDetailPanel's own close-button
-// wiring, not clicky internals. useListMenuSelection is called unconditionally
-// by CreateTodoFromPRDialog (which PRDetailPanel always mounts, closed) before
-// its own `if (!open) return null` — its return value is unused while closed,
-// so the stub only needs to avoid throwing.
+// wiring, not clicky internals.
+const openModal = vi.hoisted(() => vi.fn());
 vi.mock('@flanksource/clicky-ui/components', () => ({
+  useModal: () => ({ openModal }),
   Button: ({ children, onClick, title, disabled, ...rest }: any) => (
     <button onClick={onClick} title={title} disabled={disabled} aria-label={rest['aria-label']}>{children}</button>
   ),
@@ -169,17 +168,71 @@ describe('Gavel Results section', () => {
       />,
     );
 
-    // The failing leaf appears in the tree row and again in the detail panel
-    // that carries its message — both come from clicky-ui's test runner, with
-    // the first failure already selected.
+    // The failing test opens as a clicky-ui test runner list row carrying its
+    // message, and the violation as a `gavel lint`-style line under its linter and file.
     expect(screen.getAllByText('saves records').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/expected record to persist/).length).toBeGreaterThan(0);
-    // The lint tree groups linter → rule → file exactly as the results page does.
-    expect(screen.getAllByText('golangci-lint').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('errcheck').length).toBeGreaterThan(0);
+    const file = document.querySelector('[data-lint-list-linter="golangci-lint"] [data-lint-list-file="pkg/store/save.go"]');
+    expect(file?.querySelector('[data-lint-line]')?.textContent).toBe(':23 return value is not checked (errcheck)');
     // Counts stay exact even though the payload carries only a sample.
     expect(screen.getByText('showing 1 of 2')).toBeTruthy();
     expect(screen.getByText('showing 1 of 3')).toBeTruthy();
+  });
+
+  it('previews the first five failures across all shards in the overview, linking the rest to the merged results', () => {
+    const failing = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ name: `${prefix}${i + 1}`, failed: true, message: `${prefix} ${i + 1} broke` }));
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [
+            makeGavelShard({ artifactId: 1, stickyId: 'gavel-pg15', testsTotal: 3, testsFailed: 3, failures: failing('Pg15Case', 3) }),
+            makeGavelShard({ artifactId: 2, stickyId: 'gavel-pg16', testsTotal: 4, testsFailed: 4, failures: failing('Pg16Case', 4) }),
+          ],
+        }}
+        loading={false}
+      />,
+    );
+
+    const rows = Array.from(document.querySelectorAll('[data-test-list-row]')).map(row => row.querySelector('[title]')?.getAttribute('title'));
+    const showAll = new URL(screen.getByRole('link', { name: /Show all 7/ }).getAttribute('href')!, 'http://dashboard');
+    expect({
+      rows,
+      path: showAll.pathname,
+      filter: showAll.searchParams.get('filter'),
+      shards: showAll.searchParams.getAll('shard'),
+    }).toEqual({
+      rows: ['Pg15Case1', 'Pg15Case2', 'Pg15Case3', 'Pg16Case1', 'Pg16Case2'],
+      path: `/results/${makePR().repo}/1,2/tests`,
+      filter: 'failed',
+      shards: ['1:gavel-pg15', '2:gavel-pg16'],
+    });
+  });
+
+  it('previews the first five failures as a list and links the rest to the full results view', () => {
+    const failures = Array.from({ length: 7 }, (_, i) => ({ name: `TestCase${i + 1}`, failed: true, message: `case ${i + 1} broke` }));
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard({ artifactId: 4242, testsTotal: 9, testsPassed: 2, testsFailed: 7, failures })] }}
+        loading={false}
+      />,
+    );
+
+    const rows = Array.from(document.querySelectorAll('[data-test-list-row]')).map(row => row.querySelector('[title]')?.getAttribute('title'));
+    const showAll = screen.getByRole('link', { name: /Show all 7/ });
+    expect({
+      rows,
+      showing: screen.getByText('showing 5 of 7') !== null,
+      href: new URL(showAll.getAttribute('href')!, 'http://dashboard').pathname + new URL(showAll.getAttribute('href')!, 'http://dashboard').searchParams.get('filter'),
+      viewToggle: screen.getByRole('radiogroup', { name: 'View' }) !== null,
+    }).toEqual({
+      rows: ['TestCase1', 'TestCase2', 'TestCase3', 'TestCase4', 'TestCase5'],
+      showing: true,
+      href: `/results/${makePR().repo}/4242/testsfailed`,
+      viewToggle: true,
+    });
   });
 
   // A linter that could not run reports zero violations, so it never reaches
@@ -277,6 +330,29 @@ describe('Gavel Results section', () => {
 
     expect(screen.getByTitle('3 failed (1 timed out)')).toBeTruthy();
     expect(screen.getByTitle('2 failed')).toBeTruthy();
+  });
+
+  it('links the multi-shard lint card to every mergeable shard merged into one filterable results page', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [
+            makeGavelShard({ artifactId: 11, stickyId: 'gavel-lint', lintLinters: 7, lintViolations: 1300 }),
+            makeGavelShard({ artifactId: 12, stickyId: 'gavel-test', lintLinters: 1, lintViolations: 12 }),
+            makeGavelShard({ artifactId: 13, stickyId: 'gavel-crashed', error: 'exit status 2' }),
+          ],
+        }}
+        loading={false}
+      />,
+    );
+
+    const href = screen.getByText('Lint').closest('a')!.getAttribute('href')!;
+    const url = new URL(href, 'http://dashboard');
+    expect({ path: url.pathname, shards: url.searchParams.getAll('shard') }).toEqual({
+      path: `/results/${makePR().repo}/11,12/lint`,
+      shards: ['11:gavel-lint', '12:gavel-test'],
+    });
   });
 
   it('omits the reproduce block for a shard with nothing to re-run', () => {
