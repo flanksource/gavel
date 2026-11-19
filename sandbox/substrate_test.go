@@ -163,7 +163,7 @@ func jobRepository(t *testing.T) (string, string) {
 
 // startSubstrate serves an in-process Substrate whose processes are real, and an executor on it
 // whose jobs reach api, with the lines it logs captured.
-func startSubstrate(t *testing.T, api http.Handler) (*substratetest.Server, Executor, *strings.Builder) {
+func startSubstrate(t *testing.T, api http.Handler) (*substratetest.Server, Executor, *logtest.Lines) {
 	t.Helper()
 	logged := logtest.Capture(t)
 	server := substratetest.Start(t)

@@ -472,6 +472,7 @@ func TestHostedDashboardServesTheCredentialFetchWithoutClerk(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		return resp.StatusCode, string(body)
 	}
+	logged := logtest.Capture(t)
 	substrate := newHostedFixture(t, func(o *DashboardOptions) {
 		o.Sandbox, o.SubstrateTemplate = "substrate", "gavel-runner"
 		o.SubstrateEnvAPI, o.SubstrateControl = "ate-env-api.example:443", "substrate-api.example:443"
@@ -480,6 +481,10 @@ func TestHostedDashboardServesTheCredentialFetchWithoutClerk(t *testing.T) {
 	status, body := fetch(substrate)
 	assert.Equal(t, http.StatusUnauthorized, status)
 	assert.Contains(t, body, "credential provider's token", "answered by the credential fetch, not the Clerk middleware")
+	// The substrate the fixture names does not exist, so the sweep the server starts with fails.
+	assert.Eventually(t, func() bool {
+		return strings.Contains(logged.String(), "sweep the sandbox environments runs left behind: list the actors of atespace")
+	}, 10*time.Second, 20*time.Millisecond, "the failed sweep is a warning")
 
 	status, body = fetch(newHostedFixture(t))
 	assert.NotContains(t, body, "credential provider", "not served without substrate and a provider token (%d)", status)
