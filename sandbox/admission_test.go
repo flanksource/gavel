@@ -207,5 +207,5 @@ func TestAUsedUpModelBudgetRefusesAgentRunsOnly(t *testing.T) {
 	_, err = a.Enter(context.Background(), org, Demand{Size: cores(1), ModelCalls: true})
 	require.ErrorIs(t, err, ErrBudgetUsedUp)
 	assert.Contains(t, err.Error(), "this organization has used $5.00 of its $5.00 model cost budget")
-	assert.Contains(t, err.Error(), "this organization has used 1000 tokens of its 1000 tokens token budget")
+	assert.Contains(t, err.Error(), "this organization has used 1000 tokens of its 1000 tokens budget")
 }

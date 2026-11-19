@@ -231,8 +231,16 @@ func (a *Admission) limits(ctx context.Context, org uuid.UUID, demand Demand) (l
 
 // usedUp says how much of a used-up cumulative budget the organization used, and since when.
 func usedUp(status budget.Status) string {
-	return fmt.Sprintf("this organization has used %s of its %s %s budget since %s",
-		amount(status.Budget, status.Used), amount(status.Budget, status.Amount), resourceName(status.Resource), status.Since.UTC().Format(time.RFC3339))
+	return fmt.Sprintf("this organization has used %s of its %s budget since %s",
+		amount(status.Budget, status.Used), budgetOf(status.Budget), status.Since.UTC().Format(time.RFC3339))
+}
+
+// budgetOf names b by its amount and what it counts, which a token budget's amount already says.
+func budgetOf(b budget.Budget) string {
+	if b.Resource == budget.Tokens {
+		return amount(b, b.Amount)
+	}
+	return amount(b, b.Amount) + " " + resourceName(b.Resource)
 }
 
 // isModelBudget reports whether a budget counts model calls, which only agent runs make.
@@ -291,8 +299,6 @@ func resourceName(resource budget.Resource) string {
 	switch resource {
 	case budget.USD:
 		return "model cost"
-	case budget.Tokens:
-		return "token"
 	}
 	return string(resource)
 }
