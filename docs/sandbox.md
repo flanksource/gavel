@@ -144,6 +144,37 @@ created from the runner image. The environment is deleted once the job exits or 
   name. Serve's identity must be allowed to get, create, list and delete actor templates in the
   atespace, which its `editor` role allows. A run whose organization can't get its template
   fails without being recorded, saying why.
+- **Usage.** Every member sees what the organization used, this month, the last 30 days or this
+  week, on the Usage and budgets page of its profile (`GET /api/usage?window=now/M`). Its runs'
+  CPU and memory count what each was sized at for as long as it ran, whatever it used of it:
+  core-hours and GiB-hours, and the cores and GiB its runs hold now. A run serve left running when
+  it stopped counts only as long as a run can live. Its model calls count their tokens by kind
+  and their cost in USD: what the provider reported for each call, else its list price, each kind
+  of token at the model's price for it; a call priced in another currency counts its tokens but
+  not its cost. Counted tokens are input, cache writes, output and reasoning; cache reads are
+  shown but not counted, as the providers leave them out of their input limits.
+- **Budgets.** An organization admin sets its budgets on the same page (`/api/budgets`), at most
+  one per resource and kind; without one, nothing is capped. A cumulative budget caps what the
+  organization uses in a window, such as this month (`now/M`): core-hours, GiB-hours, counted
+  tokens or USD. A concurrent one caps the cores or GiB its runs hold at once. CPU and memory
+  budgets hold back every run; token and model cost budgets hold back agent runs only, as only
+  they call models. Budgets are enforced:
+  - A run is refused when a cumulative budget it counts towards is used up, or when it is bigger
+    than a concurrent budget on its own. Its record fails saying why, and a project action
+    answers 429.
+  - A run that would take the organization over a concurrent budget waits its turn, first in
+    first out, recorded as queued with why, which the Runs view, a push's output and an agent
+    run's log show. It starts once a run ends and it fits, or an admin raises the budget, and
+    fails after `sandbox.queue.timeout` (a property, 15 minutes). Its token is signed when it
+    starts. A run left queued when serve stopped fails at serve's start.
+  - Running runs stop once a cumulative budget that covers them is used up, ending cancelled with
+    `stopped: <why>`: serve checks every organization with a running run each
+    `sandbox.budget.interval` (a property, 30 seconds), and an agent run's organization after each
+    of its transcripts is ingested. An agent run's spend is also capped at what the model cost
+    budget leaves, and the credential provider is refused the organization's model keys once its
+    token or model cost budget is used up.
+  - Lowering a concurrent budget below what runs hold stops none of them; new runs wait.
+  - What runs hold at once is counted in serve's memory, so serve runs as one replica.
 - **Versions.** gavel speaks Substrate 1.0.0-rc.2 and env `56424de` or later.
 - **Egress.** Substrate denies every destination an actor's egress policy doesn't allow. gavel
   gives each environment, a job's or an agent run's, a policy that allows proxy.golang.org,
