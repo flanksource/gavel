@@ -142,6 +142,14 @@ func (h *Handle) Release() {
 	delete(h.registry.byRun, h.token)
 }
 
+// Idle reports whether no run holds a claim: every run registered has released it, which a
+// run does once it has returned, its outcome persisted.
+func (r *Registry) Idle() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.byRun) == 0
+}
+
 func (r *Registry) runsForIssueLocked(issueID uuid.UUID) int {
 	count := 0
 	for _, active := range r.byRun {
