@@ -117,6 +117,12 @@ export function repoWebURL(pr: PRItem): string {
   return pr.url.replace(/\/pullrequest\/\d+\/?$/, '');
 }
 
+// commitWebURL is the page of commit sha in pr's repository, which GitHub and Azure DevOps both
+// place at {repository}/commit/{sha}.
+export function commitWebURL(pr: PRItem, sha: string): string {
+  return `${repoWebURL(pr)}/commit/${sha}`;
+}
+
 // authorProfileURL is the GitHub profile of login, pr's author unless named, who wrote on pr; on
 // another host there is none to link.
 export function authorProfileURL(pr: PRItem, login = pr.author): string | undefined {

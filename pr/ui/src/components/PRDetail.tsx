@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useCallback, type ReactNode, type ComponentType } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Project } from '../types';
-import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment, authorProfileURL, repoWebURL } from '../utils';
+import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment, authorProfileURL, commitWebURL, repoWebURL } from '../utils';
 import { ShardLintFindings, ShardTestFailures } from './ShardFindings';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
 import { PRLinkedTodos } from './PRLinkedTodos';
@@ -385,8 +385,8 @@ function CommitsTab({ commits, pr }: { commits: PRCommitInfo[]; pr: PRItem }) {
     additions: commit.additions,
     deletions: commit.deletions,
     changedFiles: commit.changedFiles,
-    href: `https://github.com/${pr.repo}/commit/${commit.oid}`,
-  })), [commits, pr.repo]);
+    href: commitWebURL(pr, commit.oid),
+  })), [commits, pr]);
 
   const loadDiff = useCallback(
     (commit: GitCommitItem) => queryClient.fetchQuery(prCommitDiffQuery(pr.repo, commit.sha)),

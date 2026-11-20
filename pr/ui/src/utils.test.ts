@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateGavelShards, authorProfileURL, failedTestsLabel, groupByOrg, repoWebURL } from './utils';
+import { aggregateGavelShards, authorProfileURL, commitWebURL, failedTestsLabel, groupByOrg, repoWebURL } from './utils';
 import type { GavelResultsSummary, PRItem } from './types';
 
 function makeShard(overrides: Partial<GavelResultsSummary> = {}): GavelResultsSummary {
@@ -74,5 +74,10 @@ describe('provider links', () => {
     expect(authorProfileURL(azure)).toBeUndefined();
     expect(authorProfileURL(azure, 'grace')).toBeUndefined();
     expect(repoWebURL(azure)).toBe('https://dev.azure.com/acme/Platform/_git/rules');
+  });
+
+  it("links a commit to its repository's page on the PR's host", () => {
+    expect(commitWebURL(github, 'abc123')).toBe('https://github.com/acme/api/commit/abc123');
+    expect(commitWebURL(azure, 'abc123')).toBe('https://dev.azure.com/acme/Platform/_git/rules/commit/abc123');
   });
 });
