@@ -76,6 +76,10 @@ func (s *Server) handlePRMerge(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err)
 		return
 	}
+	if listed, ok := s.connectionPRAt(body.URL); ok {
+		s.mergeConnectionPR(w, r, listed, body.MergeInput)
+		return
+	}
 	link, err := types.PRFromURL(body.URL)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err)

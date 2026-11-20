@@ -4,8 +4,10 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,4 +158,35 @@ func TestTheDashboardServesAnAzurePullRequestsDetailThroughItsRemote(t *testing.
 	assert.Contains(t, stream, "event: runs\n")
 	assert.Contains(t, stream, "event: done\n")
 	assert.NotContains(t, stream, "event: error")
+}
+
+func TestTheDashboardMergesAnAzurePullRequestThroughItsRemote(t *testing.T) {
+	var completion map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.Path != "/acme/Platform/_apis/git/repositories/rules/pullrequests/9" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&completion)
+		_, _ = w.Write([]byte(`{"pullRequestId":9,"status":"completed"}`))
+	}))
+	t.Cleanup(server.Close)
+	s := NewServer(gavelctx.New(t.Context()), 0, github.Options{}, SearchConfig{})
+	prURL := server.URL + "/acme/Platform/_git/rules/pullrequest/9"
+	s.publishResults(github.PRSearchResults{{Provider: types.PRProviderAzure, Repo: "acme/Platform/rules", Number: 9, URL: prURL}})
+	s.SetPRRemote(func(context.Context, github.PRListItem) (*git.Repository, error) { return azureRemote(t, server), nil })
+
+	recorder := httptest.NewRecorder()
+	s.handlePRMerge(recorder, httptest.NewRequest(http.MethodPost, "/api/prs/merge",
+		strings.NewReader(`{"url":"`+prURL+`","method":"squash","headSha":"`+azureHead+`"}`)))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, "completed", completion["status"])
+	assert.Equal(t, map[string]any{"commitId": azureHead}, completion["lastMergeSourceCommit"], "the head that was reviewed")
+	assert.Equal(t, "squash", completion["completionOptions"].(map[string]any)["mergeStrategy"])
+
+	recorder = httptest.NewRecorder()
+	s.handlePRMerge(recorder, httptest.NewRequest(http.MethodPost, "/api/prs/merge",
+		strings.NewReader(`{"url":"`+prURL+`","method":"squash","auto":true,"headSha":"`+azureHead+`"}`)))
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "auto-merge isn't offered for Azure DevOps pull requests")
 }

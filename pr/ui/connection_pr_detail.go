@@ -5,6 +5,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -39,6 +40,49 @@ func (s *Server) connectionPR(repo string, number int) (github.PRListItem, bool)
 		}
 	}
 	return github.PRListItem{}, false
+}
+
+// connectionPRAt is the listed pull request at url when a git connection brings it.
+func (s *Server) connectionPRAt(url string) (github.PRListItem, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, pr := range s.prs {
+		if pr.Provider != "" && pr.URL == url {
+			return pr, true
+		}
+	}
+	return github.PRListItem{}, false
+}
+
+// mergeConnectionPR completes pr, the head that was reviewed, through its remote with the method
+// asked. Its provider queues completion behind the base's policies itself, so there is no
+// separate auto-merge.
+func (s *Server) mergeConnectionPR(w http.ResponseWriter, r *http.Request, pr github.PRListItem, input model.MergeInput) {
+	if input.Auto {
+		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("auto-merge isn't offered for Azure DevOps pull requests: completing one waits on its policies already"))
+		return
+	}
+	if s.prRemote == nil {
+		writeJSONError(w, http.StatusBadGateway, fmt.Errorf("this dashboard has no connection to merge %s pull request %s#%d through", pr.Provider, pr.Repo, pr.Number))
+		return
+	}
+	remote, err := s.prRemote(r.Context(), pr)
+	if err == nil {
+		merger, ok := remote.Provider.(git.PullRequestMerger)
+		if !ok {
+			err = fmt.Errorf("%s pull requests can't be merged from the dashboard", pr.Provider)
+		} else {
+			err = merger.MergePullRequest(r.Context(), remote.URL, pr.Number,
+				git.MergePullRequestOptions{Method: git.MergeMethod(input.Method), HeadSHA: input.HeadSHA})
+		}
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, fmt.Errorf("merge pull request %s#%d: %w", pr.Repo, pr.Number, err))
+		return
+	}
+	s.afterPRAction(pr.Repo, pr.Number)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprint(w, `{"status":"ok"}`)
 }
 
 // fetchConnectionPRDetail reads pr's detail through its remote, with Error set on failure as
