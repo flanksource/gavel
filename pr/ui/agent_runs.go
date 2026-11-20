@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/flanksource/commons-db/git"
+	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/sandbox"
@@ -19,6 +22,7 @@ import (
 	"github.com/flanksource/gavel/todos/run"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // AgentRuns runs hosted todos' steps on substrate, and their test and lint runs in sandbox jobs.
@@ -109,16 +113,37 @@ func requireRepositoryRuntime(options run.Options) error {
 // organizationPRs is the client the Server's organization's PR at url is read and acted on
 // through.
 func (s *Server) organizationPRs(ctx context.Context, url string) (provider.Client, int, error) {
-	return OrganizationPRs(s.ghOpts.TokenSource, s.cacheStore())(ctx, url)
+	return OrganizationPRs(s.ghOpts.TokenSource, s.cacheStore(), OrgConnections{DB: s.orgDB, Scope: tenant.Scope{OrgID: s.orgID()},
+		Options: git.ClientOptions{Defensive: true}})(ctx, url)
 }
 
-// OrganizationPRs reads an organization's PRs with token, its GitHub App installation's token
-// source, never the host's credentials, keeping GitHub's responses in responses, its own cache.
-// Hosted todos work on GitHub PRs only.
-func OrganizationPRs(token func() (string, error), responses *cache.Store) func(ctx context.Context, url string) (provider.Client, int, error) {
+// OrgConnections reaches an organization's pull requests that its git connections bring: those of
+// the repositories of Scope's in DB, through clients options configures.
+type OrgConnections struct {
+	DB      *gorm.DB
+	Scope   tenant.Scope
+	Options git.ClientOptions
+}
+
+// OrganizationPRs reads an organization's PRs: a GitHub one with token, its GitHub App
+// installation's token source, never the host's credentials, keeping GitHub's responses in
+// responses, its own cache; one at a /pullrequest/ URL, an Azure DevOps one, through the git
+// connection of the organization's repository that holds it.
+func OrganizationPRs(token func() (string, error), responses *cache.Store, connections OrgConnections) func(ctx context.Context, url string) (provider.Client, int, error) {
 	return func(ctx context.Context, url string) (provider.Client, int, error) {
-		if provider.IsAzure(url) {
-			return nil, 0, fmt.Errorf("hosted todos work on GitHub PRs; %s isn't one", url)
+		if _, number, found := strings.Cut(url, "/pullrequest/"); found {
+			n, err := strconv.Atoi(strings.TrimSuffix(number, "/"))
+			if err != nil || n <= 0 {
+				return nil, 0, fmt.Errorf("pull request URL %s has no positive number", url)
+			}
+			if connections.DB == nil {
+				return nil, 0, fmt.Errorf("this organization has no git connections to read %s through", url)
+			}
+			held, err := forge.PullRequestRepo(ctx, connections.DB, connections.Scope, url, connections.Options)
+			if err != nil {
+				return nil, 0, err
+			}
+			return provider.NewConnectionClient(held.Remote, held.DefaultBranch), n, nil
 		}
 		if token == nil {
 			return nil, 0, fmt.Errorf("this organization has no GitHub App installation to read %s with", url)

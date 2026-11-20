@@ -176,10 +176,13 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	// Sandbox jobs authenticate with their run token; runs on substrate reach it through serve,
 	// as their run.
 	runs := &ui.RunsAPI{DB: db, TokenKey: runTokenKey(secret), Cache: cache, Sources: sources}
-	if account != nil {
-		runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
-			return ui.OrganizationPRs(account.TokenSource(org), cache.ForOrg(org))(ctx, url)
+	runs.PRs = func(ctx context.Context, org uuid.UUID, url string) (provider.Client, int, error) {
+		var token func() (string, error)
+		if account != nil {
+			token = account.TokenSource(org)
 		}
+		return ui.OrganizationPRs(token, cache.ForOrg(org), ui.OrgConnections{DB: db, Scope: tenant.Scope{OrgID: org},
+			Options: git.ClientOptions{Defensive: true}})(ctx, url)
 	}
 	dispatcher, err := newSandboxDispatcher(ctx, opts, db, cache, secret, sources, runs.Handler())
 	if err != nil {

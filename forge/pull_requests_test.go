@@ -90,6 +90,10 @@ func TestAPullRequestIsReachedThroughTheConnectionOfItsOrgsRepository(t *testing
 	assert.Equal(t, "rules", remote.URL.Name)
 	assert.Equal(t, "Platform", remote.URL.Project)
 	require.NotNil(t, remote.Provider)
+	held, err := forge.PullRequestRepo(context.Background(), db, scope, pr, git.ClientOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "main", held.DefaultBranch, "the default branch its sync recorded")
+	assert.Equal(t, "rules", held.Remote.URL.Name)
 
 	_, err = forge.PullRequestRemote(context.Background(), db, other, pr, git.ClientOptions{})
 	require.EqualError(t, err, "no repository of the organization's git connections holds pull request "+pr)

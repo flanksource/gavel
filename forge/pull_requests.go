@@ -111,27 +111,43 @@ func PullRequestRepository(prURL string) (string, error) {
 // PullRequestRemote is the remote, through its connection as stored and never hydrated, of the
 // repository of scope's that holds pull request prURL; options configures its provider client.
 func PullRequestRemote(ctx context.Context, db *gorm.DB, scope tenant.Scope, prURL string, options git.ClientOptions) (*git.Repository, error) {
+	held, err := PullRequestRepo(ctx, db, scope, prURL, options)
+	return held.Remote, err
+}
+
+// HeldRepo is a repository of an organization's that a git connection brings: its remote through
+// that connection and the default branch its sync recorded.
+type HeldRepo struct {
+	Remote        *git.Repository
+	DefaultBranch string
+}
+
+// PullRequestRepo is the repository of scope's that holds pull request prURL, reached through its
+// connection as stored and never hydrated; options configures its provider client.
+func PullRequestRepo(ctx context.Context, db *gorm.DB, scope tenant.Scope, prURL string, options git.ClientOptions) (HeldRepo, error) {
 	repoURL, err := PullRequestRepository(prURL)
 	if err != nil {
-		return nil, err
+		return HeldRepo{}, err
 	}
 	target, err := git.ParseRepoURL(repoURL, models.ConnectionTypeAzureDevops)
 	if err != nil {
-		return nil, fmt.Errorf("pull request %s: %w", prURL, err)
+		return HeldRepo{}, fmt.Errorf("pull request %s: %w", prURL, err)
 	}
 	var repos []struct {
-		RemoteURL    string
-		ConnectionID uuid.UUID
+		RemoteURL     string
+		ConnectionID  uuid.UUID
+		DefaultBranch string
 	}
-	if err := db.WithContext(ctx).Raw(`SELECT remote_url, connection_id FROM repos
+	if err := db.WithContext(ctx).Raw(`SELECT remote_url, connection_id, default_branch FROM repos
 		WHERE org_id = ? AND connection_id IS NOT NULL AND source IN ?`, scope.OrgID, pullRequestSources).
 		Scan(&repos).Error; err != nil {
-		return nil, fmt.Errorf("list the organization's repositories: %w", err)
+		return HeldRepo{}, fmt.Errorf("list the organization's repositories: %w", err)
 	}
 	for _, repo := range repos {
 		if remote, err := git.ParseRepoURL(repo.RemoteURL, models.ConnectionTypeAzureDevops); err == nil && remote.SameRepository(target) {
-			return Remote(ctx, db, scope, repo.ConnectionID, repo.RemoteURL, options)
+			reached, err := Remote(ctx, db, scope, repo.ConnectionID, repo.RemoteURL, options)
+			return HeldRepo{Remote: reached, DefaultBranch: repo.DefaultBranch}, err
 		}
 	}
-	return nil, fmt.Errorf("no repository of the organization's git connections holds pull request %s", prURL)
+	return HeldRepo{}, fmt.Errorf("no repository of the organization's git connections holds pull request %s", prURL)
 }

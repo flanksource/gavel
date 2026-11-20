@@ -3,7 +3,9 @@
 package ui
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,9 +16,11 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/gavel/connections"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/model"
+	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -220,4 +224,35 @@ func TestTheDashboardApprovesAnAzurePullRequestAsItsConnection(t *testing.T) {
 		strings.NewReader(`{"repo":"acme/Platform/rules","number":9}`)))
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	assert.Equal(t, map[string]any{"vote": float64(10)}, vote, "an Azure pull request needs no GitHub node ID")
+}
+
+func TestAHostedOrgReachesItsAzurePullRequestsByURL(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("h"), 32)))
+	server := fakeAzure(t, azurePRRoutes())
+	scope := tenant.Scope{OrgID: org, Role: "org:admin"}
+	store, closeStore, err := connections.OpenStore(t.Context(), connections.Options{DB: db, Scope: scope})
+	require.NoError(t, err)
+	saved, err := store.SaveConnection(t.Context(), &models.Connection{Name: "acme-azure", Type: models.ConnectionTypeAzureDevops,
+		URL: server.URL + "/acme", Password: "azure-pat", InsecureTLS: true})
+	require.NoError(t, err)
+	require.NoError(t, closeStore())
+	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, connection_id, remote_url, provider_repo_id, default_branch)
+		VALUES (?, 'Platform/rules', 'azure_devops', ?, ?, 'rules-id', 'main')`, org, saved.ID, server.URL+"/acme/Platform/_git/rules").Error)
+	prs := OrganizationPRs(nil, nil, OrgConnections{DB: db, Scope: scope})
+
+	client, number, err := prs(t.Context(), server.URL+"/acme/Platform/_git/rules/pullrequest/9")
+	require.NoError(t, err)
+	assert.Equal(t, 9, number)
+	assert.Equal(t, "azuredevops", client.Kind())
+	branch, err := client.DefaultBranch(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+	status, err := client.Status(t.Context(), number, model.StatusOptions{Threads: true})
+	require.NoError(t, err)
+	assert.Equal(t, "Tighten the rules", status.PR.Title)
+
+	_, _, err = prs(t.Context(), "https://github.com/acme/api/pull/7")
+	require.ErrorContains(t, err, "this organization has no GitHub App installation to read")
 }
