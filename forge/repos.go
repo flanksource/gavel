@@ -111,7 +111,12 @@ func connectionClient(ctx context.Context, store *catalog.Store, id uuid.UUID, o
 	if err != nil {
 		return namedClient{}, err
 	}
-	client, err := git.FromConnection(dbcontext.NewContext(ctx), *connection, options)
+	return clientOf(ctx, *connection, options)
+}
+
+// clientOf is connection's provider client.
+func clientOf(ctx context.Context, connection models.Connection, options git.ClientOptions) (namedClient, error) {
+	client, err := git.FromConnection(dbcontext.NewContext(ctx), connection, options)
 	if err != nil {
 		return namedClient{}, fmt.Errorf("connection %q: %w", connection.Name, err)
 	}

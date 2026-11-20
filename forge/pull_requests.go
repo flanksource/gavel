@@ -59,19 +59,40 @@ func PullRequests(ctx context.Context, db *gorm.DB, scope tenant.Scope, options 
 			}
 			clients[repo.ConnectionID] = client
 		}
-		remote, err := client.Repository(repo.RemoteURL)
+		pulls, err := openPullRequests(ctx, client, repo.Name, repo.RemoteURL)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("repository %s of connection %q: %w", repo.Name, client.Name, err))
+			errs = append(errs, err)
 			continue
 		}
-		pulls, err := client.Provider.ListPullRequests(ctx, remote.URL, git.ListPullRequestsOptions{State: git.PullRequestOpen})
-		if err != nil {
-			errs = append(errs, fmt.Errorf("list the pull requests of %s: %w", repo.Name, err))
-			continue
-		}
-		for _, pull := range pulls {
-			listed = append(listed, RepoPullRequest{Repo: remote.URL, PullRequest: pull})
-		}
+		listed = append(listed, pulls...)
 	}
 	return listed, errors.Join(append(errs, closeStore())...)
+}
+
+// RepoPullRequests lists the open pull requests of the repository at remoteURL through
+// connection, which a caller resolved; options configures its provider client.
+func RepoPullRequests(ctx context.Context, connection models.Connection, options git.ClientOptions, remoteURL string) ([]RepoPullRequest, error) {
+	client, err := clientOf(ctx, connection, options)
+	if err != nil {
+		return nil, err
+	}
+	return openPullRequests(ctx, client, remoteURL, remoteURL)
+}
+
+// openPullRequests lists the open pull requests of the repository at remoteURL, which name
+// describes, through client.
+func openPullRequests(ctx context.Context, client namedClient, name, remoteURL string) ([]RepoPullRequest, error) {
+	remote, err := client.Repository(remoteURL)
+	if err != nil {
+		return nil, fmt.Errorf("repository %s of connection %q: %w", name, client.Name, err)
+	}
+	pulls, err := client.Provider.ListPullRequests(ctx, remote.URL, git.ListPullRequestsOptions{State: git.PullRequestOpen})
+	if err != nil {
+		return nil, fmt.Errorf("list the pull requests of %s: %w", name, err)
+	}
+	listed := make([]RepoPullRequest, 0, len(pulls))
+	for _, pull := range pulls {
+		listed = append(listed, RepoPullRequest{Repo: remote.URL, PullRequest: pull})
+	}
+	return listed, nil
 }

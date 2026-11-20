@@ -452,6 +452,10 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		if err != nil {
 			return github.PRSearchResults{}, nil, err
 		}
+		// Azure DevOps repositories named by URL are listed through their connections; a
+		// config naming only those searches no GitHub repositories.
+		var azureRepos []string
+		cfg.Repos, azureRepos = splitAzureRepos(cfg.Repos)
 		so = scopePRSearch(so, cfg, hiddenOrgs)
 		so.ShowAuthor = true
 		// Drop known bots at the source unless the user asked to see them via
@@ -460,7 +464,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		if !srv.IncludeBots() {
 			so.ExcludeAuthors = srv.KnownBots()
 		}
-		return github.SearchPRs(ghOpts, so)
+		return searchConfiguredPRs(ctx, ghOpts, so, azureRepos)
 	}
 
 	if runtime.IngestStats != nil {
