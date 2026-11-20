@@ -95,16 +95,10 @@ func (o TestOptions) packageSkipped(pkg string) bool {
 // covers pkg, or no selected file inside it. nested includes files in
 // subdirectories (node packages); Go packages own only their own directory.
 func (o TestOptions) PackageFiles(pkg string, nested bool) ([]string, error) {
-	if o.Files.Empty() {
+	if o.Files.Empty() || o.pathCoversPackage(pkg) {
 		return nil, nil
 	}
 	clean := strings.TrimPrefix(pkg, "./")
-	for _, path := range o.Paths {
-		path = strings.TrimPrefix(path, "./")
-		if path == "." || clean == path || (o.Recursive && strings.HasPrefix(clean, path+"/")) {
-			return nil, nil
-		}
-	}
 	files, err := o.selectedFiles()
 	if err != nil {
 		return nil, err
@@ -121,6 +115,18 @@ func (o TestOptions) PackageFiles(pkg string, nested bool) ([]string, error) {
 		inside = append(inside, filepath.ToSlash(rel))
 	}
 	return inside, nil
+}
+
+// pathCoversPackage reports whether a starting path selects all of pkg.
+func (o TestOptions) pathCoversPackage(pkg string) bool {
+	clean := strings.TrimPrefix(pkg, "./")
+	for _, path := range o.Paths {
+		path = strings.TrimPrefix(path, "./")
+		if path == "." || clean == path || (o.Recursive && strings.HasPrefix(clean, path+"/")) {
+			return true
+		}
+	}
+	return false
 }
 
 // ForPackages returns a copy of o that runs only packages.

@@ -62,6 +62,47 @@ var _ = Describe("Detect", func() {
 			Entry("a vitest .test.ts file under a playwright package", NewPlaywright(cwd), "src/c.test.ts"),
 		)
 
+		Describe("a starting directory below the package root", func() {
+			const feature = "app/src/feature"
+
+			BeforeEach(func() {
+				writeTree(cwd, map[string]string{
+					feature + "/c.test.ts":      "",
+					feature + "/deep/d.test.ts": "",
+					"app/src/other/readme.md":   "",
+				})
+			})
+
+			It("is detected and discovered as the enclosing package", func() {
+				opts, err := NewVitest(cwd).Detect(cwd, []string{feature})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(opts).NotTo(BeNil())
+				opts.Recursive = true
+				Expect(NewVitest(cwd).DiscoverPackages(*opts)).To(Equal([]string{"./app"}))
+			})
+
+			It("narrows the package run to the directory", func() {
+				opts, err := NewVitest(cwd).Detect(cwd, []string{feature})
+				Expect(err).NotTo(HaveOccurred())
+				run, err := NewVitest(cwd).BuildCommand(opts.ForPackages("./app"))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(run.Process.Args[len(run.Process.Args)-1]).To(Equal("src/feature"))
+			})
+
+			It("runs the whole package when another starting path covers it", func() {
+				opts, err := NewVitest(cwd).Detect(cwd, []string{feature, "app"})
+				Expect(err).NotTo(HaveOccurred())
+				run, err := NewVitest(cwd).BuildCommand(opts.ForPackages("./app"))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(run.Process.Args).NotTo(ContainElement("src/feature"))
+			})
+
+			It("is not claimed when it holds none of the runner's test files", func() {
+				Expect(NewVitest(cwd).Detect(cwd, []string{"app/src/other"})).To(BeNil())
+				Expect(NewPlaywright(cwd).Detect(cwd, []string{feature})).To(BeNil())
+			})
+		})
+
 		It("runs only the selected file, after the name filter, workers and bail", func() {
 			opts, err := NewVitest(cwd).Detect(cwd, append(slices.Clone(argv), "--", "-t", "adds", "--maxWorkers", "2", "--bail", "--silent"))
 			Expect(err).NotTo(HaveOccurred())

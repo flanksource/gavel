@@ -252,16 +252,49 @@ func hasTestFile(dir string, suffixes []string, deep bool) bool {
 // discoverNodePackages applies opts to a node runner's package detection.
 func discoverNodePackages(opts TestOptions, detect func(string, *pkgJSON) bool, suffixes []string) ([]string, error) {
 	walk := func(dir string, recursive bool) ([]string, error) {
+		var found []string
 		if !recursive {
-			pkg, _ := readPackageJSON(dir)
-			if detect(dir, pkg) {
-				return []string{dir}, nil
+			if pkg, _ := readPackageJSON(dir); detect(dir, pkg) {
+				found = []string{dir}
 			}
-			return nil, nil
+		} else {
+			var err error
+			if found, err = walkNodePackages(dir, detect); err != nil {
+				return nil, err
+			}
 		}
-		return walkNodePackages(dir, detect)
+		if len(found) > 0 {
+			return found, nil
+		}
+		pkg, ok, err := nodeEnclosingPackage(opts.Cwd, dir, detect, suffixes)
+		if err != nil || !ok {
+			return nil, err
+		}
+		return []string{pkg}, nil
 	}
 	return discoverPackages(opts, walk, nodeFileOwner(opts.Cwd, detect, suffixes))
+}
+
+// nodePresent reports whether a node runner has tests under dir: a detected
+// package at or below it, or a detected package enclosing it.
+func nodePresent(cwd string, detect func(string, *pkgJSON) bool, suffixes []string) func(string) (bool, error) {
+	return func(dir string) (bool, error) {
+		if found, err := anyNodePackage(dir, detect); err != nil || found {
+			return found, err
+		}
+		_, ok, err := nodeEnclosingPackage(cwd, dir, detect, suffixes)
+		return ok, err
+	}
+}
+
+// nodeEnclosingPackage returns the detected package that encloses a starting
+// directory holding the runner's test files, so `gavel test app/src/feature`
+// runs that folder through app.
+func nodeEnclosingPackage(cwd, dir string, detect func(string, *pkgJSON) bool, suffixes []string) (string, bool, error) {
+	if !hasTestFile(dir, suffixes, true) {
+		return "", false, nil
+	}
+	return nodePackageAbove(cwd, dir, detect)
 }
 
 // nodeFileOwner finds the nearest package directory at or above a test file,
@@ -271,19 +304,60 @@ func nodeFileOwner(cwd string, detect func(string, *pkgJSON) bool, suffixes []st
 		if !hasTestSuffix(file, suffixes) {
 			return "", false, nil
 		}
-		root, err := filepath.Abs(cwd)
-		if err != nil {
-			return "", false, err
+		return nodePackageAbove(cwd, filepath.Dir(file), detect)
+	}
+}
+
+// nodePackageAbove finds the nearest package directory at or above dir, up to
+// cwd, and reports whether the runner detects it.
+func nodePackageAbove(cwd, dir string, detect func(string, *pkgJSON) bool) (string, bool, error) {
+	root, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", false, err
+	}
+	if dir, err = filepath.Abs(dir); err != nil {
+		return "", false, err
+	}
+	for ; ; dir = filepath.Dir(dir) {
+		if pkg, ok := readPackageJSON(dir); ok {
+			return dir, detect(dir, pkg), nil
 		}
-		for dir := filepath.Dir(file); ; dir = filepath.Dir(dir) {
-			if pkg, ok := readPackageJSON(dir); ok {
-				return dir, detect(dir, pkg), nil
-			}
-			if dir == root || filepath.Dir(dir) == dir {
-				return "", false, nil
-			}
+		if dir == root || filepath.Dir(dir) == dir {
+			return "", false, nil
 		}
 	}
+}
+
+// nodePathFilters returns the starting paths inside pkg, relative to it, that
+// narrow its run; nil when a starting path covers the whole package.
+func nodePathFilters(opts TestOptions, pkg string) ([]string, error) {
+	if opts.pathCoversPackage(pkg) {
+		return nil, nil
+	}
+	pkgDir, err := filepath.Abs(filepath.Join(opts.Cwd, pkg))
+	if err != nil {
+		return nil, err
+	}
+	var filters []string
+	for _, path := range opts.Paths {
+		dir, err := filepath.Abs(filepath.Join(opts.Cwd, path))
+		if err != nil {
+			return nil, err
+		}
+		owner, _, err := nodePackageAbove(opts.Cwd, dir, func(string, *pkgJSON) bool { return true })
+		if err != nil {
+			return nil, err
+		}
+		if owner != pkgDir {
+			continue
+		}
+		rel, err := filepath.Rel(pkgDir, dir)
+		if err != nil {
+			return nil, err
+		}
+		filters = append(filters, filepath.ToSlash(rel))
+	}
+	return filters, nil
 }
 
 // nodeFlagSet names one node runner's spellings of the shared options.
@@ -341,6 +415,11 @@ func nodeRunnerArgs(opts TestOptions, pkg string, flags nodeFlagSet) ([]string, 
 			args = append(args, file)
 		}
 	}
+	filters, err := nodePathFilters(opts, pkg)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, filters...)
 	return append(args, opts.ExtraArgs...), nil
 }
 

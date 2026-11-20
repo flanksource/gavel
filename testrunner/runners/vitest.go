@@ -59,9 +59,7 @@ func (r *Vitest) Flags() []FlagSpec {
 }
 
 func (r *Vitest) Detect(cwd string, argv []string) (*TestOptions, error) {
-	return detect(r, cwd, argv, func(dir string) (bool, error) {
-		return anyNodePackage(dir, detectVitest)
-	}, nodeFileOwner(cwd, detectVitest, vitestTestSuffixes))
+	return detect(r, cwd, argv, nodePresent(cwd, detectVitest, vitestTestSuffixes), nodeFileOwner(cwd, detectVitest, vitestTestSuffixes))
 }
 
 func (r *Vitest) DiscoverPackages(opts TestOptions) ([]string, error) {

@@ -62,9 +62,7 @@ func (r *Jest) Flags() []FlagSpec {
 }
 
 func (r *Jest) Detect(cwd string, argv []string) (*TestOptions, error) {
-	return detect(r, cwd, argv, func(dir string) (bool, error) {
-		return anyNodePackage(dir, detectJest)
-	}, nodeFileOwner(cwd, detectJest, jestTestSuffixes))
+	return detect(r, cwd, argv, nodePresent(cwd, detectJest, jestTestSuffixes), nodeFileOwner(cwd, detectJest, jestTestSuffixes))
 }
 
 func (r *Jest) DiscoverPackages(opts TestOptions) ([]string, error) {

@@ -58,9 +58,7 @@ func (r *Playwright) Flags() []FlagSpec {
 }
 
 func (r *Playwright) Detect(cwd string, argv []string) (*TestOptions, error) {
-	return detect(r, cwd, argv, func(dir string) (bool, error) {
-		return anyNodePackage(dir, detectPlaywright)
-	}, nodeFileOwner(cwd, detectPlaywright, playwrightTestSuffixes))
+	return detect(r, cwd, argv, nodePresent(cwd, detectPlaywright, playwrightTestSuffixes), nodeFileOwner(cwd, detectPlaywright, playwrightTestSuffixes))
 }
 
 func (r *Playwright) DiscoverPackages(opts TestOptions) ([]string, error) {
