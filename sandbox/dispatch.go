@@ -251,7 +251,8 @@ func (d *Dispatcher) launch(ctx context.Context, run *Run, scope tenant.Scope, s
 		source, err := d.jobSource(ctx, scope, spec)
 		if err != nil {
 			ticket.Release()
-			d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
+			// The run is not tracked until it is submitted, so nothing can have stopped it yet.
+			_ = d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
 			return fmt.Errorf("start sandbox run %s: %w", run.ID, err)
 		}
 		job.Source = source
@@ -260,7 +261,8 @@ func (d *Dispatcher) launch(ctx context.Context, run *Run, scope tenant.Scope, s
 	handle, err := d.Executor.Submit(ctx, job)
 	if err != nil {
 		ticket.Release()
-		d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
+		// The run is not tracked until it is submitted, so nothing can have stopped it yet.
+		_ = d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
 		return fmt.Errorf("start sandbox run %s: %w", run.ID, err)
 	}
 	run.mu.Lock()
@@ -426,7 +428,8 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 		if !succeeded {
 			status = "failed"
 		}
-		d.finish(context.WithoutCancel(ctx), id, status, nil)
+		// A stop has already recorded its reason on the run and cancelled the run's context with it.
+		_ = d.finish(context.WithoutCancel(ctx), id, status, nil)
 	}}, nil
 }
 
