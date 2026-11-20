@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/azuredevops"
 	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/gitlab"
 	"gorm.io/gorm"
 )
 
@@ -27,14 +28,14 @@ var connectionCatalog atomic.Pointer[gorm.DB]
 // reads the files alone.
 func useConnectionCatalog(db *gorm.DB) { connectionCatalog.Store(db) }
 
-// useLocalConnections makes GitHub and Azure DevOps clients read a repository's token from this
-// host's git connections, or, when off, never.
+// useLocalConnections makes GitHub, Azure DevOps and GitLab clients read a repository's token
+// from this host's git connections, or, when off, never.
 func useLocalConnections(on bool) {
 	find := localConnection
 	if !on {
 		find = nil
 	}
-	github.FindConnection, azuredevops.FindConnection = find, find
+	github.FindConnection, azuredevops.FindConnection, gitlab.FindConnection = find, find, find
 }
 
 // localConnection is the git connection that owns repo among the working directory's connection

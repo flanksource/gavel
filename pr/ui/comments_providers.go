@@ -7,11 +7,10 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons-db/git"
-	"github.com/flanksource/commons-db/models"
-	"github.com/flanksource/gavel/azuredevops"
 	"github.com/flanksource/gavel/comments"
 	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/tenant"
 )
 
@@ -38,15 +37,14 @@ func commentGitHub(ctx context.Context, p comments.Principal, t comments.Target)
 	return opts, nil
 }
 
-// commentAzure reaches the repository of t, an Azure DevOps pull request: a hosted organization's
-// through the git connection of its repository that holds it; a local project's, whose origin must
-// be that repository, through azuredevops.LocalConnection.
-func commentAzure(ctx context.Context, _ comments.Principal, t comments.Target) (*git.Repository, error) {
+// commentConnection reaches the repository of t, an Azure DevOps or GitLab pull request: a hosted
+// organization's through the git connection of its repository that holds it; a local project's,
+// whose origin must be that repository, through its provider's local connection.
+func commentConnection(ctx context.Context, _ comments.Principal, t comments.Target) (*git.Repository, error) {
 	pr, err := forge.ParsePullRequestURL(t.URI)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", comments.ErrInvalid, err)
 	}
-	repoURL := pr.Repo
 	if s := entityServer(ctx); s != nil && s.hosted {
 		return forge.PullRequestRemote(ctx, s.orgDB, tenant.Scope{OrgID: s.orgID()}, t.URI, git.ClientOptions{Defensive: true})
 	}
@@ -60,13 +58,13 @@ func commentAzure(ctx context.Context, _ comments.Principal, t comments.Target) 
 	if err != nil {
 		return nil, fmt.Errorf("read project origin: %w", err)
 	}
-	origin, err := git.ParseRepoURL(strings.TrimSpace(string(data)), models.ConnectionTypeAzureDevops)
+	origin, err := git.ParseRepoURL(strings.TrimSpace(string(data)), pr.Provider)
 	if err != nil {
 		return nil, comments.ErrForbidden
 	}
-	target, err := git.ParseRepoURL(repoURL, models.ConnectionTypeAzureDevops)
+	target, err := git.ParseRepoURL(pr.Repo, pr.Provider)
 	if err != nil || !origin.SameRepository(target) {
 		return nil, comments.ErrForbidden
 	}
-	return azuredevops.LocalRemote(ctx, repoURL)
+	return provider.LocalRemote(ctx, pr.Provider, pr.Repo)
 }

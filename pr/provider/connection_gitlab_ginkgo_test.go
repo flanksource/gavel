@@ -4,12 +4,14 @@
 package provider
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/gavel/gitlab"
 	"github.com/flanksource/gavel/pr/model"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -78,6 +80,47 @@ var _ = Describe("A GitLab connection's PR client", func() {
 		})
 		_, err := client.Status(ctx, 5, model.StatusOptions{})
 		Expect(err).To(MatchError(`pipeline execution 102: unexpected GitLab pipeline or job status "exploded"`))
+	})
+
+	It("is what a local gavel resolves a merge request's URL to, through the connection that owns it", func(ctx SpecContext) {
+		var server *httptest.Server
+		server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.EscapedPath() {
+			case "/api/v4/projects/acme%2Fapi/merge_requests/5":
+				_, _ = w.Write([]byte(mr))
+			case "/api/v4/projects/acme%2Fapi/merge_requests/5/pipelines":
+				_, _ = w.Write([]byte(`[]`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		DeferCleanup(server.Close)
+		previous := gitlab.FindConnection
+		gitlab.FindConnection = func(context.Context, git.RepoURL) (*models.Connection, error) {
+			return &models.Connection{Name: "acme", Type: models.ConnectionTypeGitlab, URL: server.URL, Password: "glpat", InsecureTLS: true}, nil
+		}
+		DeferCleanup(func() { gitlab.FindConnection = previous })
+
+		client, number, err := ResolveURL(Options{Context: ctx}, server.URL+"/acme/api/-/merge_requests/5")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(number).To(Equal(5))
+		Expect(client.Kind()).To(Equal("gitlab"))
+		status, err := client.Status(ctx, number, model.StatusOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status.PR.Title).To(Equal("Speed up the API"))
+	})
+
+	It("reaches a gitlab.com project locally through GITLAB_TOKEN when no connection owns it", func(ctx SpecContext) {
+		previous := gitlab.FindConnection
+		gitlab.FindConnection = nil
+		DeferCleanup(func() { gitlab.FindConnection = previous })
+		GinkgoT().Setenv("GITLAB_TOKEN", "env-token")
+		remote, err := LocalRemote(ctx, models.ConnectionTypeGitlab, "https://gitlab.com/acme/platform/api")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(remote.Provider.Type()).To(Equal(models.ConnectionTypeGitlab))
+		Expect(remote.URL.Owner).To(Equal("acme/platform"))
+		_, err = LocalRemote(ctx, models.ConnectionTypeGithub, "https://github.com/acme/api")
+		Expect(err).To(MatchError(ContainSubstring("a local gavel reaches no github repository like")))
 	})
 
 	It("names the default branch its project does when it was given none", func(ctx SpecContext) {

@@ -1,5 +1,6 @@
-// Azure DevOps comments: a pull request's threads, read and written through commons-db's thread
-// writer on the repository its connection reaches, as gavel's remote comments and bindings.
+// Comments on Azure DevOps pull requests and GitLab merge requests: their threads, read and written
+// through commons-db's thread writer on the repository a git connection reaches, as gavel's remote
+// comments and bindings.
 package providers
 
 import (
@@ -9,31 +10,40 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/flanksource/commons-db/git"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/gavel/comments"
+	"github.com/flanksource/gavel/forge"
 )
 
-// Azure publishes comments to Azure DevOps pull requests. Resolve reaches a target's repository
-// through the connection the actor may use.
-type Azure struct {
+// Connection publishes comments to the pull requests of one kind of provider a git connection
+// reaches: azuredevops or gitlab. Resolve reaches a target's repository through the connection
+// the actor may use.
+type Connection struct {
+	Kind    string
 	Resolve func(context.Context, comments.Principal, comments.Target) (*git.Repository, error)
 }
 
-func (Azure) Name() string { return "azuredevops" }
+// connectionKinds are the connection types of each Connection kind's pull requests.
+var connectionKinds = map[string]string{"azuredevops": models.ConnectionTypeAzureDevops, "gitlab": models.ConnectionTypeGitlab}
+
+func (p Connection) Name() string { return p.Kind }
 
 // threadsOf is the thread writer of target's repository and target's pull request number.
-func (p Azure) threadsOf(ctx context.Context, actor comments.Principal, target comments.Target) (*git.Repository, git.PullRequestThreadWriter, git.PullRequestThreadReader, int, error) {
+func (p Connection) threadsOf(ctx context.Context, actor comments.Principal, target comments.Target) (*git.Repository, git.PullRequestThreadWriter, git.PullRequestThreadReader, int, error) {
 	if p.Resolve == nil {
-		return nil, nil, nil, 0, fmt.Errorf("Azure DevOps repository resolver is required")
+		return nil, nil, nil, 0, fmt.Errorf("%s repository resolver is required", p.Kind)
 	}
-	_, numberText, found := strings.Cut(target.URI, "/pullrequest/")
-	number, err := strconv.Atoi(strings.TrimSuffix(numberText, "/"))
-	if !found || err != nil || number <= 0 {
-		return nil, nil, nil, 0, fmt.Errorf("%w: %s is not an Azure DevOps pull request URL", comments.ErrInvalid, target.URI)
+	pr, err := forge.ParsePullRequestURL(target.URI)
+	if err != nil {
+		return nil, nil, nil, 0, fmt.Errorf("%w: %v", comments.ErrInvalid, err)
 	}
+	if pr.Provider != connectionKinds[p.Kind] {
+		return nil, nil, nil, 0, fmt.Errorf("%w: %s is not a %s pull request URL", comments.ErrInvalid, target.URI, p.Kind)
+	}
+	number := pr.Number
 	remote, err := p.Resolve(ctx, actor, target)
 	if err != nil {
 		return nil, nil, nil, 0, err
@@ -46,7 +56,7 @@ func (p Azure) threadsOf(ctx context.Context, actor comments.Principal, target c
 	return remote, writer, reader, number, nil
 }
 
-func (p Azure) Fetch(ctx context.Context, actor comments.Principal, target comments.Target) ([]comments.RemoteComment, error) {
+func (p Connection) Fetch(ctx context.Context, actor comments.Principal, target comments.Target) ([]comments.RemoteComment, error) {
 	remote, _, reader, number, err := p.threadsOf(ctx, actor, target)
 	if err != nil {
 		return nil, err
@@ -57,7 +67,7 @@ func (p Azure) Fetch(ctx context.Context, actor comments.Principal, target comme
 	}
 	fetched := make([]comments.RemoteComment, 0, len(threads))
 	for _, thread := range threads {
-		snapshot, err := azureSnapshot(target, thread)
+		snapshot, err := p.snapshot(target, thread)
 		if err != nil {
 			return nil, err
 		}
@@ -66,14 +76,14 @@ func (p Azure) Fetch(ctx context.Context, actor comments.Principal, target comme
 	return fetched, nil
 }
 
-func (p Azure) Apply(ctx context.Context, actor comments.Principal, action string, publication comments.Publication) (comments.RemoteComment, error) {
+func (p Connection) Apply(ctx context.Context, actor comments.Principal, action string, publication comments.Publication) (comments.RemoteComment, error) {
 	target := publication.Comment.Target
 	remote, writer, _, number, err := p.threadsOf(ctx, actor, target)
 	if err != nil {
 		return comments.RemoteComment{}, err
 	}
 	if action == "publish" {
-		return publishAzure(ctx, writer, remote, number, publication)
+		return p.publish(ctx, writer, remote, number, publication)
 	}
 	if publication.Binding == nil || publication.Binding.ThreadID == "" {
 		return comments.RemoteComment{}, comments.ErrInvalid
@@ -83,7 +93,7 @@ func (p Azure) Apply(ctx context.Context, actor comments.Principal, action strin
 	if err != nil {
 		return comments.RemoteComment{}, err
 	}
-	before, err := azureSnapshot(target, current)
+	before, err := p.snapshot(target, current)
 	if err != nil {
 		return before, err
 	}
@@ -112,7 +122,7 @@ func (p Azure) Apply(ctx context.Context, actor comments.Principal, action strin
 			return before, err
 		}
 		current.Comments = append(current.Comments, reply)
-		snapshot, err := azureSnapshot(target, current)
+		snapshot, err := p.snapshot(target, current)
 		snapshot.Binding.MessageIDs = map[string]string{reply.ID: publication.Message.ID}
 		return snapshot, err
 	case "resolve-native", "reopen-native":
@@ -120,15 +130,15 @@ func (p Azure) Apply(ctx context.Context, actor comments.Principal, action strin
 		if err != nil {
 			return before, err
 		}
-		return azureSnapshot(target, changed)
+		return p.snapshot(target, changed)
 	default:
 		return before, comments.ErrInvalid
 	}
 }
 
-// publishAzure opens a thread for publication: on the lines of its captured diff when it has a
+// publish opens a thread for publication: on the lines of its captured diff when it has a
 // selector, refused as a conflict when that diff isn't the target's revision or the pull request's.
-func publishAzure(ctx context.Context, writer git.PullRequestThreadWriter, remote *git.Repository, number int, publication comments.Publication) (comments.RemoteComment, error) {
+func (p Connection) publish(ctx context.Context, writer git.PullRequestThreadWriter, remote *git.Repository, number int, publication comments.Publication) (comments.RemoteComment, error) {
 	target := publication.Comment.Target
 	if strings.TrimSpace(publication.Comment.Body) == "" {
 		return comments.RemoteComment{}, comments.ErrInvalid
@@ -152,14 +162,15 @@ func publishAzure(ctx context.Context, writer git.PullRequestThreadWriter, remot
 	if err != nil {
 		return comments.RemoteComment{}, err
 	}
-	return azureSnapshot(target, thread)
+	return p.snapshot(target, thread)
 }
 
-// azureSnapshot is thread as a remote comment of target: its first comment, the replies after it,
-// and a binding whose revision changes with anything the thread holds.
-func azureSnapshot(target comments.Target, thread git.PullRequestThread) (comments.RemoteComment, error) {
+// snapshot is thread as a remote comment of target: its first comment, the replies after it,
+// and a binding whose revision changes with anything the thread holds. A thread without a status
+// has no resolution to change.
+func (p Connection) snapshot(target comments.Target, thread git.PullRequestThread) (comments.RemoteComment, error) {
 	if thread.ID == "" || len(thread.Comments) == 0 {
-		return comments.RemoteComment{}, fmt.Errorf("incomplete Azure DevOps comment thread")
+		return comments.RemoteComment{}, fmt.Errorf("incomplete %s comment thread %q of %s", p.Kind, thread.ID, target.URI)
 	}
 	native, err := json.Marshal(thread)
 	if err != nil {
@@ -170,9 +181,9 @@ func azureSnapshot(target comments.Target, thread git.PullRequestThread) (commen
 		return comments.Actor{Kind: "user", ID: comment.AuthorID, Label: comment.Author}
 	}
 	root := thread.Comments[0]
-	snapshot := comments.RemoteComment{Binding: comments.Binding{Provider: "azuredevops", RemoteKey: target.URI + "#thread=" + thread.ID,
-		ThreadID: thread.ID, RootID: root.ID, URL: target.URI + "?discussionId=" + thread.ID, Revision: hex.EncodeToString(sum[:]),
-		Resolvable: true, Native: native}, Body: root.Body, Author: actor(root), CreatedAt: root.CreatedAt, Resolved: thread.Resolved,
+	snapshot := comments.RemoteComment{Binding: comments.Binding{Provider: p.Kind, RemoteKey: target.URI + "#thread=" + thread.ID,
+		ThreadID: thread.ID, RootID: root.ID, URL: thread.URL, Revision: hex.EncodeToString(sum[:]),
+		Resolvable: thread.Status != "", Native: native}, Body: root.Body, Author: actor(root), CreatedAt: root.CreatedAt, Resolved: thread.Resolved,
 		ResolutionReason: thread.Status}
 	for _, comment := range thread.Comments[1:] {
 		snapshot.Messages = append(snapshot.Messages, comments.RemoteMessage{ID: comment.ID, ParentID: comment.ParentID, Body: comment.Body,

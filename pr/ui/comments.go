@@ -14,6 +14,7 @@ import (
 	commentlint "github.com/flanksource/gavel/comments/lint"
 	"github.com/flanksource/gavel/comments/postgres"
 	"github.com/flanksource/gavel/comments/providers"
+	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/tenant"
 	"gorm.io/gorm"
@@ -52,7 +53,7 @@ func OpenComments(ctx context.Context) (*comments.Service, error) {
 		blobs = commentblob.Store{Store: s.blobs}
 	}
 	access := CommentAccess{}
-	options := comments.Options{Store: store, Access: access, Targets: access, Workflows: []comments.Workflow{comments.HumanReview(), comments.NativePR()}, Blobs: blobs, AttachmentLimit: 10 << 20, Providers: []comments.Provider{providers.GitHub{Resolve: commentGitHub}, providers.Azure{Resolve: commentAzure}}}
+	options := comments.Options{Store: store, Access: access, Targets: access, Workflows: []comments.Workflow{comments.HumanReview(), comments.NativePR()}, Blobs: blobs, AttachmentLimit: 10 << 20, Providers: []comments.Provider{providers.GitHub{Resolve: commentGitHub}, providers.Connection{Kind: "azuredevops", Resolve: commentConnection}, providers.Connection{Kind: "gitlab", Resolve: commentConnection}}}
 	// Agent delivery reaches this machine's Captain sessions, so only the local tenant gets it.
 	if tenant.FromContext(ctx).IsLocal() {
 		if options.Delivery, err = agents.Delivery(agents.Options{Bridge: agents.Captain{}, Groups: store, Workdir: CommentWorkdir}); err != nil {
@@ -129,8 +130,8 @@ func (CommentAccess) Authorize(ctx context.Context, p comments.Principal, _ stri
 		}
 		return comments.ErrForbidden
 	}
-	if strings.Contains(u.Path, "/pullrequest/") {
-		_, err := commentAzure(ctx, p, t)
+	if _, err := forge.ParsePullRequestURL(t.URI); err == nil {
+		_, err := commentConnection(ctx, p, t)
 		return err
 	}
 	return comments.ErrForbidden

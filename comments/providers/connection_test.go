@@ -1,6 +1,6 @@
-// Tests the Azure DevOps comments provider over commons-db's thread writer: fetching a PR's
-// threads as remote comments, publishing on the captured diff's lines, replying against the
-// revision a binding saw, and resolving.
+// Tests the git connection comments provider over commons-db's thread writer: fetching an Azure
+// DevOps PR's threads and a GitLab MR's discussions as remote comments, publishing on the captured
+// diff's lines, replying against the revision a binding saw, and resolving.
 package providers
 
 import (
@@ -52,7 +52,7 @@ func newFakeAzure(t *testing.T, routes map[string]string) *fakeAzure {
 	return fake
 }
 
-func (f *fakeAzure) provider(t *testing.T) (Azure, comments.Target) {
+func (f *fakeAzure) provider(t *testing.T) (Connection, comments.Target) {
 	t.Helper()
 	client, err := git.FromConnection(dbcontext.New(), models.Connection{Name: "acme", Type: models.ConnectionTypeAzureDevops,
 		URL: f.URL + "/acme", Password: "azure-pat", InsecureTLS: true})
@@ -62,7 +62,7 @@ func (f *fakeAzure) provider(t *testing.T) (Azure, comments.Target) {
 	resolve := func(context.Context, comments.Principal, comments.Target) (*git.Repository, error) {
 		return remote, nil
 	}
-	return Azure{Resolve: resolve}, comments.Target{URI: f.URL + "/acme/Platform/_git/rules/pullrequest/9"}
+	return Connection{Kind: "azuredevops", Resolve: resolve}, comments.Target{URI: f.URL + "/acme/Platform/_git/rules/pullrequest/9"}
 }
 
 const pulls = "/acme/Platform/_apis/git/repositories/rules/pullrequests/9"
@@ -134,4 +134,38 @@ func TestAnAzureReplyAndResolutionNeedTheRevisionTheBindingSaw(t *testing.T) {
 	stale.Revision = "an-older-revision"
 	_, err = provider.Apply(context.Background(), comments.Principal{}, "resolve-native", comments.Publication{Comment: comments.Comment{Target: target}, Binding: &stale})
 	require.True(t, errors.Is(err, comments.ErrConflict), "a binding that saw another revision: %v", err)
+}
+
+func TestAGitLabMergeRequestsDiscussionsAreItsRemoteComments(t *testing.T) {
+	const mr = "/api/v4/projects/acme/api/merge_requests/5"
+	fake := newFakeAzure(t, map[string]string{
+		"GET " + mr + "/discussions": `[
+			{"id":"d1","notes":[{"id":11,"body":"Check this","resolvable":true,"resolved":false,"created_at":"2026-11-04T10:00:00Z",
+			 "author":{"id":7,"name":"Grace Hopper","username":"grace"}}]},
+			{"id":"d2","individual_note":true,"notes":[{"id":21,"body":"Nice.","resolvable":false,"created_at":"2026-11-04T11:00:00Z",
+			 "author":{"id":8,"name":"Ada Lovelace","username":"ada"}}]}]`,
+	})
+	client, err := git.FromConnection(dbcontext.New(), models.Connection{Name: "acme", Type: models.ConnectionTypeGitlab,
+		URL: fake.URL, Password: "glpat", InsecureTLS: true})
+	require.NoError(t, err)
+	remote, err := client.Repository(fake.URL + "/acme/api.git")
+	require.NoError(t, err)
+	provider := Connection{Kind: "gitlab", Resolve: func(context.Context, comments.Principal, comments.Target) (*git.Repository, error) {
+		return remote, nil
+	}}
+	target := comments.Target{URI: fake.URL + "/acme/api/-/merge_requests/5"}
+
+	assert.Equal(t, "gitlab", provider.Name())
+	fetched, err := provider.Fetch(context.Background(), comments.Principal{}, target)
+	require.NoError(t, err)
+	require.Len(t, fetched, 2)
+	assert.Equal(t, "gitlab", fetched[0].Binding.Provider)
+	assert.Equal(t, "d1", fetched[0].Binding.ThreadID)
+	assert.Equal(t, fake.URL+"/acme/api/-/merge_requests/5#note_11", fetched[0].Binding.URL, "the thread's own page")
+	assert.True(t, fetched[0].Binding.Resolvable)
+	assert.Equal(t, comments.Actor{Kind: "user", ID: "7", Label: "Grace Hopper"}, fetched[0].Author)
+	assert.False(t, fetched[1].Binding.Resolvable, "an individual note can't be resolved")
+
+	_, err = provider.Fetch(context.Background(), comments.Principal{}, comments.Target{URI: fake.URL + "/acme/Platform/_git/rules/pullrequest/9"})
+	require.ErrorIs(t, err, comments.ErrInvalid, "an Azure DevOps pull request isn't the GitLab provider's")
 }

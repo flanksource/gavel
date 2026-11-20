@@ -11,9 +11,11 @@ import (
 	"testing"
 
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/gavel/connections"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/gitlab"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/stretchr/testify/assert"
@@ -83,4 +85,15 @@ func TestAHostedServerNeverReadsTheHostsConnections(t *testing.T) {
 	newHostedFixture(t)
 	_, err := github.GitClient(context.Background(), github.Options{Repo: "acme/api"})
 	require.ErrorIs(t, err, github.ErrNoToken)
+}
+
+func TestALocalRunReadsAGitLabProjectsTokenFromItsConnections(t *testing.T) {
+	connectionFiles(t)
+	require.NoError(t, os.WriteFile(filepath.Join(workingDir, ".connections", "lab.yaml"), []byte("apiVersion: mission-control.flanksource.com/v1\nkind: Connection\n"+
+		"metadata: {name: lab}\nspec: {properties: {group: team}, gitlab: {url: 'https://gitlab.example.com', personalAccessToken: {value: gl_file}}}\n"), 0o600))
+	repo, err := git.ParseRepoURL("https://gitlab.example.com/team/svc.git", models.ConnectionTypeGitlab)
+	require.NoError(t, err)
+	connection, err := gitlab.LocalConnection(context.Background(), repo)
+	require.NoError(t, err)
+	assert.Equal(t, "gl_file", connection.Password)
 }

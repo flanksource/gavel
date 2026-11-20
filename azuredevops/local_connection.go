@@ -4,14 +4,13 @@ package azuredevops
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 	"time"
 
-	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/gavel/forge"
 )
 
 // cliLogin caches the az CLI login's token for every local connection that carries it.
@@ -22,7 +21,7 @@ var cliLogin = &authenticator{fetch: cliAccessToken, now: time.Now}
 // else one whose API calls carry the az CLI login's token.
 func LocalConnection(ctx context.Context, repo git.RepoURL) (models.Connection, git.ClientOptions, error) {
 	described := "Azure DevOps repository " + Repository{Organization: repo.Owner, Project: repo.Project, Name: repo.Name}.URL()
-	owner, err := owningConnection(ctx, repo, described)
+	owner, err := forge.OwningConnection(ctx, FindConnection, repo, described)
 	if err != nil {
 		return models.Connection{}, git.ClientOptions{}, err
 	}
@@ -36,26 +35,4 @@ func LocalConnection(ctx context.Context, repo git.RepoURL) (models.Connection, 
 	}
 	return models.Connection{Name: "az CLI", Type: models.ConnectionTypeAzureDevops, URL: organization},
 		git.ClientOptions{TokenSource: cliLogin.cliToken}, nil
-}
-
-// LocalRemote is the Azure DevOps repository at repoURL, on Services or a Server, as a local gavel
-// reaches it through LocalConnection.
-func LocalRemote(ctx context.Context, repoURL string) (*git.Repository, error) {
-	repo, err := git.ParseRepoURL(repoURL, models.ConnectionTypeAzureDevops)
-	if err != nil {
-		return nil, fmt.Errorf("Azure DevOps repository %s: %w", repoURL, err)
-	}
-	connection, options, err := LocalConnection(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	client, err := git.FromConnection(dbcontext.NewContext(ctx), connection, options)
-	if err != nil {
-		return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
-	}
-	remote, err := client.Repository(repoURL)
-	if err != nil {
-		return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
-	}
-	return remote, nil
 }

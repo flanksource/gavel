@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/flanksource/gavel/azuredevops"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/model"
@@ -53,7 +53,7 @@ func Resolve(opts Options) (Client, error) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		remote, err := azuredevops.LocalRemote(ctx, repo)
+		remote, err := LocalRemote(ctx, models.ConnectionTypeAzureDevops, repo)
 		if err != nil {
 			return nil, err
 		}

@@ -134,9 +134,11 @@ func bindUIListener(host string, requested int) (int, net.Listener, error) {
 }
 
 // resolveRepoArg is the repository a command argument names: a GitHub owner/name, or the URL of an
-// Azure DevOps repository, which the search config names it by.
+// Azure DevOps or GitLab repository, which the search config names it by.
 func resolveRepoArg(arg string) (string, error) {
-	if _, azure := splitAzureRepos([]string{arg}); len(azure) == 1 {
+	if _, connectionRepos, err := splitConnectionRepos(context.Background(), []string{arg}); err != nil {
+		return "", err
+	} else if len(connectionRepos) == 1 {
 		return arg, nil
 	}
 	if strings.HasPrefix(arg, "https://") || strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "github.com/") {
@@ -458,10 +460,12 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		if err != nil {
 			return github.PRSearchResults{}, nil, err
 		}
-		// Azure DevOps repositories named by URL are listed through their connections; a
-		// config naming only those searches no GitHub repositories.
-		var azureRepos []string
-		cfg.Repos, azureRepos = splitAzureRepos(cfg.Repos)
+		// Azure DevOps and GitLab repositories named by URL are listed through their
+		// connections; a config naming only those searches no GitHub repositories.
+		var connectionRepos []connectionRepo
+		if cfg.Repos, connectionRepos, err = splitConnectionRepos(ctx, cfg.Repos); err != nil {
+			return github.PRSearchResults{}, nil, err
+		}
 		so = scopePRSearch(so, cfg, hiddenOrgs)
 		so.ShowAuthor = true
 		// Drop known bots at the source unless the user asked to see them via
@@ -470,7 +474,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		if !srv.IncludeBots() {
 			so.ExcludeAuthors = srv.KnownBots()
 		}
-		return searchConfiguredPRs(ctx, ghOpts, so, azureRepos)
+		return searchConfiguredPRs(ctx, ghOpts, so, connectionRepos)
 	}
 
 	if runtime.IngestStats != nil {
