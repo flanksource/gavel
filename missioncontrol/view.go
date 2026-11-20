@@ -76,14 +76,18 @@ type timeseriesKeys struct {
 	ValueKey string `json:"valueKey"`
 }
 
-// View reads the panels of the View named namespace/name.
-func (s *Source) View(ctx context.Context, view string) (View, error) {
+// View reads the panels of the View named namespace/name, its queries templated with variables,
+// which they read as var.<key>.
+func (s *Source) View(ctx context.Context, view string, variables map[string]string) (View, error) {
 	namespace, name, ok := strings.Cut(view, "/")
 	if !ok || namespace == "" || name == "" || strings.Contains(name, "/") {
 		return View{}, fmt.Errorf("view %q must be namespace/name", view)
 	}
 	what := "view " + view
-	r, err := s.Client.R(ctx).Post("/view/"+namespace+"/"+name, map[string]any{"variables": map[string]string{}})
+	if variables == nil {
+		variables = map[string]string{}
+	}
+	r, err := s.Client.R(ctx).Post("/view/"+namespace+"/"+name, map[string]any{"variables": variables})
 	if err != nil {
 		return View{}, s.explain(what, err)
 	}

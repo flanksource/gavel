@@ -78,7 +78,7 @@ backend metadata using only the OAuth client ID.
 | `git_repos` | `org_id NOT NULL`; root dir unique per org; nullable `user_id` FK |
 | `git_worktrees`, `git_branches`, `git_range_stats` | Inherit via `repo_id` |
 | `todo_run_landings` | Inherit through issue |
-| `org_memberships`, `org_settings`, `repos`, `github_installations`, `sandbox_runs` | `org_id NOT NULL` FK |
+| `org_memberships`, `org_settings`, `repos`, `github_installations`, `org_model_keys`, `org_budgets`, `sandbox_runs` | `org_id NOT NULL` FK |
 | `user_ssh_keys` | Owned by the user; a key authenticates its user in every org they belong to |
 | `favicon_caches` | Public metadata; intentionally shared |
 | Captain sessions | Gavel-owned `session_owners` sidecar with session/user/org FKs |

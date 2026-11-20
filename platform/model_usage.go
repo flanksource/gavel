@@ -44,12 +44,8 @@ func (s Store) ModelUsage(ctx context.Context, since time.Time) ([]ModelUsageDay
 			sum(calls.cache_write_tokens) AS cache_write_tokens,
 			COALESCE(sum(`+captaindb.ModelCallCostUSD+`), 0) AS cost_usd,
 			count(*) FILTER (WHERE upper(calls.currency) <> 'USD') AS other_currency_calls
-		FROM captain_model_calls calls
-		JOIN captain_turns turns ON turns.id = calls.turn_id
-		JOIN captain_sessions sessions ON sessions.id = turns.session_id
-		LEFT JOIN session_owners own ON own.session_id = sessions.id
-		LEFT JOIN session_owners root ON root.session_id = sessions.root_session_id
-		LEFT JOIN orgs o ON o.id = COALESCE(own.org_id, root.org_id) AND o.issuer = ?
+		FROM `+modelCallOwners+`
+		LEFT JOIN orgs o ON o.id = `+modelCallOwner+` AND o.issuer = ?
 		WHERE calls.created_at >= ?
 		GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 3 NULLS LAST, 4, 5`, s.Issuer, since).Scan(&days).Error; err != nil {
 		return nil, fmt.Errorf("read the platform's model usage: %w", err)

@@ -79,12 +79,26 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 		if err := r.Transcripts(context.WithoutCancel(ctx), record, source, name, strings.NewReader(string(data))); err != nil {
 			logger.Warnf("keep transcript %s of agent run %s: %v", name, id, err)
 		}
+		// The transcript's model calls count towards the organization's budgets at once.
+		if err := r.Dispatcher.Enforce(context.WithoutCancel(ctx), r.Scope.OrgID); err != nil {
+			logger.Warnf("agent run %s: %v", id, err)
+		}
+	}
+	// The run's spend stops at what the organization's model cost budget leaves, or its step's
+	// own ceiling when that is lower.
+	if remaining, capped, err := r.Dispatcher.RemainingModelCost(ctx, r.Scope.OrgID); err != nil {
+		return promptrun.Result{}, err
+	} else if capped && (in.Resolved.Spec.Budget.Cost == 0 || remaining < in.Resolved.Spec.Budget.Cost) {
+		in.Resolved.Spec.Budget.Cost = remaining
 	}
 	// The dispatcher's timeout bounds every run, whatever its step's own budget, so the run ends
-	// within its environment's lifetime.
-	runCtx, cancel := context.WithTimeout(ctx, r.Dispatcher.RunTimeout())
+	// within its environment's lifetime; the dispatcher stops it sooner once its budgets are used up.
+	runCtx, cancel := context.WithTimeout(recorded.Context(), r.Dispatcher.RunTimeout())
 	defer cancel()
 	result, err := promptrun.Run(runCtx, in)
+	if stopped := context.Cause(recorded.Context()); stopped != nil && err != nil {
+		return result, fmt.Errorf("agent run %s stopped: %w", id, stopped)
+	}
 	if err != nil {
 		return result, err
 	}
@@ -99,7 +113,7 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 
 // runOptions are the substrate backend's options with the run's own: its environment, the commit
 // it starts from and the branch its commits come back on, gavel's program, the organization's
-// model keys, and the run's lifetime.
+// model keys and template, and the run's lifetime.
 func (r *SubstrateRunner) runOptions(recorded *sandbox.RecordedRun, sha, branch string) map[string]any {
 	options := maps.Clone(r.Backend)
 	options["environment"] = sandbox.JobName(recorded.ID)
@@ -111,6 +125,9 @@ func (r *SubstrateRunner) runOptions(recorded *sandbox.RecordedRun, sha, branch 
 	options["env"] = map[string]string{"GAVEL_DB": "off", "CI": "1"}
 	options["credentials"] = sandbox.SubstrateCredentialOptions(recorded.Credentials)
 	options["maxLifetime"] = r.Dispatcher.RunLifetime().String()
+	if recorded.Template != "" {
+		options["template"] = recorded.Template
+	}
 	return options
 }
 

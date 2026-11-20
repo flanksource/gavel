@@ -9,6 +9,8 @@ export interface SandboxRun {
   id: string;
   kind: string;
   status: string;
+  // statusMessage says why the run waits, or why it was refused or failed before it ran.
+  statusMessage?: string;
   exitCode?: number;
   ref?: string;
   sha?: string;
@@ -103,7 +105,10 @@ export function RunsView({ selectedId, onSelect }: { selectedId: string; onSelec
                 className={`cursor-pointer border-b border-border hover:bg-muted ${run.id === selectedId ? 'bg-primary/10' : ''}`}
               >
                 <td className="px-2 py-1.5 font-medium">{kindLabels[run.kind] ?? run.kind}</td>
-                <td className={`px-2 py-1.5 ${statusClass[run.status] ?? ''}`}>{runStatus(run)}</td>
+                <td className={`px-2 py-1.5 ${statusClass[run.status] ?? ''}`}>
+                  {runStatus(run)}
+                  {run.statusMessage && <div className="text-xs text-muted-foreground">{run.statusMessage}</div>}
+                </td>
                 <td className="px-2 py-1.5">{run.repo}</td>
                 <td className="px-2 py-1.5 font-mono">{run.ref?.replace(/^refs\/heads\//, '')}</td>
                 <td className="px-2 py-1.5 font-mono">{run.sha?.slice(0, 7)}</td>

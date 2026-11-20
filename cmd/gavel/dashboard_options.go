@@ -49,12 +49,15 @@ type DashboardOptions struct {
 	SubstrateClientKey          string   `flag:"substrate-client-key" help:"Key of --substrate-client-cert (substrate)"`
 	SubstrateAtespace           string   `flag:"substrate-atespace" help:"Atespace sandbox environments are created in (substrate)" default:"ate-env"`
 	SubstrateTemplate           string   `flag:"substrate-template" help:"Image template sandbox environments are created from, registered with ate-env manifest template --rootfs-image (substrate)"`
+	SubstrateCPU                string   `flag:"substrate-cpu" help:"CPU of an organization's sandbox environments unless a platform admin set its own, such as 2 or 500m; empty is --substrate-template's (substrate)"`
+	SubstrateMemory             string   `flag:"substrate-memory" help:"Memory of an organization's sandbox environments unless a platform admin set its own, such as 4Gi; empty is --substrate-template's (substrate)"`
 	SubstrateEgress             []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides gavel serve, the Go, npm and Python registries and GitHub; repeat for each (substrate)"`
 	SubstrateGavelName          string   `flag:"substrate-gavel-name" help:"The name substrate's credential provider knows this gavel by, in each run's model key URI, e.g. beta (substrate)"`
 	SubstrateTrustBundle        string   `flag:"substrate-trust-bundle" help:"Path in the environment of the egress gateway's CA, which jobs trust for hosts with an injected credential (substrate)"`
 	MissionControlURL           string   `flag:"mission-control-url" help:"Mission Control backend the platform dashboard reads gavel's infrastructure from, e.g. https://mc.example.com/api (or GAVEL_MISSION_CONTROL_URL; its token is GAVEL_MISSION_CONTROL_TOKEN; --auth clerk)"`
 	MissionControlInfra         string   `flag:"mission-control-infra" help:"Mission Control resource search selecting gavel's infrastructure for the platform dashboard, e.g. namespace=gavel"`
 	MissionControlSubstrateView string   `flag:"mission-control-substrate-view" help:"Mission Control View, as namespace/name, whose panels graph substrate's metrics on the platform dashboard"`
+	MissionControlOrgView       string   `flag:"mission-control-org-view" help:"Mission Control View, as namespace/name, whose panels measure one organization's CPU and memory from its variable org, the organization's ID, for platform admins and the organization's admins"`
 	PropertiesFile              string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
 
 	clerkSecretKey string
@@ -118,7 +121,7 @@ func (o DashboardOptions) Validate() error {
 		if githubApp {
 			add("--github-app-* flags serve hosted orgs and need --auth clerk")
 		}
-		if o.MissionControlURL != "" || o.MissionControlInfra != "" || o.MissionControlSubstrateView != "" {
+		if o.MissionControlURL != "" || o.MissionControlInfra != "" || o.MissionControlSubstrateView != "" || o.MissionControlOrgView != "" {
 			add("--mission-control-* flags serve the platform dashboard and need --auth clerk")
 		}
 	case authClerk:
@@ -178,6 +181,9 @@ func (o DashboardOptions) Validate() error {
 		default:
 			add("--sandbox must be docker, podman, kubernetes or substrate, got %q", o.Sandbox)
 		}
+		if _, err := substrateSize(o); err != nil {
+			add("%v", err)
+		}
 		if o.Sandbox == "substrate" {
 			switch {
 			case o.SubstrateGavelName == "":
@@ -235,18 +241,24 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // validateMissionControl checks the Mission Control the platform dashboard reads: a URL
 // needs its token and the search selecting gavel's infrastructure.
 func (o DashboardOptions) validateMissionControl(add func(format string, args ...any)) {
+	views := []struct{ flag, view string }{
+		{"--mission-control-substrate-view", o.MissionControlSubstrateView},
+		{"--mission-control-org-view", o.MissionControlOrgView},
+	}
 	if o.MissionControlURL == "" {
 		if o.MissionControlInfra != "" {
 			add("--mission-control-infra needs --mission-control-url")
 		}
-		if o.MissionControlSubstrateView != "" {
-			add("--mission-control-substrate-view needs --mission-control-url")
+		for _, v := range views {
+			if v.view != "" {
+				add("%s needs --mission-control-url", v.flag)
+			}
 		}
 		return
 	}
-	if view := o.MissionControlSubstrateView; view != "" {
-		if namespace, name, ok := strings.Cut(view, "/"); !ok || namespace == "" || name == "" || strings.Contains(name, "/") {
-			add("--mission-control-substrate-view must name a View as namespace/name, got %q", view)
+	for _, v := range views {
+		if namespace, name, ok := strings.Cut(v.view, "/"); v.view != "" && (!ok || namespace == "" || name == "" || strings.Contains(name, "/")) {
+			add("%s must name a View as namespace/name, got %q", v.flag, v.view)
 		}
 	}
 	if u, err := url.Parse(o.MissionControlURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {

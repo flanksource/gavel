@@ -32,6 +32,10 @@ secret:
 
 # Settings gavel serve reads from /etc/gavel/gavel.properties, such as retention windows:
 #   retention.job_logs: 30d
+# With the substrate sandbox, how long a run waits for room under its organization's concurrent
+# budgets before it fails, and how often a waiting run checks its budgets again:
+#   sandbox.queue.timeout: 15m
+#   sandbox.budget.interval: 30s
 properties: {}
 
 service:
@@ -66,6 +70,11 @@ missionControl:
   # Optional: namespace/name of the Mission Control View whose panels graph substrate's metrics,
   # e.g. substrate/capacity (docs/platform-dashboard.md has an example View).
   substrateView: ""
+  # Optional: namespace/name of the Mission Control View measuring one organization's CPU and
+  # memory, which gavel passes the organization's ID as variable org, e.g. substrate/org-usage
+  # (docs/platform-dashboard.md has an example View). Platform admins see every organization's,
+  # an organization's admins their own.
+  orgView: ""
   # Secret holding a Mission Control access token with the viewer role.
   token:
     secretName: ""
@@ -81,6 +90,12 @@ sandbox:
     # Image template environments are created from, which sets the runner image they run (see
     # sandbox/runner.Dockerfile): register it with `ate-env manifest template --rootfs-image`.
     template: ""
+    # Size of each organization's environments: a copy of the template at this CPU and memory is
+    # made for every organization. Empty is the template's own size. A platform admin can give an
+    # organization its own size on the platform dashboard.
+    size:
+      cpu: ""
+      memory: ""
     # Hosts environments may reach besides gavel serve, the Go, npm and Python registries and GitHub.
     egress: []
     # The name substrate's credential provider knows this gavel by, in each run's model key URI,

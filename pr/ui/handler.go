@@ -177,6 +177,8 @@ type Server struct {
 	workspaces *HostedWorkspaces
 	// agentRuns runs hosted todos' steps in sandbox jobs; nil without a sandbox.
 	agentRuns *AgentRuns
+	// measuredUsage reads the organization's measured CPU and memory.
+	measuredUsage MeasuredUsage
 }
 
 // SetOrg scopes the Server's stores to org, whose settings live in db. Call it
@@ -640,6 +642,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/model-keys/{provider}", s.handleModelKeyDelete)
 	mux.HandleFunc("GET /api/sandbox-runs", s.handleSandboxRuns)
 	mux.HandleFunc("GET /api/sandbox-runs/{id}/log", s.handleSandboxRunLog)
+	mux.HandleFunc("GET /api/usage", s.handleUsage)
+	mux.HandleFunc("GET /api/usage/measured", s.handleMeasuredUsage)
+	mux.HandleFunc("GET /api/budgets", s.handleBudgetList)
+	mux.HandleFunc("PUT /api/budgets/{resource}/{kind}", s.handleBudgetSet)
+	mux.HandleFunc("DELETE /api/budgets/{resource}/{kind}", s.handleBudgetRemove)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
 	mux.HandleFunc("/react-grab", handleReactGrabInstall)

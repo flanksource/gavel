@@ -206,9 +206,10 @@ func TestHostedPlatformReadsMissionControl(t *testing.T) {
 	mc := missioncontroltest.New(t)
 	mc.SetResources(clientapi.SearchResourcesResponse{Configs: []clientapi.SelectedResource{{ID: "c1", Name: "gavel"}}})
 	mc.SetView("substrate", "capacity", map[string]any{"panels": []map[string]any{{"name": "Crashes", "type": "number", "rows": []map[string]any{{"value": 3}}}}})
+	mc.SetView("substrate", "org-usage", map[string]any{"panels": []map[string]any{{"name": "Running environments", "type": "number", "rows": []map[string]any{{"value": 2}}}}})
 	f := newHostedFixture(t, func(o *DashboardOptions) {
 		o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = mc.URL, "namespace=gavel", missioncontroltest.Token
-		o.MissionControlSubstrateView = "substrate/capacity"
+		o.MissionControlSubstrateView, o.MissionControlOrgView = "substrate/capacity", "substrate/org-usage"
 	})
 	f.clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
 	get := func(path string) string {
@@ -230,6 +231,14 @@ func TestHostedPlatformReadsMissionControl(t *testing.T) {
 	assert.Equal(t, "namespace=gavel", mc.Searches()[0].Configs[0].Search)
 	assert.Equal(t, "c1", mc.ChangeSearches()[0].CatalogID, "and the changes of the config items found")
 	assert.Contains(t, get("/api/platform/substrate/metrics"), `"name":"Crashes","type":"number","value":3`)
+
+	other := uuid.New()
+	assert.Contains(t, get("/api/platform/orgs/"+other.String()+"/measured-usage"), `"name":"Running environments","type":"number","value":2`)
+	assert.Contains(t, get("/api/usage/measured"), `"name":"Running environments"`, "an organization admin sees their own")
+	views := mc.ViewRequests()
+	require.Len(t, views, 3)
+	assert.Equal(t, map[string]any{"org": other.String()}, views[1]["variables"])
+	assert.NotEqual(t, other.String(), views[2]["variables"].(map[string]any)["org"], "the admin's own organization")
 }
 
 func TestHostedPlatformListsSubstratesInventory(t *testing.T) {

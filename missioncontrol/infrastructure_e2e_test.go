@@ -34,7 +34,7 @@ func TestViewFromARealMissionControl(t *testing.T) {
 	require.NotEmpty(t, token, "GAVEL_MISSION_CONTROL_TOKEN is an access token with the viewer role")
 	require.NotEmpty(t, view, "GAVEL_MISSION_CONTROL_SUBSTRATE_VIEW is the namespace/name of substrate's metrics View")
 
-	got, err := missioncontrol.New(url, token, "").View(t.Context(), view)
+	got, err := missioncontrol.New(url, token, "").View(t.Context(), view, nil)
 	require.NoError(t, err)
 	assert.Empty(t, got.RefreshError, "the view's queries ran")
 	var drawn int

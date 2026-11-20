@@ -36,8 +36,14 @@ type PlatformAPI struct {
 	// SubstrateView is the namespace/name of the Mission Control View graphing substrate's
 	// metrics; empty when serve runs without one.
 	SubstrateView string
+	// OrgView is the namespace/name of the Mission Control View measuring one organization's CPU
+	// and memory; empty when serve runs without one.
+	OrgView string
 	// Substrate lists substrate's workers and actors; nil when serve runs without --sandbox substrate.
 	Substrate SubstrateInventory
+	// Sizes are the organizations' substrate templates, whose size platform admins set; nil when
+	// serve runs without --sandbox substrate.
+	Sizes *sandbox.OrgTemplates
 
 	now        func() time.Time
 	clerkMu    sync.Mutex
@@ -73,6 +79,10 @@ func (p *PlatformAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /api/platform/infrastructure", p.infrastructure)
 	mux.HandleFunc("GET /api/platform/substrate/metrics", p.substrateMetrics)
 	mux.HandleFunc("GET /api/platform/substrate/inventory", p.substrateInventory)
+	mux.HandleFunc("GET /api/platform/orgs/{id}/sandbox-size", p.sandboxSize)
+	mux.HandleFunc("GET /api/platform/orgs/{id}/measured-usage", p.orgMeasuredUsage)
+	mux.HandleFunc("PUT /api/platform/orgs/{id}/sandbox-size", p.setSandboxSize)
+	mux.HandleFunc("DELETE /api/platform/orgs/{id}/sandbox-size", p.resetSandboxSize)
 	return platformAdminsOnly(mux)
 }
 
@@ -381,7 +391,7 @@ func (p *PlatformAPI) substrateMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), platformSourceTimeout)
 	defer cancel()
-	view, err := p.MissionControl.View(ctx, p.SubstrateView)
+	view, err := p.MissionControl.View(ctx, p.SubstrateView, nil)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err)
 		return

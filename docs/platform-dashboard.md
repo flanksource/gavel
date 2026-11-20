@@ -20,7 +20,10 @@ Windows are limited to 60 days, because sandbox runs are kept for 60 days by def
 starts at UTC midnight, so every day on a chart is a whole day.
 
 Click an organization on the Tenants panel to open its own view at `/platform/<organization ID>`:
-its members, repositories, GitHub installations and last run, then the sandbox usage, model usage,
+its members, repositories, GitHub installations and last run, its sandbox size (the CPU and memory
+each of its substrate environments gets, which a platform admin sets there or returns to serve's
+default, `--substrate-cpu` and `--substrate-memory`), its measured CPU and memory (below), then
+the sandbox usage, model usage,
 Captain history, substrate actors and GitHub installations panels with only its rows. Budgets,
 substrate's workers, its metrics and gavel's infrastructure belong to no one organization, so they
 show only on the dashboard of every organization.
@@ -100,6 +103,7 @@ panel says which settings are missing. To set one up:
    | The search | `--mission-control-infra` | `missionControl.infra` |
    | The token | `GAVEL_MISSION_CONTROL_TOKEN` (environment only) | `missionControl.token.secretName` / `.key` |
 | Optional: substrate's metrics View, as `namespace/name` | `--mission-control-substrate-view` | `missionControl.substrateView` |
+| Optional: the organizations' measured use View, as `namespace/name` | `--mission-control-org-view` | `missionControl.orgView` |
 
 If Mission Control refuses the token, the panel shows the HTTP status and says to check
 `GAVEL_MISSION_CONTROL_TOKEN`.
@@ -324,3 +328,89 @@ actor states.
 
 If Mission Control can't refresh the View, for example because Prometheus is unreachable, the
 panel says why, and shows whatever data Mission Control still has cached for it.
+
+## Measured CPU and memory
+
+An organization's environments run from its own templates, `gavel-org-<organization ID>-<hash>`,
+so substrate's metrics labelled with those templates are what the organization used. gavel reads
+them from a second View, `--mission-control-org-view substrate/org-usage`, passing the
+organization's ID as its variable `org`, which its queries read as `$(.var.org)`. Mission Control
+caches the View once per organization. Platform admins see any organization's on its platform view
+(`/api/platform/orgs/{id}/measured-usage`); an organization's admins see their own on its Usage and
+budgets page (`/api/usage/measured`); its other members don't see it.
+
+The figures are sampled every scrape (15 seconds on substrate's Prometheus), so a short burst of
+CPU may not show, and they reset when that Prometheus restarts. Budgets and usage count each run's
+size for as long as it runs instead.
+
+- **CPU:** substrate keeps one CPU counter per template and worker node, which stays a while after
+  its environments end, and whose first sample already holds a short run's CPU. `increase()`
+  misses that first sample, so the window's CPU is the counter's latest value less its value when
+  the window began, or less nothing when the counter began within it.
+- **Peak memory** samples at the scrape interval (`[24h:15s]`), so an environment that lives a
+  minute still counts.
+
+```yaml
+apiVersion: mission-control.flanksource.com/v1
+kind: View
+metadata:
+  name: org-usage
+  namespace: substrate
+spec:
+  display:
+    title: Measured use
+  # The organization's ID, which gavel passes.
+  templating:
+    - key: org
+      label: Organization ID
+  panels:
+    - name: Running environments
+      type: number
+      query: SELECT value FROM environments_now
+    - name: CPU, last 24h (core-hours)
+      type: number
+      query: SELECT value FROM cpu_core_hours
+    - name: Peak memory, last 24h (GiB)
+      type: number
+      query: SELECT value FROM peak_memory
+    - name: CPU (cores)
+      description: Last 12h
+      type: timeseries
+      query: SELECT timestamp, value FROM cpu
+    - name: Memory working set (GiB)
+      description: Last 12h, per minute
+      type: timeseries
+      query: SELECT timestamp, value FROM working_set
+  queries:
+    environments_now:
+      columns: { value: decimal }
+      prometheus:
+        connection: connection://substrate/prometheus
+        query: sum(ate_actor_stats_sampled_actors{ate_template_name=~"gavel-org-$(.var.org)-.*"}) or vector(0)
+    cpu_core_hours:
+      columns: { value: decimal }
+      prometheus:
+        connection: connection://substrate/prometheus
+        # One counter per template and worker node, kept a while after its environments end: its
+        # first sample already holds a short run's CPU, which increase() misses. CPU in the window
+        # is its latest value less its value when the window began, or less 0 when it began since.
+        query: (sum(max_over_time(ate_actor_stats_cpu_time_seconds_total{ate_template_name=~"gavel-org-$(.var.org)-.*"}[24h]) - (last_over_time(ate_actor_stats_cpu_time_seconds_total{ate_template_name=~"gavel-org-$(.var.org)-.*"}[5m] offset 24h) or max_over_time(ate_actor_stats_cpu_time_seconds_total{ate_template_name=~"gavel-org-$(.var.org)-.*"}[24h]) * 0)) / 3600) or vector(0)
+    # Sampled at the scrape interval, so an environment of a minute still counts.
+    peak_memory:
+      columns: { value: decimal }
+      prometheus:
+        connection: connection://substrate/prometheus
+        query: (max_over_time(sum(ate_actor_stats_memory_working_set_bytes{ate_template_name=~"gavel-org-$(.var.org)-.*"})[24h:15s]) / 2^30) or vector(0)
+    cpu:
+      columns: { timestamp: datetime, value: decimal }
+      prometheus:
+        connection: connection://substrate/prometheus
+        query: sum(rate(ate_actor_stats_cpu_time_seconds_total{ate_template_name=~"gavel-org-$(.var.org)-.*"}[5m])) or vector(0)
+        range: { start: now-12h, end: now, step: 5m }
+    working_set:
+      columns: { timestamp: datetime, value: decimal }
+      prometheus:
+        connection: connection://substrate/prometheus
+        query: (sum(ate_actor_stats_memory_working_set_bytes{ate_template_name=~"gavel-org-$(.var.org)-.*"}) / 2^30) or vector(0)
+        range: { start: now-12h, end: now, step: 1m }
+```
