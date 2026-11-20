@@ -30,6 +30,14 @@
       },
       "type": "object"
     },
+    "AccessLevel": {
+      "description": "Portable access contract, compiled to each runtime's native dialect. read-only: the agent may read the workspace but cannot create, modify or delete files, spawn sub-agents, use third-party MCP servers, or obtain write access by approval. full: no access restriction, overriding a read-only intent from an earlier layer. Unset leaves every runtime unchanged.",
+      "enum": [
+        "read-only",
+        "full"
+      ],
+      "type": "string"
+    },
     "AfterStep": {
       "additionalProperties": false,
       "properties": {
@@ -42,6 +50,15 @@
         "cwd": {
           "type": "string"
         },
+        "if": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
         "when": {
           "enum": [
             "onVerify",
@@ -49,6 +66,9 @@
             "always"
           ],
           "type": "string"
+        },
+        "with": {
+          "type": "object"
         }
       },
       "type": "object"
@@ -94,6 +114,18 @@
         },
         "tenantID": {
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Batch": {
+      "additionalProperties": false,
+      "properties": {
+        "concurrency": {
+          "type": "integer"
+        },
+        "size": {
+          "type": "integer"
         }
       },
       "type": "object"
@@ -188,12 +220,7 @@
           "type": "boolean"
         },
         "gates": {
-          "enum": [
-            "none",
-            "cheap",
-            "full"
-          ],
-          "type": "string"
+          "$ref": "#/$defs/CommitGateSpecs"
         },
         "message": {
           "type": "string"
@@ -234,6 +261,38 @@
         }
       },
       "type": "object"
+    },
+    "CommitGateSpecs": {
+      "description": "Gates each commit must pass. The excludes gate always runs. Retired level strings none, cheap and full are still accepted.",
+      "oneOf": [
+        {
+          "items": {
+            "properties": {
+              "config": {
+                "description": "Gate configuration, e.g. max-size's bytes.",
+                "type": "object"
+              },
+              "name": {
+                "description": "Registered gate name: secret-names, max-size, or a host's own.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        {
+          "enum": [
+            "none",
+            "cheap",
+            "full"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ConfigMapKeySelector": {
       "additionalProperties": false,
@@ -349,6 +408,9 @@
         "kubernetes": {
           "$ref": "#/$defs/KubernetesConnection"
         },
+        "opensearch": {
+          "$ref": "#/$defs/OpenSearchConnection"
+        },
         "serviceAccount": {
           "type": "boolean"
         }
@@ -406,6 +468,48 @@
       },
       "type": "object"
     },
+    "Grant": {
+      "additionalProperties": false,
+      "properties": {
+        "headers": {
+          "items": {
+            "$ref": "#/$defs/HeaderGrant"
+          },
+          "type": "array"
+        },
+        "methods": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "HeaderGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "valueFrom": {
+          "$ref": "#/$defs/EnvVar"
+        }
+      },
+      "type": "object"
+    },
     "HelmRefKeySelector": {
       "additionalProperties": false,
       "properties": {
@@ -415,6 +519,117 @@
         "name": {
           "type": "string"
         }
+      },
+      "type": "object"
+    },
+    "HookAction": {
+      "additionalProperties": false,
+      "properties": {
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "if": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "with": {
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "InlineTool": {
+      "additionalProperties": false,
+      "properties": {
+        "baseDir": {
+          "type": "string"
+        },
+        "checkout": {
+          "$ref": "#/$defs/Checkout"
+        },
+        "connections": {
+          "$ref": "#/$defs/ExecConnections"
+        },
+        "credentials": {
+          "enum": [
+            "none",
+            "direct",
+            "proxied",
+            "sidecar",
+            "sidecar-proxied"
+          ],
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "destructive": {
+          "type": "boolean"
+        },
+        "dotenv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "envVars": {
+          "items": {
+            "$ref": "#/$defs/EnvVar"
+          },
+          "type": "array"
+        },
+        "exec": {
+          "type": "string"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/Grant"
+          },
+          "type": "array"
+        },
+        "input": true,
+        "output": true,
+        "patch": {
+          "type": "string"
+        },
+        "permission": {
+          "$ref": "#/$defs/ToolPolicy"
+        },
+        "placement": {
+          "enum": [
+            "host",
+            "sandbox",
+            "supervisor",
+            "sidecar"
+          ],
+          "type": "string"
+        },
+        "readonly": {
+          "type": "boolean"
+        },
+        "retry": {
+          "$ref": "#/$defs/ToolRetry"
+        },
+        "timeout": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "InlineTools": {
+      "additionalProperties": {
+        "$ref": "#/$defs/InlineTool"
       },
       "type": "object"
     },
@@ -592,6 +807,36 @@
       },
       "type": "array"
     },
+    "OpenSearchConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "boolean"
+        },
+        "index": {
+          "type": "string"
+        },
+        "insecureSkipVerify": {
+          "type": "boolean"
+        },
+        "password": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "urls": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "username": {
+          "$ref": "#/$defs/EnvVar"
+        }
+      },
+      "type": "object"
+    },
     "Part": {
       "additionalProperties": false,
       "properties": {
@@ -676,6 +921,9 @@
     "Permissions": {
       "additionalProperties": false,
       "properties": {
+        "access": {
+          "$ref": "#/$defs/AccessLevel"
+        },
         "approvalTimeout": {
           "type": "string"
         },
@@ -729,6 +977,12 @@
           },
           "type": "array"
         },
+        "inputHooks": {
+          "items": {
+            "$ref": "#/$defs/HookAction"
+          },
+          "type": "array"
+        },
         "inputSchemaJSON": true,
         "inputSchemaType": {
           "type": "string"
@@ -741,6 +995,12 @@
         },
         "outputSchemaType": {
           "type": "string"
+        },
+        "schemaHooks": {
+          "items": {
+            "$ref": "#/$defs/HookAction"
+          },
+          "type": "array"
         },
         "schemaJSON": true,
         "schemaStrictness": {
@@ -755,6 +1015,9 @@
         "typeSafeQuestions": true,
         "user": {
           "type": "string"
+        },
+        "variables": {
+          "type": "object"
         }
       },
       "required": [
@@ -1081,6 +1344,9 @@
             "$ref": "#/$defs/EnvVar"
           },
           "type": "array"
+        },
+        "patch": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -1088,6 +1354,9 @@
     "Spec": {
       "additionalProperties": false,
       "properties": {
+        "batch": {
+          "$ref": "#/$defs/Batch"
+        },
         "budget": {
           "$ref": "#/$defs/Budget"
         },
@@ -1189,6 +1458,9 @@
         },
         "toolPreferences": {
           "$ref": "#/$defs/ToolPreferences"
+        },
+        "tools": {
+          "$ref": "#/$defs/InlineTools"
         },
         "workflow": {
           "$ref": "#/$defs/Workflow"
@@ -1332,6 +1604,30 @@
       },
       "type": "object"
     },
+    "ToolRetry": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "type": "integer"
+        },
+        "backoff": {
+          "type": "number"
+        },
+        "delay": {
+          "type": "string"
+        },
+        "exitCodes": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "maxDelay": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Tools": {
       "additionalProperties": {
         "description": "Authority for one tool: auto inherits the posture, ask requires approval, allow auto-approves, deny forbids.",
@@ -1464,6 +1760,9 @@
       "additionalProperties": false,
       "description": "Base AI spec inherited by every AI operation. Configure model, prompt, workspace, permissions, environment, and runtime defaults here.",
       "properties": {
+        "batch": {
+          "$ref": "#/$defs/Batch"
+        },
         "budget": {
           "$ref": "#/$defs/Budget"
         },
@@ -1566,6 +1865,9 @@
         },
         "toolPreferences": {
           "$ref": "#/$defs/ToolPreferences"
+        },
+        "tools": {
+          "$ref": "#/$defs/InlineTools"
         },
         "workflow": {
           "$ref": "#/$defs/Workflow"
@@ -3402,6 +3704,9 @@
             "additionalProperties": false,
             "description": "Spec one custom lifecycle step runs as. It overrides the step's prompt frontmatter and its lifecycle declaration, and is overridden by the todo's llm: and the request.",
             "properties": {
+              "batch": {
+                "$ref": "#/$defs/Batch"
+              },
               "budget": {
                 "$ref": "#/$defs/Budget"
               },
@@ -3516,6 +3821,9 @@
               },
               "toolPreferences": {
                 "$ref": "#/$defs/ToolPreferences"
+              },
+              "tools": {
+                "$ref": "#/$defs/InlineTools"
               },
               "workflow": {
                 "$ref": "#/$defs/Workflow"
@@ -3715,6 +4023,9 @@
           "additionalProperties": false,
           "description": "Spec a verification run executes as: `gavel todos check`, the dashboard's verify action, and the acceptance-criteria grader inside a run's definition-of-done loop. It overrides ai: and is overridden by the request. There is no prompt to override — the checklist is generated from the todo's acceptance criteria.",
           "properties": {
+            "batch": {
+              "$ref": "#/$defs/Batch"
+            },
             "budget": {
               "$ref": "#/$defs/Budget"
             },
@@ -3829,6 +4140,9 @@
             },
             "toolPreferences": {
               "$ref": "#/$defs/ToolPreferences"
+            },
+            "tools": {
+              "$ref": "#/$defs/InlineTools"
             },
             "workflow": {
               "$ref": "#/$defs/Workflow"

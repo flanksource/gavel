@@ -79,7 +79,7 @@ func agentCommitter(opts AgentHooksOptions, keepSubject bool) func(*agent.HookCo
 			// Captain already ran the cheap gates over the exact path set it
 			// selected; only `gates: full` asks for gavel's fuller pipeline
 			// (hooks, lint, linked-deps, tidy) on top.
-			SkipGates: plan.Gates != api.CommitGatesFull,
+			SkipGates: !api.HasGate(plan.Gates, api.FullPipelineGate),
 		}
 		if keepSubject {
 			run.Message = plan.Subject

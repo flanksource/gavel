@@ -43,7 +43,10 @@ func (n ADFNode) render(path string) (api.Textable, error) {
 	case "paragraph":
 		return inline, nil
 	case "text":
-		var text api.Textable = clicky.Text(n.Text)
+		// Marks style the text itself: clicky renders a style only on a Text's own
+		// content, not on its children, so a styled wrapper would drop it.
+		styled := clicky.Text(n.Text)
+		href := ""
 		for _, mark := range n.Marks {
 			var markAttrs adfAttrs
 			if len(mark.Attrs) > 0 {
@@ -53,20 +56,23 @@ func (n ADFNode) render(path string) (api.Textable, error) {
 			}
 			switch mark.Type {
 			case "strong":
-				text = api.Text{}.Add(text).Styles("font-bold")
+				styled = styled.Styles("font-bold")
 			case "em":
-				text = api.Text{}.Add(text).Styles("italic")
+				styled = styled.Styles("italic")
 			case "strike":
-				text = api.Text{}.Add(text).Styles("line-through")
+				styled = styled.Styles("line-through")
 			case "code":
-				text = api.Text{}.Add(text).Styles("font-mono")
+				styled = styled.Styles("font-mono")
 			case "link":
-				text = clicky.Link(markAttrs.Href).Add(text)
+				href = markAttrs.Href
 			default:
 				return nil, fmt.Errorf("ADF %s: unsupported mark %q", path, mark.Type)
 			}
 		}
-		return text, nil
+		if href != "" {
+			return clicky.Link(href).Add(styled), nil
+		}
+		return styled, nil
 	case "hardBreak":
 		return clicky.Text("\n"), nil
 	case "heading":
