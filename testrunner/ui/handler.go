@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/clicky/api"
 	clickytask "github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons/text"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
@@ -552,7 +553,7 @@ func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
 		t.Stderr = strings.Join(lines, "\n")
 	}
 	t.Context = map[string]any{
-		"duration": snap.Duration,
+		"duration": text.HumanizeDuration(snap.Duration()),
 		"status":   snap.Status,
 		"type":     snap.Type,
 	}
