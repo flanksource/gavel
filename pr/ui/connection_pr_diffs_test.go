@@ -84,8 +84,12 @@ func diffRoutes() map[string]string {
 		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9": `{"pullRequestId":9,"status":"active","title":"Tighten the rules",
 			"sourceRefName":"refs/heads/tighten","targetRefName":"refs/heads/main",
 			"repository":{"id":"rules-id","name":"rules","project":{"name":"Platform"}}}`,
-		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/threads": `{"value":[]}`,
-		"GET /acme/Platform/_apis/build/builds":                                  `{"value":[]}`,
+		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/threads":   `{"value":[]}`,
+		"GET /acme/Platform/_apis/build/builds":                                    `{"value":[]}`,
+		"GET /acme/_apis/projects/Platform":                                        `{"id":"platform-id"}`,
+		"GET /acme/Platform/_apis/policy/evaluations":                              `{"value":[]}`,
+		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/reviewers": `{"value":[]}`,
+		"GET /acme/Platform/_apis/git/repositories/rules-id/refs":                  `{"value":[{"name":"refs/heads/tighten","objectId":"0"},{"name":"refs/heads/main","objectId":"0"}]}`,
 	}
 }
 

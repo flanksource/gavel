@@ -73,7 +73,11 @@ func azurePRRoutes() map[string]string {
 				{"id":1,"content":"Rename the flag?","commentType":"text","publishedDate":"2026-11-02T12:30:00Z","author":{"displayName":"Ada Lovelace"}}]},
 			{"id":7,"comments":[
 				{"id":1,"content":"Updated the PR","commentType":"system","publishedDate":"2026-11-02T12:05:00Z","author":{"displayName":"Azure"}}]}]}`,
-		"GET /acme/Platform/_apis/build/builds": builds,
+		"GET /acme/Platform/_apis/build/builds":                                    builds,
+		"GET /acme/_apis/projects/Platform":                                        `{"id":"platform-id"}`,
+		"GET /acme/Platform/_apis/policy/evaluations":                              `{"value":[]}`,
+		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/reviewers": `{"value":[]}`,
+		"GET /acme/Platform/_apis/git/repositories/rules-id/refs":                  `{"value":[{"name":"refs/heads/tighten","objectId":"` + azureHead + `"}]}`,
 		"GET /acme/Platform/_apis/build/builds/31/timeline": `{"records":[
 			{"id":"job-2","type":"Job","name":"build","state":"completed","result":"failed","order":1,"log":{"id":7}},
 			{"id":"checkout","parentId":"job-2","type":"Task","name":"checkout","state":"completed","result":"succeeded","order":1,"log":{"id":9}},
@@ -118,10 +122,10 @@ func TestAnAzurePullRequestsDetailComesThroughItsConnection(t *testing.T) {
 	threads := []model.PRComment{
 		{ThreadID: "5", ID: 1, Body: "Please split this up.", Author: "Grace Hopper", AvatarURL: "https://avatars.example/grace",
 			URL: server.URL + "/acme/Platform/_git/rules/pullrequest/9?discussionId=5", CreatedAt: time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC),
-			Path: "/rules.go", Line: 12, IsReviewThread: true},
+			Path: "/rules.go", Line: 12, IsReviewThread: true, CanResolve: true},
 		{ThreadID: "6", ID: 1, Body: "Rename the flag?", Author: "Ada Lovelace",
 			URL: server.URL + "/acme/Platform/_git/rules/pullrequest/9?discussionId=6", CreatedAt: time.Date(2026, 11, 2, 12, 30, 0, 0, time.UTC),
-			IsResolved: true, IsReviewThread: true},
+			IsResolved: true, IsReviewThread: true, CanResolve: true},
 	}
 	assert.Equal(t, threads, pr.ReviewThreads, "a system note isn't a comment")
 	assert.Equal(t, threads, pr.Comments, "every Azure DevOps comment is in a thread")

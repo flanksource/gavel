@@ -5,19 +5,15 @@ package ui
 import (
 	"strings"
 
-	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 // prProviders names each connection type's PR provider as todo links and the PR index key it.
 var prProviders = map[string]string{models.ConnectionTypeAzureDevops: types.PRProviderAzure}
-
-var prStates = map[git.PullRequestState]string{git.PullRequestOpen: "OPEN", git.PullRequestMerged: "MERGED", git.PullRequestClosed: "CLOSED"}
-
-var prMergeable = map[string]string{"mergeable": "MERGEABLE", "conflicts": "CONFLICTING"}
 
 // ConnectionPRItems are listed's pull requests as PR list items. A provider keeping no update
 // time, as Azure DevOps doesn't, has each item as recent as its creation.
@@ -28,13 +24,11 @@ func ConnectionPRItems(listed []forge.RepoPullRequest) github.PRSearchResults {
 		item := github.PRListItem{
 			Provider: prProviders[repo.Provider], Number: pr.Number, Title: pr.Title, Author: pr.Author,
 			Repo: strings.Join(nonEmpty(repo.Owner, repo.Project, repo.Name), "/"), Source: pr.Head, Target: pr.Base,
-			State: prStates[pr.State], Mergeable: "UNKNOWN", URL: pr.URL, UpdatedAt: pr.CreatedAt, ShowAuthor: true,
+			State: provider.PRState(pr.State), Mergeable: "UNKNOWN", URL: pr.URL, UpdatedAt: pr.CreatedAt, ShowAuthor: true,
 		}
 		if metadata := pr.Metadata; metadata != nil {
 			item.AuthorAvatarURL, item.IsDraft = metadata.AuthorAvatarURL, metadata.Draft
-			if mergeable, ok := prMergeable[metadata.Mergeability]; ok {
-				item.Mergeable = mergeable
-			}
+			item.Mergeable = provider.PRMergeable(metadata.Mergeability)
 		}
 		items = append(items, item)
 	}
