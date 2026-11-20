@@ -36,11 +36,14 @@ type Repo struct {
 	ConnectionID *uuid.UUID
 	// RemoteURL is where a connection's repository is cloned from.
 	RemoteURL string
+	// DefaultBranch is the branch a connection's sync recorded as the repository's default.
+	DefaultBranch string
 }
 
 // RepoColumns selects a repos row as a Repo.
 const RepoColumns = `id, org_id AS org, source, name, COALESCE(github_repo_id, 0) AS git_hub_repo_id,
-	COALESCE(installation_id, 0) AS installation_id, connection_id, COALESCE(remote_url, '') AS remote_url`
+	COALESCE(installation_id, 0) AS installation_id, connection_id, COALESCE(remote_url, '') AS remote_url,
+	COALESCE(default_branch, '') AS default_branch`
 
 // ErrRepoNotFound is a repository the organization doesn't have.
 var ErrRepoNotFound = errors.New("repository not found")

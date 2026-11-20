@@ -3,9 +3,12 @@
 package ui
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/cgi"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -14,8 +17,13 @@ import (
 	"sync"
 	"testing"
 
+	dbcontext "github.com/flanksource/commons-db/context"
+	cdbgit "github.com/flanksource/commons-db/git"
+	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/gavel/connections"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/sandbox"
+	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -165,7 +173,7 @@ func TestHostedRunsLandAsPullRequests(t *testing.T) {
 	_, other := hostedCall(t, h.base, http.MethodPost, "/api/todos", h.creator, "org:member", map[string]any{"dir": pushed, "title": "Tool fix"})
 	status, refused = hostedCall(t, h.base, http.MethodPost, "/api/todos/land", h.creator, "org:member", map[string]any{"dir": pushed, "ref": other["id"], "via": "pr"})
 	assert.Equal(t, http.StatusBadRequest, status, refused)
-	assert.Equal(t, "repository tool was pushed to gavel, not linked from GitHub, so its runs can't land as pull requests", refused["error"])
+	assert.Equal(t, "repository tool was pushed to gavel, not linked from GitHub or a git connection, so its runs can't land as pull requests", refused["error"])
 }
 
 func TestHostedLandingTakesItsTitleAndLeavesFilesOut(t *testing.T) {
@@ -274,4 +282,92 @@ func TestHostedPRLinksReadThroughTheOrgsApp(t *testing.T) {
 	for _, token := range tokens {
 		assert.Equal(t, "Bearer ghs_app", token, "through the organization's App, never serve's own token")
 	}
+}
+
+func TestAHostedRunOfAnAzureRepositoryLandsThroughItsConnection(t *testing.T) {
+	db, store, org := openOrgDB(t)
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("h"), 32)))
+	h := &hostedLanding{db: db, org: org, creator: uuid.New(), member: uuid.New(), work: t.TempDir()}
+	for name, id := range map[string]uuid.UUID{"ada": h.creator, "grace": h.member} {
+		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
+	}
+	root := t.TempDir()
+	h.origin = filepath.Join(root, "app")
+	h.git = func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = h.work
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return strings.TrimSpace(string(out))
+	}
+	h.git("init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(h.work, "README.md"), []byte("app"), 0o644))
+	h.git("add", ".")
+	h.git("commit", "-q", "-m", "init")
+	h.setup = h.git("rev-parse", "HEAD")
+	h.git("clone", "-q", "--bare", h.work, h.origin)
+
+	// Azure DevOps: the repository over git's smart HTTP, and the API that opens pull requests.
+	gitPath, err := exec.LookPath("git")
+	require.NoError(t, err)
+	backend := &cgi.Handler{Path: gitPath, Args: []string{"http-backend"}, Root: "/acme/Platform/_git",
+		Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"}}
+	azure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/acme/Platform/_git/") {
+			backend.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/acme/Platform/_apis/git/repositories/app/pullrequests" {
+			http.NotFound(w, r)
+			return
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&h.opened))
+		_, _ = w.Write([]byte(`{"pullRequestId":12,"status":"active","title":"Fix the build","sourceRefName":"` + h.opened["sourceRefName"].(string) +
+			`","targetRefName":"refs/heads/main","repository":{"name":"app","project":{"name":"Platform"}}}`))
+	}))
+	t.Cleanup(azure.Close)
+	client, err := cdbgit.FromConnection(dbcontext.New(), models.Connection{Name: "acme", Type: models.ConnectionTypeAzureDevops,
+		URL: azure.URL + "/acme", Password: "azure-pat", InsecureTLS: true})
+	require.NoError(t, err)
+	scope := tenant.Scope{OrgID: org, Role: "org:admin"}
+	catalogStore, closeStore, err := connections.OpenStore(t.Context(), connections.Options{DB: db, Scope: scope})
+	require.NoError(t, err)
+	saved, err := catalogStore.SaveConnection(t.Context(), &models.Connection{Name: "acme", Type: models.ConnectionTypeAzureDevops,
+		URL: azure.URL + "/acme", Password: "azure-pat", InsecureTLS: true})
+	require.NoError(t, err)
+	require.NoError(t, closeStore())
+	var linked struct{ ID uuid.UUID }
+	require.NoError(t, db.Raw(`INSERT INTO repos (org_id, name, source, connection_id, remote_url, provider_repo_id, default_branch)
+		VALUES (?, 'Platform/app', 'azure_devops', ?, ?, 'app-id', 'main') RETURNING id`, org, saved.ID, azure.URL+"/acme/Platform/_git/app").Scan(&linked).Error)
+	h.workspace = "repo:" + linked.ID.String()
+
+	h.dataDir = t.TempDir()
+	srv := &Server{githubCache: store}
+	srv.SetOrg(org, db)
+	srv.SetHostedMode(true)
+	srv.SetHostedWorkspaces(HostedWorkspaces{DB: db, Sources: &sandbox.Sources{DataDir: h.dataDir,
+		Connection: func(_ context.Context, repo sandbox.Repo) (*cdbgit.Repository, error) {
+			return client.Repository(repo.RemoteURL)
+		}}})
+	h.base = serveActingAs(t, srv, org)
+
+	todo, branch, head := h.run(t, "Fix the build", "fix.go")
+	status, refused := hostedCall(t, h.base, http.MethodPost, "/api/todos/land", h.member, "org:member", map[string]any{"dir": h.workspace, "ref": todo.String(), "via": "pr"})
+	assert.Equal(t, http.StatusForbidden, status, "another member can't land it: %v", refused)
+
+	status, landed := hostedCall(t, h.base, http.MethodPost, "/api/todos/land", h.creator, "org:member", map[string]any{"dir": h.workspace, "ref": todo.String(), "via": "pr"})
+	require.Equal(t, http.StatusOK, status, landed)
+	landing := landed["landing"].(map[string]any)
+	assert.Equal(t, float64(12), landing["prNumber"])
+	assert.Equal(t, "main", landing["targetBranch"], "onto the default branch its sync recorded")
+	assert.Equal(t, head, landing["landedSha"])
+	h.mu.Lock()
+	assert.Equal(t, "refs/heads/"+branch, h.opened["sourceRefName"], "from the run's branch")
+	assert.Equal(t, "refs/heads/main", h.opened["targetRefName"])
+	assert.Contains(t, h.opened["description"], "add fix.go", "described from the run's commits")
+	h.mu.Unlock()
 }

@@ -75,3 +75,33 @@ func TestMirrorsNamedByGitHubRepositoryIDAreRemoved(t *testing.T) {
 	assert.DirExists(t, byRepo)
 	require.NoError(t, (&Sources{DataDir: t.TempDir()}).RemoveGitHubIDMirrors(), "a server with no mirrors yet")
 }
+
+func TestAConnectionsRepositoryLandsARunOnItsOwnRemote(t *testing.T) {
+	dataDir, remotes := t.TempDir(), t.TempDir()
+	work := newWork(t)
+	base := commitFile(t, work, "README.md", "first")
+	remote := filepath.Join(remotes, "rules.git")
+	git(t, work, "clone", "-q", "--bare", work, remote)
+	git(t, remote, "branch", "topic", base)
+	connection := uuid.New()
+	sources := &Sources{DataDir: dataDir, Connection: func(_ context.Context, repo Repo) (*cdbgit.Repository, error) {
+		return cdbgit.NewRepository(cdbgit.RepositoryOptions{URL: repo.RemoteURL, ProviderType: models.ConnectionTypeGitlab})
+	}}
+	azure := Repo{ID: uuid.New(), Org: uuid.New(), Source: "azure_devops", Name: "Platform/rules", ConnectionID: &connection, RemoteURL: "file://" + remote}
+	mirror, err := sources.GitDir(context.Background(), azure)
+	require.NoError(t, err)
+
+	bundle, tip := runCommits(t, remote, base, "worktree-run")
+	bundlePath := filepath.Join(t.TempDir(), "run.bundle")
+	require.NoError(t, os.WriteFile(bundlePath, bundle, 0o644))
+	git(t, mirror, "fetch", "-q", bundlePath, "worktree-run:refs/heads/gavel/todo-run")
+	require.NoError(t, sources.PublishRunBranch(context.Background(), azure, "gavel/todo-run", tip))
+	assert.Equal(t, tip, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"), "the run's branch is on the repository's remote")
+	require.ErrorIs(t, sources.PublishRunBranch(context.Background(), azure, "gavel/todo-run", tip), ErrBranchExists)
+
+	turn, turnTip := runCommits(t, remote, base, "topic-turn")
+	head, err := sources.PushPRHead(context.Background(), azure, "file://"+remote, "topic", base, bytes.NewReader(turn))
+	require.NoError(t, err)
+	assert.Equal(t, turnTip, head)
+	assert.Equal(t, turnTip, git(t, remote, "rev-parse", "refs/heads/topic"), "the PR's source branch moves on the remote")
+}

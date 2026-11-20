@@ -97,15 +97,22 @@ func (s *Sources) PublishRunBranch(ctx context.Context, repo Repo, branch, sha s
 			return fmt.Errorf("put branch %s of %s at %s: %w", branch, repo.label(), sha, err)
 		}
 		return nil
-	case "github":
-		return s.pushNewBranch(ctx, repo, s.mirrorDir(repo), branch, sha)
 	default:
-		return fmt.Errorf("repository %s has source %q, not push or github", repo.ID, repo.Source)
+		if !landsPRs(repo.Source) {
+			return fmt.Errorf("repository %s has source %q, which has no pull requests to land a run as", repo.ID, repo.Source)
+		}
+		return s.pushNewBranch(ctx, repo, s.mirrorDir(repo), branch, sha)
 	}
 }
 
-// pushNewBranch creates branch at sha on GitHub, from source, repo's mirror. A branch GitHub has
-// already is never moved: it's ErrBranchExists.
+// landsPRs reports whether a repository from source has pull requests a run lands as: one GitHub,
+// GitLab or Azure DevOps keeps, not one pushed to gavel or reached as plain git.
+func landsPRs(source string) bool {
+	return source == "github" || source == "gitlab" || source == "azure_devops"
+}
+
+// pushNewBranch creates branch at sha on repo's remote, from source, its mirror. A branch the
+// remote has already is never moved: it's ErrBranchExists.
 func (s *Sources) pushNewBranch(ctx context.Context, repo Repo, source, branch, sha string) error {
 	remote, err := s.remote(ctx, repo)
 	if err != nil {
@@ -114,21 +121,21 @@ func (s *Sources) pushNewBranch(ctx context.Context, repo Repo, source, branch, 
 	defer remote.done()
 	existing, err := runGitWith(ctx, remote.env, nil, "ls-remote", remote.url, "refs/heads/"+branch)
 	if err != nil {
-		return fmt.Errorf("look for branch %s of %s on GitHub: %w", branch, repo.label(), err)
+		return fmt.Errorf("look for branch %s of %s on its remote: %w", branch, repo.label(), err)
 	}
 	if strings.TrimSpace(existing) != "" {
-		return fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), ErrBranchExists)
+		return fmt.Errorf("create branch %s of %s on its remote: %w", branch, repo.label(), ErrBranchExists)
 	}
 	// The mirror's origin pushes everything; this pushes the one branch, to its URL. The lease
 	// refuses a branch created since the check above.
 	if _, err := runGitWith(ctx, remote.env, nil, "-C", source, "push", "--quiet",
 		"--force-with-lease=refs/heads/"+branch+":", remote.url, sha+":refs/heads/"+branch); err != nil {
-		return fmt.Errorf("create branch %s of %s on GitHub: %w", branch, repo.label(), err)
+		return fmt.Errorf("create branch %s of %s on its remote: %w", branch, repo.label(), err)
 	}
 	return nil
 }
 
-// LeaveOut adds a commit to branch, a GitHub repository's run branch at head, that puts paths
+// LeaveOut adds a commit to branch, a pull request repository's run branch at head, that puts paths
 // back as they were at base, the commit the run started at, so a landing from branch leaves them
 // out. Each path must be one the run changed, and at least one changed file must stay. It returns
 // the branch's new tip.
@@ -138,8 +145,8 @@ func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head st
 			return "", fmt.Errorf("%q can't start with \"-\"", arg)
 		}
 	}
-	if repo.Source != "github" {
-		return "", fmt.Errorf("repository %s has source %q; only a GitHub repository's runs land", repo.label(), repo.Source)
+	if !landsPRs(repo.Source) {
+		return "", fmt.Errorf("repository %s has source %q, which has no pull requests to land a run as", repo.label(), repo.Source)
 	}
 	dir, err := s.sourceDir(ctx, repo)
 	if err != nil {
@@ -207,7 +214,7 @@ func (s *Sources) LeaveOut(ctx context.Context, repo Repo, branch, base, head st
 	return tip, nil
 }
 
-// ResetRunBranch moves branch, a GitHub repository's run branch at tip, back to head, undoing
+// ResetRunBranch moves branch, a pull request repository's run branch at tip, back to head, undoing
 // a LeaveOut whose landing failed.
 func (s *Sources) ResetRunBranch(ctx context.Context, repo Repo, branch, tip, head string) error {
 	for _, arg := range []string{branch, tip, head} {
@@ -225,7 +232,7 @@ func (s *Sources) ResetRunBranch(ctx context.Context, repo Repo, branch, tip, he
 	return nil
 }
 
-// moveBranch pushes branch of repo on GitHub from one commit to another, from dir, the
+// moveBranch pushes branch of repo on its remote from one commit to another, from dir, the
 // repository's mirror. The lease refuses a branch that isn't at from.
 func (s *Sources) moveBranch(ctx context.Context, repo Repo, dir, branch, from, to string) error {
 	remote, err := s.remote(ctx, repo)
@@ -251,8 +258,8 @@ func (s *Sources) PushPRHead(ctx context.Context, repo Repo, headURL, branch, ba
 	if !commitSHA.MatchString(base) {
 		return "", fmt.Errorf("the PR's base %q is not a commit SHA", base)
 	}
-	if repo.Source != "github" {
-		return "", fmt.Errorf("repository %s has source %q; only GitHub repositories have PRs", repo.label(), repo.Source)
+	if !landsPRs(repo.Source) {
+		return "", fmt.Errorf("repository %s has source %q, which has no pull requests", repo.label(), repo.Source)
 	}
 	source, err := s.sourceDir(ctx, repo)
 	if err != nil {
@@ -263,7 +270,7 @@ func (s *Sources) PushPRHead(ctx context.Context, repo Repo, headURL, branch, ba
 		return "", err
 	}
 	defer done()
-	// The remote's credentials are scoped to its host, which a fork on GitHub shares.
+	// The remote's credentials are scoped to its host, which a fork on the same host shares.
 	remote, err := s.remote(ctx, repo)
 	if err != nil {
 		return "", err

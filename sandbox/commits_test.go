@@ -145,7 +145,7 @@ func TestLeaveOutPutsFilesBackAsTheRunFoundThem(t *testing.T) {
 
 	pushed := Repo{ID: uuid.New(), Org: org, Source: "push", Name: "tool"}
 	_, err = sources.LeaveOut(context.Background(), pushed, "gavel/todo-run", base, head, []string{"notes.md"})
-	require.EqualError(t, err, `repository tool has source "push"; only a GitHub repository's runs land`)
+	require.EqualError(t, err, `repository tool has source "push", which has no pull requests to land a run as`)
 	_, err = sources.LeaveOut(context.Background(), github, "gavel/todo-run", base, head, []string{"main.go"})
 	require.ErrorIs(t, err, ErrInvalidLeaveOut)
 	require.EqualError(t, err, `can't leave those files out: the run didn't change main.go`)

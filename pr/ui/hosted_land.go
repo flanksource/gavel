@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/model"
+	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos/land"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -32,10 +33,7 @@ func (s *Server) landHostedRun(ctx context.Context, provider land.Provider, sour
 		return nil, hostedLandingRefusal("a hosted run lands as a pull request; land it with via pr")
 	}
 	repo := source.Hosted.Repo
-	if repo.Source != "github" {
-		return nil, hostedLandingRefusal(fmt.Sprintf("repository %s was pushed to gavel, not linked from GitHub, so its runs can't land as pull requests", repo.Name))
-	}
-	account, err := s.todoGitHub(ctx, source, todo)
+	openPR, err := s.hostedPROpener(ctx, source, todo)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +79,7 @@ func (s *Server) landHostedRun(ctx context.Context, provider land.Provider, sour
 		if title == "" {
 			title = todo.Title
 		}
-		pr, err = github.CreatePR(account, model.CreatePRInput{
+		pr, err = openPR(ctx, model.CreatePRInput{
 			Title: title, Body: hostedLandingBody(todo, subjects, opts.LeaveOut), Head: branch, Base: base, Draft: opts.Draft,
 		})
 	}
@@ -100,6 +98,33 @@ func (s *Server) landHostedRun(ctx context.Context, provider land.Provider, sour
 		return nil, fmt.Errorf("run %s opened %s but recording it failed: %w", run.PromptRunID, pr.URL, err)
 	}
 	return recorded, nil
+}
+
+// hostedPROpener opens a hosted run's pull request on its repository: a GitHub one through the
+// organization's GitHub App, one a git connection brings through that connection, onto its default
+// branch when the landing names no base. A repository pushed to gavel has no pull requests.
+func (s *Server) hostedPROpener(ctx context.Context, source todoSource, todo *types.TODO) (func(context.Context, model.CreatePRInput) (*model.CreatePRResult, error), error) {
+	repo := source.Hosted.Repo
+	if repo.InstallationID != 0 || (repo.Source == "github" && repo.ConnectionID == nil) {
+		account, err := s.todoGitHub(ctx, source, todo)
+		if err != nil {
+			return nil, err
+		}
+		return func(_ context.Context, input model.CreatePRInput) (*model.CreatePRResult, error) {
+			return github.CreatePR(account, input)
+		}, nil
+	}
+	if repo.ConnectionID == nil || s.workspaces.Sources == nil || s.workspaces.Sources.Connection == nil {
+		return nil, hostedLandingRefusal(fmt.Sprintf("repository %s was pushed to gavel, not linked from GitHub or a git connection, so its runs can't land as pull requests", repo.Name))
+	}
+	if err := requireTodoChangeable(ctx, todo); err != nil {
+		return nil, err
+	}
+	remote, err := s.workspaces.Sources.Connection(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("reach repository %s through its connection: %w", repo.Name, err)
+	}
+	return provider.NewConnectionClient(remote, repo.DefaultBranch).CreatePR, nil
 }
 
 // hostedLandingBody describes a landing's pull request: the todo it carries, its commits and
