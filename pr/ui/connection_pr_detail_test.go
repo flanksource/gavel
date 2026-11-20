@@ -81,6 +81,7 @@ func azurePRRoutes() map[string]string {
 		"GET /acme/_apis/projects/Platform":                                        `{"id":"platform-id"}`,
 		"GET /acme/Platform/_apis/policy/evaluations":                              `{"value":[]}`,
 		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/reviewers": `{"value":[]}`,
+		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/statuses":  `{"value":[]}`,
 		"GET /acme/Platform/_apis/git/repositories/rules-id/refs":                  `{"value":[{"name":"refs/heads/tighten","objectId":"` + azureHead + `"}]}`,
 		"GET /acme/Platform/_apis/build/builds/31/timeline": `{"records":[
 			{"id":"job-2","type":"Job","name":"build","state":"completed","result":"failed","order":1,"log":{"id":7}},
@@ -263,8 +264,14 @@ func TestAHostedOrgReachesItsGitLabMergeRequestsByURL(t *testing.T) {
 	t.Setenv("GAVEL_SECRET_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("h"), 32)))
 	var server *httptest.Server
 	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/api/v4/projects/acme/api/merge_requests/5/pipelines" {
+		if r.Method == http.MethodGet && (r.URL.Path == "/api/v4/projects/acme/api/merge_requests/5/pipelines" ||
+			r.URL.Path == "/api/v4/projects/acme/api/merge_requests/5/reviewers" ||
+			r.URL.Path == "/api/v4/projects/acme/api/repository/commits/2222222222222222222222222222222222222222/statuses") {
 			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v4/projects/acme/api/merge_requests/5/approvals" {
+			_, _ = w.Write([]byte(`{"approved":true,"approvals_required":1,"approved_by":[{"user":{"id":9,"name":"Lin"}}]}`))
 			return
 		}
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v4/projects/acme/api/merge_requests/5" {
@@ -295,6 +302,7 @@ func TestAHostedOrgReachesItsGitLabMergeRequestsByURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Speed up the API", status.PR.Title)
 	assert.Equal(t, "2222222222222222222222222222222222222222", status.PR.HeadRefOID)
+	assert.Equal(t, "APPROVED", status.PR.ReviewDecision)
 
 	_, _, err = prs(t.Context(), server.URL+"/acme/api/-/merge_requests/none")
 	require.EqualError(t, err, `pull request URL "`+server.URL+`/acme/api/-/merge_requests/none" has no positive number`)

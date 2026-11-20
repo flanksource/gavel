@@ -45,6 +45,7 @@ var _ = Describe("linked PR UI endpoints", func() {
 			"GET /acme/product/_apis/git/repositories/service/pullrequests/27":           pr,
 			"GET /acme/product/_apis/git/repositories/service/pullrequests/27/threads":   `{"value":[]}`,
 			"GET /acme/product/_apis/git/repositories/service/pullrequests/27/reviewers": `{"value":[]}`,
+			"GET /acme/product/_apis/git/repositories/service/pullrequests/27/statuses":  `{"value":[]}`,
 			"GET /acme/product/_apis/git/repositories/repo-id/refs":                      `{"value":[{"name":"refs/heads/feature","objectId":"reviewed-head"},{"name":"refs/heads/main","objectId":"base"}]}`,
 			"GET /acme/_apis/projects/product":                                           `{"id":"project-id"}`,
 			"GET /acme/product/_apis/policy/evaluations":                                 `{"value":[]}`,

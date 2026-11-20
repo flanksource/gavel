@@ -162,6 +162,13 @@ func (c connectionClient) Status(ctx context.Context, number int, opts model.Sta
 				WaitingForBuilds: readiness.WaitingForBuilds, WaitingForMerge: readiness.WaitingForMerge}
 		}
 	}
+	var review git.PullRequestReview
+	if reader, ok := provider.(git.PullRequestReviewReader); ok {
+		if review, err = reader.PullRequestReview(ctx, repo, number); err != nil {
+			return nil, fmt.Errorf("read pull request %d's review: %w", number, err)
+		}
+		info.ReviewDecision = reviewDecision(review)
+	}
 	if reader, ok := provider.(git.PullRequestThreadReader); ok && opts.Threads {
 		if info.ReviewThreads, err = threadComments(ctx, reader, repo, number); err != nil {
 			return nil, err
@@ -174,6 +181,11 @@ func (c connectionClient) Status(ctx context.Context, number int, opts model.Sta
 			return nil, fmt.Errorf("%s pipeline states aren't known to gavel", provider.Type())
 		}
 		if runs, err = pipelineRuns(ctx, reader, state, repo, number, opts, &info); err != nil {
+			return nil, err
+		}
+	}
+	if reader, ok := provider.(git.PullRequestChecksReader); ok {
+		if err := addCommitStatuses(ctx, reader, repo, pull, review, &info); err != nil {
 			return nil, err
 		}
 	}
@@ -199,6 +211,41 @@ func threadComments(ctx context.Context, reader git.PullRequestThreadReader, rep
 		}
 	}
 	return comments, nil
+}
+
+// checkStatuses spell commons-db's check states as the dashboard spells a commit status.
+var checkStatuses = map[string][2]string{"success": {"COMPLETED", "SUCCESS"}, "failure": {"COMPLETED", "FAILURE"},
+	"error": {"COMPLETED", "FAILURE"}, "pending": {"PENDING", ""}}
+
+// addCommitStatuses adds to info's rollup each status posted on pull's head or on the pull request
+// that isn't a pipeline job already there (GitLab posts one for every job) or one of review's
+// policies (Azure DevOps reports its policies as statuses), which readiness and the review
+// decision report.
+func addCommitStatuses(ctx context.Context, reader git.PullRequestChecksReader, repo git.RepoURL, pull git.PullRequest, review git.PullRequestReview, info *model.PRInfo) error {
+	checks, err := reader.PullRequestChecks(ctx, repo, pull)
+	if err != nil {
+		return fmt.Errorf("read pull request %d's commit statuses: %w", pull.Number, err)
+	}
+	shown := map[string]bool{}
+	for _, check := range info.StatusCheckRollup {
+		shown[check.Name] = true
+	}
+	for _, policy := range review.Policies {
+		shown[policy.Name] = true
+	}
+	for _, check := range checks {
+		if shown[check.Name] {
+			continue
+		}
+		spelled, ok := checkStatuses[check.State]
+		if !ok {
+			return fmt.Errorf("pull request %d's commit status %s has unknown state %q", pull.Number, check.Name, check.State)
+		}
+		info.StatusCheckRollup = append(info.StatusCheckRollup, model.StatusCheck{Name: check.Name, Status: spelled[0],
+			Conclusion: spelled[1], DetailsURL: check.URL})
+		shown[check.Name] = true
+	}
+	return nil
 }
 
 // executionState is a provider's pipeline, job or step state and result as the dashboard spells

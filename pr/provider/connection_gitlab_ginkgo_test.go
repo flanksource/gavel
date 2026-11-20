@@ -47,6 +47,10 @@ var _ = Describe("A GitLab connection's PR client", func() {
 		client := serve(map[string]string{
 			"GET /api/v4/projects/acme%2Fapi/merge_requests/5":           mr,
 			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/pipelines": `[{"id":102,"project_id":1,"sha":"` + head + `","ref":"fast","status":"failed"}]`,
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/approvals": `{"approved":false,"approvals_required":1,"approved_by":[]}`,
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/reviewers": `[{"user":{"id":7,"name":"Grace Hopper"},"state":"requested_changes"}]`,
+			"GET /api/v4/projects/acme%2Fapi/repository/commits/" + head + "/statuses": `[{"name":"build","status":"success"},{"name":"test","status":"failed"},
+				{"name":"sonar","status":"failed","target_url":"https://sonar.example.com/api"}]`,
 			"GET /api/v4/projects/1/pipelines/102/jobs": `[` + job("7001", "build", "success") + `,` + job("7002", "test", "failed") + `,` +
 				job("7003", "deploy", "manual") + `,` + job("7004", "lint", "running") + `,` + job("7005", "docs", "created") + `]`,
 			"GET /api/v4/projects/acme%2Fapi/jobs/7002/trace": "go test ./...\n--- FAIL: TestSpeed\nFAIL\n",
@@ -57,6 +61,7 @@ var _ = Describe("A GitLab connection's PR client", func() {
 		Expect(status.PR.Title).To(Equal("Speed up the API"))
 		Expect(status.PR.HeadRefOID).To(Equal(head))
 		Expect(status.PR.MergeReadiness).To(Equal(&model.MergeReadiness{State: "blocked", Reasons: []string{"pipeline must succeed"}}))
+		Expect(status.PR.ReviewDecision).To(Equal("CHANGES_REQUESTED"))
 		Expect(status.Runs).To(HaveKey(int64(102)))
 		run := status.Runs[102]
 		Expect(run.Status).To(Equal("COMPLETED"))
@@ -70,14 +75,19 @@ var _ = Describe("A GitLab connection's PR client", func() {
 			"lint": {"IN_PROGRESS", ""}, "docs": {"QUEUED", ""},
 		}))
 		Expect(run.Jobs[1].Logs).To(Equal("--- FAIL: TestSpeed\nFAIL"), "a failed job's own log, without steps")
-		Expect(status.PR.StatusCheckRollup).To(HaveLen(5))
+		Expect(status.PR.StatusCheckRollup).To(HaveLen(6), "each job once, and the commit status no job reported")
+		Expect(status.PR.StatusCheckRollup).To(ContainElement(model.StatusCheck{Name: "sonar", Status: "COMPLETED", Conclusion: "FAILURE",
+			DetailsURL: "https://sonar.example.com/api"}))
 	})
 
 	It("refuses a pipeline state it doesn't know instead of marking it successful", func(ctx SpecContext) {
 		client := serve(map[string]string{
-			"GET /api/v4/projects/acme%2Fapi/merge_requests/5":           mr,
-			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/pipelines": `[{"id":102,"project_id":1,"sha":"` + head + `","status":"exploded"}]`,
-			"GET /api/v4/projects/1/pipelines/102/jobs":                  `[]`,
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5":                         mr,
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/pipelines":               `[{"id":102,"project_id":1,"sha":"` + head + `","status":"exploded"}]`,
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/approvals":               `{"approved":true,"approvals_required":0,"approved_by":[]}`,
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/reviewers":               `[]`,
+			"GET /api/v4/projects/acme%2Fapi/repository/commits/" + head + "/statuses": `[]`,
+			"GET /api/v4/projects/1/pipelines/102/jobs":                                `[]`,
 		})
 		_, err := client.Status(ctx, 5, model.StatusOptions{})
 		Expect(err).To(MatchError(`pipeline execution 102: unexpected GitLab pipeline or job status "exploded"`))
@@ -89,8 +99,11 @@ var _ = Describe("A GitLab connection's PR client", func() {
 			switch r.URL.EscapedPath() {
 			case "/api/v4/projects/acme%2Fapi/merge_requests/5":
 				_, _ = w.Write([]byte(mr))
-			case "/api/v4/projects/acme%2Fapi/merge_requests/5/pipelines":
+			case "/api/v4/projects/acme%2Fapi/merge_requests/5/pipelines", "/api/v4/projects/acme%2Fapi/merge_requests/5/reviewers",
+				"/api/v4/projects/acme%2Fapi/repository/commits/" + head + "/statuses":
 				_, _ = w.Write([]byte(`[]`))
+			case "/api/v4/projects/acme%2Fapi/merge_requests/5/approvals":
+				_, _ = w.Write([]byte(`{"approved":true,"approvals_required":0,"approved_by":[]}`))
 			default:
 				http.NotFound(w, r)
 			}

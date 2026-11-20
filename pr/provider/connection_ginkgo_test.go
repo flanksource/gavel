@@ -61,6 +61,8 @@ var _ = Describe("A git connection's PR client", func() {
 		"GET /acme/Platform/_apis/git/repositories/rules-id/refs": `{"value":[{"name":"refs/heads/tighten","objectId":"` + head + `"}]}`,
 		"GET " + pulls + "/9/threads":                             `{"value":[{"id":5,"status":"active","comments":[{"id":1,"content":"Hm.","commentType":"text","author":{"displayName":"Grace Hopper"}}]}]}`,
 		"GET /acme/Platform/_apis/build/builds":                   `{"value":[]}`,
+		"GET " + pulls + "/9/statuses": `{"value":[{"id":1,"state":"succeeded","targetUrl":"https://lint.example.com/9",
+			"context":{"genre":"acme-ci","name":"lint"}}]}`,
 	}
 
 	It("names its kind and reads a pull request with its readiness and resolvable threads", func(ctx SpecContext) {
@@ -73,6 +75,8 @@ var _ = Describe("A git connection's PR client", func() {
 		Expect(status.PR.MergeReadiness).To(Equal(&model.MergeReadiness{State: "ready"}))
 		Expect(status.PR.ReviewThreads).To(HaveLen(1))
 		Expect(status.PR.ReviewThreads[0].CanResolve).To(BeTrue())
+		Expect(status.PR.StatusCheckRollup).To(Equal(model.StatusChecks{{Name: "acme-ci/lint", Status: "COMPLETED", Conclusion: "SUCCESS",
+			DetailsURL: "https://lint.example.com/9"}}), "a status another service posted on the pull request")
 	})
 
 	It("resolves an open thread, and leaves a resolved one alone", func(ctx SpecContext) {

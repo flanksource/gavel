@@ -89,6 +89,7 @@ func diffRoutes() map[string]string {
 		"GET /acme/_apis/projects/Platform":                                        `{"id":"platform-id"}`,
 		"GET /acme/Platform/_apis/policy/evaluations":                              `{"value":[]}`,
 		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/reviewers": `{"value":[]}`,
+		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/statuses":  `{"value":[]}`,
 		"GET /acme/Platform/_apis/git/repositories/rules-id/refs":                  `{"value":[{"name":"refs/heads/tighten","objectId":"0"},{"name":"refs/heads/main","objectId":"0"}]}`,
 	}
 }
