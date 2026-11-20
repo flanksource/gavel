@@ -88,19 +88,34 @@ func Remote(ctx context.Context, db *gorm.DB, scope tenant.Scope, connectionID u
 	if err != nil {
 		return nil, fmt.Errorf("open the organization's connection catalog: %w", err)
 	}
-	connection, err := store.ResolveConnection(dbcontext.NewContext(ctx), connectionID.String())
+	client, err := connectionClient(ctx, store, connectionID, options)
 	if err := errors.Join(err, closeStore()); err != nil {
 		return nil, fmt.Errorf("read the connection of %s: %w", remoteURL, err)
 	}
-	client, err := git.FromConnection(dbcontext.NewContext(ctx), *connection, options)
-	if err != nil {
-		return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
-	}
 	remote, err := client.Repository(remoteURL)
 	if err != nil {
-		return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
+		return nil, fmt.Errorf("connection %q: %w", client.Name, err)
 	}
 	return remote, nil
+}
+
+// namedClient is a connection's provider client, with the connection's name for errors.
+type namedClient struct {
+	*git.Client
+	Name string
+}
+
+// connectionClient is the provider client of store's connection id, as stored and never hydrated.
+func connectionClient(ctx context.Context, store *catalog.Store, id uuid.UUID, options git.ClientOptions) (namedClient, error) {
+	connection, err := store.ResolveConnection(dbcontext.NewContext(ctx), id.String())
+	if err != nil {
+		return namedClient{}, err
+	}
+	client, err := git.FromConnection(dbcontext.NewContext(ctx), *connection, options)
+	if err != nil {
+		return namedClient{}, fmt.Errorf("connection %q: %w", connection.Name, err)
+	}
+	return namedClient{Client: client, Name: connection.Name}, nil
 }
 
 // DeleteConnection deletes scope's connection reference and, in the same transaction, the
