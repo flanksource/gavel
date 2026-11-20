@@ -573,8 +573,13 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/todos/changes", s.handleWorkspaceChanges)
 	mux.HandleFunc("GET /api/connections/storage", s.handleConnectionStorage)
-	for _, pattern := range []string{"GET /api/connections", "POST /api/connections", "GET /api/connections/{reference}", "PATCH /api/connections/{reference}", "DELETE /api/connections/{reference}", "POST /api/connections/{reference}/validate"} {
+	for _, pattern := range []string{"GET /api/connections", "POST /api/connections", "GET /api/connections/{reference}", "PATCH /api/connections/{reference}", "DELETE /api/connections/{reference}", "POST /api/connections/{reference}/validate",
+		"POST " + catalogBase + "/connection", "GET " + catalogBase + "/connection/{reference}", "PUT " + catalogBase + "/connection/{reference}", "DELETE " + catalogBase + "/connection/{reference}"} {
 		mux.HandleFunc(pattern, s.handleConnections)
+	}
+	for _, pattern := range []string{"GET " + catalogBase + "/connection", "GET " + catalogBase + "/connections/dashboard",
+		"POST " + catalogBase + "/connection/test", "POST " + catalogBase + "/connection/resolve", "POST " + catalogBase + "/connections/health"} {
+		mux.HandleFunc(pattern, s.handleConnectionCatalog)
 	}
 	if s.launchService != nil {
 		for _, path := range []string{"/api/launch", "/api/launch/", "/api/runs", "/api/runs/"} {

@@ -39,6 +39,10 @@ export const WORKSPACE_TAB = "workspace";
 // through the schema-driven form, and it owns its own saving.
 export const TAGS_TAB = "tags";
 
+// The connections tab: the git connections in the connection catalog, which it reads and
+// saves itself, like TAGS_TAB.
+export const CONNECTIONS_TAB = "connections";
+
 // Human labels for the top-level sections (used as in-form section headings) and
 // for a handful of nested keys the automatic humanizer would render awkwardly.
 export const SECTION_TITLES: Record<string, string> = {

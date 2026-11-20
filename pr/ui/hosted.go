@@ -31,6 +31,11 @@ var hostedPassThrough = []string{
 	// stays off until hosted dials are limited to public addresses.
 	"GET /api/connections/storage", "GET /api/connections", "POST /api/connections", "GET /api/connections/{reference}",
 	"PATCH /api/connections/{reference}", "DELETE /api/connections/{reference}",
+	// The same catalog as the Settings connections page reads it; its test, resolve and health
+	// routes answer that hosted connections aren't dialled.
+	"GET /api/catalog/connection", "POST /api/catalog/connection", "GET /api/catalog/connection/{reference}",
+	"PUT /api/catalog/connection/{reference}", "DELETE /api/catalog/connection/{reference}", "GET /api/catalog/connections/dashboard",
+	"POST /api/catalog/connection/test", "POST /api/catalog/connection/resolve", "POST /api/catalog/connections/health",
 	"GET /api/sandbox-runs", "GET /api/sandbox-runs/{id}/log",
 
 	"/api/prs", "/api/prs/stream", "/api/prs/refresh", "/api/prs/bots", "/api/prs/closed",

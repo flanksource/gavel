@@ -16,6 +16,7 @@ import {
   UiChevronRight,
   UiClose,
   UiGitBranch,
+  UiPlug,
 } from "@flanksource/clicky-ui/icons";
 import type { Project } from "../../types";
 import { Spinner } from "../../icons/Spinner";
@@ -26,6 +27,7 @@ import {
   TABS,
   WORKSPACE_TAB,
   TAGS_TAB,
+  CONNECTIONS_TAB,
   SECTION_TITLES,
   decorateSchema,
   usesPromptPicker,
@@ -36,6 +38,7 @@ import { LayerSwitch } from "./LayerSwitch";
 import { SettingsSectionCard } from "./SettingsSectionCard";
 import { SaveBar } from "./SaveBar";
 import { TagDefinitionsPanel } from "./tags/TagDefinitionsPanel";
+import { ConnectionsPanel } from "./ConnectionsPanel";
 import { MetaLabel } from "../../icons/issues";
 import type { GavelTrace, SettingsLayer } from "./provenance";
 import {
@@ -95,6 +98,7 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
   const reg = useProjectRegistration({ open: hasProject, project });
   const isWorkspaceTab = hasProject && tab === WORKSPACE_TAB;
   const isTagsTab = tab === TAGS_TAB;
+  const isConnectionsTab = tab === CONNECTIONS_TAB;
   const query = scopeQueryFor(layer, project);
   const traceScopeQuery = hasProject
     ? `project=${encodeURIComponent(project.name)}`
@@ -260,6 +264,12 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
     label: "Tags",
     icon: MetaLabel as unknown as TabItem["icon"],
   };
+  // The Connections tab, like Tags, edits the connection catalog rather than .gavel.yaml.
+  const connectionsTabItem: TabItem = {
+    id: CONNECTIONS_TAB,
+    label: "Connections",
+    icon: UiPlug as unknown as TabItem["icon"],
+  };
   const tabItems: TabItem[] = hasProject
     ? [
         {
@@ -269,8 +279,9 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
         },
         ...sectionTabItems,
         tagsTabItem,
+        connectionsTabItem,
       ]
-    : [...sectionTabItems, tagsTabItem];
+    : [...sectionTabItems, tagsTabItem, connectionsTabItem];
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background">
@@ -321,6 +332,8 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
 
           {isTagsTab ? (
             <TagDefinitionsPanel dir={project?.dir ?? ""} />
+          ) : isConnectionsTab ? (
+            <ConnectionsPanel />
           ) : isWorkspaceTab ? (
             <section>
               <ProjectFields reg={reg} repoOptions={repoOptions} />
@@ -393,7 +406,7 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
         </div>
       </div>
 
-      {!isWorkspaceTab && !isTagsTab && configReady && !loading && (
+      {!isWorkspaceTab && !isTagsTab && !isConnectionsTab && configReady && !loading && (
         <SaveBar
           path={path}
           dirty={dirty}

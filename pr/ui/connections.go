@@ -17,15 +17,27 @@ import (
 	"gorm.io/gorm"
 )
 
-func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
+// catalogBase is where the Settings connections page reaches the connection catalog, in the
+// shape clicky-ui's ConnectionsPage reads: {base}/connection and {base}/connections/dashboard.
+const catalogBase = "/api/catalog"
+
+// hostedConnectionPolicy is what a hosted organization's catalog offers and accepts: only the
+// git connections its repositories come from, with literal values, so none names a secret,
+// config map or account of the server's to hydrate.
+var hostedConnectionPolicy = shared.Policy{AllowedTypes: forge.GitTypes,
+	SecretSources: []string{shared.SourceValue}, URLSources: []string{shared.SourceValue}}
+
+// openConnectionCatalog opens the catalog of the request's organization, for a member to read and
+// an admin to change; ok is false once it has answered the request with why it can't.
+func (s *Server) openConnectionCatalog(w http.ResponseWriter, r *http.Request) (*shared.Service, *gorm.DB, tenant.Scope, func() error, bool) {
 	scope := tenant.FromContext(r.Context())
 	if scope.OrgID != s.orgID() {
 		writeJSONError(w, http.StatusForbidden, fmt.Errorf("organization mismatch"))
-		return
+		return nil, nil, scope, nil, false
 	}
 	if r.Method != http.MethodGet && !scope.IsLocal() && scope.Role != "org:admin" {
 		writeJSONError(w, http.StatusForbidden, fmt.Errorf("organization admin required"))
-		return
+		return nil, nil, scope, nil, false
 	}
 	db := s.orgDB
 	if db == nil {
@@ -33,11 +45,39 @@ func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
 	}
 	if db == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, fmt.Errorf("connections require a database"))
-		return
+		return nil, nil, scope, nil, false
 	}
-	service, close, err := catalog.Open(r.Context(), catalog.Options{DB: db, Scope: scope})
+	options := catalog.Options{DB: db, Scope: scope}
+	if s.hosted {
+		options.Policy = hostedConnectionPolicy
+	}
+	service, close, err := catalog.Open(r.Context(), options)
 	if err != nil {
 		writeJSONError(w, http.StatusServiceUnavailable, err)
+		return nil, nil, scope, nil, false
+	}
+	return service, db, scope, close, true
+}
+
+// handleConnectionCatalog serves the connections page's form schema and dashboard from the
+// catalog's service. Testing or resolving a connection, and checking the fleet's health, dial it,
+// which a hosted organization's may not have the server do.
+func (s *Server) handleConnectionCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && s.hosted {
+		writeJSONError(w, http.StatusForbidden, fmt.Errorf("a hosted organization's connections aren't tested from the server: it reaches only public addresses, and only when it syncs or reads their repositories"))
+		return
+	}
+	service, _, _, close, ok := s.openConnectionCatalog(w, r)
+	if !ok {
+		return
+	}
+	defer func() { _ = close() }()
+	service.Handler(catalogBase, http.NotFoundHandler()).ServeHTTP(w, r)
+}
+
+func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
+	service, db, scope, close, ok := s.openConnectionCatalog(w, r)
+	if !ok {
 		return
 	}
 	result, err := connectionResult(service, db, w, r, scope, s.hosted)
@@ -97,6 +137,13 @@ func connectionResult(service *shared.Service, db *gorm.DB, w http.ResponseWrite
 	}
 	if body == nil {
 		return nil, fmt.Errorf("connection body must be an object")
+	}
+	if strings.HasPrefix(r.URL.Path, catalogBase+"/") {
+		// The connections page sends back the connection it loaded; the fields the server keeps
+		// are the server's to set.
+		for _, field := range []string{"id", "org_id", "created_by", "created_at", "updated_at"} {
+			delete(body, field)
+		}
 	}
 	var extra any
 	if trailing := decoder.Decode(&extra); trailing != io.EOF {

@@ -32,6 +32,9 @@ type Options struct {
 	Scope            tenant.Scope
 	KeeperConnection text.SensitiveString
 	Interactive      bool
+	// Policy narrows the connection types and value sources the catalog's service offers in its
+	// form and accepts on save; zero places no restriction.
+	Policy shared.Policy
 }
 
 func Keeper(ctx context.Context, connection text.SensitiveString, interactive bool) (*secrets.Keeper, string, error) {
@@ -97,7 +100,7 @@ func Open(ctx context.Context, options Options) (*shared.Service, func() error, 
 	connectionCtx := dbcontext.NewContext(ctx).WithConnectionResolver(store.ResolveConnection)
 	service, err := shared.New(shared.Options{Virtual: provider{store}, KEKStatus: func(context.Context) shared.KEKStatus {
 		return shared.KEKStatus{State: "ready", Detail: "The connection encryption key is available on this host."}
-	}, Context: func() dbcontext.Context { return connectionCtx }, DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil }, Profiles: func(context.Context) ([]query.Profile, error) { return nil, nil }})
+	}, Context: func() dbcontext.Context { return connectionCtx }, DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil }, Profiles: func(context.Context) ([]query.Profile, error) { return nil, nil }, Policy: options.Policy})
 	if err != nil {
 		return nil, nil, errors.Join(err, close())
 	}
