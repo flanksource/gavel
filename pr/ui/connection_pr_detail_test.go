@@ -51,7 +51,8 @@ func azureRemote(t *testing.T, server *httptest.Server) *git.Repository {
 }
 
 // azurePRRoutes are the Azure DevOps API routes of pull request 9 of Platform/rules: its CI
-// failed in the compile step, and one comment and one system note were left on it.
+// failed in the compile step, a review thread on rules.go is open, a discussion is resolved, and
+// a system note was left on it.
 func azurePRRoutes() map[string]string {
 	builds := `{"value":[{"id":31,"buildNumber":"b31","status":"completed","result":"failed","sourceBranch":"refs/pull/9/merge",
 		"sourceVersion":"` + azureMerge + `","queueTime":"2026-11-02T11:00:00Z","definition":{"id":4,"name":"ci"},
@@ -62,9 +63,14 @@ func azurePRRoutes() map[string]string {
 			"sourceRefName":"refs/heads/tighten","targetRefName":"refs/heads/main","createdBy":{"displayName":"Ada Lovelace","imageUrl":"https://avatars.example/ada"},
 			"lastMergeSourceCommit":{"commitId":"` + azureHead + `"},"lastMergeCommit":{"commitId":"` + azureMerge + `"},
 			"repository":{"id":"rules-id","name":"rules","project":{"name":"Platform"}}}`,
-		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/threads": `{"value":[{"id":5,"comments":[
-			{"id":1,"content":"Please split this up.","commentType":"text","publishedDate":"2026-11-02T12:00:00Z","author":{"displayName":"Grace Hopper"}},
-			{"id":2,"content":"Updated the PR","commentType":"system","publishedDate":"2026-11-02T12:05:00Z","author":{"displayName":"Azure"}}]}]}`,
+		"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/threads": `{"value":[
+			{"id":5,"status":"active","threadContext":{"filePath":"/rules.go","rightFileStart":{"line":12}},"comments":[
+				{"id":1,"content":"Please split this up.","commentType":"text","publishedDate":"2026-11-02T12:00:00Z",
+				 "author":{"displayName":"Grace Hopper","imageUrl":"https://avatars.example/grace"}}]},
+			{"id":6,"status":"fixed","comments":[
+				{"id":1,"content":"Rename the flag?","commentType":"text","publishedDate":"2026-11-02T12:30:00Z","author":{"displayName":"Ada Lovelace"}}]},
+			{"id":7,"comments":[
+				{"id":1,"content":"Updated the PR","commentType":"system","publishedDate":"2026-11-02T12:05:00Z","author":{"displayName":"Azure"}}]}]}`,
 		"GET /acme/Platform/_apis/build/builds": builds,
 		"GET /acme/Platform/_apis/build/builds/31/timeline": `{"records":[
 			{"id":"job-2","type":"Job","name":"build","state":"completed","result":"failed","order":1,"log":{"id":7}},
@@ -107,9 +113,18 @@ func TestAnAzurePullRequestsDetailComesThroughItsConnection(t *testing.T) {
 			{Name: "compile", Number: 2, Status: "COMPLETED", Conclusion: "FAILURE", Logs: "go build ./...\nundefined: rule"},
 		}}}}, detail.Runs[31], "a failed step carries its log's tail")
 
-	assert.Equal(t, []model.PRComment{{ThreadID: "5", ID: 1, Body: "Please split this up.", Author: "Grace Hopper",
-		URL:       server.URL + "/acme/Platform/_git/rules/pullrequest/9?discussionId=5",
-		CreatedAt: time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)}}, pr.Comments, "a system note isn't a comment")
+	threads := []model.PRComment{
+		{ThreadID: "5", ID: 1, Body: "Please split this up.", Author: "Grace Hopper", AvatarURL: "https://avatars.example/grace",
+			URL: server.URL + "/acme/Platform/_git/rules/pullrequest/9?discussionId=5", CreatedAt: time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC),
+			Path: "/rules.go", Line: 12, IsReviewThread: true},
+		{ThreadID: "6", ID: 1, Body: "Rename the flag?", Author: "Ada Lovelace",
+			URL: server.URL + "/acme/Platform/_git/rules/pullrequest/9?discussionId=6", CreatedAt: time.Date(2026, 11, 2, 12, 30, 0, 0, time.UTC),
+			IsResolved: true, IsReviewThread: true},
+	}
+	assert.Equal(t, threads, pr.ReviewThreads, "a system note isn't a comment")
+	assert.Equal(t, threads, pr.Comments, "every Azure DevOps comment is in a thread")
+	require.NotEmpty(t, detail.Comments)
+	assert.Equal(t, "Please split this up.", detail.Comments[0].Body, "the open review thread is actionable")
 }
 
 func TestTheDashboardServesAnAzurePullRequestsDetailThroughItsRemote(t *testing.T) {

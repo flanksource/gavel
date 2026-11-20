@@ -77,20 +77,12 @@ func connectionPRDetail(ctx context.Context, provider git.Provider, repo git.Rep
 	if mergeable, ok := prMergeable[metadata.Mergeability]; ok {
 		info.Mergeable = mergeable
 	}
-	activity, err := provider.ListPullRequestActivity(ctx, repo, number)
-	if err != nil {
-		return prDetail{}, fmt.Errorf("read pull request %d's comments: %w", number, err)
-	}
-	for _, entry := range activity {
-		if entry.Kind != git.PullRequestComment {
-			continue
+	if reader, ok := provider.(git.PullRequestThreadReader); ok {
+		if info.ReviewThreads, err = connectionThreads(ctx, reader, repo, number); err != nil {
+			return prDetail{}, err
 		}
-		comment := model.PRComment{Body: entry.Body, Author: entry.Author, URL: entry.URL, CreatedAt: entry.CreatedAt}
-		var thread int64
-		if _, err := fmt.Sscanf(entry.ID, "thread:%d:comment:%d", &thread, &comment.ID); err == nil {
-			comment.ThreadID = strconv.FormatInt(thread, 10)
-		}
-		info.Comments = append(info.Comments, comment)
+		// Every comment on such a pull request is in a thread, which carries its own state.
+		info.Comments = info.ReviewThreads
 	}
 	runs := map[int64]*model.WorkflowRun{}
 	if reader, ok := provider.(git.PullRequestPipelineReader); ok {
@@ -98,7 +90,29 @@ func connectionPRDetail(ctx context.Context, provider git.Provider, repo git.Rep
 			return prDetail{}, err
 		}
 	}
-	return prDetail{PR: info, Runs: runs, Comments: prwatch.MergeAndFilter(info.Comments, nil)}, nil
+	comments := prwatch.MergeAndFilter(append([]model.PRComment(nil), info.Comments...), info.ReviewThreads)
+	return prDetail{PR: info, Runs: runs, Comments: comments}, nil
+}
+
+// connectionThreads reads pull request number's threads as review thread comments.
+func connectionThreads(ctx context.Context, reader git.PullRequestThreadReader, repo git.RepoURL, number int) ([]model.PRComment, error) {
+	threads, err := reader.PullRequestThreads(ctx, repo, number)
+	if err != nil {
+		return nil, fmt.Errorf("read pull request %d's threads: %w", number, err)
+	}
+	var comments []model.PRComment
+	for _, thread := range threads {
+		for _, comment := range thread.Comments {
+			id, err := strconv.ParseInt(comment.ID, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("thread %s comment ID %q: %w", thread.ID, comment.ID, err)
+			}
+			comments = append(comments, model.PRComment{ThreadID: thread.ID, ID: id, Body: comment.Body, Author: comment.Author,
+				AvatarURL: comment.AuthorAvatarURL, URL: thread.URL, CreatedAt: comment.CreatedAt, Path: thread.Path, Line: thread.Line,
+				IsResolved: thread.Resolved, IsReviewThread: true})
+		}
+	}
+	return comments, nil
 }
 
 // connectionRuns reads the CI pull request number ran as workflow runs, adding a check for each
