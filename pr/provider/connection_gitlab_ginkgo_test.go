@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 
@@ -121,6 +122,35 @@ var _ = Describe("A GitLab connection's PR client", func() {
 		Expect(remote.URL.Owner).To(Equal("acme/platform"))
 		_, err = LocalRemote(ctx, models.ConnectionTypeGithub, "https://github.com/acme/api")
 		Expect(err).To(MatchError(ContainSubstring("a local gavel reaches no github repository like")))
+	})
+
+	It("opens a run's merge request onto the default branch its project names", func(ctx SpecContext) {
+		var opened map[string]any
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method + " " + r.URL.EscapedPath() {
+			case "GET /api/v4/projects/acme%2Fapi":
+				_, _ = w.Write([]byte(`{"id":1,"path":"api","path_with_namespace":"acme/api","default_branch":"trunk"}`))
+			case "POST /api/v4/projects/acme%2Fapi/merge_requests":
+				Expect(json.NewDecoder(r.Body).Decode(&opened)).To(Succeed())
+				_, _ = w.Write([]byte(`{"iid":8,"state":"opened","title":"Land run","web_url":"https://gitlab.example.com/acme/api/-/merge_requests/8",
+					"source_branch":"gavel/run","target_branch":"trunk","source_project_id":1,"target_project_id":1}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		DeferCleanup(server.Close)
+		client, err := git.FromConnection(dbcontext.New(), models.Connection{Name: "acme", Type: models.ConnectionTypeGitlab,
+			URL: server.URL, Password: "glpat", InsecureTLS: true})
+		Expect(err).NotTo(HaveOccurred())
+		remote, err := client.Repository(server.URL + "/acme/api.git")
+		Expect(err).NotTo(HaveOccurred())
+
+		created, err := NewConnectionClient(remote, "").CreatePR(ctx, model.CreatePRInput{Title: "Land run", Body: "Lands a todo.", Head: "gavel/run"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(created.Number).To(Equal(8))
+		Expect(created.Base).To(Equal("trunk"))
+		Expect(created.URL).To(Equal("https://gitlab.example.com/acme/api/-/merge_requests/8"))
+		Expect(opened).To(Equal(map[string]any{"source_branch": "gavel/run", "target_branch": "trunk", "title": "Land run", "description": "Lands a todo."}))
 	})
 
 	It("names the default branch its project does when it was given none", func(ctx SpecContext) {
