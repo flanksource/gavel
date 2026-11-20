@@ -70,3 +70,36 @@ describe('WorkflowRunView job log fallback', () => {
     expect(screen.getAllByText('✗').some(icon => icon.className.includes('text-red-600'))).toBe(true);
   });
 });
+
+describe('WorkflowRunView Azure DevOps jobs', () => {
+  it('shows the log tails a job carries without fetching, keeping jobs apart by their own IDs', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const run: WorkflowRun = {
+      databaseId: 31,
+      name: 'ci',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      jobs: [
+        {
+          databaseId: 0, nativeId: 'job-1', name: 'build', status: 'COMPLETED', conclusion: 'FAILURE',
+          steps: [{ name: 'compile', number: 2, status: 'COMPLETED', conclusion: 'FAILURE', logs: 'undefined: rule' }],
+        },
+        { databaseId: 0, nativeId: 'job-2', name: 'package', status: 'COMPLETED', conclusion: 'FAILURE', logs: 'no space left' },
+      ],
+    };
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <WorkflowRunView run={run} repo="acme/Platform/rules" />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByText('compile'));
+    fireEvent.click(screen.getByText('package'));
+
+    await waitFor(() => expect(screen.getByText('undefined: rule')).toBeTruthy());
+    expect(screen.getByText('no space left')).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

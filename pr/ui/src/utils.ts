@@ -112,14 +112,15 @@ function isGitHubPR(pr: Pick<PRItem, 'provider'>): boolean {
 
 // repoWebURL is the page of pr's repository: on GitHub by name, elsewhere the PR's own URL
 // without its pull request path.
-function repoWebURL(pr: PRItem): string {
+export function repoWebURL(pr: PRItem): string {
   if (isGitHubPR(pr)) return `https://github.com/${pr.repo}`;
   return pr.url.replace(/\/pullrequest\/\d+\/?$/, '');
 }
 
-// authorProfileURL is the GitHub profile of pr's author; another host's author has none to link.
-export function authorProfileURL(pr: PRItem): string | undefined {
-  return isGitHubPR(pr) ? `https://github.com/${pr.author}` : undefined;
+// authorProfileURL is the GitHub profile of login, pr's author unless named, who wrote on pr; on
+// another host there is none to link.
+export function authorProfileURL(pr: PRItem, login = pr.author): string | undefined {
+  return isGitHubPR(pr) ? `https://github.com/${login}` : undefined;
 }
 
 export function groupByRepo(prs: PRItem[]): RepoGroup[] {

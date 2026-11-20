@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateGavelShards, authorProfileURL, failedTestsLabel, groupByOrg } from './utils';
+import { aggregateGavelShards, authorProfileURL, failedTestsLabel, groupByOrg, repoWebURL } from './utils';
 import type { GavelResultsSummary, PRItem } from './types';
 
 function makeShard(overrides: Partial<GavelResultsSummary> = {}): GavelResultsSummary {
@@ -60,6 +60,8 @@ describe('provider links', () => {
     expect(org.repos[0].webUrl).toBe('https://github.com/acme/api');
     expect(org.repos[0].host).toBe('GitHub');
     expect(authorProfileURL(github)).toBe('https://github.com/Ada Lovelace');
+    expect(authorProfileURL(github, 'grace'), 'a commenter on the PR').toBe('https://github.com/grace');
+    expect(repoWebURL(github)).toBe('https://github.com/acme/api');
   });
 
   it('links an Azure DevOps PR to its repository, and to no GitHub owner or profile', () => {
@@ -70,5 +72,7 @@ describe('provider links', () => {
     expect(org.repos[0].webUrl).toBe('https://dev.azure.com/acme/Platform/_git/rules');
     expect(org.repos[0].host).toBe('Azure DevOps');
     expect(authorProfileURL(azure)).toBeUndefined();
+    expect(authorProfileURL(azure, 'grace')).toBeUndefined();
+    expect(repoWebURL(azure)).toBe('https://dev.azure.com/acme/Platform/_git/rules');
   });
 });

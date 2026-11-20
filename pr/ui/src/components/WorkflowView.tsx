@@ -94,7 +94,7 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
         )}
       </div>
       {expanded && run.jobs && run.jobs.map(job => (
-        <JobView key={job.databaseId} job={job} repo={repo} runId={run.databaseId} />
+        <JobView key={job.nativeId || job.databaseId} job={job} repo={repo} runId={run.databaseId} />
       ))}
     </div>
   );
@@ -102,19 +102,21 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
 
 function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }) {
   const failed = job.conclusion?.toLowerCase() === 'failure';
+  // A job without a GitHub ID, an Azure DevOps job's, carries its failed logs' tails in the detail.
+  const carried = !job.databaseId;
 
   const [logsRequested, setLogsRequested] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
   const [expandedJobFallback, setExpandedJobFallback] = useState(false);
   const logsResult = useQuery({
     ...jobLogsQuery(repo, runId, job.databaseId),
-    enabled: logsRequested,
+    enabled: logsRequested && !carried,
   });
-  const loading = logsResult.isFetching;
-  const loaded = logsResult.isSuccess;
-  const jobLogs = logsResult.data?.logs || '';
+  const loading = !carried && logsResult.isFetching;
+  const loaded = carried || logsResult.isSuccess;
+  const jobLogs = (carried ? job.logs : logsResult.data?.logs) || '';
   const stepLogs = new Map(
-    (logsResult.data?.steps ?? [])
+    ((carried ? job.steps : logsResult.data?.steps) ?? [])
       .filter(step => !!step.logs)
       .map(step => [step.number, step.logs!]),
   );

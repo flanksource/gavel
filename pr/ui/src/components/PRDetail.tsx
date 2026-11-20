@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useCallback, type ReactNode, type ComponentType } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Project } from '../types';
-import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
+import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment, authorProfileURL, repoWebURL } from '../utils';
 import { ShardLintFindings, ShardTestFailures } from './ShardFindings';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
 import { PRLinkedTodos } from './PRLinkedTodos';
@@ -272,7 +272,7 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
           {detail?.comments && <DeploymentsSection comments={detail.comments} />}
 
           {detail?.comments && detail.comments.length > 0 && (
-            <CommentsSection comments={detail.comments.filter(c => !isDeploymentComment(c))} />
+            <CommentsSection pr={pr} comments={detail.comments.filter(c => !isDeploymentComment(c))} />
           )}
         </>
       )}
@@ -461,7 +461,7 @@ function PRHeader({ pr, detail, action }: { pr: PRItem; detail: PRDetail | null;
           alt={pr.repo}
           size={36}
           rounded="md"
-          href={`https://github.com/${pr.repo}`}
+          href={repoWebURL(pr)}
           title={pr.repo}
         />
         <div className="flex-1 min-w-0">
@@ -475,11 +475,11 @@ function PRHeader({ pr, detail, action }: { pr: PRItem; detail: PRDetail | null;
               src={authorAvatarUrl}
               alt={pr.author}
               size={16}
-              href={`https://github.com/${pr.author}`}
+              href={authorProfileURL(pr)}
               title={pr.author}
             />
             <a
-              href={`https://github.com/${pr.author}`}
+              href={authorProfileURL(pr)}
               target="_blank"
               rel="noopener"
               className="hover:text-blue-600 hover:underline"
@@ -529,7 +529,7 @@ function PRHeader({ pr, detail, action }: { pr: PRItem; detail: PRDetail | null;
   );
 }
 
-function CommentView({ comment }: { comment: PRComment }) {
+function CommentView({ pr, comment }: { pr: PRItem; comment: PRComment }) {
   const [expanded, setExpanded] = useState(false);
   const resolved = comment.isResolved || comment.isOutdated;
   const title = extractCommentTitle(comment.body);
@@ -567,7 +567,7 @@ function CommentView({ comment }: { comment: PRComment }) {
             src={comment.avatarUrl}
             alt={comment.author}
             size={14}
-            href={`https://github.com/${comment.author}`}
+            href={authorProfileURL(pr, comment.author)}
             title={comment.author}
           />
           @{comment.author}
@@ -712,7 +712,7 @@ const SEVERITY_DEFS = [
   { key: 'nitpick', icon: '🧹', label: 'Nitpick', color: 'border-border bg-muted' },
 ];
 
-function CommentsSection({ comments }: { comments: PRComment[] }) {
+function CommentsSection({ pr, comments }: { pr: PRItem; comments: PRComment[] }) {
   const [showOutdated, setShowOutdated] = useState(false);
   const [severityFilter, setSeverityFilter] = useState<Set<string>>(new Set());
 
@@ -806,7 +806,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
         )}
       </div>
       {filtered.map(c => (
-        <CommentView key={c.id} comment={c} />
+        <CommentView key={`${c.threadId ?? ''}:${c.id}`} pr={pr} comment={c} />
       ))}
       {filtered.length === 0 && (
         <div className="text-xs text-muted-foreground py-2">No comments match filters</div>

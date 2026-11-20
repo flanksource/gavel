@@ -265,6 +265,8 @@ export interface Step {
 
 export interface Job {
   databaseId: number;
+  // nativeId is the provider's own job ID: an Azure DevOps job's, which has no databaseId.
+  nativeId?: string;
   name: string;
   status: string;
   conclusion: string;
