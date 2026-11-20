@@ -223,6 +223,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		if err := srv.StartWorkspaceData(ctx, db); err != nil {
 			return nil, err
 		}
+		srv.SetPRRemote(func(ctx context.Context, pr github.PRListItem) (*git.Repository, error) {
+			return forge.PullRequestRemote(ctx, db, scope, pr.URL, git.ClientOptions{Defensive: true})
+		})
 		poller := ui.NewPoller(srv, orgPRSearch(srv, account, cache, db, scope.OrgID), interval)
 		orgWork.Go(func() { poller.Run(ctx) })
 		changed := make(chan struct{}, 1)

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/gavel/azuredevops"
@@ -72,4 +73,30 @@ func localAzurePRs(ctx context.Context, repos []string) (github.PRSearchResults,
 		listed = append(listed, pulls...)
 	}
 	return ui.ConnectionPRItems(listed), errors.Join(errs...)
+}
+
+// localPRRemote reaches a listed Azure DevOps pull request's repository through
+// azuredevops.LocalConnection.
+func localPRRemote(ctx context.Context, pr github.PRListItem) (*git.Repository, error) {
+	repoURL, err := forge.PullRequestRepository(pr.URL)
+	if err != nil {
+		return nil, err
+	}
+	repo, err := git.ParseRepoURL(repoURL, models.ConnectionTypeAzureDevops)
+	if err != nil {
+		return nil, fmt.Errorf("pull request %s: %w", pr.URL, err)
+	}
+	connection, options, err := azuredevops.LocalConnection(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	client, err := git.FromConnection(dbcontext.NewContext(ctx), connection, options)
+	if err != nil {
+		return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
+	}
+	remote, err := client.Repository(repoURL)
+	if err != nil {
+		return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
+	}
+	return remote, nil
 }

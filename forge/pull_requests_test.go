@@ -75,3 +75,32 @@ func connectionRepo(t *testing.T, db *gorm.DB, scope tenant.Scope, name, source 
 	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, connection_id, remote_url, provider_repo_id, default_branch)
 		VALUES (?, ?, ?, ?, ?, ?, 'main')`, scope.OrgID, name, source, connection, remoteURL, uuid.NewString()).Error)
 }
+
+func TestAPullRequestIsReachedThroughTheConnectionOfItsOrgsRepository(t *testing.T) {
+	db := catalog(t)
+	scope, other := hostedOrg(t, db), hostedOrg(t, db)
+	azure := fakeListing(t, "/acme/Platform/_apis/git/repositories/rules/pullrequests/9")
+	conn := saveFor(t, db, scope, models.Connection{Name: "acme-azure", Type: models.ConnectionTypeAzureDevops, URL: azure.URL + "/acme",
+		Password: "azure-pat", InsecureTLS: true})
+	connectionRepo(t, db, scope, "Platform/rules", "azure_devops", &conn, azure.URL+"/acme/Platform/_git/rules")
+	pr := azure.URL + "/acme/Platform/_git/rules/pullrequest/9"
+
+	remote, err := forge.PullRequestRemote(context.Background(), db, scope, pr, git.ClientOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "rules", remote.URL.Name)
+	assert.Equal(t, "Platform", remote.URL.Project)
+	require.NotNil(t, remote.Provider)
+
+	_, err = forge.PullRequestRemote(context.Background(), db, other, pr, git.ClientOptions{})
+	require.EqualError(t, err, "no repository of the organization's git connections holds pull request "+pr)
+	_, err = forge.PullRequestRemote(context.Background(), db, scope, azure.URL+"/acme/Platform/_git/other/pullrequest/9", git.ClientOptions{})
+	require.ErrorContains(t, err, "no repository of the organization's git connections holds")
+	_, err = forge.PullRequestRemote(context.Background(), db, scope, "https://github.com/acme/api/pull/7", git.ClientOptions{})
+	require.EqualError(t, err, `pull request URL "https://github.com/acme/api/pull/7" has no /pullrequest/ path`)
+}
+
+func TestAPullRequestURLNamesItsRepository(t *testing.T) {
+	repo, err := forge.PullRequestRepository("https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9")
+	require.NoError(t, err)
+	assert.Equal(t, "https://dev.azure.com/acme/Platform/_git/rules", repo)
+}

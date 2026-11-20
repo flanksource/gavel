@@ -64,3 +64,18 @@ func TestALocalDashboardListsTheAzurePullRequestsOfItsConfiguredRepositories(t *
 	require.Len(t, items, 1)
 	assert.Equal(t, types.PRProviderAzure, items[0].Provider)
 }
+
+func TestALocalDashboardReachesAListedAzurePullRequestThroughItsConnection(t *testing.T) {
+	previous := azuredevops.FindConnection
+	azuredevops.FindConnection = func(context.Context, git.RepoURL) (*models.Connection, error) {
+		return &models.Connection{Name: "acme", Type: models.ConnectionTypeAzureDevops, URL: "https://tfs.example.com/acme", Password: "azure-pat"}, nil
+	}
+	t.Cleanup(func() { azuredevops.FindConnection = previous })
+
+	remote, err := localPRRemote(context.Background(), github.PRListItem{Provider: types.PRProviderAzure, Repo: "acme/Platform/rules", Number: 9,
+		URL: "https://tfs.example.com/acme/Platform/_git/rules/pullrequest/9"})
+	require.NoError(t, err)
+	assert.Equal(t, "tfs.example.com", remote.URL.Host)
+	assert.Equal(t, "rules", remote.URL.Name)
+	require.NotNil(t, remote.Provider)
+}

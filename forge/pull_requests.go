@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
@@ -95,4 +96,42 @@ func openPullRequests(ctx context.Context, client namedClient, name, remoteURL s
 		listed = append(listed, RepoPullRequest{Repo: remote.URL, PullRequest: pull})
 	}
 	return listed, nil
+}
+
+// PullRequestRepository is the URL of the repository pull request prURL, an Azure DevOps
+// .../_git/{repo}/pullrequest/{number} URL, belongs to.
+func PullRequestRepository(prURL string) (string, error) {
+	repo, _, found := strings.Cut(prURL, "/pullrequest/")
+	if !found {
+		return "", fmt.Errorf("pull request URL %q has no /pullrequest/ path", prURL)
+	}
+	return repo, nil
+}
+
+// PullRequestRemote is the remote, through its connection as stored and never hydrated, of the
+// repository of scope's that holds pull request prURL; options configures its provider client.
+func PullRequestRemote(ctx context.Context, db *gorm.DB, scope tenant.Scope, prURL string, options git.ClientOptions) (*git.Repository, error) {
+	repoURL, err := PullRequestRepository(prURL)
+	if err != nil {
+		return nil, err
+	}
+	target, err := git.ParseRepoURL(repoURL, models.ConnectionTypeAzureDevops)
+	if err != nil {
+		return nil, fmt.Errorf("pull request %s: %w", prURL, err)
+	}
+	var repos []struct {
+		RemoteURL    string
+		ConnectionID uuid.UUID
+	}
+	if err := db.WithContext(ctx).Raw(`SELECT remote_url, connection_id FROM repos
+		WHERE org_id = ? AND connection_id IS NOT NULL AND source IN ?`, scope.OrgID, pullRequestSources).
+		Scan(&repos).Error; err != nil {
+		return nil, fmt.Errorf("list the organization's repositories: %w", err)
+	}
+	for _, repo := range repos {
+		if remote, err := git.ParseRepoURL(repo.RemoteURL, models.ConnectionTypeAzureDevops); err == nil && remote.SameRepository(target) {
+			return Remote(ctx, db, scope, repo.ConnectionID, repo.RemoteURL, options)
+		}
+	}
+	return nil, fmt.Errorf("no repository of the organization's git connections holds pull request %s", prURL)
 }

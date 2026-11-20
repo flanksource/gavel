@@ -478,6 +478,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	if err := startGitChangeFeed(ctx, srv, tracker, runtime.DB); err != nil {
 		return err
 	}
+	srv.SetPRRemote(localPRRemote)
 	poller := ui.NewPoller(srv, searchFn, interval)
 	poller.Start(ctx)
 
