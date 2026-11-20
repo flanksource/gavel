@@ -40,6 +40,15 @@ func (a *authenticator) authorization(ctx context.Context) (string, error) {
 	if a.pat != "" {
 		return "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+a.pat)), nil
 	}
+	token, err := a.cliToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	return "Bearer " + token, nil
+}
+
+// cliToken is the az CLI login's access token, fetched again once it nears expiry.
+func (a *authenticator) cliToken(ctx context.Context) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.fetch == nil || a.now == nil {
@@ -55,7 +64,7 @@ func (a *authenticator) authorization(ctx context.Context) (string, error) {
 		}
 		a.cached = token
 	}
-	return "Bearer " + a.cached.Token, nil
+	return a.cached.Token, nil
 }
 
 func cliAccessToken(ctx context.Context) (accessToken, error) {

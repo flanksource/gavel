@@ -24,15 +24,25 @@ func connectionPAT(ctx context.Context, repo Repository) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", described, err)
 	}
-	connection, err := FindConnection(ctx, target)
-	if err != nil {
-		return "", fmt.Errorf("find the git connection for %s: %w", described, err)
-	}
-	if connection == nil {
-		return "", nil
-	}
-	if connection.Password == "" {
-		return "", fmt.Errorf("git connection %q owns %s but holds no personal access token", connection.Name, described)
+	connection, err := owningConnection(ctx, target, described)
+	if err != nil || connection == nil {
+		return "", err
 	}
 	return connection.Password, nil
+}
+
+// owningConnection is the git connection that owns target, which described names for errors, or
+// nil when none does or no lookup is set; one owning it must hold a PAT.
+func owningConnection(ctx context.Context, target git.RepoURL, described string) (*models.Connection, error) {
+	if FindConnection == nil {
+		return nil, nil
+	}
+	connection, err := FindConnection(ctx, target)
+	if err != nil {
+		return nil, fmt.Errorf("find the git connection for %s: %w", described, err)
+	}
+	if connection != nil && connection.Password == "" {
+		return nil, fmt.Errorf("git connection %q owns %s but holds no personal access token", connection.Name, described)
+	}
+	return connection, nil
 }
