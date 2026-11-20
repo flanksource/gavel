@@ -34,6 +34,10 @@ import (
 // npm and Python registries, and GitHub. They are passed through without decryption.
 var DefaultSubstrateEgress = []string{
 	"proxy.golang.org", "sum.golang.org",
+	// When a repository's go.mod asks for a newer Go than the runner image has, go downloads that
+	// toolchain, and proxy.golang.org redirects every toolchain download here. Without it the run
+	// fails before any test runs. Passthrough admits all of Google Cloud Storage, not just Go's.
+	"storage.googleapis.com",
 	"registry.npmjs.org",
 	"pypi.org", "files.pythonhosted.org",
 	"github.com", "codeload.github.com", "objects.githubusercontent.com",
