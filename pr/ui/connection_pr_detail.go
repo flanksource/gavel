@@ -4,6 +4,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/prwatch"
+	"github.com/flanksource/gavel/todos/types"
 )
 
 // connectionLogTail is how many of a failed step's last log lines its detail carries.
@@ -54,12 +56,22 @@ func (s *Server) connectionPRAt(url string) (github.PRListItem, bool) {
 	return github.PRListItem{}, false
 }
 
+// autoMergeRefusals say why the dashboard offers no auto-merge for each connection provider's pull
+// requests.
+var autoMergeRefusals = map[string]string{
+	types.PRProviderAzure:  "auto-merge isn't offered for Azure DevOps pull requests: completing one waits on its policies already",
+	types.PRProviderGitLab: "auto-merge isn't offered for GitLab pull requests from the dashboard",
+}
+
 // mergeConnectionPR completes pr, the head that was reviewed, through its remote with the method
-// asked. Its provider queues completion behind the base's policies itself, so there is no
-// separate auto-merge.
+// asked. There is no auto-merge: Azure DevOps queues completion behind the base's policies itself.
 func (s *Server) mergeConnectionPR(w http.ResponseWriter, r *http.Request, pr github.PRListItem, input model.MergeInput) {
 	if input.Auto {
-		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("auto-merge isn't offered for Azure DevOps pull requests: completing one waits on its policies already"))
+		refusal, ok := autoMergeRefusals[pr.Provider]
+		if !ok {
+			refusal = fmt.Sprintf("auto-merge isn't offered for %s pull requests", pr.Provider)
+		}
+		writeJSONError(w, http.StatusBadRequest, errors.New(refusal))
 		return
 	}
 	if s.prRemote == nil {

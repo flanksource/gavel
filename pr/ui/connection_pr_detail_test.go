@@ -263,6 +263,10 @@ func TestAHostedOrgReachesItsGitLabMergeRequestsByURL(t *testing.T) {
 	t.Setenv("GAVEL_SECRET_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("h"), 32)))
 	var server *httptest.Server
 	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v4/projects/acme/api/merge_requests/5/pipelines" {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v4/projects/acme/api/merge_requests/5" {
 			http.NotFound(w, r)
 			return
@@ -294,4 +298,38 @@ func TestAHostedOrgReachesItsGitLabMergeRequestsByURL(t *testing.T) {
 
 	_, _, err = prs(t.Context(), server.URL+"/acme/api/-/merge_requests/none")
 	require.EqualError(t, err, `pull request URL "`+server.URL+`/acme/api/-/merge_requests/none" has no positive number`)
+}
+
+func TestTheDashboardMergesAGitLabMergeRequestThroughItsRemote(t *testing.T) {
+	var merged map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v4/projects/acme/api/merge_requests/5/merge" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&merged)
+		_, _ = w.Write([]byte(`{"iid":5,"state":"merged"}`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := git.FromConnection(dbcontext.New(), models.Connection{Name: "acme", Type: models.ConnectionTypeGitlab,
+		URL: server.URL, Password: "glpat", InsecureTLS: true})
+	require.NoError(t, err)
+	remote, err := client.Repository(server.URL + "/acme/api.git")
+	require.NoError(t, err)
+	s := NewServer(gavelctx.New(t.Context()), 0, github.Options{}, SearchConfig{})
+	mrURL := server.URL + "/acme/api/-/merge_requests/5"
+	s.publishResults(github.PRSearchResults{{Provider: types.PRProviderGitLab, Repo: "acme/api", Number: 5, URL: mrURL}})
+	s.SetPRRemote(func(context.Context, github.PRListItem) (*git.Repository, error) { return remote, nil })
+
+	recorder := httptest.NewRecorder()
+	s.handlePRMerge(recorder, httptest.NewRequest(http.MethodPost, "/api/prs/merge",
+		strings.NewReader(`{"url":"`+mrURL+`","method":"squash","headSha":"`+azureHead+`"}`)))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, map[string]any{"sha": azureHead, "squash": true, "should_remove_source_branch": false}, merged)
+
+	recorder = httptest.NewRecorder()
+	s.handlePRMerge(recorder, httptest.NewRequest(http.MethodPost, "/api/prs/merge",
+		strings.NewReader(`{"url":"`+mrURL+`","method":"merge","auto":true,"headSha":"`+azureHead+`"}`)))
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "auto-merge isn't offered for GitLab pull requests from the dashboard")
 }

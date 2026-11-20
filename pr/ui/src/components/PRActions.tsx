@@ -91,7 +91,11 @@ export function PRActions({
   const submittingRef = useRef(false);
 
   const info = detail?.pr;
-  const azure = info?.provider === 'azuredevops';
+  // A pull request a git connection brings (Azure DevOps, GitLab) has no GitHub node ID, auto-merge
+  // or update-branch; GitLab rebases in a request of its own, so it merges with a merge commit.
+  const connection = !!info?.provider && info.provider !== 'github';
+  const gitlab = info?.provider === 'gitlab';
+  const defaultMethod = gitlab ? 'merge' : 'rebase';
   const nodeId = info?.nodeId;
   const state = (info?.state || pr.state || '').toUpperCase();
   const isDraft = info?.isDraft ?? pr.isDraft ?? false;
@@ -125,7 +129,7 @@ export function PRActions({
   const error = conflict ? '' : actionMutation.error instanceof Error ? actionMutation.error.message : '';
 
   // The node ID arrives with the first detail SSE frame; gate actions until then.
-  const loading = disabled || actionMutation.isPending || !info || (!azure && !nodeId) || (azure && !info.headRefOid);
+  const loading = disabled || actionMutation.isPending || !info || (!connection && !nodeId) || (connection && !info.headRefOid);
   const conflicting = mergeable === 'CONFLICTING' || info?.mergeReadiness?.state === 'conflicting';
   const mergeDisabled = loading || isDraft || conflicting;
   const mergeDisabledReason = disabled
@@ -138,12 +142,12 @@ export function PRActions({
         ? 'Resolve merge conflicts before merging'
         : undefined;
 
-  // The default click rebases; the menu names every strategy explicitly.
+  // The default click rebases (a GitLab merge request merges); the menu names every strategy it offers.
   const mergeMethods: DropdownMenuItem[] = [
-    {
+    ...(!gitlab ? [{
       label: menuLabel(UiGitMerge, 'Rebase and merge'),
       onSelect: () => open({ type: 'merge', method: 'rebase' }),
-    },
+    }] : []),
     {
       label: menuLabel(UiGitPr, 'Squash and merge'),
       onSelect: () => open({ type: 'merge', method: 'squash' }),
@@ -152,7 +156,7 @@ export function PRActions({
       label: menuLabel(UiGitGraph, 'Create a merge commit'),
       onSelect: () => open({ type: 'merge', method: 'merge' }),
     },
-    ...(!azure ? [{
+    ...(!connection ? [{
       label: menuLabel(UiRocket, 'Enable auto-merge (rebase)'),
       title: 'Merge automatically once all required checks pass',
       onSelect: () => open({ type: 'automerge', method: 'rebase' }),
@@ -188,7 +192,7 @@ export function PRActions({
             onSelect: () => {},
             children: mergeMethods,
           },
-          ...(!azure && behind > 0
+          ...(!connection && behind > 0
             ? [
                 {
                   label: menuLabel(UiSync, 'Update branch'),
@@ -355,12 +359,12 @@ export function PRActions({
               label={menuLabel(UiGitMerge, 'Merge')}
               title="Merge options"
               disabled={mergeDisabled}
-              onClick={() => open({ type: 'merge', method: 'rebase' })}
+              onClick={() => open({ type: 'merge', method: defaultMethod })}
               items={mergeMethods}
             />
           </span>
 
-          {!azure && behind > 0 && (
+          {!connection && behind > 0 && (
             <Button
               variant="outline"
               size="sm"

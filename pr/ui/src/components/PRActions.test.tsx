@@ -129,6 +129,24 @@ describe('PRActions responsive collapse', () => {
     }));
   });
 
+  it('merges a GitLab merge request with a merge commit by default, offering no rebase', async () => {
+    const url = 'https://gitlab.example.com/acme/api/-/merge_requests/5';
+    const fetchMock = vi.fn(async () => new Response('{"status":"ok"}'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderActions({ pr: makePR({ number: 5, repo: 'acme/api', url, provider: 'gitlab' }), detail: { pr: { provider: 'gitlab', state: 'OPEN', headRefOid: 'reviewed-head' } } as PRDetail });
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Rebase and merge' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Squash and merge' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Enable auto-merge (rebase)' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Update branch' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Merge' }).at(-1)!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/prs/merge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, method: 'merge', auto: false, headSha: 'reviewed-head' }),
+    }));
+  });
+
   it('names rebase, squash and merge-commit strategies on demand', () => {
     renderActions();
     for (const label of ['Rebase and merge', 'Squash and merge', 'Create a merge commit']) {
