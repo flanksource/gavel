@@ -47,11 +47,32 @@ func (c connectionClient) Kind() string { return kinds[c.remote.URL.Provider] }
 
 func (c connectionClient) Preflight(ctx context.Context) error { return c.remote.Provider.Verify(ctx) }
 
-func (c connectionClient) DefaultBranch(context.Context) (string, error) {
-	if c.defaultBranch == "" {
-		return "", fmt.Errorf("the default branch of %s is not known", c.remote.URL.Redacted())
+// DefaultBranch is the default branch the client was given, else the one its provider names.
+func (c connectionClient) DefaultBranch(ctx context.Context) (string, error) {
+	if c.defaultBranch != "" {
+		return c.defaultBranch, nil
 	}
-	return c.defaultBranch, nil
+	info, err := c.repository(ctx)
+	if err != nil {
+		return "", err
+	}
+	if info.DefaultBranch == "" {
+		return "", fmt.Errorf("%s names no default branch for %s", c.Kind(), c.remote.URL.Redacted())
+	}
+	return info.DefaultBranch, nil
+}
+
+// repository is the client's repository as its provider describes it.
+func (c connectionClient) repository(ctx context.Context) (git.RepositoryInfo, error) {
+	reader, ok := c.remote.Provider.(git.RepositoryReader)
+	if !ok {
+		return git.RepositoryInfo{}, fmt.Errorf("%s doesn't describe its repositories to gavel", c.Kind())
+	}
+	info, err := reader.Repository(ctx, c.remote.URL)
+	if err != nil {
+		return git.RepositoryInfo{}, fmt.Errorf("read repository %s: %w", c.remote.URL.Redacted(), err)
+	}
+	return info, nil
 }
 
 func (c connectionClient) OpenPRs(ctx context.Context) ([]model.PRInfo, error) {

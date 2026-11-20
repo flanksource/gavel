@@ -1,8 +1,9 @@
+// The az CLI login a local gavel reaches Azure DevOps with when no git connection or
+// AZURE_DEVOPS_EXT_PAT does: its access token, fetched again once it nears expiry.
 package azuredevops
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -16,35 +17,12 @@ type accessToken struct {
 	Expires time.Time
 }
 
+// authenticator caches the az CLI login's access token until it nears expiry.
 type authenticator struct {
 	mu     sync.Mutex
-	pat    string
 	fetch  func(context.Context) (accessToken, error)
 	now    func() time.Time
 	cached accessToken
-	// connection, when set, is the PAT of the git connection that owns the repository, which
-	// comes before pat; "" when no connection does.
-	connection func(context.Context) (string, error)
-}
-
-func (a *authenticator) authorization(ctx context.Context) (string, error) {
-	if a.connection != nil {
-		pat, err := a.connection(ctx)
-		if err != nil {
-			return "", err
-		}
-		if pat != "" {
-			return "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+pat)), nil
-		}
-	}
-	if a.pat != "" {
-		return "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+a.pat)), nil
-	}
-	token, err := a.cliToken(ctx)
-	if err != nil {
-		return "", err
-	}
-	return "Bearer " + token, nil
 }
 
 // cliToken is the az CLI login's access token, fetched again once it nears expiry.

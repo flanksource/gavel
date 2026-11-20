@@ -70,6 +70,12 @@ var _ = Describe("A local Azure DevOps repository's connection", func() {
 		Expect(err).NotTo(HaveOccurred(), "a client needs no PAT with the login")
 	})
 
+	It("refuses a connection that owns the repository but holds no PAT", func(ctx SpecContext) {
+		owning(&models.Connection{Name: "contoso", Type: models.ConnectionTypeAzureDevops}, nil, "env-pat")
+		_, _, err := LocalConnection(ctx, repo)
+		Expect(err).To(MatchError(`git connection "contoso" owns Azure DevOps repository https://dev.azure.com/contoso/web/_git/site but holds no personal access token`))
+	})
+
 	It("fails with the lookup's reason", func(ctx SpecContext) {
 		owning(nil, errors.New("the catalog's key is unavailable"), "env-pat")
 		_, _, err := LocalConnection(ctx, repo)

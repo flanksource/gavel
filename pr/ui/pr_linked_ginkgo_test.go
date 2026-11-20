@@ -15,19 +15,46 @@ import (
 
 const linkedPRFixture = `{"data":{"repository":{"pullRequest":{"id":"PR_node_27","number":27,"title":"Fix validation","state":"OPEN","headRefOid":"reviewed-head","headRefName":"fix/validation","baseRefName":"main","url":"https://github.com/acme/service/pull/27","author":{"login":"dev"},"mergeable":"MERGEABLE","reviewThreads":{"nodes":[]},"comments":{"nodes":[]}}}}}`
 
-type linkedPRTransport func(*http.Request) (*http.Response, error)
+// linkedPRTransport sends every request to endpoint, through next.
+type linkedPRTransport struct {
+	endpoint *url.URL
+	next     http.RoundTripper
+}
 
-func (f linkedPRTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func (t linkedPRTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	clone := r.Clone(r.Context())
+	clone.URL.Scheme, clone.URL.Host = t.endpoint.Scheme, t.endpoint.Host
+	return t.next.RoundTrip(clone)
+}
+
+// Unwrap and Rewrap let a client that configures TLS on the transport keep the redirect.
+func (t linkedPRTransport) Unwrap() http.RoundTripper { return t.next }
+
+func (t linkedPRTransport) Rewrap(next http.RoundTripper) http.RoundTripper {
+	return linkedPRTransport{endpoint: t.endpoint, next: next}
+}
 
 var _ = Describe("linked PR UI endpoints", func() {
 	It("loads and completes the linked Azure PR through its native provider", func() {
 		ref := "https://dev.azure.com/acme/product/_git/service/pullrequest/27"
 		mutations := 0
+		pr := `{"pullRequestId":27,"title":"Fix validation","status":"active","mergeStatus":"succeeded","sourceRefName":"refs/heads/feature",
+			"targetRefName":"refs/heads/main","lastMergeSourceCommit":{"commitId":"reviewed-head"},"lastMergeTargetCommit":{"commitId":"base"},
+			"lastMergeCommit":{"commitId":"merge"},"repository":{"id":"repo-id","name":"service","project":{"id":"project-id","name":"product"}}}`
+		routes := map[string]string{
+			"GET /acme/product/_apis/git/repositories/service/pullrequests/27":           pr,
+			"GET /acme/product/_apis/git/repositories/service/pullrequests/27/threads":   `{"value":[]}`,
+			"GET /acme/product/_apis/git/repositories/service/pullrequests/27/reviewers": `{"value":[]}`,
+			"GET /acme/product/_apis/git/repositories/repo-id/refs":                      `{"value":[{"name":"refs/heads/feature","objectId":"reviewed-head"},{"name":"refs/heads/main","objectId":"base"}]}`,
+			"GET /acme/_apis/projects/product":                                           `{"id":"project-id"}`,
+			"GET /acme/product/_apis/policy/evaluations":                                 `{"value":[]}`,
+			"GET /acme/product/_apis/build/builds":                                       `{"value":[]}`,
+		}
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer GinkgoRecover()
 			if r.Method == http.MethodPatch {
 				mutations++
-				Expect(r.URL.Path).To(Equal("/acme/product/_apis/git/repositories/repo-id/pullrequests/27"))
+				Expect(r.URL.Path).To(Equal("/acme/product/_apis/git/repositories/service/pullrequests/27"))
 				var body map[string]any
 				Expect(json.NewDecoder(r.Body).Decode(&body)).To(Succeed())
 				Expect(body).To(Equal(map[string]any{
@@ -37,28 +64,17 @@ var _ = Describe("linked PR UI endpoints", func() {
 				fmt.Fprint(w, `{"pullRequestId":27,"status":"completed"}`)
 				return
 			}
-			switch {
-			case strings.HasSuffix(r.URL.Path, "/repositories/service"):
-				fmt.Fprint(w, `{"id":"repo-id","name":"service","project":{"id":"project-id","name":"product"}}`)
-			case strings.HasSuffix(r.URL.Path, "/pullrequests/27"):
-				fmt.Fprint(w, `{"pullRequestId":27,"title":"Fix validation","status":"active","mergeStatus":"succeeded","sourceRefName":"refs/heads/feature","targetRefName":"refs/heads/main","lastMergeSourceCommit":{"commitId":"reviewed-head"},"lastMergeTargetCommit":{"commitId":"base"},"lastMergeCommit":{"commitId":"merge"}}`)
-			case strings.HasSuffix(r.URL.Path, "/refs"):
-				fmt.Fprint(w, `{"value":[{"name":"refs/heads/feature","objectId":"reviewed-head"},{"name":"refs/heads/main","objectId":"base"}]}`)
-			case strings.HasSuffix(r.URL.Path, "/threads"), strings.HasSuffix(r.URL.Path, "/evaluations"), strings.HasSuffix(r.URL.Path, "/builds"):
-				fmt.Fprint(w, `{"value":[]}`)
-			default:
-				Fail("unexpected Azure request: " + r.URL.Path)
+			body, ok := routes[r.Method+" "+r.URL.Path]
+			if !ok {
+				Fail("unexpected Azure request: " + r.Method + " " + r.URL.Path)
 			}
+			fmt.Fprint(w, body)
 		}))
 		DeferCleanup(upstream.Close)
 		endpoint, err := url.Parse(upstream.URL)
 		Expect(err).NotTo(HaveOccurred())
 		transport := http.DefaultTransport
-		http.DefaultTransport = linkedPRTransport(func(r *http.Request) (*http.Response, error) {
-			clone := r.Clone(r.Context())
-			clone.URL.Scheme, clone.URL.Host = endpoint.Scheme, endpoint.Host
-			return transport.RoundTrip(clone)
-		})
+		http.DefaultTransport = linkedPRTransport{endpoint: endpoint, next: transport}
 		DeferCleanup(func() { http.DefaultTransport = transport })
 		GinkgoT().Setenv("AZURE_DEVOPS_EXT_PAT", "fixture-pat")
 		s := &Server{refreshCh: make(chan struct{}, 1)}

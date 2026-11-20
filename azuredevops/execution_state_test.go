@@ -1,3 +1,5 @@
+// Tests Azure DevOps execution states as the dashboard spells them: native partial and cancelled
+// results kept, unknown results refused.
 package azuredevops
 
 import (
@@ -5,15 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Azure timeline normalization", func() {
-	It("sorts jobs and tasks and selects their latest attempt", func() {
-		records := latestRecords([]timelineRecord{{ID: "old-job", Identifier: "Test", Type: "Job", Order: 1, Attempt: 1}, {ID: "new-job", Identifier: "Test", Type: "Job", Order: 1, Attempt: 2}, {ID: "task-b", Type: "Task", ParentID: "new-job", Order: 3}, {ID: "task-a", Type: "Task", ParentID: "new-job", Order: 2}, {ID: "deploy", Identifier: "Deploy", Type: "Job", Order: 4}})
-		var ids []string
-		for _, r := range records {
-			ids = append(ids, r.ID)
-		}
-		Expect(ids).To(Equal([]string{"new-job", "task-a", "task-b", "deploy"}))
-	})
+var _ = Describe("Azure execution states", func() {
 	It("rejects unknown execution results instead of marking them successful", func() {
 		_, _, err := ExecutionState("completed", "unexpected")
 		Expect(err).To(MatchError(ContainSubstring("unexpected Azure execution state")))

@@ -49,11 +49,15 @@ func Resolve(opts Options) (Client, error) {
 		repo = remote
 	}
 	if IsAzure(repo) {
-		parsed, err := azuredevops.ParseRepository(repo)
+		ctx := opts.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		remote, err := azuredevops.LocalRemote(ctx, repo)
 		if err != nil {
 			return nil, err
 		}
-		return azuredevops.New(parsed), nil
+		return NewConnectionClient(remote, ""), nil
 	}
 	repo = strings.TrimPrefix(repo, "git@github.com:")
 	repo = strings.TrimSuffix(repo, ".git")
@@ -102,29 +106,8 @@ func PreflightCreate(ctx context.Context, opts Options) error {
 			return fmt.Errorf("PR repository does not match origin; pushes target origin")
 		}
 		if client.Kind() == "azuredevops" {
-			requested, err := azuredevops.ParseRepository(opts.Repo)
-			if err != nil {
-				return err
-			}
-			remote, err := azuredevops.ParseRepository(origin)
-			if err != nil {
-				return err
-			}
-			if !strings.EqualFold(requested.Organization, remote.Organization) || !strings.EqualFold(requested.Name, remote.Name) || (requested.Project != "" && remote.Project != "" && !strings.EqualFold(requested.Project, remote.Project)) {
+			if !client.(connectionClient).remote.URL.SameRepository(originClient.(connectionClient).remote.URL) {
 				return fmt.Errorf("azure PR repository does not match origin; pushes target origin")
-			}
-			if requested.Project == "" || remote.Project == "" {
-				requested, err = client.(*azuredevops.Client).Repository(ctx)
-				if err != nil {
-					return err
-				}
-				remote, err = originClient.(*azuredevops.Client).Repository(ctx)
-				if err != nil {
-					return err
-				}
-				if !strings.EqualFold(requested.URL(), remote.URL()) {
-					return fmt.Errorf("azure PR repository does not match origin; pushes target origin")
-				}
 			}
 		} else if client.(gitHubClient).opts.Repo != originClient.(gitHubClient).opts.Repo {
 			return fmt.Errorf("GitHub PR repository does not match origin; pushes target origin")
