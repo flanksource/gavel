@@ -223,10 +223,8 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		if err := srv.StartWorkspaceData(ctx, db); err != nil {
 			return nil, err
 		}
-		if account != nil {
-			poller := ui.NewPoller(srv, orgPRSearch(srv, account, cache, scope.OrgID), interval)
-			orgWork.Go(func() { poller.Run(ctx) })
-		}
+		poller := ui.NewPoller(srv, orgPRSearch(srv, account, cache, db, scope.OrgID), interval)
+		orgWork.Go(func() { poller.Run(ctx) })
 		changed := make(chan struct{}, 1)
 		srv.SetConnectionsChanged(func() {
 			select {
@@ -361,38 +359,63 @@ func syncReposEvery(ctx context.Context, sync func(context.Context) error, srv *
 	}
 }
 
-// orgPRSearch is an org's PR poller search: each group of its repositories, searched with
-// that group's token, merged. An org without repositories has no PRs.
-func orgPRSearch(srv *ui.Server, account hostedGitHub, cache *ghcache.Store, org uuid.UUID) func(time.Time) (github.PRSearchResults, *github.RateLimit, error) {
+// connectionPRsTimeout bounds one listing of an org's pull requests from its git connections.
+const connectionPRsTimeout = 2 * time.Minute
+
+// orgPRSearch is an org's PR poller search: each group of its GitHub repositories, searched with
+// that group's token, then the open pull requests of the repositories its git connections bring,
+// each listed through its connection with public addresses only. An org without a GitHub account
+// searches no GitHub repositories, and one without repositories has no PRs.
+func orgPRSearch(srv *ui.Server, account hostedGitHub, cache *ghcache.Store, db *gorm.DB, org uuid.UUID) func(time.Time) (github.PRSearchResults, *github.RateLimit, error) {
 	return func(since time.Time) (github.PRSearchResults, *github.RateLimit, error) {
-		groups, err := account.SearchGroups(context.Background(), org)
-		if err != nil {
-			return nil, nil, err
-		}
-		search := github.PRSearchOptions{State: "open", Since: since, Status: true, ShowAuthor: true}
-		if srv.ShowClosed() {
-			search.State = "all"
-			if since.IsZero() {
-				search.Since = time.Now().Add(-closedPRLookback)
-			}
-		}
-		if !srv.IncludeBots() {
-			search.ExcludeAuthors = srv.KnownBots()
-		}
 		var all github.PRSearchResults
 		var rateLimit *github.RateLimit
-		for _, group := range groups {
-			search.Repos = group.Repos
-			opts := github.Options{TokenSource: group.Token, Cache: cache.ForOrg(org)}
-			results, rl, err := github.SearchPRs(opts, search)
-			if err != nil {
-				return all, rl, fmt.Errorf("search the pull requests of %s: %w", group.Name, err)
+		if account != nil {
+			var err error
+			if all, rateLimit, err = searchGitHubPRs(srv, account, cache, org, since); err != nil {
+				return all, rateLimit, err
 			}
-			all = append(all, results...)
-			rateLimit = rl
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), connectionPRsTimeout)
+		defer cancel()
+		listed, err := forge.PullRequests(ctx, db, tenant.Scope{OrgID: org}, git.ClientOptions{Defensive: true})
+		all = append(all, ui.ConnectionPRItems(listed)...)
+		if err != nil {
+			return all, rateLimit, fmt.Errorf("list the pull requests of the organization's git connections: %w", err)
 		}
 		return all, rateLimit, nil
 	}
+}
+
+// searchGitHubPRs searches each group of org's GitHub repositories with that group's token.
+func searchGitHubPRs(srv *ui.Server, account hostedGitHub, cache *ghcache.Store, org uuid.UUID, since time.Time) (github.PRSearchResults, *github.RateLimit, error) {
+	groups, err := account.SearchGroups(context.Background(), org)
+	if err != nil {
+		return nil, nil, err
+	}
+	search := github.PRSearchOptions{State: "open", Since: since, Status: true, ShowAuthor: true}
+	if srv.ShowClosed() {
+		search.State = "all"
+		if since.IsZero() {
+			search.Since = time.Now().Add(-closedPRLookback)
+		}
+	}
+	if !srv.IncludeBots() {
+		search.ExcludeAuthors = srv.KnownBots()
+	}
+	var all github.PRSearchResults
+	var rateLimit *github.RateLimit
+	for _, group := range groups {
+		search.Repos = group.Repos
+		opts := github.Options{TokenSource: group.Token, Cache: cache.ForOrg(org)}
+		results, rl, err := github.SearchPRs(opts, search)
+		if err != nil {
+			return all, rl, fmt.Errorf("search the pull requests of %s: %w", group.Name, err)
+		}
+		all = append(all, results...)
+		rateLimit = rl
+	}
+	return all, rateLimit, nil
 }
 
 // hostedPushServer is the git push server for --auth clerk: registered SSH keys only,

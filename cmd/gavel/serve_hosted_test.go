@@ -373,6 +373,48 @@ func TestAHostedOrgSyncsASavedConnectionThroughPublicAddressesOnly(t *testing.T)
 	assert.Zero(t, reached.Load(), "nothing reached the loopback API")
 }
 
+func TestAHostedOrgWithoutTheGitHubAppListsItsAzurePullRequestsThroughPublicAddressesOnly(t *testing.T) {
+	logged := logtest.Capture(t)
+	f := newHostedFixture(t)
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", f.opts.secretKey)
+	var reached atomic.Int64
+	azure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Add(1)
+		_, _ = w.Write([]byte(`{"value":[]}`))
+	}))
+	t.Cleanup(azure.Close)
+	call := func(method, path, body string) string {
+		t.Helper()
+		req, err := http.NewRequest(method, f.server.URL+path, strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+		req.Header.Set("Origin", hostedPublicURL)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		data := readAll(t, resp)
+		require.NoError(t, resp.Body.Close())
+		require.Less(t, resp.StatusCode, 300, data)
+		return data
+	}
+
+	call(http.MethodPost, "/api/connections", `{"name":"acme-azure","type":"azure_devops","url":"`+azure.URL+`/acme","password":"azure-pat"}`)
+	var org, connection struct{ ID uuid.UUID }
+	require.NoError(t, f.db.Gorm().Raw(`SELECT id FROM orgs WHERE clerk_org_id = 'org_a'`).Scan(&org).Error)
+	require.NoError(t, f.db.Gorm().Raw(`SELECT id FROM connections WHERE org_id = ? AND name = 'acme-azure'`, org.ID).Scan(&connection).Error)
+	require.NoError(t, f.db.Gorm().Exec(`INSERT INTO repos (org_id, name, source, connection_id, remote_url, provider_repo_id, default_branch)
+		VALUES (?, 'Platform/rules', 'azure_devops', ?, ?, 'rules-id', 'main')`, org.ID, connection.ID, azure.URL+"/acme/Platform/_git/rules").Error)
+	call(http.MethodPost, "/api/prs/refresh", "")
+
+	assert.Eventually(t, func() bool {
+		var listed struct{ Error string }
+		require.NoError(t, json.Unmarshal([]byte(call(http.MethodGet, "/api/prs", "")), &listed))
+		return strings.Contains(listed.Error, "list the pull requests of Platform/rules") && strings.Contains(listed.Error, "refuses localhost address 127.0.0.1")
+	}, 10*time.Second, 50*time.Millisecond, "the org's poller lists the repository's pull requests, refusing an address that isn't public: %s", logged.String())
+	assert.Zero(t, reached.Load(), "nothing reached the loopback API")
+}
+
 func TestHostedSourcesDropGitHubIDMirrorsAndReachConnectionsDefensively(t *testing.T) {
 	dataDir := t.TempDir()
 	byGitHubID := filepath.Join(dataDir, "mirrors", uuid.NewString(), "42.git")

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -35,11 +36,11 @@ type todoPRLinkPayload struct {
 	Relation string `json:"relation"`
 }
 
-// prIndexRow is the poller's view of a PR as the index stores it. The poller
-// only searches GitHub.
+// prIndexRow is the poller's view of a PR as the index stores it. A PR without
+// a provider is one GitHub search found.
 func prIndexRow(pr github.PRListItem) cache.PullRequest {
 	return cache.PullRequest{
-		Provider: types.PRProviderGitHub, Repo: pr.Repo, Number: pr.Number, URL: pr.URL,
+		Provider: cmp.Or(pr.Provider, types.PRProviderGitHub), Repo: pr.Repo, Number: pr.Number, URL: pr.URL,
 		Title: pr.Title, Author: pr.Author, State: pr.State, IsDraft: pr.IsDraft,
 		Head: pr.Source, Base: pr.Target, UpdatedAt: pr.UpdatedAt,
 	}

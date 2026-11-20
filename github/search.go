@@ -230,6 +230,8 @@ type searchPRNode struct {
 }
 
 type PRListItem struct {
+	// Provider is the PR's host, a todos/types PRProvider; empty is GitHub, which search finds.
+	Provider        string    `json:"provider,omitempty"`
 	Number          int       `json:"number"`
 	Title           string    `json:"title"`
 	Author          string    `json:"author"`
