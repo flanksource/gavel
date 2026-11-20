@@ -78,12 +78,13 @@ type PRStatusOptions struct {
 }
 
 func (o PRStatusOptions) Help() api.Textable {
-	return clicky.Text(`Show GitHub Actions or Azure DevOps pipeline status — checks, conclusions, timing, and failing-step logs.
+	return clicky.Text(`Show pull request status for GitHub or Azure DevOps, including checks and review comments.
 
 Hosted Azure DevOps repositories are detected from origin or --repo. Accepts modern
 and legacy hosted PR URLs. Uses AZURE_DEVOPS_EXT_PAT first, otherwise an Azure CLI
-login. Azure merge readiness includes blocking policies; --follow waits for pipeline
-jobs and merge computation, and returns once human policies are the remaining blocker.
+login. Azure status shows reviewer votes and includes blocking policies in merge readiness.
+Without a comment filter, --follow waits for pipeline jobs and merge computation, and
+returns once human policies are the remaining blocker.
 Azure does not support --ai-fix or --worktree. Both providers support --whole-pr
 and --head-sha for linked TODO verification, including native review threads.
 

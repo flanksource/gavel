@@ -1,6 +1,7 @@
 package prwatch
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -323,7 +324,11 @@ func prettyCommentLine(c model.PRComment, indent string) api.Text {
 		}
 		lines[0] = lines[0] + " (" + tag + ")"
 	}
-	text = text.Append(" "+lines[0], style)
+	text = text.Append(" ", "")
+	if author := cmp.Or(c.AuthorName, c.Author); author != "" {
+		text = text.Append(author+": ", "text-blue-600")
+	}
+	text = text.Append(lines[0], style)
 	for _, line := range lines[1:] {
 		text = text.NewLine().Append(indent+"  "+line, style)
 	}

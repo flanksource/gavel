@@ -98,7 +98,7 @@ func (c *Client) FetchComments(ctx context.Context, target comments.Target) ([]c
 		if len(row.Comments) == 0 {
 			continue
 		}
-		if string(row.Comments[0].Kind) != "\"text\"" && string(row.Comments[0].Kind) != "1" {
+		if !isTextComment(row.Comments[0].Kind) {
 			continue
 		}
 		snapshot, err := azureSnapshot(target, row)

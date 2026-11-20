@@ -13,13 +13,6 @@ import (
 
 const requiredReviewersPolicyType = "fd2167ab-b0be-447a-8ec8-39368250530e"
 
-type policyReviewer struct {
-	ID    string `json:"id"`
-	Name  string `json:"displayName"`
-	Login string `json:"uniqueName"`
-	Group bool   `json:"isContainer"`
-}
-
 func (c *Client) reviewerPolicies(ctx context.Context, number int) ([]blame.PolicyReviewer, error) {
 	policies, err := collection[policyEvaluation](ctx, c, c.apiPath("policy/evaluations"), url.Values{
 		"artifactId":  {fmt.Sprintf("vstfs:///CodeReview/CodeReviewId/%s/%d", c.info.Project.ID, number)},
@@ -28,7 +21,7 @@ func (c *Client) reviewerPolicies(ctx context.Context, number int) ([]blame.Poli
 		return nil, err
 	}
 	var result []blame.PolicyReviewer
-	var identities map[string]policyReviewer
+	var identities map[string]reviewer
 	for _, evaluation := range policies {
 		policy := evaluation.Configuration
 		if !policy.Enabled || policy.Deleted || !strings.EqualFold(policy.Type.ID, requiredReviewersPolicyType) || evaluation.Status == "notApplicable" {
@@ -50,11 +43,11 @@ func (c *Client) reviewerPolicies(ctx context.Context, number int) ([]blame.Poli
 			return nil, fmt.Errorf("Azure reviewer policy %d requires requiredReviewerIds", policy.ID)
 		}
 		if identities == nil {
-			reviewers, err := collection[policyReviewer](ctx, c, c.repositoryPath()+"/pullrequests/"+strconv.Itoa(number)+"/reviewers", nil)
+			reviewers, err := collection[reviewer](ctx, c, c.repositoryPath()+"/pullrequests/"+strconv.Itoa(number)+"/reviewers", nil)
 			if err != nil {
 				return nil, err
 			}
-			identities = make(map[string]policyReviewer, len(reviewers))
+			identities = make(map[string]reviewer, len(reviewers))
 			for _, reviewer := range reviewers {
 				identities[strings.ToLower(reviewer.ID)] = reviewer
 			}

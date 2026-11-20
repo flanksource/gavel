@@ -237,6 +237,14 @@ func followDone(filters resultFilters, result *PRWatchResult, failFast bool) boo
 		if result.PR.State != "OPEN" {
 			return true
 		}
+		if filters.hasCommentFilters() {
+			if result.UnresolvedComments() > 0 {
+				return false
+			}
+			if !filters.hasActionFilters() {
+				return true
+			}
+		}
 		r := result.PR.MergeReadiness
 		if r == nil {
 			return true
@@ -363,13 +371,19 @@ func fetchRuns(opts WatchOptions, pr *model.PRInfo) (map[int64]*model.WorkflowRu
 }
 
 func wholePRBlocked(result *PRWatchResult) bool {
-	if result.PR.State != "OPEN" || result.HasMergeConflict() || result.PR.IsDraft || result.PR.ReviewDecision == "REVIEW_REQUIRED" || result.PR.ReviewDecision == "CHANGES_REQUESTED" {
+	pr := result.PR
+	if pr.State != "OPEN" || result.HasMergeConflict() || pr.IsDraft {
 		return true
+	}
+	if pr.Provider != "azuredevops" {
+		if pr.ReviewDecision == model.ReviewRequired || pr.ReviewDecision == "CHANGES_REQUESTED" {
+			return true
+		}
+		if pr.StatusCheckRollup.AllComplete() && pr.MergeState != "UNKNOWN" && pr.MergeState != "CLEAN" && pr.MergeState != "HAS_HOOKS" {
+			return true
+		}
 	}
 	if readiness := result.PR.MergeReadiness; readiness != nil && readiness.State != "ready" && !readiness.WaitingForBuilds && !readiness.WaitingForMerge {
-		return true
-	}
-	if pr := result.PR; pr.Provider != "azuredevops" && pr.StatusCheckRollup.AllComplete() && pr.MergeState != "UNKNOWN" && pr.MergeState != "CLEAN" && pr.MergeState != "HAS_HOOKS" {
 		return true
 	}
 	for _, summary := range result.GavelResults {

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -54,8 +55,9 @@ type PRInfo struct {
 	PRFiles []PRFileInfo `json:"prFiles,omitempty"`
 	// Comments and ReviewThreads are populated by FetchPR in a single GraphQL request.
 	// Callers typically pass them through prwatch.MergeAndFilter to produce the actionable set.
-	Comments      []PRComment `json:"comments,omitempty"`
-	ReviewThreads []PRComment `json:"reviewThreads,omitempty"`
+	Comments      []PRComment  `json:"comments,omitempty"`
+	ReviewThreads []PRComment  `json:"reviewThreads,omitempty"`
+	Reviewers     []PRReviewer `json:"reviewers,omitempty"`
 }
 
 // PRCommitInfo is a commit in the PR.
@@ -143,6 +145,7 @@ type PRComment struct {
 	ID         int64     `json:"id"`
 	Body       string    `json:"body"`
 	Author     string    `json:"author"`
+	AuthorName string    `json:"authorName,omitempty"`
 	AvatarURL  string    `json:"avatarUrl,omitempty"`
 	URL        string    `json:"url"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -386,7 +389,7 @@ func (pr PRInfo) Pretty() api.Text {
 		Append(" ← ", "text-gray-500").
 		Append(pr.HeadRefName, "text-cyan-600").
 		Append(" | ", "text-gray-500").
-		Append(pr.Author.Login, "text-blue-600")
+		Append(cmp.Or(pr.Author.Name, pr.Author.Login), "text-blue-600")
 
 	if pr.State != "" {
 		meta = meta.Append(" | ", "text-gray-500").Append(pr.State, StateStyle(pr.State))
@@ -422,7 +425,15 @@ func (pr PRInfo) Pretty() api.Text {
 			meta = meta.NewLine().Append("    "+reason, style)
 		}
 	}
-	return title.NewLine().Add(meta)
+	text := title.NewLine().Add(meta)
+	if len(pr.Reviewers) == 0 {
+		return text
+	}
+	text = text.NewLine().NewLine().Append("Reviewers:", "font-bold")
+	for _, reviewer := range pr.Reviewers {
+		text = text.NewLine().Append("  ", "").Add(reviewer.Pretty())
+	}
+	return text
 }
 
 // IsConflicting reports whether GitHub currently refuses to merge the PR
@@ -501,9 +512,9 @@ func StateStyle(state string) string {
 
 func ReviewStyle(decision string) string {
 	switch decision {
-	case "APPROVED":
+	case ReviewApproved, ReviewApprovedWithSuggestions:
 		return "text-green-600"
-	case "CHANGES_REQUESTED":
+	case "CHANGES_REQUESTED", ReviewRejected:
 		return "text-red-600"
 	default:
 		return "text-yellow-600"

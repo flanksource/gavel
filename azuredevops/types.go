@@ -34,6 +34,7 @@ type pullRequest struct {
 	SourceCommit        commitRef      `json:"lastMergeSourceCommit"`
 	TargetCommit        commitRef      `json:"lastMergeTargetCommit"`
 	Repository          repositoryInfo `json:"repository"`
+	Reviewers           []reviewer     `json:"reviewers"`
 	ForkSource          *struct {
 		Repository repositoryInfo `json:"repository"`
 	} `json:"forkSource"`
@@ -43,6 +44,16 @@ type pullRequest struct {
 		Login  string `json:"uniqueName"`
 		Avatar string `json:"imageUrl"`
 	} `json:"createdBy"`
+}
+
+type reviewer struct {
+	ID       string `json:"id"`
+	Name     string `json:"displayName"`
+	Login    string `json:"uniqueName"`
+	Avatar   string `json:"imageUrl"`
+	Group    bool   `json:"isContainer"`
+	Vote     int    `json:"vote"`
+	Required bool   `json:"isRequired"`
 }
 
 type policyEvaluation struct {

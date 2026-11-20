@@ -15,12 +15,12 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-type prBlameTransport struct {
+type azureTestTransport struct {
 	server    *url.URL
 	transport http.RoundTripper
 }
 
-func (t prBlameTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+func (t azureTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	clone := request.Clone(request.Context())
 	endpoint := *request.URL
 	endpoint.Scheme, endpoint.Host = t.server.Scheme, t.server.Host
@@ -75,7 +75,7 @@ var _ = Describe("gavel pr blame Azure targets", func() {
 		endpoint, err := url.Parse(server.URL)
 		Expect(err).NotTo(HaveOccurred())
 		original := http.DefaultTransport
-		http.DefaultTransport = prBlameTransport{server: endpoint, transport: original}
+		http.DefaultTransport = azureTestTransport{server: endpoint, transport: original}
 		DeferCleanup(func() { http.DefaultTransport = original })
 		previous := workingDir
 		workingDir = dir

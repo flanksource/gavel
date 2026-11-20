@@ -38,14 +38,19 @@ func (c *Client) Status(ctx context.Context, number int, opts model.StatusOption
 	if err != nil {
 		return nil, err
 	}
+	info.Reviewers, err = normalizeReviewers(pr.Reviewers)
+	if err != nil {
+		return nil, err
+	}
 	if opts.Threads {
 		info.ReviewThreads, err = c.ReviewThreads(ctx, number)
 		if err != nil {
 			return nil, err
 		}
 	}
+	var policies []policyEvaluation
 	if pr.Status == "active" {
-		policies, err := collection[policyEvaluation](ctx, c, c.apiPath("policy/evaluations"), url.Values{"artifactId": {fmt.Sprintf("vstfs:///CodeReview/CodeReviewId/%s/%d", c.info.Project.ID, number)}, "api-version": {"7.1-preview.1"}})
+		policies, err = collection[policyEvaluation](ctx, c, c.apiPath("policy/evaluations"), url.Values{"artifactId": {fmt.Sprintf("vstfs:///CodeReview/CodeReviewId/%s/%d", c.info.Project.ID, number)}, "api-version": {"7.1-preview.1"}})
 		if err != nil {
 			return nil, err
 		}
@@ -54,6 +59,7 @@ func (c *Client) Status(ctx context.Context, number int, opts model.StatusOption
 			return nil, err
 		}
 	}
+	info.ReviewDecision = reviewDecision(info.Reviewers, policies)
 	runs, err := c.pipelineRuns(ctx, pr, opts)
 	if err != nil {
 		return nil, err
