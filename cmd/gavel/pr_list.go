@@ -132,7 +132,12 @@ func bindUIListener(host string, requested int) (int, net.Listener, error) {
 	return requested, l, nil
 }
 
+// resolveRepoArg is the repository a command argument names: a GitHub owner/name, or the URL of an
+// Azure DevOps repository, which the search config names it by.
 func resolveRepoArg(arg string) (string, error) {
+	if _, azure := splitAzureRepos([]string{arg}); len(azure) == 1 {
+		return arg, nil
+	}
 	if strings.HasPrefix(arg, "https://") || strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "github.com/") {
 		return github.ParseRepoURL(arg)
 	}

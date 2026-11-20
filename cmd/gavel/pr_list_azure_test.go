@@ -25,6 +25,15 @@ func TestASearchConfigNamesAzureRepositoriesByURL(t *testing.T) {
 	assert.Equal(t, []string{"https://dev.azure.com/acme/Platform/_git/rules", "https://tfs.example.com/DefaultCollection/Platform/_git/site"}, azureRepos)
 }
 
+func TestARepoArgumentMayNameAnAzureRepositoryByURL(t *testing.T) {
+	repo, err := resolveRepoArg("https://dev.azure.com/acme/Platform/_git/rules")
+	require.NoError(t, err)
+	assert.Equal(t, "https://dev.azure.com/acme/Platform/_git/rules", repo, "kept as the URL the search config names it by")
+	repo, err = resolveRepoArg("https://github.com/acme/api")
+	require.NoError(t, err)
+	assert.Equal(t, "acme/api", repo)
+}
+
 func TestALocalDashboardListsTheAzurePullRequestsOfItsConfiguredRepositories(t *testing.T) {
 	azure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/acme/Platform/_apis/git/repositories/rules/pullrequests" {
