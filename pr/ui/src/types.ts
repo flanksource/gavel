@@ -31,6 +31,8 @@ export interface CheckSummary {
 }
 
 export interface PRItem {
+  // The PR's host: 'azure' for Azure DevOps; absent for GitHub.
+  provider?: string;
   number: number;
   title: string;
   author: string;

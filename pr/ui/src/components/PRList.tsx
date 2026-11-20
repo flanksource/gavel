@@ -66,7 +66,7 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                 alt={og.org}
                 size={20}
                 rounded="md"
-                href={`https://github.com/${og.org}`}
+                href={og.orgUrl}
                 title={og.org}
                 colorKey={og.org}
               />
@@ -111,17 +111,17 @@ function RepoSection({ group, selected, onSelect, unread, syncStatus, gavelResul
           className="shrink-0 text-xs text-muted-foreground hover:text-foreground"
         />
         <a
-          href={`https://github.com/${group.repo}`}
+          href={group.webUrl}
           target="_blank"
           rel="noopener"
           className="inline-flex shrink-0"
-          aria-label={`Open ${group.repo} on GitHub`}
+          aria-label={`Open ${group.repo} on ${group.host}`}
           onClick={(e) => e.stopPropagation()}
         >
           <RepoIcon repo={group.repo} homepageUrl={group.repoHomepageUrl} size={20} />
         </a>
         <a
-          href={`https://github.com/${group.repo}`}
+          href={group.webUrl}
           target="_blank"
           rel="noopener"
           onClick={(e) => e.stopPropagation()}

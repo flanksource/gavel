@@ -87,14 +87,39 @@ export interface RepoGroup {
   repoShort: string;
   repoAvatarUrl?: string;
   repoHomepageUrl?: string;
+  provider?: string;
+  // webUrl is the repository's page on its host, which host names.
+  webUrl: string;
+  host: string;
   items: PRItem[];
 }
 
 export interface OrgGroup {
   org: string;
   orgAvatarUrl?: string;
+  // orgUrl is the owner's page on GitHub; other hosts have none the dashboard links to.
+  orgUrl?: string;
   repos: RepoGroup[];
   itemCount: number;
+}
+
+const prHosts: Record<string, string> = { azure: 'Azure DevOps' };
+
+// isGitHubPR reports whether pr is on GitHub, the host of a PR without a provider.
+function isGitHubPR(pr: Pick<PRItem, 'provider'>): boolean {
+  return !pr.provider || pr.provider === 'github';
+}
+
+// repoWebURL is the page of pr's repository: on GitHub by name, elsewhere the PR's own URL
+// without its pull request path.
+function repoWebURL(pr: PRItem): string {
+  if (isGitHubPR(pr)) return `https://github.com/${pr.repo}`;
+  return pr.url.replace(/\/pullrequest\/\d+\/?$/, '');
+}
+
+// authorProfileURL is the GitHub profile of pr's author; another host's author has none to link.
+export function authorProfileURL(pr: PRItem): string | undefined {
+  return isGitHubPR(pr) ? `https://github.com/${pr.author}` : undefined;
 }
 
 export function groupByRepo(prs: PRItem[]): RepoGroup[] {
@@ -117,28 +142,34 @@ export function groupByRepo(prs: PRItem[]): RepoGroup[] {
       repoShort: slash >= 0 ? repo.slice(slash + 1) : repo,
       repoAvatarUrl: items.find(p => p.repoAvatarUrl)?.repoAvatarUrl,
       repoHomepageUrl: items.find(p => p.repoHomepageUrl)?.repoHomepageUrl,
+      provider: items[0].provider,
+      webUrl: repoWebURL(items[0]),
+      host: prHosts[items[0].provider ?? ''] ?? 'GitHub',
       items,
     };
   });
 }
 
+// groupByOrg groups prs by their repositories' owner; owners of one name on two hosts are two.
 export function groupByOrg(prs: PRItem[]): OrgGroup[] {
   const repoGroups = groupByRepo(prs);
   const order: string[] = [];
   const byOrg = new Map<string, RepoGroup[]>();
   for (const rg of repoGroups) {
-    const org = rg.repoOwner || '';
-    if (!byOrg.has(org)) {
-      order.push(org);
-      byOrg.set(org, []);
+    const key = `${rg.provider ?? ''}\u0000${rg.repoOwner}`;
+    if (!byOrg.has(key)) {
+      order.push(key);
+      byOrg.set(key, []);
     }
-    byOrg.get(org)!.push(rg);
+    byOrg.get(key)!.push(rg);
   }
-  return order.map(org => {
-    const repos = byOrg.get(org)!;
+  return order.map(key => {
+    const repos = byOrg.get(key)!;
+    const org = repos[0].repoOwner;
     return {
       org,
       orgAvatarUrl: repos.find(r => r.repoAvatarUrl)?.repoAvatarUrl,
+      orgUrl: org && isGitHubPR(repos[0]) ? `https://github.com/${org}` : undefined,
       repos,
       itemCount: repos.reduce((n, r) => n + r.items.length, 0),
     };

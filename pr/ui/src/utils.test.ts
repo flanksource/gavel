@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateGavelShards, failedTestsLabel } from './utils';
-import type { GavelResultsSummary } from './types';
+import { aggregateGavelShards, authorProfileURL, failedTestsLabel, groupByOrg } from './utils';
+import type { GavelResultsSummary, PRItem } from './types';
 
 function makeShard(overrides: Partial<GavelResultsSummary> = {}): GavelResultsSummary {
   return {
@@ -46,5 +46,29 @@ describe('failedTestsLabel', () => {
     ['all timed out', { testsFailed: 2, testsTimedOut: 2 }, '2 failed (2 timed out)'],
   ])('renders %s', (_name, counts, expected) => {
     expect(failedTestsLabel(counts)).toBe(expected);
+  });
+});
+
+describe('provider links', () => {
+  const base = { title: 'T', author: 'Ada Lovelace', source: 'a', target: 'main', state: 'OPEN', isDraft: false, updatedAt: '2026-11-02T10:00:00Z' };
+  const github: PRItem = { ...base, number: 7, repo: 'acme/api', url: 'https://github.com/acme/api/pull/7' };
+  const azure: PRItem = { ...base, number: 9, provider: 'azure', repo: 'acme/Platform/rules', url: 'https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9' };
+
+  it('links a GitHub PR to its repository, owner and author on GitHub', () => {
+    const [org] = groupByOrg([github]);
+    expect(org.orgUrl).toBe('https://github.com/acme');
+    expect(org.repos[0].webUrl).toBe('https://github.com/acme/api');
+    expect(org.repos[0].host).toBe('GitHub');
+    expect(authorProfileURL(github)).toBe('https://github.com/Ada Lovelace');
+  });
+
+  it('links an Azure DevOps PR to its repository, and to no GitHub owner or profile', () => {
+    const [org] = groupByOrg([azure]);
+    expect(org.org).toBe('acme');
+    expect(org.orgUrl).toBeUndefined();
+    expect(org.repos[0].repoShort).toBe('Platform/rules');
+    expect(org.repos[0].webUrl).toBe('https://dev.azure.com/acme/Platform/_git/rules');
+    expect(org.repos[0].host).toBe('Azure DevOps');
+    expect(authorProfileURL(azure)).toBeUndefined();
   });
 });

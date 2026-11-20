@@ -16,7 +16,7 @@ import {
   UiGitBranch,
 } from '@flanksource/clicky-ui/icons';
 import type { PRItem, PRSyncStatus, GavelResultsSummary } from '../types';
-import { reviewColor, checkSummaryText, timedOutNote } from '../utils';
+import { reviewColor, checkSummaryText, timedOutNote, authorProfileURL } from '../utils';
 import { SyncIndicator } from './SyncIndicator';
 import { Avatar } from './Avatar';
 import { RelativeTime } from './RelativeTime';
@@ -210,7 +210,7 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
               src={pr.authorAvatarUrl}
               alt={pr.author}
               size={20}
-              href={`https://github.com/${pr.author}`}
+              href={authorProfileURL(pr)}
               title={`@${pr.author}`}
             />
           )}
