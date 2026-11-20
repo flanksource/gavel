@@ -262,8 +262,10 @@ tasks:
 
   install:
     desc: Install the binary to $GOPATH/bin
+    deps:
+      - build
     cmds:
-      - mv "{{.BINARY_NAME}}" "$GOPATH/bin/"
+      - install -m 0755 "{{.BINARY_NAME}}" "$GOPATH/bin/"
 
   deploy:
     desc: |
