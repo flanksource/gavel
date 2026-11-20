@@ -1,37 +1,60 @@
 package runners
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/flanksource/gavel/testrunner/parsers"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-type timedSink struct {
-	mu        sync.Mutex
-	firstPass time.Time
+// passSignal writes its marker file when the stream reports the first passed test, so a test
+// still running in vitest can see that gavel got the result.
+type passSignal struct {
+	marker string
+	once   sync.Once
 }
 
-func (s *timedSink) UpdatePackageProgress(_ string, _ parsers.Framework, progress parsers.Test) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.firstPass.IsZero() && progress.Sum().Passed > 0 {
-		s.firstPass = time.Now()
+func (s *passSignal) UpdatePackageProgress(_ string, _ parsers.Framework, progress parsers.Test) {
+	if progress.Sum().Passed > 0 {
+		s.once.Do(func() { _ = os.WriteFile(s.marker, []byte("passed\n"), 0o600) })
 	}
 }
 
+// findTest finds the test called name among tests and their children.
+func findTest(tests []parsers.Test, name string) (parsers.Test, bool) {
+	for _, test := range tests {
+		if test.Name == name {
+			return test, true
+		}
+		if found, ok := findTest(test.Children, name); ok {
+			return found, true
+		}
+	}
+	return parsers.Test{}, false
+}
+
+// vitestProgressSpec is a fast test and a slow one that passes only once gavel has streamed the
+// fast test's pass, which writes the marker file at %q. The slow test waits on that signal, so
+// the spec holds however busy the machine is.
 const vitestProgressSpec = `
+import { existsSync } from "node:fs"
+
 test("fast", () => { expect(1 + 1).toBe(2) })
 test("slow", async () => {
-  await new Promise((resolve) => setTimeout(resolve, 1500))
-  expect(true).toBe(true)
-})
+  const deadline = Date.now() + 30000
+  while (!existsSync(%[1]q)) {
+    if (Date.now() > deadline) {
+      throw new Error("gavel had not streamed the fast test's pass 30s after it finished")
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}, 35000)
 `
 
 var _ = Describe("Vitest progress reporter", func() {
@@ -67,7 +90,8 @@ var _ = Describe("Vitest progress reporter", func() {
 		Expect(vitestBin).To(BeAnExistingFile(), "run `pnpm install` in testrunner/ui")
 
 		dir := GinkgoT().TempDir()
-		Expect(os.WriteFile(filepath.Join(dir, "progress.test.js"), []byte(vitestProgressSpec), 0o600)).To(Succeed())
+		marker := filepath.Join(GinkgoT().TempDir(), "fast-passed")
+		Expect(os.WriteFile(filepath.Join(dir, "progress.test.js"), []byte(fmt.Sprintf(vitestProgressSpec, marker)), 0o600)).To(Succeed())
 		run, err := NewVitest(dir).BuildCommand(".")
 		Expect(err).NotTo(HaveOccurred())
 
@@ -76,23 +100,21 @@ var _ = Describe("Vitest progress reporter", func() {
 		args := run.Process.Args[slices.Index(run.Process.Args, "vitest")+1:]
 		cmd := exec.Command("node", append(append([]string{vitestBin}, args...), "--globals")...)
 		cmd.Dir = dir
-		sink := &timedSink{}
-		stream := parsers.NewVitestStreamWriter(dir, ".", sink)
+		stream := parsers.NewVitestStreamWriter(dir, ".", &passSignal{marker: marker})
 		cmd.Stdout = stream
 		cmd.Stderr = GinkgoWriter
-		Expect(cmd.Run()).To(Succeed())
-		exited := time.Now()
+		runErr := cmd.Run()
 		stream.Flush()
-
-		Expect(sink.firstPass).NotTo(BeZero(), "no passed test was streamed")
-		Expect(exited.Sub(sink.firstPass)).To(BeNumerically(">", 500*time.Millisecond),
-			"the fast test should be reported while the slow one is still running")
 
 		report, err := os.Open(run.ReportPath)
 		Expect(err).NotTo(HaveOccurred())
 		defer report.Close()
 		tests, err := run.Parser.Parse(report)
 		Expect(err).NotTo(HaveOccurred())
+		slow, found := findTest(tests, "slow")
+		Expect(found).To(BeTrue(), "the report lists the slow test")
+		Expect(slow.Passed).To(BeTrue(), "the slow test passes only once the fast test's pass is streamed while it runs: %s", slow.Message)
 		Expect(parsers.Tests(tests).Sum().Passed).To(Equal(2))
+		Expect(runErr).NotTo(HaveOccurred())
 	})
 })
