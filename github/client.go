@@ -27,6 +27,10 @@ type Options struct {
 	// TokenSource, when set, is the only credential: no fallback to Token, the
 	// environment or auth.json, so a hosted organization never uses the host's token.
 	TokenSource func() (string, error)
+	// RepoTokenSource, when set, is asked first for the token of the call's Repo: a hosted
+	// organization's repository reached through its own App installation or the git connection
+	// that brings it. "" leaves the call to TokenSource.
+	RepoTokenSource func(repo string) (string, error)
 	// Cache is the GitHub response cache of the organization this client acts for;
 	// nil is the shared local-org cache.
 	Cache *cache.Store
@@ -48,6 +52,15 @@ func (o Options) cacheStore() *cache.Store {
 var ErrNoToken = errors.New("no GitHub token")
 
 func (o Options) token() (string, error) {
+	if o.RepoTokenSource != nil && o.Repo != "" {
+		token, err := o.RepoTokenSource(o.Repo)
+		if err != nil {
+			return "", fmt.Errorf("token for %s: %w", o.Repo, err)
+		}
+		if token != "" {
+			return token, nil
+		}
+	}
 	if o.TokenSource != nil {
 		token, err := o.TokenSource()
 		if err == nil && token == "" {

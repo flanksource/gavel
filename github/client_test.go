@@ -1,6 +1,7 @@
 package github
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -355,6 +356,39 @@ func TestTokenResolution(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestARepositorysOwnTokenComesBeforeTheOrganizations(t *testing.T) {
+	var asked []string
+	opts := Options{
+		TokenSource: func() (string, error) { return "org-token", nil },
+		RepoTokenSource: func(repo string) (string, error) {
+			asked = append(asked, repo)
+			if repo == "acme/api" {
+				return "repo-token", nil
+			}
+			return "", nil
+		},
+	}
+
+	opts.Repo = "acme/api"
+	token, err := opts.token()
+	require.NoError(t, err)
+	assert.Equal(t, "repo-token", token)
+	opts.Repo = "acme/web"
+	token, err = opts.token()
+	require.NoError(t, err)
+	assert.Equal(t, "org-token", token, "a repository with no token of its own uses the organization's")
+	opts.Repo = ""
+	token, err = opts.token()
+	require.NoError(t, err)
+	assert.Equal(t, "org-token", token, "a call naming no repository")
+	assert.Equal(t, []string{"acme/api", "acme/web"}, asked)
+
+	opts.Repo = "acme/api"
+	opts.RepoTokenSource = func(string) (string, error) { return "", errors.New("the connection catalog is unavailable") }
+	_, err = opts.token()
+	require.EqualError(t, err, "token for acme/api: the connection catalog is unavailable")
 }
 
 func TestMapGraphQLPRToPRInfo(t *testing.T) {
