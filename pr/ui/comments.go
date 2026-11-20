@@ -230,23 +230,28 @@ func commentProject(ctx context.Context, scope string) (projectInfo, error) {
 	if err != nil || url.PathEscape(name) != raw {
 		return projectInfo{}, comments.ErrInvalid
 	}
-	var infos []projectInfo
 	if s := entityServer(ctx); s != nil && s.hosted {
-		infos, err = s.projectList(ctx)
-	} else {
-		var local []projects.Project
-		local, err = loadProjects(ctx)
-		for _, p := range local {
-			infos = append(infos, projectInfo{Name: p.Name, Dir: p.ResolvedDir(), Repos: p.Repos})
+		infos, err := s.projectList(ctx)
+		if err != nil {
+			return projectInfo{}, err
 		}
+		for _, p := range infos {
+			if p.Name == name {
+				return p, nil
+			}
+		}
+		return projectInfo{}, comments.ErrForbidden
+	}
+	catalog, err := projects.Shared(ctx)
+	if err != nil {
+		return projectInfo{}, err
+	}
+	p, err := catalog.Get(ctx, name)
+	if errors.Is(err, projects.ErrNotFound) || (err == nil && p.Kind == projects.KindWeb) {
+		return projectInfo{}, comments.ErrForbidden
 	}
 	if err != nil {
 		return projectInfo{}, err
 	}
-	for _, p := range infos {
-		if p.Name == name {
-			return p, nil
-		}
-	}
-	return projectInfo{}, comments.ErrForbidden
+	return projectInfo{Name: p.Name, Dir: p.ResolvedDir(), Repos: p.Repos}, nil
 }

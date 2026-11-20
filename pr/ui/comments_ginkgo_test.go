@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 
 	"github.com/flanksource/gavel/projects"
@@ -30,4 +31,31 @@ var _ = Describe("Gavel comments authorization", func() {
 		p.TenantID = "another-tenant"
 		Expect(access.Authorize(ctx, p, "read", target)).To(MatchError(comments.ErrForbidden))
 	})
+	It("resolves a project scope by name without listing the whole catalog", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "projects.json")
+		dir := GinkgoT().TempDir()
+		file := projects.NewFile(path)
+		_, err := file.Create(context.Background(), projects.Project{Name: "demo", Dir: dir, Repos: []string{"acme/demo"}})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = file.Create(context.Background(), projects.Project{Name: "site", Kind: projects.KindWeb})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(projects.UseForTest(noListCatalog{file}, path))
+		ctx := context.Background()
+		workdir, err := CommentWorkdir(ctx, comments.Target{ScopeURI: "gavel://project/demo"})
+		Expect(err).NotTo(HaveOccurred())
+		expected, err := projects.CanonicalPath(dir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(workdir).To(Equal(expected))
+		for _, scope := range []string{"gavel://project/missing", "gavel://project/site"} {
+			_, err = CommentWorkdir(ctx, comments.Target{ScopeURI: scope})
+			Expect(err).To(MatchError(comments.ErrForbidden), scope)
+		}
+	})
 })
+
+// noListCatalog fails every List, so a test proves a lookup reads one project.
+type noListCatalog struct{ projects.Service }
+
+func (noListCatalog) List(context.Context) ([]projects.Project, error) {
+	return nil, errors.New("comment scope lookups must not list the whole catalog")
+}
