@@ -98,7 +98,9 @@ func currentBuilds(pr pullRequest, builds []build) []build {
 	return out
 }
 
-func executionState(state, result string) (string, string, error) {
+// ExecutionState is an Azure DevOps build or timeline record's state and result as the dashboard
+// spells a check's status and conclusion: QUEUED, IN_PROGRESS or COMPLETED, and SUCCESS, FAILURE...
+func ExecutionState(state, result string) (string, string, error) {
 	switch state {
 	case "pending", "notStarted", "postponed":
 		return "QUEUED", "", nil

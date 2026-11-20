@@ -15,11 +15,11 @@ var _ = Describe("Azure timeline normalization", func() {
 		Expect(ids).To(Equal([]string{"new-job", "task-a", "task-b", "deploy"}))
 	})
 	It("rejects unknown execution results instead of marking them successful", func() {
-		_, _, err := executionState("completed", "unexpected")
+		_, _, err := ExecutionState("completed", "unexpected")
 		Expect(err).To(MatchError(ContainSubstring("unexpected Azure execution state")))
 	})
 	DescribeTable("preserves native partial and cancelled results", func(result, want string) {
-		status, conclusion, err := executionState("completed", result)
+		status, conclusion, err := ExecutionState("completed", result)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(status).To(Equal("COMPLETED"))
 		Expect(conclusion).To(Equal(want))

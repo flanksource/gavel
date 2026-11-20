@@ -175,6 +175,9 @@ type Server struct {
 	catalogDB *gorm.DB
 	// connectionsChanged, when set, is told the organization's connections changed.
 	connectionsChanged func()
+	// prRemote, when set, reaches the repository of a listed pull request a git connection
+	// brings; without it such a pull request has no detail.
+	prRemote PRRemote
 
 	// blobs is the storage: store from ~/.gavel.yaml; nil keeps attachments in
 	// attachmentsDir.
@@ -1512,6 +1515,24 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if listed, ok := s.connectionPR(repo, prNumber); ok {
+		detail := s.fetchConnectionPRDetail(r.Context(), listed)
+		if detail.Error != "" {
+			emit("error", map[string]string{"error": detail.Error})
+			emit("done", nil)
+			return
+		}
+		emit("pr", prFrame(detail.PR, detail.Comments))
+		if len(detail.Runs) > 0 {
+			emit("runs", map[string]any{"runs": detail.Runs})
+		}
+		emit("done", nil)
+		s.detailCache.Put(cacheKey, detail, s.prUpdatedAt(repo, prNumber))
+		s.detailCache.SetStatus(cacheKey, PRSyncStatus{State: SyncUpToDate, LastSynced: time.Now()})
+		s.notify()
+		return
+	}
+
 	opts := s.ghOpts
 	opts.Repo = repo
 
@@ -1603,9 +1624,13 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 // fetchPRDetail loads full PR metadata, workflow runs, and comments from
-// GitHub. Returns a prDetail with Error set on failure rather than an error
-// value so callers (handleDetail, export) can embed it directly.
+// GitHub, or for a listed PR a git connection brings, through that connection.
+// Returns a prDetail with Error set on failure rather than an error value so
+// callers (handleDetail, export) can embed it directly.
 func (s *Server) fetchPRDetail(repo string, number int) prDetail {
+	if listed, ok := s.connectionPR(repo, number); ok {
+		return s.fetchConnectionPRDetail(context.Background(), listed)
+	}
 	opts := s.ghOpts
 	opts.Repo = repo
 

@@ -42,7 +42,7 @@ func (c *Client) loadTimeline(ctx context.Context, run *model.WorkflowRun, opts 
 		if record.Type != "Job" {
 			continue
 		}
-		status, conclusion, err := executionState(record.State, record.Result)
+		status, conclusion, err := ExecutionState(record.State, record.Result)
 		if err != nil {
 			return fmt.Errorf("job %s: %w", record.ID, err)
 		}
@@ -51,7 +51,7 @@ func (c *Client) loadTimeline(ctx context.Context, run *model.WorkflowRun, opts 
 			if task.Type != "Task" || !belongsToJob(task, record.ID, byID) {
 				continue
 			}
-			status, conclusion, err := executionState(task.State, task.Result)
+			status, conclusion, err := ExecutionState(task.State, task.Result)
 			if err != nil {
 				return fmt.Errorf("task %s: %w", task.ID, err)
 			}

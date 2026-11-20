@@ -167,7 +167,7 @@ func (c *Client) pipelineRuns(ctx context.Context, pr pullRequest, opts model.St
 		if b.ID <= 0 || b.Definition.ID <= 0 || b.Definition.Name == "" {
 			return nil, fmt.Errorf("azure build has invalid identity or pipeline definition")
 		}
-		status, conclusion, err := executionState(b.Status, b.Result)
+		status, conclusion, err := ExecutionState(b.Status, b.Result)
 		if err != nil {
 			return nil, fmt.Errorf("build %d: %w", b.ID, err)
 		}
