@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -372,6 +373,105 @@ func TestAHostedOrgSyncsASavedConnectionThroughPublicAddressesOnly(t *testing.T)
 	}, 10*time.Second, 20*time.Millisecond, "saving the connection syncs it, refusing an address that isn't public: %s", logged.String())
 	assert.Zero(t, reached.Load(), "nothing reached the loopback API")
 }
+
+func TestAHostedOrgListsThePullRequestsOfGitHubRepositoriesItsConnectionsBringWithTheirTokens(t *testing.T) {
+	gh := githubtest.New(t)
+	gh.AddPullRequest(githubtest.PullRequest{Repo: "acme/api", Number: 7, Title: "Add login", Author: "ada"})
+	f := newHostedFixture(t)
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", f.opts.secretKey)
+	call := func(method, path string) string {
+		t.Helper()
+		req, err := http.NewRequest(method, f.server.URL+path, nil)
+		require.NoError(t, err)
+		req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+		req.Header.Set("Origin", hostedPublicURL)
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		data := readAll(t, resp)
+		require.NoError(t, resp.Body.Close())
+		require.Less(t, resp.StatusCode, 300, data)
+		return data
+	}
+	// The org's dashboard starts before its connection exists, so no sync lists the
+	// connection's repositories from github.com; the test records the one it brings.
+	call(http.MethodGet, "/api/prs")
+	var org struct{ ID uuid.UUID }
+	require.NoError(t, f.db.Gorm().Raw(`SELECT id FROM orgs WHERE clerk_org_id = 'org_a'`).Scan(&org).Error)
+	store, closeStore, err := connections.OpenStore(t.Context(), connections.Options{DB: f.db.Gorm(), Scope: tenant.Scope{OrgID: org.ID}})
+	require.NoError(t, err)
+	saved, err := store.SaveConnection(t.Context(), &models.Connection{Name: "acme-gh", Type: models.ConnectionTypeGithub, Password: "ghp_acme",
+		Properties: map[string]string{"organization": "acme"}})
+	require.NoError(t, err)
+	require.NoError(t, closeStore())
+	require.NoError(t, f.db.Gorm().Exec(`INSERT INTO repos (org_id, name, source, github_repo_id, connection_id, provider_repo_id, remote_url, default_branch)
+		VALUES (?, 'acme/api', 'github', 101, ?, '101', 'https://github.com/acme/api.git', 'main')`, org.ID, saved.ID).Error)
+	call(http.MethodPost, "/api/prs/refresh")
+
+	assert.Eventually(t, func() bool {
+		var listed struct {
+			PRs []github.PRListItem `json:"prs"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(call(http.MethodGet, "/api/prs")), &listed))
+		return len(listed.PRs) == 1 && listed.PRs[0].Repo == "acme/api" && listed.PRs[0].Number == 7
+	}, 10*time.Second, 50*time.Millisecond, "the org's poller lists the connection's repository's pull request")
+	var tokens []string
+	for _, search := range gh.Searches() {
+		if strings.Contains(search.Query, "repo:acme/api") {
+			tokens = append(tokens, search.Token)
+		}
+	}
+	require.NotEmpty(t, tokens)
+	assert.Equal(t, "ghp_acme", tokens[len(tokens)-1], "searched with the connection's token")
+}
+
+func TestAHostedOrgReachesEachGitHubRepositoryWithItsOwnToken(t *testing.T) {
+	f := newHostedFixture(t)
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", f.opts.secretKey)
+	db := f.db.Gorm()
+	org := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Acme')`, org, org.String()).Error)
+	scope := tenant.Scope{OrgID: org}
+	store, closeStore, err := connections.OpenStore(t.Context(), connections.Options{DB: db, Scope: scope})
+	require.NoError(t, err)
+	saved, err := store.SaveConnection(t.Context(), &models.Connection{Name: "acme-gh", Type: models.ConnectionTypeGithub, Password: "ghp_acme",
+		Properties: map[string]string{"organization": "acme"}})
+	require.NoError(t, err)
+	require.NoError(t, closeStore())
+	require.NoError(t, db.Exec(`INSERT INTO github_installations (id, org_id, account_login, account_type) VALUES (42, ?, 'acme', 'Organization')`, org).Error)
+	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, github_repo_id, connection_id, provider_repo_id) VALUES (?, 'acme/api', 'github', 101, ?, '101')`, org, saved.ID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, github_repo_id, installation_id) VALUES (?, 'acme/web', 'github', 102, 42)`, org).Error)
+
+	token := hostedRepoToken(db, nil, scope)
+	got, err := token("acme/api")
+	require.NoError(t, err)
+	assert.Equal(t, "ghp_acme", got, "a repository only the connection brings")
+	got, err = token("acme/unknown")
+	require.NoError(t, err)
+	assert.Empty(t, got, "the organization's own token answers for a repository it doesn't hold")
+	_, err = token("acme/web")
+	require.EqualError(t, err, "a GitHub App installation grants acme/web, but this server has no GitHub App")
+
+	installed := hostedRepoToken(db, fakeInstallations{42: "ghs_web"}, scope)
+	got, err = installed("acme/web")
+	require.NoError(t, err)
+	assert.Equal(t, "ghs_web", got, "the installation that grants the repository, not the organization's first")
+}
+
+// fakeInstallations is a GitHub account minting a fixed token per installation.
+type fakeInstallations map[int64]string
+
+func (f fakeInstallations) TokenSource(uuid.UUID) func() (string, error) {
+	return func() (string, error) { return "org-token", nil }
+}
+func (f fakeInstallations) RepoToken(_ context.Context, installation int64) (string, error) {
+	return f[installation], nil
+}
+func (f fakeInstallations) SearchGroups(context.Context, uuid.UUID) ([]github.RepoGroup, error) {
+	return nil, nil
+}
+func (f fakeInstallations) SyncAll(context.Context, uuid.UUID) error { return nil }
 
 func TestAHostedOrgWithoutTheGitHubAppListsItsAzurePullRequestsThroughPublicAddressesOnly(t *testing.T) {
 	logged := logtest.Capture(t)

@@ -203,7 +203,8 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		if err != nil {
 			return nil, err
 		}
-		ghOpts := github.Options{TokenSource: githubNotConnected, Cache: cache.ForOrg(scope.OrgID)}
+		ghOpts := github.Options{TokenSource: githubNotConnected, Cache: cache.ForOrg(scope.OrgID),
+			RepoTokenSource: hostedRepoToken(db, account, scope)}
 		if account != nil {
 			ghOpts.TokenSource = account.TokenSource(scope.OrgID)
 		}
@@ -367,20 +368,34 @@ const connectionPRsTimeout = 2 * time.Minute
 
 // orgPRSearch is an org's PR poller search: each group of its GitHub repositories, searched with
 // that group's token, then the open pull requests of the repositories its git connections bring,
-// each listed through its connection with public addresses only. An org without a GitHub account
-// searches no GitHub repositories, and one without repositories has no PRs.
+// each listed through its connection with public addresses only. The GitHub repositories only a
+// github.com connection brings are searched with that connection's token. An org without a GitHub
+// account or such connections searches no GitHub repositories, and one without repositories has
+// no PRs.
 func orgPRSearch(srv *ui.Server, account hostedGitHub, cache *ghcache.Store, db *gorm.DB, org uuid.UUID) func(time.Time) (github.PRSearchResults, *github.RateLimit, error) {
 	return func(since time.Time) (github.PRSearchResults, *github.RateLimit, error) {
-		var all github.PRSearchResults
-		var rateLimit *github.RateLimit
-		if account != nil {
-			var err error
-			if all, rateLimit, err = searchGitHubPRs(srv, account, cache, org, since); err != nil {
-				return all, rateLimit, err
-			}
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), connectionPRsTimeout)
 		defer cancel()
+		var groups []github.RepoGroup
+		if account != nil {
+			var err error
+			if groups, err = account.SearchGroups(ctx, org); err != nil {
+				return nil, nil, err
+			}
+		}
+		connectionGroups, err := forge.GitHubConnectionRepos(ctx, db, tenant.Scope{OrgID: org})
+		if err != nil {
+			return nil, nil, fmt.Errorf("list the GitHub repositories of the organization's git connections: %w", err)
+		}
+		for _, group := range connectionGroups {
+			token := group.Token
+			groups = append(groups, github.RepoGroup{Name: fmt.Sprintf("git connection %q", group.Connection), Repos: group.Repos,
+				Token: func() (string, error) { return token, nil }})
+		}
+		all, rateLimit, err := searchGitHubPRs(srv, groups, cache, org, since)
+		if err != nil {
+			return all, rateLimit, err
+		}
 		listed, err := forge.PullRequests(ctx, db, tenant.Scope{OrgID: org}, git.ClientOptions{Defensive: true})
 		all = append(all, ui.ConnectionPRItems(listed)...)
 		if err != nil {
@@ -391,10 +406,9 @@ func orgPRSearch(srv *ui.Server, account hostedGitHub, cache *ghcache.Store, db 
 }
 
 // searchGitHubPRs searches each group of org's GitHub repositories with that group's token.
-func searchGitHubPRs(srv *ui.Server, account hostedGitHub, cache *ghcache.Store, org uuid.UUID, since time.Time) (github.PRSearchResults, *github.RateLimit, error) {
-	groups, err := account.SearchGroups(context.Background(), org)
-	if err != nil {
-		return nil, nil, err
+func searchGitHubPRs(srv *ui.Server, groups []github.RepoGroup, cache *ghcache.Store, org uuid.UUID, since time.Time) (github.PRSearchResults, *github.RateLimit, error) {
+	if len(groups) == 0 {
+		return nil, nil, nil
 	}
 	search := github.PRSearchOptions{State: "open", Since: since, Status: true, ShowAuthor: true}
 	if srv.ShowClosed() {
@@ -442,4 +456,23 @@ func runTokenKey(secret []byte) []byte {
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte("gavel-run-token"))
 	return mac.Sum(nil)
+}
+
+// hostedRepoToken is a hosted org's token for one of its GitHub repositories: the App
+// installation that grants it, else the git connection that brings it; "" for a repository it
+// holds neither way, which the org's own token answers for.
+func hostedRepoToken(db *gorm.DB, account hostedGitHub, scope tenant.Scope) func(string) (string, error) {
+	return func(repo string) (string, error) {
+		access, err := forge.GitHubRepo(context.Background(), db, scope, repo)
+		if err != nil {
+			return "", err
+		}
+		if access.InstallationID == 0 {
+			return access.ConnectionToken, nil
+		}
+		if account == nil {
+			return "", fmt.Errorf("a GitHub App installation grants %s, but this server has no GitHub App", repo)
+		}
+		return account.RepoToken(context.Background(), access.InstallationID)
+	}
 }
