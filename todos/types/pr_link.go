@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Hosted PR providers a TODO can link to.
+// Hosted PR providers a TODO can link to; a GitLab merge request on any host.
 const (
 	PRProviderGitHub = "github"
 	PRProviderAzure  = "azure"
@@ -40,6 +40,11 @@ func PRRefFromURL(raw string) (PRRef, error) {
 	ref := PRRef{Number: pr.Number, URL: pr.URL}
 	if u.Host == "github.com" {
 		ref.Provider, ref.Repo = PRProviderGitHub, strings.ToLower(parts[0]+"/"+parts[1])
+		return ref, nil
+	}
+	if isGitLabMR(parts) {
+		// The project's whole path, without its host, as the PR index keys a listed merge request.
+		ref.Provider, ref.Repo = PRProviderGitLab, strings.ToLower(strings.Join(parts[:len(parts)-3], "/"))
 		return ref, nil
 	}
 	ref.Provider, ref.Repo = PRProviderAzure, strings.ToLower(strings.Join(azureRepoKey(u.Host, parts), "/"))

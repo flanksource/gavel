@@ -20,6 +20,8 @@ var _ = Describe("PR link references", func() {
 			PRRef{Provider: PRProviderAzure, Repo: "org/service", Number: 3, URL: "https://dev.azure.com/org/_git/service/pullrequest/3"}),
 		Entry("Azure legacy host drops DefaultCollection", "https://org.visualstudio.com/DefaultCollection/product/_git/service/pullrequest/27",
 			PRRef{Provider: PRProviderAzure, Repo: "org/product/service", Number: 27, URL: "https://org.visualstudio.com/DefaultCollection/product/_git/service/pullrequest/27"}),
+		Entry("GitLab keys a nested group's project by its whole path, as the PR index does", "https://gitlab.example.com/Acme/Platform/API/-/merge_requests/5",
+			PRRef{Provider: PRProviderGitLab, Repo: "acme/platform/api", Number: 5, URL: "https://gitlab.example.com/Acme/Platform/API/-/merge_requests/5"}),
 	)
 
 	It("refuses a URL that is not a hosted PR", func() {

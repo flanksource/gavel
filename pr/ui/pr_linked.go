@@ -1,11 +1,14 @@
+// Linked pull requests a todo points at: their detail, read through the client their URL resolves
+// to, and merging them.
 package ui
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
-	"github.com/flanksource/gavel/azuredevops"
+	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/pr/provider"
@@ -17,13 +20,15 @@ type linkedPRDetail struct {
 	Repo string `json:"repo"`
 }
 
+// linkedPRRepository is the repository a linked PR belongs to: an Azure DevOps or GitLab one's
+// URL, a GitHub one's owner/name.
 func linkedPRRepository(ref string) (string, error) {
-	if provider.IsAzure(ref) {
-		repo, _, err := azuredevops.ParsePRURL(ref)
-		if err != nil {
-			return "", err
-		}
-		return repo.URL(), nil
+	pr, err := forge.ParsePullRequestURL(ref)
+	if err == nil {
+		return pr.Repo, nil
+	}
+	if !errors.Is(err, forge.ErrNotConnectionPullRequest) {
+		return "", err
 	}
 	repo, _, err := github.ParsePRURL(ref)
 	return repo, err

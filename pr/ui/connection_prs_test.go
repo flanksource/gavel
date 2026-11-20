@@ -56,3 +56,15 @@ func TestAGitLabMergeRequestIsListedAsADashboardItem(t *testing.T) {
 	}, items, "a nested group's repository keeps its whole path")
 	assert.Equal(t, types.PRProviderGitLab, prIndexRow(items[0]).Provider)
 }
+
+func TestALinkedPullRequestNamesItsRepository(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://github.com/acme/api/pull/7":                              "acme/api",
+		"https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9":    "https://dev.azure.com/acme/Platform/_git/rules",
+		"https://gitlab.example.com/acme/platform/api/-/merge_requests/5": "https://gitlab.example.com/acme/platform/api",
+	} {
+		repo, err := linkedPRRepository(raw)
+		assert.NoError(t, err, raw)
+		assert.Equal(t, want, repo, raw)
+	}
+}

@@ -1,3 +1,5 @@
+// A todo's pull request link: a GitHub, Azure DevOps or GitLab pull request URL, validated and
+// stored with its number.
 package types
 
 import (
@@ -5,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -24,6 +27,9 @@ func PRFromURL(ref string) (*PR, error) {
 	if u.Host == "dev.azure.com" || strings.HasSuffix(u.Host, ".visualstudio.com") {
 		_, _, err := azuredevops.ParsePRURL(strings.TrimSuffix(u.String(), "/"))
 		valid = err == nil
+	}
+	if isGitLabMR(parts) {
+		valid = true
 	}
 	if !valid {
 		return nil, fmt.Errorf("unsupported PR URL %q", ref)
@@ -63,4 +69,11 @@ func (p *PR) Scan(value any) error {
 	default:
 		return fmt.Errorf("cannot scan PR link from %T", value)
 	}
+}
+
+// isGitLabMR reports whether parts, a URL's path segments, are a GitLab merge request's on any
+// host: a project's path, then -/merge_requests and the number.
+func isGitLabMR(parts []string) bool {
+	n := len(parts)
+	return n >= 5 && parts[n-3] == "-" && parts[n-2] == "merge_requests" && !slices.Contains(parts[:n-3], "")
 }
