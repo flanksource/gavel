@@ -169,7 +169,11 @@ func (c connectionClient) Status(ctx context.Context, number int, opts model.Sta
 	}
 	runs := map[int64]*model.WorkflowRun{}
 	if reader, ok := provider.(git.PullRequestPipelineReader); ok {
-		if runs, err = pipelineRuns(ctx, reader, repo, number, opts, &info); err != nil {
+		state, ok := executionStates[provider.Type()]
+		if !ok {
+			return nil, fmt.Errorf("%s pipeline states aren't known to gavel", provider.Type())
+		}
+		if runs, err = pipelineRuns(ctx, reader, state, repo, number, opts, &info); err != nil {
 			return nil, err
 		}
 	}
@@ -197,9 +201,38 @@ func threadComments(ctx context.Context, reader git.PullRequestThreadReader, rep
 	return comments, nil
 }
 
-// pipelineRuns reads the CI pull request number ran as workflow runs, adding a check for each
-// job, or for a run without jobs, to info's rollup.
-func pipelineRuns(ctx context.Context, reader git.PullRequestPipelineReader, repo git.RepoURL, number int, opts model.StatusOptions, info *model.PRInfo) (map[int64]*model.WorkflowRun, error) {
+// executionState is a provider's pipeline, job or step state and result as the dashboard spells
+// a check's status and conclusion.
+type executionState func(state, result string) (string, string, error)
+
+// executionStates spell each provider's pipeline states as the dashboard does.
+var executionStates = map[string]executionState{
+	models.ConnectionTypeAzureDevops: azuredevops.ExecutionState,
+	models.ConnectionTypeGitlab:      gitlabExecutionState,
+}
+
+// gitlabStatuses are GitLab pipeline and job statuses as the dashboard spells a check's status
+// and conclusion. A manual job waits for someone to start it.
+var gitlabStatuses = map[string][2]string{
+	"created": {"QUEUED", ""}, "pending": {"QUEUED", ""}, "preparing": {"QUEUED", ""},
+	"waiting_for_resource": {"QUEUED", ""}, "scheduled": {"QUEUED", ""}, "manual": {"WAITING", ""},
+	"running": {"IN_PROGRESS", ""}, "canceling": {"IN_PROGRESS", ""},
+	"success": {"COMPLETED", "SUCCESS"}, "failed": {"COMPLETED", "FAILURE"},
+	"canceled": {"COMPLETED", "CANCELLED"}, "skipped": {"COMPLETED", "SKIPPED"},
+}
+
+// gitlabExecutionState spells a GitLab pipeline or job status, which has no separate result.
+func gitlabExecutionState(status, _ string) (string, string, error) {
+	spelled, ok := gitlabStatuses[status]
+	if !ok {
+		return "", "", fmt.Errorf("unexpected GitLab pipeline or job status %q", status)
+	}
+	return spelled[0], spelled[1], nil
+}
+
+// pipelineRuns reads the CI pull request number ran as workflow runs, with each state spelled by
+// state, adding a check for each job, or for a run without jobs, to info's rollup.
+func pipelineRuns(ctx context.Context, reader git.PullRequestPipelineReader, state executionState, repo git.RepoURL, number int, opts model.StatusOptions, info *model.PRInfo) (map[int64]*model.WorkflowRun, error) {
 	executions, err := reader.PullRequestExecutions(ctx, repo, number)
 	if err != nil {
 		return nil, fmt.Errorf("read pull request %d's CI: %w", number, err)
@@ -211,14 +244,14 @@ func pipelineRuns(ctx context.Context, reader git.PullRequestPipelineReader, rep
 			return nil, fmt.Errorf("pipeline execution ID %q: %w", execution.ID, err)
 		}
 		pipeline, _ := strconv.ParseInt(execution.Pipeline, 10, 64)
-		status, conclusion, err := azuredevops.ExecutionState(execution.Status, execution.Result)
+		status, conclusion, err := state(execution.Status, execution.Result)
 		if err != nil {
 			return nil, fmt.Errorf("pipeline execution %s: %w", execution.ID, err)
 		}
 		run := &model.WorkflowRun{DatabaseID: id, WorkflowID: pipeline, Name: execution.PipelineName, Status: status, Conclusion: conclusion,
 			URL: execution.URL, HeadSHA: execution.SHA}
 		for _, job := range execution.Jobs {
-			converted, err := pipelineJob(ctx, reader, execution, job, opts)
+			converted, err := pipelineJob(ctx, reader, state, execution, job, opts)
 			if err != nil {
 				return nil, err
 			}
@@ -237,8 +270,8 @@ func pipelineRuns(ctx context.Context, reader git.PullRequestPipelineReader, rep
 
 // pipelineJob is job as the PR model holds it, with, when opts asks for logs, the log tails of its
 // failed steps, or its own when it failed without steps.
-func pipelineJob(ctx context.Context, reader git.PullRequestPipelineReader, execution git.PullRequestExecution, job git.PipelineJob, opts model.StatusOptions) (model.Job, error) {
-	status, conclusion, err := azuredevops.ExecutionState(job.Status, job.Result)
+func pipelineJob(ctx context.Context, reader git.PullRequestPipelineReader, state executionState, execution git.PullRequestExecution, job git.PipelineJob, opts model.StatusOptions) (model.Job, error) {
+	status, conclusion, err := state(job.Status, job.Result)
 	if err != nil {
 		return model.Job{}, fmt.Errorf("job %s: %w", job.ID, err)
 	}
@@ -252,7 +285,7 @@ func pipelineJob(ctx context.Context, reader git.PullRequestPipelineReader, exec
 		return logs, nil
 	}
 	for _, step := range job.Steps {
-		status, conclusion, err := azuredevops.ExecutionState(step.Status, step.Result)
+		status, conclusion, err := state(step.Status, step.Result)
 		if err != nil {
 			return model.Job{}, fmt.Errorf("step %s: %w", step.Name, err)
 		}
