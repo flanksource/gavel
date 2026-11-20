@@ -129,7 +129,7 @@ func (CommentAccess) Authorize(ctx context.Context, p comments.Principal, _ stri
 		}
 		return comments.ErrForbidden
 	}
-	if u.Host == "dev.azure.com" {
+	if strings.Contains(u.Path, "/pullrequest/") {
 		_, err := commentAzure(ctx, p, t)
 		return err
 	}
