@@ -10,6 +10,7 @@ import (
 const (
 	PRProviderGitHub = "github"
 	PRProviderAzure  = "azure"
+	PRProviderGitLab = "gitlab"
 )
 
 // PRRef identifies one hosted pull request. Repo is a lower-cased key, not a

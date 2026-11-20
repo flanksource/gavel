@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/flanksource/commons-db/git"
@@ -127,15 +126,15 @@ type OrgConnections struct {
 
 // OrganizationPRs reads an organization's PRs: a GitHub one with token, its GitHub App
 // installation's token source, never the host's credentials, keeping GitHub's responses in
-// responses, its own cache; one at a /pullrequest/ URL, an Azure DevOps one, through the git
-// connection of the organization's repository that holds it.
+// responses, its own cache; an Azure DevOps or GitLab one through the git connection of the
+// organization's repository that holds it.
 func OrganizationPRs(token func() (string, error), responses *cache.Store, connections OrgConnections) func(ctx context.Context, url string) (provider.Client, int, error) {
 	return func(ctx context.Context, url string) (provider.Client, int, error) {
-		if _, number, found := strings.Cut(url, "/pullrequest/"); found {
-			n, err := strconv.Atoi(strings.TrimSuffix(number, "/"))
-			if err != nil || n <= 0 {
-				return nil, 0, fmt.Errorf("pull request URL %s has no positive number", url)
-			}
+		pr, err := forge.ParsePullRequestURL(url)
+		if err != nil && !errors.Is(err, forge.ErrNotConnectionPullRequest) {
+			return nil, 0, err
+		}
+		if err == nil {
 			if connections.DB == nil {
 				return nil, 0, fmt.Errorf("this organization has no git connections to read %s through", url)
 			}
@@ -143,7 +142,7 @@ func OrganizationPRs(token func() (string, error), responses *cache.Store, conne
 			if err != nil {
 				return nil, 0, err
 			}
-			return provider.NewConnectionClient(held.Remote, held.DefaultBranch), n, nil
+			return provider.NewConnectionClient(held.Remote, held.DefaultBranch), pr.Number, nil
 		}
 		if token == nil {
 			return nil, 0, fmt.Errorf("this organization has no GitHub App installation to read %s with", url)

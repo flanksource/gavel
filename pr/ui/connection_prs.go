@@ -13,7 +13,7 @@ import (
 )
 
 // prProviders names each connection type's PR provider as todo links and the PR index key it.
-var prProviders = map[string]string{models.ConnectionTypeAzureDevops: types.PRProviderAzure}
+var prProviders = map[string]string{models.ConnectionTypeAzureDevops: types.PRProviderAzure, models.ConnectionTypeGitlab: types.PRProviderGitLab}
 
 // ConnectionPRItems are listed's pull requests as PR list items. A provider keeping no update
 // time, as Azure DevOps doesn't, has each item as recent as its creation.

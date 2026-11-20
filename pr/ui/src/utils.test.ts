@@ -53,6 +53,7 @@ describe('provider links', () => {
   const base = { title: 'T', author: 'Ada Lovelace', source: 'a', target: 'main', state: 'OPEN', isDraft: false, updatedAt: '2026-11-02T10:00:00Z' };
   const github: PRItem = { ...base, number: 7, repo: 'acme/api', url: 'https://github.com/acme/api/pull/7' };
   const azure: PRItem = { ...base, number: 9, provider: 'azure', repo: 'acme/Platform/rules', url: 'https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9' };
+  const gitlab: PRItem = { ...base, number: 5, provider: 'gitlab', repo: 'acme/platform/api', url: 'https://gitlab.example.com/acme/platform/api/-/merge_requests/5' };
 
   it('links a GitHub PR to its repository, owner and author on GitHub', () => {
     const [org] = groupByOrg([github]);
@@ -76,8 +77,18 @@ describe('provider links', () => {
     expect(repoWebURL(azure)).toBe('https://dev.azure.com/acme/Platform/_git/rules');
   });
 
+  it('links a GitLab merge request to its repository, and to no GitHub owner or profile', () => {
+    const [org] = groupByOrg([gitlab]);
+    expect(org.orgUrl).toBeUndefined();
+    expect(org.repos[0].webUrl).toBe('https://gitlab.example.com/acme/platform/api');
+    expect(org.repos[0].host).toBe('GitLab');
+    expect(authorProfileURL(gitlab)).toBeUndefined();
+    expect(repoWebURL(gitlab)).toBe('https://gitlab.example.com/acme/platform/api');
+  });
+
   it("links a commit to its repository's page on the PR's host", () => {
     expect(commitWebURL(github, 'abc123')).toBe('https://github.com/acme/api/commit/abc123');
     expect(commitWebURL(azure, 'abc123')).toBe('https://dev.azure.com/acme/Platform/_git/rules/commit/abc123');
+    expect(commitWebURL(gitlab, 'abc123')).toBe('https://gitlab.example.com/acme/platform/api/-/commit/abc123');
   });
 });

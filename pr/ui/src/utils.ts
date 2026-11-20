@@ -103,7 +103,7 @@ export interface OrgGroup {
   itemCount: number;
 }
 
-const prHosts: Record<string, string> = { azure: 'Azure DevOps' };
+const prHosts: Record<string, string> = { azure: 'Azure DevOps', gitlab: 'GitLab' };
 
 // isGitHubPR reports whether pr is on GitHub, the host of a PR without a provider.
 function isGitHubPR(pr: Pick<PRItem, 'provider'>): boolean {
@@ -114,13 +114,13 @@ function isGitHubPR(pr: Pick<PRItem, 'provider'>): boolean {
 // without its pull request path.
 export function repoWebURL(pr: PRItem): string {
   if (isGitHubPR(pr)) return `https://github.com/${pr.repo}`;
-  return pr.url.replace(/\/pullrequest\/\d+\/?$/, '');
+  return pr.url.replace(/\/(pullrequest|-\/merge_requests)\/\d+\/?$/, '');
 }
 
-// commitWebURL is the page of commit sha in pr's repository, which GitHub and Azure DevOps both
-// place at {repository}/commit/{sha}.
+// commitWebURL is the page of commit sha in pr's repository: {repository}/commit/{sha} on GitHub
+// and Azure DevOps, {repository}/-/commit/{sha} on GitLab.
 export function commitWebURL(pr: PRItem, sha: string): string {
-  return `${repoWebURL(pr)}/commit/${sha}`;
+  return `${repoWebURL(pr)}${pr.provider === 'gitlab' ? '/-' : ''}/commit/${sha}`;
 }
 
 // authorProfileURL is the GitHub profile of login, pr's author unless named, who wrote on pr; on

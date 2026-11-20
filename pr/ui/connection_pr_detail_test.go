@@ -256,3 +256,42 @@ func TestAHostedOrgReachesItsAzurePullRequestsByURL(t *testing.T) {
 	_, _, err = prs(t.Context(), "https://github.com/acme/api/pull/7")
 	require.ErrorContains(t, err, "this organization has no GitHub App installation to read")
 }
+
+func TestAHostedOrgReachesItsGitLabMergeRequestsByURL(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("h"), 32)))
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v4/projects/acme/api/merge_requests/5" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"iid":5,"state":"opened","title":"Speed up the API","web_url":"` + server.URL + `/acme/api/-/merge_requests/5",
+			"source_branch":"fast","target_branch":"main","source_project_id":1,"target_project_id":1,
+			"sha":"2222222222222222222222222222222222222222","author":{"name":"Grace Hopper"}}`))
+	}))
+	t.Cleanup(server.Close)
+	scope := tenant.Scope{OrgID: org, Role: "org:admin"}
+	store, closeStore, err := connections.OpenStore(t.Context(), connections.Options{DB: db, Scope: scope})
+	require.NoError(t, err)
+	saved, err := store.SaveConnection(t.Context(), &models.Connection{Name: "acme-gitlab", Type: models.ConnectionTypeGitlab,
+		URL: server.URL, Password: "glpat", InsecureTLS: true})
+	require.NoError(t, err)
+	require.NoError(t, closeStore())
+	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, connection_id, remote_url, provider_repo_id, default_branch)
+		VALUES (?, 'acme/api', 'gitlab', ?, ?, '1', 'main')`, org, saved.ID, server.URL+"/acme/api.git").Error)
+	prs := OrganizationPRs(nil, nil, OrgConnections{DB: db, Scope: scope})
+
+	client, number, err := prs(t.Context(), server.URL+"/acme/api/-/merge_requests/5")
+	require.NoError(t, err)
+	assert.Equal(t, 5, number)
+	assert.Equal(t, "gitlab", client.Kind())
+	status, err := client.Status(t.Context(), number, model.StatusOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "Speed up the API", status.PR.Title)
+	assert.Equal(t, "2222222222222222222222222222222222222222", status.PR.HeadRefOID)
+
+	_, _, err = prs(t.Context(), server.URL+"/acme/api/-/merge_requests/none")
+	require.EqualError(t, err, `pull request URL "`+server.URL+`/acme/api/-/merge_requests/none" has no positive number`)
+}

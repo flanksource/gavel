@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/flanksource/commons-db/git"
@@ -18,7 +19,7 @@ import (
 
 // pullRequestSources are the repository sources whose pull requests are listed through their
 // connection. A GitHub repository's come from GitHub search instead.
-var pullRequestSources = []string{models.ConnectionTypeAzureDevops}
+var pullRequestSources = []string{models.ConnectionTypeAzureDevops, models.ConnectionTypeGitlab}
 
 // RepoPullRequest is one open pull request of a repository.
 type RepoPullRequest struct {
@@ -98,14 +99,42 @@ func openPullRequests(ctx context.Context, client namedClient, name, remoteURL s
 	return listed, nil
 }
 
-// PullRequestRepository is the URL of the repository pull request prURL, an Azure DevOps
-// .../_git/{repo}/pullrequest/{number} URL, belongs to.
-func PullRequestRepository(prURL string) (string, error) {
-	repo, _, found := strings.Cut(prURL, "/pullrequest/")
-	if !found {
-		return "", fmt.Errorf("pull request URL %q has no /pullrequest/ path", prURL)
+// ErrNotConnectionPullRequest is a pull request URL of no provider whose pull requests come
+// through git connections, such as a GitHub one.
+var ErrNotConnectionPullRequest = errors.New("not a pull request of a git connection's provider")
+
+// PullRequestURL is a pull request URL of a provider whose pull requests come through git
+// connections: its repository's URL, the provider's connection type and the number.
+type PullRequestURL struct {
+	Repo     string
+	Provider string
+	Number   int
+}
+
+// pullRequestPaths are the path segments that put a pull request's number after its
+// repository's URL, for each provider.
+var pullRequestPaths = []struct{ marker, provider string }{
+	{"/pullrequest/", models.ConnectionTypeAzureDevops},
+	{"/-/merge_requests/", models.ConnectionTypeGitlab},
+}
+
+// ParsePullRequestURL reads an Azure DevOps .../_git/{repo}/pullrequest/{number} or a GitLab
+// .../{repo}/-/merge_requests/{number} URL, whatever page of the pull request it opens.
+func ParsePullRequestURL(prURL string) (PullRequestURL, error) {
+	for _, path := range pullRequestPaths {
+		repo, rest, found := strings.Cut(prURL, path.marker)
+		if !found {
+			continue
+		}
+		numberText, _, _ := strings.Cut(rest, "/")
+		number, err := strconv.Atoi(numberText)
+		if err != nil || number <= 0 {
+			return PullRequestURL{}, fmt.Errorf("pull request URL %q has no positive number", prURL)
+		}
+		return PullRequestURL{Repo: repo, Provider: path.provider, Number: number}, nil
 	}
-	return repo, nil
+	return PullRequestURL{}, fmt.Errorf("pull request URL %q is neither an Azure DevOps .../pullrequest/N nor a GitLab .../-/merge_requests/N URL: %w",
+		prURL, ErrNotConnectionPullRequest)
 }
 
 // PullRequestRemote is the remote, through its connection as stored and never hydrated, of the
@@ -125,11 +154,11 @@ type HeldRepo struct {
 // PullRequestRepo is the repository of scope's that holds pull request prURL, reached through its
 // connection as stored and never hydrated; options configures its provider client.
 func PullRequestRepo(ctx context.Context, db *gorm.DB, scope tenant.Scope, prURL string, options git.ClientOptions) (HeldRepo, error) {
-	repoURL, err := PullRequestRepository(prURL)
+	pr, err := ParsePullRequestURL(prURL)
 	if err != nil {
 		return HeldRepo{}, err
 	}
-	target, err := git.ParseRepoURL(repoURL, models.ConnectionTypeAzureDevops)
+	target, err := git.ParseRepoURL(pr.Repo, pr.Provider)
 	if err != nil {
 		return HeldRepo{}, fmt.Errorf("pull request %s: %w", prURL, err)
 	}
@@ -139,12 +168,12 @@ func PullRequestRepo(ctx context.Context, db *gorm.DB, scope tenant.Scope, prURL
 		DefaultBranch string
 	}
 	if err := db.WithContext(ctx).Raw(`SELECT remote_url, connection_id, default_branch FROM repos
-		WHERE org_id = ? AND connection_id IS NOT NULL AND source IN ?`, scope.OrgID, pullRequestSources).
+		WHERE org_id = ? AND connection_id IS NOT NULL AND source = ?`, scope.OrgID, pr.Provider).
 		Scan(&repos).Error; err != nil {
 		return HeldRepo{}, fmt.Errorf("list the organization's repositories: %w", err)
 	}
 	for _, repo := range repos {
-		if remote, err := git.ParseRepoURL(repo.RemoteURL, models.ConnectionTypeAzureDevops); err == nil && remote.SameRepository(target) {
+		if remote, err := git.ParseRepoURL(repo.RemoteURL, pr.Provider); err == nil && remote.SameRepository(target) {
 			reached, err := Remote(ctx, db, scope, repo.ConnectionID, repo.RemoteURL, options)
 			return HeldRepo{Remote: reached, DefaultBranch: repo.DefaultBranch}, err
 		}

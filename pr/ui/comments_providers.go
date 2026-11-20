@@ -42,10 +42,11 @@ func commentGitHub(ctx context.Context, p comments.Principal, t comments.Target)
 // through the git connection of its repository that holds it; a local project's, whose origin must
 // be that repository, through azuredevops.LocalConnection.
 func commentAzure(ctx context.Context, _ comments.Principal, t comments.Target) (*git.Repository, error) {
-	repoURL, err := forge.PullRequestRepository(t.URI)
+	pr, err := forge.ParsePullRequestURL(t.URI)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", comments.ErrInvalid, err)
 	}
+	repoURL := pr.Repo
 	if s := entityServer(ctx); s != nil && s.hosted {
 		return forge.PullRequestRemote(ctx, s.orgDB, tenant.Scope{OrgID: s.orgID()}, t.URI, git.ClientOptions{Defensive: true})
 	}

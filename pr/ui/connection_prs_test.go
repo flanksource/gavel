@@ -39,3 +39,20 @@ func TestAnAzurePullRequestIsListedAsADashboardItem(t *testing.T) {
 	assert.Equal(t, "acme/platform/rules", row.Key().Repo, "indexed under the key a todo's link to the PR has")
 	assert.Equal(t, types.PRProviderGitHub, prIndexRow(github.PRListItem{Repo: "acme/api", Number: 7}).Provider, "a GitHub search result")
 }
+
+func TestAGitLabMergeRequestIsListedAsADashboardItem(t *testing.T) {
+	opened := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	api := git.RepoURL{Provider: models.ConnectionTypeGitlab, Owner: "acme/platform", Name: "api"}
+	items := ConnectionPRItems([]forge.RepoPullRequest{
+		{Repo: api, PullRequest: git.PullRequest{Number: 5, URL: "https://gitlab.com/acme/platform/api/-/merge_requests/5",
+			State: git.PullRequestOpen, Head: "fast", Base: "main", Title: "Speed up the API", Author: "Grace Hopper", CreatedAt: opened,
+			Metadata: &git.PullRequestMetadata{Mergeability: "mergeable"}}},
+	})
+
+	assert.Equal(t, github.PRSearchResults{
+		{Provider: types.PRProviderGitLab, Number: 5, Title: "Speed up the API", Author: "Grace Hopper", Repo: "acme/platform/api",
+			Source: "fast", Target: "main", State: "OPEN", Mergeable: "MERGEABLE", URL: "https://gitlab.com/acme/platform/api/-/merge_requests/5",
+			UpdatedAt: opened, ShowAuthor: true},
+	}, items, "a nested group's repository keeps its whole path")
+	assert.Equal(t, types.PRProviderGitLab, prIndexRow(items[0]).Provider)
+}

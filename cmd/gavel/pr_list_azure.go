@@ -77,9 +77,9 @@ func localAzurePRs(ctx context.Context, repos []string) (github.PRSearchResults,
 // localPRRemote reaches a listed Azure DevOps pull request's repository through
 // azuredevops.LocalConnection.
 func localPRRemote(ctx context.Context, pr github.PRListItem) (*git.Repository, error) {
-	repoURL, err := forge.PullRequestRepository(pr.URL)
+	parsed, err := forge.ParsePullRequestURL(pr.URL)
 	if err != nil {
 		return nil, err
 	}
-	return azuredevops.LocalRemote(ctx, repoURL)
+	return azuredevops.LocalRemote(ctx, parsed.Repo)
 }

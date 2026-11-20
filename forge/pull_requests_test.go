@@ -16,7 +16,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestAnOrgsAzureRepositoriesListTheirOpenPullRequests(t *testing.T) {
+func TestAnOrgsAzureAndGitLabRepositoriesListTheirOpenPullRequests(t *testing.T) {
 	db := catalog(t)
 	scope := hostedOrg(t, db)
 	azure := fakeListing(t, "/acme/Platform/_apis/git/repositories/rules/pullrequests")
@@ -28,18 +28,34 @@ func TestAnOrgsAzureRepositoriesListTheirOpenPullRequests(t *testing.T) {
 	conn := saveFor(t, db, scope, models.Connection{Name: "acme-azure", Type: models.ConnectionTypeAzureDevops, URL: azure.URL + "/acme",
 		Password: "azure-pat", InsecureTLS: true})
 	connectionRepo(t, db, scope, "Platform/rules", "azure_devops", &conn, azure.URL+"/acme/Platform/_git/rules")
-	gitlab := saveFor(t, db, scope, models.Connection{Name: "acme-gitlab", Type: models.ConnectionTypeGitlab, URL: "https://gitlab.example.com",
-		Password: "glpat", Properties: map[string]string{"group": "acme"}})
-	connectionRepo(t, db, scope, "acme/api", "gitlab", &gitlab, "https://gitlab.example.com/acme/api.git")
+	gitlabAPI := fakeListing(t, "/api/v4/projects/acme/api/merge_requests")
+	gitlabAPI.set(`[{"iid":5,"state":"opened","title":"Speed up the API","web_url":"` + gitlabAPI.URL + `/acme/api/-/merge_requests/5",
+		"source_branch":"fast","target_branch":"main","source_project_id":1,"target_project_id":1,"sha":"2222222222222222222222222222222222222222",
+		"author":{"name":"Grace Hopper"},"created_at":"2026-11-03T10:00:00Z"}]`)
+	gitlab := saveFor(t, db, scope, models.Connection{Name: "acme-gitlab", Type: models.ConnectionTypeGitlab, URL: gitlabAPI.URL,
+		Password: "glpat", InsecureTLS: true, Properties: map[string]string{"group": "acme"}})
+	connectionRepo(t, db, scope, "acme/api", "gitlab", &gitlab, gitlabAPI.URL+"/acme/api.git")
 	connectionRepo(t, db, scope, "Platform/released", "azure_devops", nil, azure.URL+"/acme/Platform/_git/released")
+	connectionRepo(t, db, scope, "acme/plain", "git", &gitlab, gitlabAPI.URL+"/acme/plain.git")
 
 	listed, err := forge.PullRequests(context.Background(), db, scope, git.ClientOptions{})
 	require.NoError(t, err)
-	require.Len(t, listed, 1, "only a repository whose connection lists its pull requests")
-	assert.Equal(t, "acme", listed[0].Repo.Owner)
-	assert.Equal(t, "Platform", listed[0].Repo.Project)
-	assert.Equal(t, "rules", listed[0].Repo.Name)
-	pr := listed[0].PullRequest
+	byProvider := map[string]forge.RepoPullRequest{}
+	for _, entry := range listed {
+		byProvider[entry.Repo.Provider] = entry
+	}
+	require.Len(t, listed, 2, "each repository whose connection lists its pull requests: %v", listed)
+	mr := byProvider[models.ConnectionTypeGitlab]
+	assert.Equal(t, "acme", mr.Repo.Owner)
+	assert.Equal(t, "api", mr.Repo.Name)
+	assert.Equal(t, 5, mr.PullRequest.Number)
+	assert.Equal(t, "Speed up the API", mr.PullRequest.Title)
+	assert.Equal(t, gitlabAPI.URL+"/acme/api/-/merge_requests/5", mr.PullRequest.URL)
+	azurePR := byProvider[models.ConnectionTypeAzureDevops]
+	assert.Equal(t, "acme", azurePR.Repo.Owner)
+	assert.Equal(t, "Platform", azurePR.Repo.Project)
+	assert.Equal(t, "rules", azurePR.Repo.Name)
+	pr := azurePR.PullRequest
 	assert.Equal(t, 9, pr.Number)
 	assert.Equal(t, "Tighten the rules", pr.Title)
 	assert.Equal(t, git.PullRequestOpen, pr.State)
@@ -100,11 +116,42 @@ func TestAPullRequestIsReachedThroughTheConnectionOfItsOrgsRepository(t *testing
 	_, err = forge.PullRequestRemote(context.Background(), db, scope, azure.URL+"/acme/Platform/_git/other/pullrequest/9", git.ClientOptions{})
 	require.ErrorContains(t, err, "no repository of the organization's git connections holds")
 	_, err = forge.PullRequestRemote(context.Background(), db, scope, "https://github.com/acme/api/pull/7", git.ClientOptions{})
-	require.EqualError(t, err, `pull request URL "https://github.com/acme/api/pull/7" has no /pullrequest/ path`)
+	require.ErrorIs(t, err, forge.ErrNotConnectionPullRequest)
 }
 
-func TestAPullRequestURLNamesItsRepository(t *testing.T) {
-	repo, err := forge.PullRequestRepository("https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9")
+func TestAMergeRequestIsReachedThroughTheConnectionOfItsOrgsGitLabRepository(t *testing.T) {
+	db := catalog(t)
+	scope := hostedOrg(t, db)
+	gitlabAPI := fakeListing(t, "/api/v4/projects/acme/platform/api/merge_requests/5")
+	conn := saveFor(t, db, scope, models.Connection{Name: "acme-gitlab", Type: models.ConnectionTypeGitlab, URL: gitlabAPI.URL,
+		Password: "glpat", InsecureTLS: true})
+	connectionRepo(t, db, scope, "acme/platform/api", "gitlab", &conn, gitlabAPI.URL+"/acme/platform/api.git")
+
+	held, err := forge.PullRequestRepo(context.Background(), db, scope, gitlabAPI.URL+"/acme/platform/api/-/merge_requests/5", git.ClientOptions{})
 	require.NoError(t, err)
-	assert.Equal(t, "https://dev.azure.com/acme/Platform/_git/rules", repo)
+	assert.Equal(t, "acme/platform", held.Remote.URL.Owner, "a nested group")
+	assert.Equal(t, "api", held.Remote.URL.Name)
+	assert.Equal(t, models.ConnectionTypeGitlab, held.Remote.URL.Provider)
+	assert.Equal(t, "main", held.DefaultBranch)
+
+	_, err = forge.PullRequestRepo(context.Background(), db, scope, gitlabAPI.URL+"/acme/platform/web/-/merge_requests/5", git.ClientOptions{})
+	require.ErrorContains(t, err, "no repository of the organization's git connections holds")
+}
+
+func TestAPullRequestURLNamesItsRepositoryProviderAndNumber(t *testing.T) {
+	pr, err := forge.ParsePullRequestURL("https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9")
+	require.NoError(t, err)
+	assert.Equal(t, forge.PullRequestURL{Repo: "https://dev.azure.com/acme/Platform/_git/rules", Provider: models.ConnectionTypeAzureDevops, Number: 9}, pr)
+
+	pr, err = forge.ParsePullRequestURL("https://gitlab.com/acme/platform/api/-/merge_requests/5/diffs")
+	require.NoError(t, err)
+	assert.Equal(t, forge.PullRequestURL{Repo: "https://gitlab.com/acme/platform/api", Provider: models.ConnectionTypeGitlab, Number: 5}, pr)
+
+	_, err = forge.ParsePullRequestURL("https://github.com/acme/api/pull/7")
+	require.ErrorIs(t, err, forge.ErrNotConnectionPullRequest)
+	assert.EqualError(t, err, `pull request URL "https://github.com/acme/api/pull/7" is neither an Azure DevOps .../pullrequest/N nor a GitLab .../-/merge_requests/N URL: `+
+		forge.ErrNotConnectionPullRequest.Error())
+
+	_, err = forge.ParsePullRequestURL("https://gitlab.com/acme/api/-/merge_requests/new")
+	require.EqualError(t, err, `pull request URL "https://gitlab.com/acme/api/-/merge_requests/new" has no positive number`)
 }
