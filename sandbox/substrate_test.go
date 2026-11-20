@@ -351,7 +351,7 @@ func TestSubstrateBackendIsCaptainsSubstrateSandboxOptions(t *testing.T) {
 		"envAPI": "envapi.example:443", "control": "control.example:443", "tokenFile": "/run/token",
 		"atespace": "ate-env", "template": "gavel-runner", "trustBundle": "/run/ate/trust.pem",
 		"egress": []string{
-			"proxy.golang.org:443", "sum.golang.org:443", "registry.npmjs.org:443", "pypi.org:443", "files.pythonhosted.org:443",
+			"proxy.golang.org:443", "sum.golang.org:443", "storage.googleapis.com:443", "registry.npmjs.org:443", "pypi.org:443", "files.pythonhosted.org:443",
 			"github.com:443", "codeload.github.com:443", "objects.githubusercontent.com:443", "goproxy.example.com:443",
 		},
 	}, backend, "a run reaches the package hosts and GitHub, and never serve, which it asks over its channel")
