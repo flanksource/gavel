@@ -85,6 +85,31 @@ func (s *Server) mergeConnectionPR(w http.ResponseWriter, r *http.Request, pr gi
 	fmt.Fprint(w, `{"status":"ok"}`)
 }
 
+// approveConnectionPR approves pr through its remote as the connection's identity, leaving comment
+// when there is one.
+func (s *Server) approveConnectionPR(w http.ResponseWriter, r *http.Request, pr github.PRListItem, comment string) {
+	if s.prRemote == nil {
+		writeJSONError(w, http.StatusBadGateway, fmt.Errorf("this dashboard has no connection to approve %s pull request %s#%d through", pr.Provider, pr.Repo, pr.Number))
+		return
+	}
+	remote, err := s.prRemote(r.Context(), pr)
+	if err == nil {
+		approver, ok := remote.Provider.(git.PullRequestApprover)
+		if !ok {
+			err = fmt.Errorf("%s pull requests can't be approved from the dashboard", pr.Provider)
+		} else {
+			err = approver.ApprovePullRequest(r.Context(), remote.URL, pr.Number, comment)
+		}
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, fmt.Errorf("approve pull request %s#%d: %w", pr.Repo, pr.Number, err))
+		return
+	}
+	s.afterPRAction(pr.Repo, pr.Number)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprint(w, `{"status":"ok"}`)
+}
+
 // fetchConnectionPRDetail reads pr's detail through its remote, with Error set on failure as
 // fetchPRDetail's callers expect.
 func (s *Server) fetchConnectionPRDetail(ctx context.Context, pr github.PRListItem) prDetail {

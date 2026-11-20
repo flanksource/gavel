@@ -190,3 +190,30 @@ func TestTheDashboardMergesAnAzurePullRequestThroughItsRemote(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "auto-merge isn't offered for Azure DevOps pull requests")
 }
+
+func TestTheDashboardApprovesAnAzurePullRequestAsItsConnection(t *testing.T) {
+	const me = "8f1c2a8e-6b2d-4c1f-9a77-2f6f0b8d5e11"
+	var vote map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /acme/_apis/connectionData":
+			_, _ = w.Write([]byte(`{"authenticatedUser":{"id":"` + me + `"}}`))
+		case "PUT /acme/Platform/_apis/git/repositories/rules/pullrequests/9/reviewers/" + me:
+			_ = json.NewDecoder(r.Body).Decode(&vote)
+			_, _ = w.Write([]byte(`{"id":"` + me + `","vote":10}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	s := NewServer(gavelctx.New(t.Context()), 0, github.Options{}, SearchConfig{})
+	s.publishResults(github.PRSearchResults{{Provider: types.PRProviderAzure, Repo: "acme/Platform/rules", Number: 9,
+		URL: server.URL + "/acme/Platform/_git/rules/pullrequest/9"}})
+	s.SetPRRemote(func(context.Context, github.PRListItem) (*git.Repository, error) { return azureRemote(t, server), nil })
+
+	recorder := httptest.NewRecorder()
+	s.handlePRApprove(recorder, httptest.NewRequest(http.MethodPost, "/api/prs/approve",
+		strings.NewReader(`{"repo":"acme/Platform/rules","number":9}`)))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, map[string]any{"vote": float64(10)}, vote, "an Azure pull request needs no GitHub node ID")
+}

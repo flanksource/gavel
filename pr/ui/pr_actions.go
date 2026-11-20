@@ -31,6 +31,12 @@ type prActionRequest struct {
 // endpoint. It writes the error response itself and returns ok=false when the
 // request is malformed, so callers can `if !ok { return }`.
 func decodePRAction(w http.ResponseWriter, r *http.Request) (prActionRequest, bool) {
+	body, ok := decodePRActionBody(w, r)
+	return body, ok && requireNodeID(w, body)
+}
+
+// decodePRActionBody decodes a PR action's request, which a GitHub action also needs a node ID in.
+func decodePRActionBody(w http.ResponseWriter, r *http.Request) (prActionRequest, bool) {
 	var body prActionRequest
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -40,11 +46,16 @@ func decodePRAction(w http.ResponseWriter, r *http.Request) (prActionRequest, bo
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return body, false
 	}
+	return body, true
+}
+
+// requireNodeID refuses a GitHub PR action without the GraphQL node ID it acts on.
+func requireNodeID(w http.ResponseWriter, body prActionRequest) bool {
 	if strings.TrimSpace(body.NodeID) == "" {
 		http.Error(w, `{"error":"nodeId is required"}`, http.StatusBadRequest)
-		return body, false
+		return false
 	}
-	return body, true
+	return true
 }
 
 // afterPRAction drops the stale cached detail for the PR and requests an
@@ -109,8 +120,15 @@ func (s *Server) handlePRMerge(w http.ResponseWriter, r *http.Request) {
 
 // handlePRApprove submits an APPROVE review on the PR with an optional comment.
 func (s *Server) handlePRApprove(w http.ResponseWriter, r *http.Request) {
-	body, ok := decodePRAction(w, r)
+	body, ok := decodePRActionBody(w, r)
 	if !ok {
+		return
+	}
+	if listed, ok := s.connectionPR(body.Repo, body.Number); ok {
+		s.approveConnectionPR(w, r, listed, body.Body)
+		return
+	}
+	if !requireNodeID(w, body) {
 		return
 	}
 	opts := s.ghOpts

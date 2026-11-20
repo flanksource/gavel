@@ -175,12 +175,12 @@ export function PRActions({
   const menuItems: DropdownMenuItem[] = [
     ...(isOpen
       ? [
-          ...(!azure ? [{
+          {
             label: menuLabel(UiCheck, 'Approve'),
             title: 'Submit an approving review',
             disabled: loading,
             onSelect: () => open({ type: 'approve' as const }),
-          }] : []),
+          },
           {
             label: menuLabel(UiGitMerge, 'Merge'),
             title: mergeDisabledReason ?? 'Merge options',
@@ -336,7 +336,7 @@ export function PRActions({
     <>
       {isOpen && (
         <>
-          {!azure && <Button
+          <Button
             variant="outline"
             size="sm"
             className="h-7 shrink-0 gap-1 px-2 text-xs"
@@ -346,7 +346,7 @@ export function PRActions({
           >
             <UiCheck className="text-xs" />
             Approve
-          </Button>}
+          </Button>
 
           <span title={mergeDisabledReason}>
             <SplitButton
@@ -402,11 +402,15 @@ export function PRActions({
 
 function submitAction(pr: PRItem, nodeId: string | undefined, headSha: string | undefined, request: { pending: Pending; comment: string }) {
   if (request.pending.type === 'approve') {
-    if (!nodeId) throw new Error('Approve pull request: missing pull request node ID');
+    // A pull request from a git connection (Azure DevOps) is approved by repo and number; a
+    // GitHub one by its GraphQL node ID.
+    if (!nodeId && !pr.provider) throw new Error('Approve pull request: missing pull request node ID');
     return mutationJSON({
       url: '/api/prs/approve',
       method: 'POST',
-      body: { repo: pr.repo, number: pr.number, nodeId, body: request.comment },
+      body: pr.provider
+        ? { repo: pr.repo, number: pr.number, body: request.comment }
+        : { repo: pr.repo, number: pr.number, nodeId, body: request.comment },
       context: 'Approve pull request',
     });
   }

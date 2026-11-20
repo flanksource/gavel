@@ -102,7 +102,7 @@ describe('PRActions responsive collapse', () => {
     const fetchMock = vi.fn(async () => new Response('{"status":"ok"}'));
     vi.stubGlobal('fetch', fetchMock);
     renderActions({ pr: makePR({ number: 27, repo: 'acme/product/service', url }), detail: { pr: { provider: 'azuredevops', state: 'OPEN', headRefOid: 'reviewed-head' } } as PRDetail });
-    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Enable auto-merge (rebase)' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Update branch' })).toBeNull();
     expect((screen.getByRole('button', { name: 'Merge' }) as HTMLButtonElement).disabled).toBe(false);
@@ -112,6 +112,20 @@ describe('PRActions responsive collapse', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/prs/merge', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, method: 'rebase', auto: false, headSha: 'reviewed-head' }),
+    }));
+  });
+
+  it('approves an Azure pull request without a GitHub node ID', async () => {
+    const url = 'https://dev.azure.com/acme/product/_git/service/pullrequest/27';
+    const fetchMock = vi.fn(async () => new Response('{"status":"ok"}'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderActions({ pr: makePR({ number: 27, repo: 'acme/product/service', url, provider: 'azure' }), detail: { pr: { provider: 'azuredevops', state: 'OPEN', headRefOid: 'reviewed-head' } } as PRDetail });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    fireEvent.change(screen.getByPlaceholderText('Optional approval comment'), { target: { value: 'Ship it' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Approve' }).at(-1)!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/prs/approve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo: 'acme/product/service', number: 27, body: 'Ship it' }),
     }));
   });
 
