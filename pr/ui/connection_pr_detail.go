@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flanksource/commons-db/git"
@@ -121,7 +122,7 @@ func (s *Server) fetchConnectionPRDetail(ctx context.Context, pr github.PRListIt
 	remote, err := s.prRemote(ctx, pr)
 	if err == nil {
 		var detail prDetail
-		if detail, err = connectionPRDetail(ctx, remote.Provider, remote.URL, pr.Number); err == nil {
+		if detail, err = connectionPRDetail(ctx, remote, pr.Number, s.gitCache); err == nil {
 			return detail
 		}
 	}
@@ -129,9 +130,11 @@ func (s *Server) fetchConnectionPRDetail(ctx context.Context, pr github.PRListIt
 	return prDetail{Error: fmt.Sprintf("pull request %s#%d: %v", pr.Repo, pr.Number, err)}
 }
 
-// connectionPRDetail reads pull request number of repo through provider. Azure DevOps is the
-// provider whose CI it reads; its executions' states take the dashboard's GitHub spelling.
-func connectionPRDetail(ctx context.Context, provider git.Provider, repo git.RepoURL, number int) (prDetail, error) {
+// connectionPRDetail reads pull request number of remote through its provider, and with cache, its
+// commits and changed files from git. Azure DevOps is the provider whose CI it reads; its
+// executions' states take the dashboard's GitHub spelling.
+func connectionPRDetail(ctx context.Context, remote *git.Repository, number int, cache *git.Cache) (prDetail, error) {
+	provider, repo := remote.Provider, remote.URL
 	pr, err := provider.GetPullRequest(ctx, repo, number)
 	if err != nil {
 		return prDetail{}, fmt.Errorf("read pull request %d: %w", number, err)
@@ -159,8 +162,19 @@ func connectionPRDetail(ctx context.Context, provider git.Provider, repo git.Rep
 			return prDetail{}, err
 		}
 	}
+	if cache != nil && !fromFork(pr, repo) {
+		if err := connectionChanges(ctx, cache, remote, info); err != nil {
+			return prDetail{}, fmt.Errorf("read pull request %d's changes: %w", number, err)
+		}
+	}
 	comments := prwatch.MergeAndFilter(append([]model.PRComment(nil), info.Comments...), info.ReviewThreads)
 	return prDetail{PR: info, Runs: runs, Comments: comments}, nil
+}
+
+// fromFork reports whether pr's head is in another repository than repo, whose commits a cache of
+// repo doesn't reach.
+func fromFork(pr git.PullRequest, repo git.RepoURL) bool {
+	return pr.HeadRepository != "" && !strings.EqualFold(pr.HeadRepository, repo.Project+"/"+repo.Name)
 }
 
 // connectionThreads reads pull request number's threads as review thread comments.

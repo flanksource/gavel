@@ -87,7 +87,7 @@ func TestAnAzurePullRequestsDetailComesThroughItsConnection(t *testing.T) {
 	server := fakeAzure(t, azurePRRoutes())
 	remote := azureRemote(t, server)
 
-	detail, err := connectionPRDetail(context.Background(), remote.Provider, remote.URL, 9)
+	detail, err := connectionPRDetail(context.Background(), remote, 9, nil)
 	require.NoError(t, err)
 	require.NotNil(t, detail.PR)
 	pr := detail.PR

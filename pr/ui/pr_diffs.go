@@ -25,6 +25,10 @@ func (s *Server) handlePRCommitDiff(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
 	sha := strings.TrimSpace(r.URL.Query().Get("sha"))
+	if listed, ok := s.connectionPRInRepo(repo); ok && gavelgit.IsValidCommitHash(sha) {
+		s.writeConnectionDiff(w, r, listed, prDiffResponse{Repo: repo, Commit: sha}, commitPatch(sha))
+		return
+	}
 	if err := validatePRDiffRepo(repo); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err)
 		return
@@ -58,6 +62,12 @@ func (s *Server) handlePRFileDiff(w http.ResponseWriter, r *http.Request) {
 	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
 	numberText := strings.TrimSpace(r.URL.Query().Get("number"))
 	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if number, err := strconv.Atoi(numberText); err == nil && path != "" {
+		if listed, ok := s.connectionPR(repo, number); ok {
+			s.writeConnectionDiff(w, r, listed, prDiffResponse{Repo: repo, Number: number, Path: path}, prFilePatch(listed, path))
+			return
+		}
+	}
 	if err := validatePRDiffRepo(repo); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err)
 		return

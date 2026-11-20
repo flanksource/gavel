@@ -15,6 +15,7 @@ import (
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/github"
@@ -484,6 +485,11 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 		return err
 	}
 	srv.SetPRRemote(localPRRemote)
+	if cacheDir, err := os.UserCacheDir(); err == nil {
+		srv.SetGitCache(&git.Cache{Root: filepath.Join(cacheDir, "gavel", "git-cache")})
+	} else {
+		logger.Warnf("no git cache for the commits and patches of Azure DevOps pull requests: %v", err)
+	}
 	poller := ui.NewPoller(srv, searchFn, interval)
 	poller.Start(ctx)
 

@@ -22,6 +22,7 @@ import (
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/clicky/sse"
 	clickytask "github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/blob"
 	gavelctx "github.com/flanksource/gavel/context"
@@ -178,6 +179,8 @@ type Server struct {
 	// prRemote, when set, reaches the repository of a listed pull request a git connection
 	// brings; without it such a pull request has no detail.
 	prRemote PRRemote
+	// gitCache, when set, reads the commits and patches of pull requests from git connections.
+	gitCache *git.Cache
 
 	// blobs is the storage: store from ~/.gavel.yaml; nil keeps attachments in
 	// attachmentsDir.
