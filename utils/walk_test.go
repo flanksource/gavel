@@ -118,6 +118,53 @@ var _ = Describe("WalkGitIgnored", func() {
 		Expect(paths).NotTo(ContainElement("secret/key.pem"))
 	})
 
+	Context("global excludes", func() {
+		var xdgConfig string
+
+		// Points Git's user-level config at empty temp dirs so the host's own
+		// ~/.gitconfig and ~/.config/git/ignore cannot leak into the spec.
+		BeforeEach(func() {
+			home := GinkgoT().TempDir()
+			xdgConfig = filepath.Join(home, ".config")
+			GinkgoT().Setenv("HOME", home)
+			GinkgoT().Setenv("XDG_CONFIG_HOME", xdgConfig)
+			GinkgoT().Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			Expect(os.MkdirAll(filepath.Join(xdgConfig, "git"), 0o755)).To(Succeed())
+			setupGitRepo(root)
+			Expect(os.WriteFile(filepath.Join(root, "main.go"), nil, 0o644)).To(Succeed())
+		})
+
+		It("skips a nested module under a directory ignored by the default XDG excludes file", func() {
+			Expect(os.WriteFile(filepath.Join(xdgConfig, "git", "ignore"), []byte(".shell/\n"), 0o644)).To(Succeed())
+			nested := filepath.Join(root, ".shell", "worktrees", "copy")
+			Expect(os.MkdirAll(nested, 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(nested, "go.mod"), []byte("module example.com/copy\n"), 0o644)).To(Succeed())
+
+			paths, err := collectBoundedPaths(root)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(paths).To(ContainElement("main.go"))
+			Expect(paths).NotTo(ContainElement(HavePrefix(".shell")))
+		})
+
+		It("uses core.excludesFile instead of the XDG default when it is configured", func() {
+			Expect(os.WriteFile(filepath.Join(xdgConfig, "git", "ignore"), []byte("xdg-only/\n"), 0o644)).To(Succeed())
+			custom := filepath.Join(GinkgoT().TempDir(), "excludes")
+			Expect(os.WriteFile(custom, []byte("scratch/\n"), 0o644)).To(Succeed())
+			cmd := exec.Command("git", "config", "core.excludesFile", custom)
+			cmd.Dir = root
+			Expect(cmd.Run()).To(Succeed())
+			for _, dir := range []string{"scratch", "xdg-only"} {
+				Expect(os.MkdirAll(filepath.Join(root, dir), 0o755)).To(Succeed())
+				Expect(os.WriteFile(filepath.Join(root, dir, "file.go"), nil, 0o644)).To(Succeed())
+			}
+
+			paths, err := collectPaths(root)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(paths).NotTo(ContainElement(HavePrefix("scratch")))
+			Expect(paths).To(ContainElement("xdg-only/file.go"))
+		})
+	})
+
 	It("allowList overrides gitignore", func() {
 		setupGitRepo(root)
 		os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".todos/\n.codex/\n"), 0644)
