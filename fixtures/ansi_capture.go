@@ -103,7 +103,12 @@ type Capture struct {
 	Truncated    bool       `json:"truncated,omitempty"`
 	raw          string
 	maxLineWidth int
+	timeout      error
 }
+
+// TimeoutError is set when the runtime timeout stopped the command, which may
+// still have exited 0.
+func (c *Capture) TimeoutError() error { return c.timeout }
 
 // MaxLineWidth returns the widest unwrapped line in the final terminal state.
 func (c *Capture) MaxLineWidth() int { return c.maxLineWidth }
@@ -146,9 +151,10 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 	if err := opts.Runtime.Apply(process); err != nil {
 		return nil, err
 	}
+	errTimeout := fmt.Errorf("command timed out after %v", process.Timeout)
 	if opts.Runtime.Slots.Enabled() && process.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = slots.Timeout(ctx, slots.TimeoutOptions{Limits: opts.Runtime.Slots, Duration: process.Timeout})
+		ctx, cancel = slots.Timeout(ctx, slots.TimeoutOptions{Limits: opts.Runtime.Slots, Duration: process.Timeout, Cause: errTimeout})
 		defer cancel()
 	}
 	cmd, err := process.PrepareCommand()
@@ -309,6 +315,9 @@ func CaptureANSI(opts CaptureOptions) (*Capture, error) {
 		Events:     events,
 		Truncated:  truncated,
 		raw:        raw.String(),
+	}
+	if cause := context.Cause(ctx); errors.Is(cause, errTimeout) {
+		capture.timeout = cause
 	}
 	if opts.Snapshots {
 		final := viewport.String()

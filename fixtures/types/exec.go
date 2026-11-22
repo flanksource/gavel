@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	osExec "os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -269,7 +270,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	// to the markdown that asserts them. A worktree is disposable, so writing
 	// an updated golden into one would discard it on cleanup. The command moves;
 	// its expectations do not.
-	if err := processLaunchError(p); err != nil {
+	if err := processError(p); err != nil {
 		result.Stdout = p.Stdout
 		result.Stderr = p.Stderr
 		result.ExitCode = p.ExitCode
@@ -312,19 +313,24 @@ const (
 	ptyHeight = 40
 )
 
-// processLaunchError reports context and command start failures.
-// Ordinary non-zero exits stay with Evaluate so fixtures can still assert them.
-func processLaunchError(p *clickyExec.ExecResult) error {
+// processError reports a command that did not start, or that was stopped: by
+// its context, its runtime timeout or a resource limit. A stopped command may
+// still exit 0, so its exit code says nothing. Ordinary non-zero exits stay
+// with Evaluate so fixtures can still assert them.
+func processError(p *clickyExec.ExecResult) error {
 	if p == nil {
 		return fmt.Errorf("command produced no result")
 	}
 	if p.Error == nil {
 		return nil
 	}
-	if errors.Is(p.Error, context.Canceled) || errors.Is(p.Error, context.DeadlineExceeded) || p.PID == 0 {
-		return p.Error
+	var exit *osExec.ExitError
+	// clicky replaces the exit error of a shell that could not run its command.
+	shellFailure := p.ExitCode == 126 || p.ExitCode == 127
+	if p.PID != 0 && (errors.As(p.Error, &exit) || shellFailure) {
+		return nil
 	}
-	return nil
+	return p.Error
 }
 
 // ptyRun is one command run under a pseudo-terminal: the fixture's command,
@@ -396,7 +402,7 @@ func runWithPTY(ctx context.Context, run ptyRun) *clickyExec.ExecResult {
 		Command:  run.exec.Exec,
 		Args:     run.exec.Args,
 	}
-	result.Error = errors.Join(ctx.Err(), closeTerminalFeed(run.terminal, feed, capture.ExitCode))
+	result.Error = errors.Join(ctx.Err(), capture.TimeoutError(), closeTerminalFeed(run.terminal, feed, capture.ExitCode))
 	return result
 }
 
