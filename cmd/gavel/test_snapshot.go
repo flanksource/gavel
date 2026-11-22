@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"time"
 
 	"github.com/flanksource/commons/logger"
@@ -12,8 +13,10 @@ import (
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
-// failedRun is a run the runner returned an error for, with what completed.
-type failedRun struct {
+// finishedRun is a run saved on its own, outside a successful run's sha-keyed
+// snapshot: one the runner returned an error for, with what completed, a
+// terminal fixtures run, or a UI rerun.
+type finishedRun struct {
 	Opts        testrunner.RunOptions
 	Tests       []parsers.Test
 	Lint        []*linters.LinterResult
@@ -23,31 +26,51 @@ type failedRun struct {
 	Err         error
 }
 
-// saveFailedRun writes run's per-run snapshot, carrying its error and exit
-// code 1, and returns it.
-func saveFailedRun(run failedRun) testui.Snapshot {
+// saveFinishedRun writes run's per-run snapshot, carrying its error and exit
+// code 1 when it has one, and returns it.
+func saveFinishedRun(run finishedRun) testui.Snapshot {
 	snapshot := buildTestSnapshot(run.Opts, run.Tests, run.Lint, run.Started, time.Now().UTC(), run.Trace)
 	snapshot.Performance = run.Performance
-	snapshot.Error = run.Err.Error()
-	failed := 1
-	snapshot.Metadata.ExitCode = &failed
-	if path, err := snapshots.SavePerRun(run.Opts.Dirs.StateRoot, &snapshot, run.Started, ""); err != nil {
-		logger.Warnf("persist per-run snapshot: %v", err)
-	} else {
-		logger.V(1).Infof("wrote per-run snapshot to %s", path)
+	if run.Opts.RunKind != "" {
+		snapshot.Metadata.Kind = run.Opts.RunKind
 	}
+	if run.Err != nil {
+		snapshot.Error = run.Err.Error()
+		failed := 1
+		snapshot.Metadata.ExitCode = &failed
+	}
+	persistPerRunSnapshot(run.Opts.Dirs.StateRoot, &snapshot, run.Started)
 	return snapshot
 }
 
-// persistRunSnapshot writes a completed run as both the sha-keyed snapshot
-// (refreshing last.json, which a bare --failed resolves) and the per-run
-// timestamped snapshot.
+// saveFixtureRerun saves a UI rerun as the run on screen, before with the
+// rerun's tests over it, so any fixture step of it can be resumed. It returns
+// the saved run's id, empty for a run without fixtures.
+func saveFixtureRerun(before []parsers.Test, run finishedRun) string {
+	run.Tests = testui.MergeRerunTests(before, run.Tests)
+	if !slices.ContainsFunc(run.Tests, holdsFixture) {
+		return ""
+	}
+	return saveFinishedRun(run).Metadata.SavedRun
+}
+
+func holdsFixture(test parsers.Test) bool {
+	return test.Framework == parsers.Fixture || slices.ContainsFunc(test.Children, holdsFixture)
+}
+
+// persistRunSnapshot writes a completed run as both the per-run timestamped
+// snapshot and the sha-keyed snapshot (refreshing last.json, which a bare
+// --failed resolves).
 func persistRunSnapshot(stateRoot string, snapshot *testui.Snapshot, started time.Time) {
+	persistPerRunSnapshot(stateRoot, snapshot, started)
 	if path, err := snapshots.Save(stateRoot, snapshot); err != nil {
 		logger.Warnf("persist snapshot: %v", err)
 	} else {
 		logger.V(1).Infof("wrote snapshot to %s", path)
 	}
+}
+
+func persistPerRunSnapshot(stateRoot string, snapshot *testui.Snapshot, started time.Time) {
 	if path, err := snapshots.SavePerRun(stateRoot, snapshot, started, ""); err != nil {
 		logger.Warnf("persist per-run snapshot: %v", err)
 	} else {
@@ -81,6 +104,7 @@ func buildTestSnapshot(
 			RunID:        trace.runID(),
 			StateRoot:    opts.Dirs.StateRoot,
 			ProcessTrace: trace.processRefs(),
+			Rerun:        opts.FixtureCommand,
 		},
 		Git: snapshots.GitInfo(opts.WorkDir),
 		Status: testui.SnapshotStatus{

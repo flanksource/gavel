@@ -56,6 +56,9 @@ func runStep(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResu
 	// is the `params:` form every row reads.
 	if failed := step.Scope.FailedStep(); failed != "" {
 		result := normalizeResult(FixtureResult{Type: spec.Kind, Status: task.StatusSKIP, Error: fmt.Sprintf("skipped: step %s failed", failed)}, step)
+		if test.Step != nil {
+			stampStepMetadata(&result, spec, nil, map[string]ExportRecord{}, nil, nil)
+		}
 		return recordSkipped(result, step, "step "+failed+" failed")
 	}
 	if test.Step == nil {
@@ -240,12 +243,6 @@ func executeStep(ctx context.Context, kind Kind, step *StepContext) FixtureResul
 		if err := scope.AddCleanup(stepLabel(step), outcome.Cleanup); err != nil {
 			result = result.Errorf(err, "register cleanup")
 		}
-		// A step that left teardown work (a service, a browser) cannot be
-		// reused by a resumed run: what it started does not outlive its run.
-		if result.Metadata == nil {
-			result.Metadata = map[string]interface{}{}
-		}
-		result.Metadata[CleanupMetadataKey] = true
 	}
 	outputs := outcome.Outputs
 	var waited *WaitReport

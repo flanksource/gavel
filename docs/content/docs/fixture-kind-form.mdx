@@ -129,7 +129,7 @@ An `enum` that is empty, repeats an option, or holds something other than string
 
 ## Params
 
-Front-matter, or a YAML fixture's top level, may declare `params:` as an object JSON Schema. It becomes a leading form step with the id `params`, so `{{.params.x}}` and CEL `params.x` read its answers. Values come from `--param key=value` (repeatable), `--params file.yaml`, or a UI rerun request's `params`. They are typed by the schema and filled with its defaults. When they satisfy the schema the step resolves without asking. Otherwise it asks with the gathered values pre-filled.
+Front-matter, or a YAML fixture's top level, may declare `params:` as an object JSON Schema. It becomes a leading form step with the id `params`, so `{{.params.x}}` and CEL `params.x` read its answers. Values come from `--param key=value` (repeatable), `--params file.yaml`, or a UI rerun request's `params`. They are typed by the schema and filled with its defaults. When they satisfy the schema the step resolves without asking. Otherwise it asks with the gathered values pre-filled. A run [resumed from a step](/docs/fixture-step-policies#rerun-from-a-step) starts from the earlier run's answers.
 
 ## Connections
 

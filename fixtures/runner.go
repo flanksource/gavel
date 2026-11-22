@@ -281,6 +281,9 @@ func (r *Runner) prepareFixtureTree() (*FixtureNode, error) {
 	if len(r.fixtures) == 0 {
 		return nil, ErrNoFixtures
 	}
+	if err := r.options.Resume.validate(r.fixtures); err != nil {
+		return nil, err
+	}
 
 	return r.tree, nil
 }

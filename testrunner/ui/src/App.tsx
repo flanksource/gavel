@@ -31,7 +31,7 @@ import {
   type FileTreeSelection,
   type ProblemFilters,
 } from '@flanksource/clicky-ui/file-findings';
-import { Button, Tabs } from '@flanksource/clicky-ui/components';
+import { Button, Tabs, copyText } from '@flanksource/clicky-ui/components';
 import {
   UiArrowLeft,
   UiBeaker,
@@ -428,6 +428,15 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     else void startRerun({ fixture: node.file, from_step: stepId, work_dir: request.body.work_dir ?? '' }, `${node.name} from step ${stepId}`);
   }, [startRerun, say]);
 
+  const onCopyRerunCommand = useCallback(async (node: Test, stepId: string) => {
+    try {
+      await copyText(await run.rerunCommand(node.file ?? '', stepId));
+      say('Rerun command copied');
+    } catch (e: unknown) {
+      say(`Cannot copy the rerun command: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [run, say]);
+
   const onRerunLint = useCallback(() => {
     const body = buildLintRerunBody(selectedLint, lint ?? []);
     if (!body.work_dir) say('Rerun across multiple lint roots is not supported');
@@ -529,8 +538,10 @@ export function App({ runId, navigate = loadPage }: AppProps = {}) {
     onTestEdit,
     testEditBusy,
     onRetryFromStep,
+    onCopyRerunCommand: (node: Test, stepId: string) => void onCopyRerunCommand(node, stepId),
     rerunBusy,
-  }), [route, snapshotStatus.test_edit_supported, onTestEdit, testEditBusy, onRetryFromStep, rerunBusy]);
+    runInProgress: snapshotStatus.running,
+  }), [route, snapshotStatus.test_edit_supported, snapshotStatus.running, onTestEdit, testEditBusy, onRetryFromStep, onCopyRerunCommand, rerunBusy]);
 
   const registry = useMemo(
     () => gavelRegistry({ traces, processes: trace.nodes, onOpenProcess: onSelectProcess, actions, scope, promptOwner: runMeta?.prompt_owner }),

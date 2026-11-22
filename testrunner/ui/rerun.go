@@ -154,7 +154,38 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// handleRerunCommand answers the command line that reruns the fixture query
+// parameter from its from_step step over the current run's results.
+func (s *Server) handleRerunCommand(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fixture, fromStep := r.URL.Query().Get("fixture"), r.URL.Query().Get("from_step")
+	if fixture == "" || fromStep == "" {
+		http.Error(w, "fixture and from_step are required", http.StatusBadRequest)
+		return
+	}
+	s.mu.RLock()
+	meta := cloneSnapshotMetadata(s.metadata)
+	s.mu.RUnlock()
+	if meta == nil || meta.Rerun == nil {
+		http.Error(w, "this run has no rerun command", http.StatusNotImplemented)
+		return
+	}
+	if meta.SavedRun == "" {
+		http.Error(w, "the run is not saved yet: a command can rerun it once it finishes", http.StatusConflict)
+		return
+	}
+	argv := append(slices.Clone(meta.Rerun.Argv), "--from-run="+meta.SavedRun, "--from-step="+fromStep, fixture)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(newRerunCommand(meta.Rerun.Cwd, argv)) //nolint:errcheck
+}
+
 func rerunCommandLabel(req RerunRequest) string {
+	if req.FromStep != "" {
+		return fmt.Sprintf("fixtures %s from step %s", req.Fixture, req.FromStep)
+	}
 	if req.Lint {
 		parts := []string{"lint"}
 		if len(req.LintLinters) > 0 {

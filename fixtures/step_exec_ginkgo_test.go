@@ -437,17 +437,6 @@ var _ = Describe("a run resumed from a step", func() {
 		Expect(reused).To(HaveKeyWithValue("exports", map[string]any{"CLUSTER_URL": map[string]any{"value": "https://east.example", "step": "lookup"}}))
 		Expect(metadataJSON(results[2])).ToNot(HaveKey("reused"))
 	})
-
-	It("errors a step before it that has no prior result, naming it, and skips the rest", func() {
-		useKind(fakeKind{name: "ok", execute: passing(nil, nil)})
-
-		results := runResumed(Resume{FromStep: fromStep, Prior: map[string]PriorStep{}},
-			StepSpec{ID: "lookup", Kind: "ok"}, StepSpec{ID: fromStep, Kind: "ok"})
-
-		Expect(results[0].Status).To(Equal(task.StatusERR))
-		Expect(results[0].Error).To(ContainSubstring(`step "lookup" runs before "apply" but the resumed run has no result for it`))
-		Expect(results[1].Status).To(Equal(task.StatusSKIP))
-	})
 })
 
 type selfTemplatingKind struct{ fakeKind }

@@ -35,6 +35,11 @@ type SnapshotMetadata struct {
 	// ProcessTrace names the run's process capture in its trace store; nil
 	// when the run was not watched.
 	ProcessTrace *traces.ProcessRefs `json:"process_trace,omitempty"`
+	// SavedRun is the id the run was saved under (snapshots.SavePerRun), which
+	// --from-run reads; empty until it is.
+	SavedRun string `json:"saved_run,omitempty"`
+	// Rerun is what a copied command rerunning a step of the run starts with.
+	Rerun *fixtures.RerunBase `json:"rerun,omitempty"`
 }
 
 type SnapshotGit struct {

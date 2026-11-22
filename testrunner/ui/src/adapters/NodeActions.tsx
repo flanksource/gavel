@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { sum, type Test as ClickyTest } from '@flanksource/clicky-ui/data';
-import { Button, ConfirmDialog, DropdownMenu } from '@flanksource/clicky-ui/components';
-import { UiFile, UiRestart, UiSkipForward, UiTrash } from '@flanksource/clicky-ui/icons';
+import { ConfirmDialog, DropdownMenu, SplitButton } from '@flanksource/clicky-ui/components';
+import { UiCopy, UiFile, UiRestart, UiSkipForward, UiTrash } from '@flanksource/clicky-ui/icons';
 import { CopyAIPromptButton, DownloadMenu } from '../components/ExportControls';
 import type { RouteState } from '../routes';
 import type { Test, TestEditAction, TestEditScope } from '../types';
@@ -17,8 +17,12 @@ export interface NodeActionsConfig {
   testEditBusy: boolean;
   /** Reruns a fixture file from the given step, reusing the last run's earlier steps. */
   onRetryFromStep: (node: Test, stepId: string) => void;
+  /** Copies the command that does the same from a terminal. */
+  onCopyRerunCommand: (node: Test, stepId: string) => void;
   /** A rerun is already running: the server accepts one at a time. */
   rerunBusy: boolean;
+  /** The run is in progress: no command can name it until it is saved. */
+  runInProgress: boolean;
 }
 
 const EDITABLE_FRAMEWORKS = new Set(['go test', 'ginkgo', 'vitest']);
@@ -91,17 +95,22 @@ export function NodeActions({ node, config }: { node: Test; config: NodeActionsC
   return (
     <>
       {stepId && (
-        <Button
-          type="button"
+        <SplitButton
+          label="Retry from here"
+          icon={UiRestart}
           variant="outline"
           size="sm"
-          disabled={config.rerunBusy}
+          primaryDisabled={config.rerunBusy}
           onClick={() => config.onRetryFromStep(node, stepId)}
-          title="Rerun this fixture from this step, reusing the earlier steps' results from the last run"
-        >
-          <UiRestart className="mr-1" />
-          Retry from here
-        </Button>
+          title="More ways to rerun this fixture from this step"
+          items={[{
+            label: 'Copy rerun command',
+            icon: UiCopy,
+            disabled: config.runInProgress,
+            title: config.runInProgress ? 'Available once the run finishes' : "Copy the command that reruns this fixture from this step, reusing the earlier steps' results",
+            onSelect: () => config.onCopyRerunCommand(node, stepId),
+          }]}
+        />
       )}
       {nodeRouteState && <DownloadMenu routeState={nodeRouteState} title="Download this node as JSON or Markdown" />}
       {nodeRouteState && failingOnly && (

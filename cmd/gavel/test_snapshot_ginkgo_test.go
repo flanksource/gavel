@@ -49,7 +49,7 @@ var _ = Describe("saving a run the runner failed", func() {
 		completed := parsers.Test{Framework: parsers.GoTest, PackagePath: "./pkg/foo", Name: "TestFoo", Passed: true}
 		runErr := errors.New("test execution failed: read the process samples of pid 3916: session ended")
 
-		saved := saveFailedRun(failedRun{
+		saved := saveFinishedRun(finishedRun{
 			Opts: testrunner.RunOptions{WorkDir: workDir, Dirs: workspace.Dirs{Invocation: workDir, StateRoot: workDir}}, Tests: []parsers.Test{completed},
 			Started: started, Err: runErr,
 		})
@@ -63,5 +63,34 @@ var _ = Describe("saving a run the runner failed", func() {
 		Expect(*loaded.Metadata.ExitCode).To(Equal(1))
 		Expect(loaded.Tests).To(HaveExactElements(HaveField("Name", completed.Name)))
 		Expect(saved.Error).To(Equal(runErr.Error()))
+	})
+})
+
+var _ = Describe("saving a UI rerun", func() {
+	step := func(file, id string) parsers.Test {
+		return parsers.Test{Framework: parsers.Fixture, File: file, Name: id, Passed: true}
+	}
+	var opts testrunner.RunOptions
+
+	BeforeEach(func() {
+		workDir := GinkgoT().TempDir()
+		opts = testrunner.RunOptions{WorkDir: workDir, Dirs: workspace.Dirs{Invocation: workDir, StateRoot: workDir}}
+	})
+
+	It("keeps the fixtures the rerun left out, so a step of any of them can be resumed", func() {
+		before := []parsers.Test{step("a.fixture.yaml", "a"), step("b.fixture.yaml", "b")}
+
+		id := saveFixtureRerun(before, finishedRun{Opts: opts, Tests: []parsers.Test{step("b.fixture.yaml", "b")}, Started: time.Now()})
+
+		saved, err := snapshots.LoadRun(opts.WorkDir, id)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(saved.Tests).To(HaveExactElements(HaveField("File", "a.fixture.yaml"), HaveField("File", "b.fixture.yaml")))
+	})
+
+	It("saves nothing for a run without fixtures", func() {
+		tests := []parsers.Test{{Framework: parsers.GoTest, Name: "TestFoo", Passed: true}}
+
+		Expect(saveFixtureRerun(tests, finishedRun{Opts: opts, Tests: tests, Started: time.Now()})).To(BeEmpty())
+		Expect(snapshots.ListRuns(opts.WorkDir, snapshots.ListRunsOptions{})).To(BeEmpty())
 	})
 })

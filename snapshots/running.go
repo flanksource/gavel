@@ -202,6 +202,9 @@ func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time, label 
 	if err != nil {
 		return "", err
 	}
+	if snap.Metadata != nil {
+		snap.Metadata.SavedRun = strings.TrimSuffix(key, ".json")
+	}
 	if err := putJSON(store, key, snap); err != nil {
 		return "", err
 	}

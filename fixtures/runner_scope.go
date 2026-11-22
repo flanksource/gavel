@@ -155,6 +155,9 @@ func (r *Runner) settleFixture(ctx context.Context, q queuedFixture, returned Fi
 	}
 	base.Name, base.Test = node.Name, *node.Test
 	result := cutOffVerdict(base, taskErr, q.failedStep())
+	if _, recorded := result.Metadata["step"]; !recorded && node.Test.Step != nil {
+		stampStepMetadata(&result, *node.Test.Step, nil, map[string]ExportRecord{}, nil, nil)
+	}
 	r.cutOff[node] = true
 	r.attachResult(node, result)
 	if node.Test.Step != nil && isFailureStatus(result.Status) && !node.Test.Step.ContinueOnError {

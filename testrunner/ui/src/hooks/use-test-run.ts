@@ -68,6 +68,8 @@ export interface UseTestRunResult {
   done: boolean;
   error: string | undefined;
   rerun: (body?: RerunRequest) => Promise<ActionResult>;
+  /** The shell line that reruns a fixture from a step; rejects with the server's reason when it has none. */
+  rerunCommand: (fixture: string, fromStep: string) => Promise<string>;
   stop: (taskId?: string) => Promise<ActionResult>;
   editTest: (body: TestEditRequest) => Promise<ActionResult>;
   /** Reconnect the stream / restart polling. */
@@ -273,6 +275,15 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
     [base],
   );
 
+  const rerunCommand = useCallback(
+    async (fixture: string, fromStep: string): Promise<string> => {
+      const res = await fetch(`${base}/api/rerun/command?${new URLSearchParams({ fixture, from_step: fromStep })}`);
+      if (!res.ok) throw new Error((await res.text()).trim());
+      return ((await res.json()) as { shell: string }).shell;
+    },
+    [base],
+  );
+
   const stop = useCallback(
     async (taskId?: string): Promise<ActionResult> => {
       const payload = taskId ? { scope: 'task', task_id: taskId } : { scope: 'global' };
@@ -323,6 +334,7 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
     done,
     error,
     rerun,
+    rerunCommand,
     stop,
     editTest,
     refetch,

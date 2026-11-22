@@ -98,6 +98,7 @@ func (s *Server) BeginRun(kind string) {
 	meta.Kind = kind
 	meta.Started = time.Now().UTC()
 	meta.Ended = time.Time{}
+	meta.SavedRun = ""
 	s.done = false
 	s.fixtureBenchmark = nil
 	s.replayed = false
@@ -144,6 +145,23 @@ func (s *Server) SetRunProcess(pid int, command string) {
 	meta := s.ensureMetadataLocked()
 	meta.PID = pid
 	meta.Command = command
+}
+
+// SetRerunBase records what a copied command rerunning a fixture step starts with.
+func (s *Server) SetRerunBase(base *fixtures.RerunBase) {
+	defer s.notify()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureMetadataLocked().Rerun = base
+}
+
+// SetSavedRun records the id the current run was saved under, which a copied
+// rerun command names.
+func (s *Server) SetSavedRun(runID string) {
+	defer s.notify()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureMetadataLocked().SavedRun = runID
 }
 
 // SetRunFrameworks records which test frameworks the run scheduled.
@@ -369,7 +387,7 @@ func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) <-chan
 		for tests := range ch {
 			s.mu.Lock()
 			if mergeAttempts {
-				s.tests = mergeRerunTests(s.tests, tests)
+				s.tests = MergeRerunTests(s.tests, tests)
 			} else {
 				s.tests = tests
 			}
@@ -400,6 +418,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc(QueryMount+"/", s.handleTraces)
 	mux.HandleFunc("/api/rerun", s.handleRerun)
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
+	mux.HandleFunc("/api/rerun/command", s.handleRerunCommand)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	s.prompter().RegisterHandlers(mux, PromptsMount)
 	for _, route := range []string{"/connection", "/connection/", "/connections/"} {

@@ -201,6 +201,10 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		}
 		uiServer.SetVersion(version)
 		uiServer.SetRunArgs(snapshotArgs(opts))
+		if opts.FixtureCommand == nil {
+			opts.FixtureCommand = &fixtures.RerunBase{Cwd: opts.Dirs.Invocation, Argv: []string{os.Args[0], "fixtures", "--ui=true", "--cwd=" + opts.WorkDir}}
+		}
+		uiServer.SetRerunBase(opts.FixtureCommand)
 		uiServer.SetGitInfo(gitInfo)
 		if err := trace.serveOn(uiServer); err != nil {
 			return nil, err
@@ -253,10 +257,12 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		opts.Updates = attachRecorderTee(recorderTee{Recorder: recorder, Reporter: reporter, Stream: stream, Options: opts, Started: runStarted, Downstream: attachUIUpdates()})
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			// Refused before anything runs, so the last run stays on screen.
-			fixture, err := resumeFixtureRerun(uiServer.Snapshot().Tests, req)
+			before := uiServer.Snapshot()
+			fixture, err := resumeFixtureRerun(before.Tests, req, opts.FixtureCommand.Cwd)
 			if err != nil {
 				return err
 			}
+			rerunStarted := time.Now().UTC()
 			clicky.ClearGlobalTasks()
 			rerunCtx, cancelRerun := newStopContext(opts.Context, opts.Timeout)
 			defer cancelRerun()
@@ -266,6 +272,9 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 				uiServer.SetFixtureBenchmarkMode(mode)
 			}
 			if req.Lint {
+				if before.Metadata != nil {
+					uiServer.SetSavedRun(before.Metadata.SavedRun)
+				}
 				results, err := executeLintRerun(LintOptions{
 					WorkDir: opts.WorkDir, Selection: opts.Selection, Tags: opts.Tags,
 					Timeout: configuredLintTimeout(opts),
@@ -284,7 +293,9 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			rerunOpts.FixtureRunID = uiServer.PromptOwner()
 			rerunOpts.Context = rerunCtx
 			rerunOpts.OutputTee = output.StdoutWriter()
-			_, err = testrunner.Run(rerunOpts)
+			result, err := testrunner.Run(rerunOpts)
+			tests, _ := result.([]parsers.Test)
+			uiServer.SetSavedRun(saveFixtureRerun(before.Tests, finishedRun{Opts: rerunOpts, Tests: tests, Started: rerunStarted, Trace: trace, Err: err}))
 			return err
 		})
 	}
@@ -556,9 +567,12 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 		// a crash envelope, so `--format json=FILE` always produces a file.
 		// Persisted on every runner failure so `gavel ui serve` still lists
 		// the tests that completed and why the run failed.
-		failedSnapshot := saveFailedRun(failedRun{
+		failedSnapshot := saveFinishedRun(finishedRun{
 			Opts: opts, Tests: tests, Lint: lintResults, Started: runStarted, Trace: trace, Performance: fixturePerformance, Err: err,
 		})
+		if uiServer != nil {
+			uiServer.SetSavedRun(failedSnapshot.Metadata.SavedRun)
+		}
 		holdFailedRunUI(uiServer, err, func() {
 			if detach {
 				if handoffErr := handoffDetachedUI(uiListener, failedSnapshot, detachedUIOptions{AutoStop: opts.AutoStop, IdleTimeout: opts.IdleTimeout, Dev: opts.Dev}); handoffErr != nil {
@@ -620,6 +634,7 @@ func runTests(opts testrunner.RunOptions, detach bool) (value any, runErr error)
 			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), trace)
 			snapshot.Performance = fixturePerformance
 			persistRunSnapshot(opts.Dirs.StateRoot, &snapshot, runStarted)
+			uiServer.SetSavedRun(snapshot.Metadata.SavedRun)
 			runSucceeded = true
 			waitForStopSignal()
 			return nil, nil
@@ -1181,6 +1196,7 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, fi
 	}
 	rerunOpts.StartingPaths = req.PackagePaths
 	rerunOpts.ExtraArgs = buildRerunArgs(req)
+	rerunOpts.FixtureResume = nil
 	if fixture.Resume != nil {
 		rerunOpts = fixture.scope(rerunOpts, req.Fixture)
 	}

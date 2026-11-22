@@ -49,11 +49,9 @@ steps:
 		Expect(seen).To(Equal(answered))
 	})
 
-	It("is prepared after reused params when the run resumes past the params form", func() {
-		asked := 0
-		useKind(fakeKind{name: FormKind, execute: func(context.Context, *StepContext) (StepOutcome, error) {
-			asked++
-			return StepOutcome{Result: FixtureResult{Status: task.StatusPASS}}, nil
+	It("is prepared from re-resolved params when the run resumes past the params form", func() {
+		useKind(fakeKind{name: FormKind, execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
+			return StepOutcome{Result: FixtureResult{Status: task.StatusPASS}, Outputs: step.Opts.Params}, nil
 		}})
 		var seen string
 		useKind(fakeKind{name: "probe", execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
@@ -74,13 +72,13 @@ setup:
 steps:
   - { id: use, kind: probe, url: "{{.env.GREETING}}" }
 `)
-		resume := &Resume{FromStep: "use", Prior: map[string]PriorStep{ParamsStepID: {Outputs: map[string]any{"greeting": answered}}}}
-		runner, err := NewRunner(RunnerOptions{Paths: []string{path}, WorkDir: filepath.Dir(path), MaxWorkers: 1, Resume: resume})
+		resume := &Resume{FromStep: "use", Prior: map[string]PriorStep{ParamsStepID: {Outputs: map[string]any{"greeting": "from-the-resumed-run"}}}}
+		runner, err := NewRunner(RunnerOptions{Paths: []string{path}, WorkDir: filepath.Dir(path), MaxWorkers: 1,
+			Resume: resume, Params: map[string]any{"greeting": answered}})
 		Expect(err).ToNot(HaveOccurred())
 		tree, err := runner.Run()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tree.GetStats().Passed).To(Equal(2))
-		Expect(asked).To(BeZero())
 		Expect(seen).To(Equal(answered))
 	})
 

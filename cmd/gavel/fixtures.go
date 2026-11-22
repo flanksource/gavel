@@ -65,6 +65,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 	t = t.Add(h("USAGE")).
 		Add(code("  gavel fixtures [flags] <fixture-file-or-glob> [fixture-file-or-glob...]")).NewLine().
 		Add(code("  gavel fixtures --ui checks.fixture.md")).Add(dim("  # stream the typed execution tree in the test UI")).NewLine().
+		Add(code("  gavel fixtures --from-step deploy checks.fixture.yaml")).Add(dim("  # rerun from a step, reusing the newest run's earlier results")).NewLine().
 		Add(h("ARGUMENTS")).
 		Add(kv("fixture-files", "One or more markdown fixture files or doublestar glob patterns. At least one is required.")).
 		Append("    ").Add(dim("Quote globs when you want Gavel to expand them instead of your shell.")).NewLine()

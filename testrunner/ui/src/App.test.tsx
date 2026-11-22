@@ -139,16 +139,34 @@ describe('App', () => {
     it('reruns from the selected fixture step with its file and work dir, and shows the server\'s refusal', async () => {
       const calls = serve(
         fixtureRun([fixtureStep('seed'), fixtureStep('stage', { passed: false, failed: true })]),
-        { 'POST /api/rerun': () => new Response('step "stage" follows failed step "seed"\n', { status: 400 }) },
+        { 'POST /api/rerun': () => new Response('no step "stage" to resume from; steps: seed\n', { status: 400 }) },
       );
       open('/');
       fireEvent.click(await screen.findByText('stage'));
 
       fireEvent.click(within(await detailHeader()).getByRole('button', { name: /Retry from here/ }));
 
-      await waitFor(() => expect(screen.getByText(/Rerun failed: step "stage" follows failed step "seed"/)).toBeTruthy());
+      await waitFor(() => expect(screen.getByText(/Rerun failed: no step "stage" to resume from; steps: seed/)).toBeTruthy());
       const rerun = calls.find(call => call.url === '/api/rerun')!;
       expect(JSON.parse(rerun.init!.body as string)).toEqual({ fixture: fixtureFile, from_step: 'stage', work_dir: '/repo' });
+    });
+
+    it.each([
+      ['copies the server\'s command', () => Response.json({ shell: 'cd /repo && gavel fixtures --from-step=stage' }), ['cd /repo && gavel fixtures --from-step=stage'], /Rerun command copied/],
+      ['shows why there is no command', () => new Response('the run is not saved yet\n', { status: 409 }), [], /Cannot copy the rerun command: the run is not saved yet/],
+    ])('%s for the selected step', async (_name, answer, copied, message) => {
+      const written: string[] = [];
+      vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text); } } });
+      const query = new URLSearchParams({ fixture: fixtureFile, from_step: 'stage' });
+      serve(fixtureRun([fixtureStep('seed'), fixtureStep('stage')]), { [`GET /api/rerun/command?${query}`]: answer });
+      open('/');
+      fireEvent.click(await screen.findByText('stage'));
+
+      fireEvent.click(within(await detailHeader()).getByRole('button', { name: /More ways to rerun/ }));
+      fireEvent.click(await screen.findByText('Copy rerun command'));
+
+      await waitFor(() => expect(screen.getByText(message)).toBeTruthy());
+      expect(written).toEqual(copied);
     });
 
     it.each([

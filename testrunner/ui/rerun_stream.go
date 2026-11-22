@@ -4,16 +4,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/flanksource/clicky/sse"
+	"github.com/flanksource/gavel/utils"
 )
 
 // OutputLine is a single line of process output captured during a rerun.
 type OutputLine struct {
 	Text   string `json:"text"`
 	Stream string `json:"stream"` // "stdout" or "stderr"
+}
+
+// RerunCommand is a process a rerun ran: Line is argv quoted for a shell, and
+// Shell the line that reruns it from any directory (cd to Cwd first).
+type RerunCommand struct {
+	Cwd   string   `json:"cwd,omitempty"`
+	Argv  []string `json:"argv"`
+	Line  string   `json:"line"`
+	Shell string   `json:"shell"`
+}
+
+func newRerunCommand(cwd string, argv []string) RerunCommand {
+	line := utils.ShellJoin(argv)
+	shell := line
+	if cwd != "" {
+		shell = "cd " + utils.ShellQuote(cwd) + " && " + line
+	}
+	return RerunCommand{Cwd: cwd, Argv: slices.Clone(argv), Line: line, Shell: shell}
 }
 
 // RerunOutputBuffer is a thread-safe buffer that captures process output

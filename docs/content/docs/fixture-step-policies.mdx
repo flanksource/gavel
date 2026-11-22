@@ -60,6 +60,34 @@ Set shared timing in the document's `defaults` block; individual steps can refin
   <SchemaViewer schema={schema.document.properties.defaults} />
 </div>
 
+## Rerun from a step
+
+Every fixture run is saved, so a later run can start part-way through a file:
+
+```sh
+gavel fixtures --from-step summary purge.fixture.yaml
+gavel fixtures --from-step summary --from-run run-2026-11-22T13-22-21Z purge.fixture.yaml
+gavel fixtures --from-step summary --from-run .gavel/running.json purge.fixture.yaml
+```
+
+`--from-step` names the step to start at. `--from-run` names the run to reuse, as a saved run id or a snapshot file; without it, the newest saved run of the file is used. In the `--ui` dashboard, a step's **Retry from here** button does the same over the run on screen, and its menu copies the equivalent command.
+
+The steps before it are not run, however they ended:
+
+| In the earlier run | In the rerun |
+| --- | --- |
+| Passed or warned | Reused: its outputs and exports are available again |
+| Failed or timed out | Shown as warned; whatever it recorded is available |
+| Skipped | Skipped, with `{skipped: true}` as its outputs |
+| Never ran, or not in the file then | Skipped, with no outputs |
+| Ran in the background, or started a service | Not started; its recorded outputs are available |
+
+A step that reads an output the earlier run does not have fails on reading it. An id the file does not have is an error, because nothing would run.
+
+The earlier run's teardown has already happened: a service it started is stopped, and an `exec` step's `cleanup` has run. Start at the step that sets such state up when later steps depend on it. Approval forms before the step are reused, not asked again.
+
+The `params` step always resolves again, from the earlier run's answers with any `--param` or `--params` values over them, so a `setup:` that reads them is prepared again.
+
 ## Lifetime and teardown
 
 `background: true` is for kinds supporting work that remains active while later steps execute. Teardown collects its verdict and releases resources. Kind-specific startup/readiness deadlines are separate from the overall step deadline. See [Services](/docs/fixture-kind-services), [Browser](/docs/fixture-kind-browser), and [Playwright](/docs/fixture-kind-playwright) for their lifetime contracts.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
@@ -95,8 +96,20 @@ func runFixtures(cmd *cobra.Command, args []string) (runError error) {
 	if err != nil {
 		return err
 	}
+	dirs, err := workspace.From(cmd.Context())
+	if err != nil {
+		return err
+	}
+	resumed, err := fixtureResumeFlags{FromStep: fixturesFromStep, FromRun: fixturesFromRun, Files: args, Dirs: dirs}.resume()
+	if err != nil {
+		return err
+	}
+	command, err := fixtureCommand(cmd)
+	if err != nil {
+		return err
+	}
 	runnerOpts := fixtures.RunnerOptions{
-		Params:         params,
+		Params:         resumed.withParams(params),
 		TraceArchive:   archive,
 		ProcessRuntime: runtime,
 		Args:           runtimeArgs,
@@ -121,27 +134,23 @@ func runFixtures(cmd *cobra.Command, args []string) (runError error) {
 			ShowStderr: fixtures.ParseOutputMode(fixturesShowStderr),
 		}, cmd.Flags().Changed("show-stdout"), cmd.Flags().Changed("show-stderr"))),
 	}
+	runOpts, detach := fixtureUIRunOptions(fixtureUIRunRequest{Runner: &runnerOpts, UI: fixturesUI, Resume: resumed.Resume, Command: command})
+	runOpts.Dirs = dirs
 	if fixturesUI.UI {
-		opts, detach := fixtureUIRunOptions(fixtureUIRunRequest{Runner: &runnerOpts, UI: fixturesUI})
-		if opts.Dirs, err = workspace.From(cmd.Context()); err != nil {
-			return err
-		}
-		_, err = runTests(opts, detach)
+		_, err = runTests(runOpts, detach)
 		return err
 	}
 	if runnerOpts.Prompter, err = fixtureTerminalPrompter(cmd.Context(), wd); err != nil {
 		return err
 	}
+	runnerOpts.Resume = resumed.Resume
 
 	runner, err := fixtures.NewRunner(runnerOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create fixture runner: %w", err)
 	}
 
-	dirs, err := workspace.From(cmd.Context())
-	if err != nil {
-		return err
-	}
+	started := time.Now().UTC()
 	reporter, err := startRunStatus(dirs)
 	if err != nil {
 		return err
@@ -151,6 +160,9 @@ func runFixtures(cmd *cobra.Command, args []string) (runError error) {
 	tree, runErr := runner.Run()
 	runErr = errors.Join(runErr, reporter.Stop())
 	if tree != nil {
+		if err := saveFixtureRun(finishedRun{Opts: runOpts, Started: started, Err: runErr}, runner, tree); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
 		if runner.BenchmarkReport() != nil && strings.EqualFold(runnerOpts.Format, "json") {
 			data, err := os.ReadFile(runner.BenchmarkReport().Path)
 			if err != nil {

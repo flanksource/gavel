@@ -167,7 +167,8 @@ type RunOptions struct {
 	FixturePrompter          fixtures.Prompter                `json:"-" yaml:"-"`                                                                                                                                   // Answers the fixtures' form steps (the --ui server's prompts); overrides the fixture runner's own.
 	FixtureRunID             string                           `json:"-" yaml:"-"`                                                                                                                                   // The prompt owner FixturePrompter files the fixtures' forms under.
 	FixtureParams            map[string]any                   `json:"-" yaml:"-"`                                                                                                                                   // Pre-supplied values for the fixtures' params: forms (a UI run request's params); overrides the fixture runner's own.
-	FixtureResume            *fixtures.Resume                 `json:"-" yaml:"-"`                                                                                                                                   // Restarts the fixture run at a step, reusing the earlier steps' results (a UI "retry from here" rerun).
+	FixtureResume            *fixtures.Resume                 `json:"-" yaml:"-"`                                                                                                                                   // Restarts the fixture run at a step, reusing the earlier steps' results (--from-step, a UI "retry from here" rerun).
+	FixtureCommand           *fixtures.RerunBase              `json:"-" yaml:"-"`                                                                                                                                   // The command a copied rerun of the run's fixtures starts with.
 	Frameworks               []string                         `json:"frameworks,omitempty" yaml:"framework,omitempty" flag:"framework" help:"Select one or more frameworks (go, ginkgo, jest, vitest, playwright)"` // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
 	Baseline                 string                           `json:"baseline,omitempty" yaml:"baseline,omitempty" flag:"baseline" help:"Compare against a saved results snapshot and report new failures"`         // Path to previous results JSON; only report NEW failures not in baseline
 	Failed                   string                           `json:"failed,omitempty" yaml:"failed,omitempty" flag:"failed"`                                                                                       // Path to previous results JSON; re-run only failed tests
@@ -1774,15 +1775,10 @@ func (t *TestOrchestrator) runFixtureRunner(runnerOpts fixtures.RunnerOptions, c
 	if result == nil {
 		return nil, err
 	}
-	snapshot := runner.ExecutionSnapshot()
-	tests, projectErr := executionSnapshotToTests(snapshot)
+	tests, projectErr := FixtureRunTests(runner, result, runnerOpts.WorkDir)
 	if projectErr != nil {
-		return nil, errors.Join(err, projectErr)
+		return tests, errors.Join(err, projectErr)
 	}
-	if mergeErr := mergeFixtureResultDetails(tests, result, runnerOpts.WorkDir, liveResultKeys(snapshot)); mergeErr != nil {
-		return tests, errors.Join(err, mergeErr)
-	}
-	mergeFixtureMeasurements(tests, runner.BenchmarkReport())
 	if streamer != nil {
 		streamer.UpdateFixtures(tests)
 	}

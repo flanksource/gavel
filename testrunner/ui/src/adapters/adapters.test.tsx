@@ -16,7 +16,9 @@ const idleActions: NodeActionsConfig = {
   onTestEdit: async () => {},
   testEditBusy: false,
   onRetryFromStep: () => {},
+  onCopyRerunCommand: () => {},
   rerunBusy: false,
+  runInProgress: false,
 };
 
 interface HarnessOptions {
@@ -176,6 +178,28 @@ describe('retry from here', () => {
 
     const button = screen.getByRole('button', { name: /Retry from here/ }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
+  });
+
+  const openMenu = () => fireEvent.click(screen.getByRole('button', { name: /More ways to rerun/ }));
+
+  it('copies the rerun command of the step from its menu, even while another rerun is running', () => {
+    const onCopyRerunCommand = vi.fn();
+    renderNode(stepNode, { actions: { onCopyRerunCommand, rerunBusy: true } });
+    openMenu();
+
+    fireEvent.click(screen.getByText('Copy rerun command'));
+
+    expect(onCopyRerunCommand).toHaveBeenCalledWith(stepNode, 'stageApproval');
+  });
+
+  it('offers no command while the run is in progress', () => {
+    const onCopyRerunCommand = vi.fn();
+    renderNode(stepNode, { actions: { onCopyRerunCommand, runInProgress: true } });
+    openMenu();
+
+    fireEvent.click(screen.getByText('Copy rerun command'));
+
+    expect(onCopyRerunCommand).not.toHaveBeenCalled();
   });
 });
 

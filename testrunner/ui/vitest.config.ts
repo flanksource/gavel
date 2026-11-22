@@ -30,7 +30,7 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     server: {
       deps: {
-        inline: [/@flanksource\/clicky-ui/, /@floating-ui\/react/, /@tanstack\/react-virtual/, /@radix-ui\//],
+        inline: [/@flanksource\/clicky-ui/, /@floating-ui\/react/, /@tanstack\/react-virtual/, /@radix-ui\//, /country-flag-icons/],
       },
     },
   },
