@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/processruntime"
 )
 
 // The kinds this package owns: every markdown fence/row lowers to one of them,
@@ -90,7 +91,13 @@ func (execKind) run(ctx context.Context, step *fixtures.StepContext) (fixtures.F
 			return fixtures.FixtureResult{}, fmt.Errorf("exec step %q: %w", step.Spec.ID, err)
 		}
 	}
-	return (&ExecFixture{Stdout: step.Stdout(), Stderr: step.Stderr()}).Run(ctx, test, step.Opts), nil
+	opts := step.Opts
+	if test.DeclaredTimeout() != nil {
+		// runKind enforces the declared timeout on ctx; the configured one
+		// (test.testTimeout) only limits a command that declares none.
+		opts.ProcessRuntime = opts.ProcessRuntime.Merge(processruntime.Options{Timeout: new("")})
+	}
+	return (&ExecFixture{Stdout: step.Stdout(), Stderr: step.Stderr()}).Run(ctx, test, opts), nil
 }
 
 // execStepConfig is a YAML/JSON exec step. `script` runs under bash -c (or

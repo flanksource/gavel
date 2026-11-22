@@ -509,7 +509,7 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 // runKind, which reports it as a timeout; the task deadline only backstops it,
 // so it fires after the declared one.
 func fixtureTimeout(fixture FixtureTest, grace time.Duration) time.Duration {
-	if timeout := fixture.declaredTimeout(); timeout != nil {
+	if timeout := fixture.DeclaredTimeout(); timeout != nil {
 		return *timeout + grace
 	}
 	if fixture.Step != nil {
