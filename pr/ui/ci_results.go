@@ -1,5 +1,5 @@
-// Accepts test and lint results that GitHub Actions jobs upload with their OIDC token, and stores
-// them for every organization the repository is linked to.
+// Accepts test and lint results that GitHub Actions, GitLab CI and Azure Pipelines jobs upload with
+// their own credentials, and stores them for every organization the repository is linked to.
 package ui
 
 import (
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/api"
 	"github.com/flanksource/gavel/blob"
@@ -28,12 +29,16 @@ import (
 const maxCIResultsBytes = 50 << 20
 
 // CIResults serves POST /api/ci/results, and PUT /api/ci/results/{run} that replaces a run a
-// job streams while it is in progress, authenticated by a GitHub Actions OIDC token whose
-// repository is linked to an organization.
+// job streams while it is in progress, authenticated by the job's own credential: a GitHub Actions
+// OIDC token, a GitLab CI ID token, or an Azure Pipelines job's access token for its build.
 type CIResults struct {
-	DB    *gorm.DB
-	OIDC  api.GitHubOIDCVerifier
-	Cache *cache.Store
+	DB   *gorm.DB
+	OIDC api.GitHubOIDCVerifier
+	// GitLab verifies ID tokens from gitlab.com and the GitLabs organizations sync repositories from.
+	GitLab api.GitLabOIDCVerifier
+	// ClientOptions configures the Azure DevOps client an Azure job's build is read with.
+	ClientOptions git.ClientOptions
+	Cache         *cache.Store
 }
 
 // Handler routes the CI results endpoint.
@@ -55,27 +60,20 @@ func (c *CIResults) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || raw == "" {
-		writeCIError(w, http.StatusUnauthorized, "send the job's GitHub Actions OIDC token as Authorization: Bearer")
+		writeCIError(w, http.StatusUnauthorized, "send the job's GitHub Actions OIDC token, GitLab CI ID token or Azure Pipelines System.AccessToken as Authorization: Bearer")
 		return
 	}
-	claims, err := c.OIDC.Verify(r.Context(), raw)
+	job, err := c.identify(r, raw)
+	var refused ciRefusal
+	if errors.As(err, &refused) {
+		writeCIError(w, refused.status, refused.message)
+		return
+	}
 	if err != nil {
-		writeCIError(w, http.StatusUnauthorized, err.Error())
+		writeCIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Every organization holding the repository gets its results.
-	var holders []resultsRepo
-	if err := c.DB.WithContext(r.Context()).Raw(`SELECT id, org_id FROM repos WHERE github_repo_id = ? ORDER BY created_at, id`, claims.RepositoryID).
-		Scan(&holders).Error; err != nil {
-		logger.Warnf("look up repository %d for CI results: %v", claims.RepositoryID, err)
-		writeCIError(w, http.StatusInternalServerError, "could not look up the repository")
-		return
-	}
-	if len(holders) == 0 {
-		writeCIError(w, http.StatusForbidden, fmt.Sprintf("%s (%d) is not linked to a gavel organization; install the gavel GitHub App on it", claims.Repository, claims.RepositoryID))
-		return
-	}
-	storeResults(w, r, c.Cache, holders, claims.SHA, claims.Repository, runID)
+	storeResults(w, r, c.Cache, job.holders, job.sha, job.what, runID)
 }
 
 // resultsRepo is a repository a run's results are stored in: its ID and its organization's.

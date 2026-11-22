@@ -5,6 +5,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -29,22 +30,37 @@ import (
 
 const ciAudience = "https://gavel.example"
 
-func TestCIResults(t *testing.T) {
+// openCIResults is a migrated database, whose connection catalog has a key, and the cache CI
+// results are stored in.
+func openCIResults(t *testing.T) (*gorm.DB, *ghcache.Store) {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
 	t.Setenv(database.EnvDSN, commonsdbtest.ForT(t, commonsdbtest.Options{Name: "gavel_ci_results"}).DSN())
 	t.Setenv(database.EnvDisable, "")
 	opened, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, opened.Close()) })
-	db := opened.Gorm()
 	cache, err := ghcache.Open()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cache.Close()) })
+	return opened.Gorm(), cache
+}
 
+// ciOrg is a new organization's ID.
+func ciOrg(t *testing.T, db *gorm.DB, name string) uuid.UUID {
+	t.Helper()
 	org := uuid.New()
-	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Acme')`, org, org.String()).Error)
+	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, ?)`, org, org.String(), name).Error)
+	return org
+}
+
+func TestCIResults(t *testing.T) {
+	db, cache := openCIResults(t)
+	org := ciOrg(t, db, "Acme")
 	var repo struct{ ID uuid.UUID }
 	require.NoError(t, db.Raw(`INSERT INTO repos (org_id, name, source, github_repo_id) VALUES (?, 'acme/app', 'github', 123456) RETURNING id`, org).Scan(&repo).Error)
 	repoID := repo.ID

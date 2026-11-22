@@ -21,6 +21,7 @@ import (
 
 	"github.com/flanksource/commons-db/git"
 	commonssecret "github.com/flanksource/commons-db/secret"
+	commonshttp "github.com/flanksource/commons/http"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/api"
@@ -265,11 +266,19 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		stopShell()
 		orgWork.Wait()
 	}
-	// CI jobs authenticate with their GitHub Actions OIDC token, not a Clerk session.
+	// CI jobs authenticate with their own credential, not a Clerk session: a GitHub Actions OIDC
+	// token, a GitLab CI ID token, or an Azure Pipelines job's access token. GitLab keys come only
+	// from public addresses.
+	gitlabKeys := api.NewJWKSCaches(&http.Client{Timeout: 10 * time.Second,
+		Transport: commonshttp.Defensive(commonshttp.DefensiveOptions{Public: true})(http.DefaultTransport)}, 10*time.Minute)
 	ciResults := &ui.CIResults{
-		DB:    db,
-		OIDC:  api.GitHubOIDCVerifier{Audience: opts.PublicURL, JWKS: api.NewJWKSCache(api.GitHubOIDCJWKSURL, &http.Client{Timeout: 10 * time.Second}, 10*time.Minute)},
-		Cache: cache,
+		DB:   db,
+		OIDC: api.GitHubOIDCVerifier{Audience: opts.PublicURL, JWKS: api.NewJWKSCache(api.GitHubOIDCJWKSURL, &http.Client{Timeout: 10 * time.Second}, 10*time.Minute)},
+		GitLab: api.GitLabOIDCVerifier{Audience: opts.PublicURL, JWKS: func(issuer string) *api.JWKSCache {
+			return gitlabKeys.For(strings.TrimRight(issuer, "/") + api.GitLabJWKSPath)
+		}},
+		ClientOptions: git.ClientOptions{Defensive: true},
+		Cache:         cache,
 	}
 	root := http.NewServeMux()
 	root.Handle("/api/ci/", ciResults.Handler())
