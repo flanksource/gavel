@@ -120,6 +120,9 @@ type Runner struct {
 	// or failed outright: their verdict is final, and a run function that
 	// returns late must not overwrite it.
 	cutOff map[*FixtureNode]bool
+	// ginkgoContext is what RegisterGinkgoSpecs' setup and specs run under, one
+	// per Ginkgo run (setupGinkgoRun).
+	ginkgoContext context.Context
 }
 
 // NewRunner creates a new fixture runner
@@ -395,6 +398,7 @@ func (r *Runner) executeFixtures() (results *FixtureGroup, runErr error) {
 	if parent == nil {
 		parent = context.Background()
 	}
+	parent = withRunSecrets(parent)
 	ctx := flanksourceContext.NewContext(parent)
 	if r.hasSetup() {
 		defer func() {

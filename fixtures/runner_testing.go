@@ -166,8 +166,7 @@ func registerGinkgoNode(r *Runner, node *FixtureNode, file *fileScope) {
 }
 
 func (r *Runner) runSingleFixture(fixture FixtureTest, env fixtureEnv) (FixtureResult, error) {
-	ctx := flanksourceContext.NewContext(context.Background())
-	return r.executeFixture(ctx, fixture, env)
+	return r.executeFixture(flanksourceContext.NewContext(r.ginkgoContext), fixture, env)
 }
 
 func (r *Runner) setupGinkgoRun() error {
@@ -175,7 +174,8 @@ func (r *Runner) setupGinkgoRun() error {
 		r.options.WorkDir, _ = os.Getwd()
 	}
 
-	ctx := flanksourceContext.NewContext(context.Background())
+	r.ginkgoContext = withRunSecrets(context.Background())
+	ctx := flanksourceContext.NewContext(r.ginkgoContext)
 	// Same ordering as executeFixtures: setup before build, so a build that a
 	// setup relocated does not build the tree the tests aren't running in.
 	if err := r.setups.prepare(ctx, r.tree.Children); err != nil {

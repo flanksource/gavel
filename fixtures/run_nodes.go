@@ -8,7 +8,16 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/task"
+	dbcontext "github.com/flanksource/commons-db/context"
+	flanksourceContext "github.com/flanksource/commons/context"
 )
+
+// withRunSecrets is ctx keeping every secret resolved under it until the run
+// ends, so a connection its setups and steps share is authorized once. ctx's
+// own logger is kept: NewContext would set the standard one over it.
+func withRunSecrets(ctx context.Context) context.Context {
+	return dbcontext.NewContext(ctx, flanksourceContext.WithLogger(flanksourceContext.LoggerFromContext(ctx))).WithSecretTTL(0)
+}
 
 // RunNodes executes every test node in a fixture tree and returns one result per
 // test, in tree order, plus the execution snapshot the run ended on.
@@ -38,6 +47,7 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	if opts.ProcessRuntime.Isolated() {
 		return runNodesIsolated(ctx, nodes, opts)
 	}
+	ctx = withRunSecrets(ctx)
 	if opts.Context == nil {
 		opts.Context = ctx
 	}
@@ -122,6 +132,7 @@ func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, rep
 // that is torn down before RunNode returns, folding a background verdict into
 // the result's children and a teardown failure into its error.
 func RunNode(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResult {
+	ctx = withRunSecrets(ctx)
 	var result FixtureResult
 	if opts.Scope == nil {
 		opts.Scope = NewStepScope(scopeSeed(opts.Setup, test.FrontMatter, nil))
