@@ -6,14 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"strings"
 
 	"github.com/flanksource/commons-db/git"
-	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/gitlab"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/pr/ui"
 )
@@ -30,48 +26,17 @@ type connectionRepo struct {
 // GitLab one is on gitlab.com, or on a host whose gitlab connection owns it.
 func splitConnectionRepos(ctx context.Context, repos []string) (githubRepos []string, connectionRepos []connectionRepo, err error) {
 	for _, repo := range repos {
-		provider, err := connectionRepoProvider(ctx, repo)
+		kind, err := provider.ConnectionKind(ctx, repo)
 		if err != nil {
 			return nil, nil, err
 		}
-		if provider == "" {
+		if kind == "" {
 			githubRepos = append(githubRepos, repo)
 			continue
 		}
-		connectionRepos = append(connectionRepos, connectionRepo{URL: repo, Provider: provider})
+		connectionRepos = append(connectionRepos, connectionRepo{URL: repo, Provider: kind})
 	}
 	return githubRepos, connectionRepos, nil
-}
-
-// connectionRepoProvider is the connection type of the repository at repo when a git connection
-// lists its pull requests, or "" for a GitHub one.
-func connectionRepoProvider(ctx context.Context, repo string) (string, error) {
-	parsed, err := url.Parse(repo)
-	if err != nil || parsed.Scheme == "" {
-		return "", nil
-	}
-	if strings.Contains(parsed.Path, "/_git/") {
-		return models.ConnectionTypeAzureDevops, nil
-	}
-	host := strings.ToLower(parsed.Hostname())
-	if host == "github.com" {
-		return "", nil
-	}
-	if host == "gitlab.com" {
-		return models.ConnectionTypeGitlab, nil
-	}
-	target, err := git.ParseRepoURL(repo, models.ConnectionTypeGitlab)
-	if err != nil {
-		return "", nil
-	}
-	owner, err := forge.OwningConnection(ctx, gitlab.FindConnection, target, "repository "+repo)
-	if err != nil {
-		return "", err
-	}
-	if owner != nil && owner.Type == models.ConnectionTypeGitlab {
-		return models.ConnectionTypeGitlab, nil
-	}
-	return "", nil
 }
 
 // searchConfiguredPRs searches GitHub with so, then lists the pull requests of connectionRepos. A

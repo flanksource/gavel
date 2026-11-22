@@ -1,3 +1,5 @@
+// Tests a push to an Azure DevOps or GitLab origin: auto-merge is refused before staged files or
+// HEAD change.
 package commit
 
 import (
@@ -9,18 +11,19 @@ import (
 	"path/filepath"
 )
 
-var _ = Describe("Azure commit push validation", func() {
-	It("rejects auto-merge before changing staged files or HEAD", func() {
+var _ = Describe("Git connection commit push validation", func() {
+	DescribeTable("rejects auto-merge before changing staged files or HEAD", func(origin, provider string) {
+		GinkgoT().Setenv("GITLAB_TOKEN", "glpat-env")
 		repo := GinkgoT().TempDir()
 		runGit(repo, "init", "-b", "feature")
 		runGit(repo, "commit", "--allow-empty", "-m", "root")
-		runGit(repo, "remote", "add", "origin", "https://dev.azure.com/acme/product/_git/service")
+		runGit(repo, "remote", "add", "origin", origin)
 		Expect(os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("feature"), 0600)).To(Succeed())
 		runGit(repo, "add", "feature.txt")
 		before, err := exec.Command("git", "-C", repo, "status", "--porcelain=v1").Output()
 		Expect(err).NotTo(HaveOccurred())
 		_, err = Run(context.Background(), Options{WorkDir: repo, Push: true, AutoMerge: true, Stage: StageStaged, Message: "feat: feature"})
-		Expect(err).To(MatchError(ContainSubstring("--auto-merge is not supported")))
+		Expect(err).To(MatchError(ContainSubstring("--auto-merge is not supported for " + provider)))
 		Expect(os.ReadFile(filepath.Join(repo, "feature.txt"))).To(Equal([]byte("feature")))
 		after, err := exec.Command("git", "-C", repo, "status", "--porcelain=v1").Output()
 		Expect(err).NotTo(HaveOccurred())
@@ -28,5 +31,6 @@ var _ = Describe("Azure commit push validation", func() {
 		head, err := exec.Command("git", "-C", repo, "log", "-1", "--format=%s").Output()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(head)).To(Equal("root\n"))
-	})
+	}, Entry("Azure DevOps", "https://dev.azure.com/acme/product/_git/service", "Azure DevOps"),
+		Entry("GitLab", "git@gitlab.com:acme/service.git", "GitLab"))
 })

@@ -46,6 +46,8 @@ var _ = Describe("PR reference parsing", func() {
 			statusTarget{Repo: "acme/widgets", PR: 12}),
 		Entry("repo and number", []string{"acme/widgets", "12"},
 			statusTarget{Repo: "acme/widgets", PR: 12}),
+		Entry("GitLab merge request URL", []string{"https://gitlab.com/acme/platform/api/-/merge_requests/12/diffs"},
+			statusTarget{Repo: "https://gitlab.com/acme/platform/api", PR: 12}),
 		Entry("no arguments", []string{}, statusTarget{}),
 	)
 

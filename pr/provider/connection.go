@@ -45,6 +45,12 @@ type connectionClient struct {
 
 func (c connectionClient) Kind() string { return kinds[c.remote.URL.Provider] }
 
+// names spells each PR client kind as messages name its provider.
+var names = map[string]string{"azuredevops": "Azure DevOps", "github": "GitHub", "gitlab": "GitLab"}
+
+// Name is the provider client's PRs come from, as messages spell it: GitHub, Azure DevOps or GitLab.
+func Name(client Client) string { return names[client.Kind()] }
+
 func (c connectionClient) Preflight(ctx context.Context) error { return c.remote.Provider.Verify(ctx) }
 
 // DefaultBranch is the default branch the client was given, else the one its provider names.

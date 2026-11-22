@@ -17,4 +17,9 @@ var _ = Describe("Azure PR status targets", func() {
 		_, err := runPRStatus(PRStatusOptions{Args: []string{"https://dev.azure.com/acme/product/_git/service/pullrequest/27"}, AIFix: true})
 		Expect(err).To(MatchError(ContainSubstring("--ai-fix is not supported")))
 	})
+	It("routes a GitLab merge request through its connection, refusing GitHub-only flags", func() {
+		GinkgoT().Setenv("GITLAB_TOKEN", "glpat-env")
+		_, err := runPRStatus(PRStatusOptions{Args: []string{"https://gitlab.com/acme/platform/api/-/merge_requests/12"}, AIFix: true})
+		Expect(err).To(MatchError("--ai-fix is not supported in GitLab"))
+	})
 })

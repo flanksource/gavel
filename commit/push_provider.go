@@ -1,3 +1,5 @@
+// The PR client a push from a checkout whose origin a git connection reaches opens or finds its PR
+// with: Azure DevOps or GitLab, which refuse auto-merge; a GitHub origin keeps the default deps.
 package commit
 
 import (
@@ -13,11 +15,11 @@ func validatePushProvider(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	if client.Kind() != "azuredevops" {
+	if client.Kind() == "github" {
 		return nil
 	}
 	if opts.AutoMerge {
-		return fmt.Errorf("--auto-merge is not supported for Azure DevOps")
+		return fmt.Errorf("--auto-merge is not supported for %s", provider.Name(client))
 	}
 	return client.Preflight(ctx)
 }
@@ -31,11 +33,11 @@ func providerPushDeps(ctx context.Context, opts Options) (pushDeps, error) {
 	if err != nil {
 		return deps, err
 	}
-	if client.Kind() != "azuredevops" {
+	if client.Kind() == "github" {
 		return deps, nil
 	}
 	if opts.AutoMerge {
-		return deps, fmt.Errorf("--auto-merge is not supported for Azure DevOps")
+		return deps, fmt.Errorf("--auto-merge is not supported for %s", provider.Name(client))
 	}
 	if err := client.Preflight(ctx); err != nil {
 		return deps, err

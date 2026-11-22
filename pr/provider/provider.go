@@ -1,3 +1,5 @@
+// Resolves the PR client of a repository reference or checkout: a sandbox job's, a git connection's
+// for Azure DevOps and GitLab, else GitHub's; and checks a PR can be opened through it.
 package provider
 
 import (
@@ -6,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/model"
@@ -48,16 +50,23 @@ func Resolve(opts Options) (Client, error) {
 		}
 		repo = remote
 	}
-	if IsAzure(repo) {
-		ctx := opts.Context
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		remote, err := LocalRemote(ctx, models.ConnectionTypeAzureDevops, repo)
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	kind, err := ConnectionKind(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	if kind != "" {
+		remote, err := LocalRemote(ctx, kind, repo)
 		if err != nil {
 			return nil, err
 		}
 		return NewConnectionClient(remote, ""), nil
+	}
+	if host, _, ok := repoLocation(repo); ok && !strings.EqualFold(host, "github.com") {
+		return nil, fmt.Errorf("repository %s is on %s, which is neither github.com, gitlab.com, Azure DevOps nor a host a gitlab connection names", git.Redact(repo), host)
 	}
 	repo = strings.TrimPrefix(repo, "git@github.com:")
 	repo = strings.TrimSuffix(repo, ".git")
@@ -98,16 +107,16 @@ func PreflightCreate(ctx context.Context, opts Options) error {
 		if err != nil {
 			return err
 		}
-		originClient, err := Resolve(Options{Repo: origin, WorkDir: opts.WorkDir, Token: opts.Token})
+		originClient, err := Resolve(Options{Repo: origin, WorkDir: opts.WorkDir, Token: opts.Token, Context: ctx})
 		if err != nil {
 			return err
 		}
 		if client.Kind() != originClient.Kind() {
 			return fmt.Errorf("PR repository does not match origin; pushes target origin")
 		}
-		if client.Kind() == "azuredevops" {
-			if !client.(connectionClient).remote.URL.SameRepository(originClient.(connectionClient).remote.URL) {
-				return fmt.Errorf("azure PR repository does not match origin; pushes target origin")
+		if connection, ok := client.(connectionClient); ok {
+			if !connection.remote.URL.SameRepository(originClient.(connectionClient).remote.URL) {
+				return fmt.Errorf("%s PR repository does not match origin; pushes target origin", Name(client))
 			}
 		} else if client.(gitHubClient).opts.Repo != originClient.(gitHubClient).opts.Repo {
 			return fmt.Errorf("GitHub PR repository does not match origin; pushes target origin")

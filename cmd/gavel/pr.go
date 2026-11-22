@@ -1,3 +1,5 @@
+// The gavel pr command group, and pr status: a PR's checks and pipeline jobs from GitHub, Azure DevOps
+// or GitLab, for a PR, an Actions run or job, or the current branch's PR.
 package main
 
 import (
@@ -10,9 +12,11 @@ import (
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/commons-db/models"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/azuredevops"
+	"github.com/flanksource/gavel/forge"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/prwatch"
@@ -29,7 +33,7 @@ conclusions, timing, and failing-step logs in one view, and can feed failures
 into the AI. Reserve raw gh for actions gavel does not cover.
 
 Subcommands:
-  status   Show PR checks and pipeline jobs for GitHub or Azure DevOps
+  status   Show PR checks and pipeline jobs for GitHub, Azure DevOps or GitLab
   create   Cherry-pick a commit into a fresh worktree and open a PR (AI title/body/branch)
   list     List PRs, optionally with CI status or a live browser dashboard (--ui)
   close    Close a PR without merging it (replaces gh pr close)
@@ -188,11 +192,11 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if client.Kind() == "azuredevops" {
+	if client.Kind() != "github" {
 		if opts.Rules {
 			return nil, fmt.Errorf("--rules is only supported for GitHub PRs")
 		}
-		return runClientPRStatus(opts, target, client, workDir, "Azure DevOps")
+		return runClientPRStatus(opts, target, client, workDir, provider.Name(client))
 	}
 	if provider.InJob() {
 		if opts.Rules {
@@ -306,6 +310,11 @@ func parseStatusTarget(args []string) (statusTarget, error) {
 	if len(args) == 1 && provider.IsAzure(args[0]) {
 		repo, number, err := azuredevops.ParsePRURL(args[0])
 		return statusTarget{Repo: repo.URL(), PR: number}, err
+	}
+	if len(args) == 1 {
+		if pr, err := forge.ParsePullRequestURL(args[0]); err == nil && pr.Provider == models.ConnectionTypeGitlab {
+			return statusTarget{Repo: pr.Repo, PR: pr.Number}, nil
+		}
 	}
 	if len(args) == 1 && strings.Contains(args[0], "/actions/runs/") {
 		repo, runID, jobID, err := github.ParseRunURL(args[0])
