@@ -1,6 +1,6 @@
 // Streams a `gavel test` run's in-flight results and diagnostics to a hosted gavel while the
-// run is in progress, so a GitHub Actions job killed before the action's upload step still
-// leaves its latest state on the server.
+// run is in progress, so a CI job killed before its upload step still leaves its latest state on
+// the server.
 package main
 
 import (
@@ -44,7 +44,7 @@ type ciStream struct {
 	// runID, token and tokenExpiry are only touched by the upload loop and Stop's final flush,
 	// which runs after the loop ended.
 	runID       string
-	token       string
+	credential  ciCredential
 	tokenExpiry time.Time
 	failed      bool
 
@@ -52,15 +52,15 @@ type ciStream struct {
 	done chan struct{}
 }
 
-// startCIStream starts streaming when GAVEL_CI_SERVER is set in a GitHub Actions job that
-// can request an OIDC token; otherwise it returns nil, whose methods do nothing.
+// startCIStream starts streaming when GAVEL_CI_SERVER is set in a GitHub Actions, GitLab CI or
+// Azure Pipelines job that has its credential; otherwise it returns nil, whose methods do nothing.
 func startCIStream(getenv func(string) string) *ciStream {
 	server := strings.TrimRight(getenv(ciStreamServerEnv), "/")
 	if server == "" {
 		return nil
 	}
-	if getenv("ACTIONS_ID_TOKEN_REQUEST_URL") == "" {
-		logger.Warnf("%s is set but the job can't request an OIDC token (it needs permissions: id-token: write); not streaming results", ciStreamServerEnv)
+	if err := ciCredentialMissing(getenv, server); err != nil {
+		logger.Warnf("%s is set, but the job can't stream results: %v", ciStreamServerEnv, err)
 		return nil
 	}
 	s := &ciStream{
@@ -167,13 +167,13 @@ func (s *ciStream) upload(ctx context.Context, snap testui.Snapshot) error {
 	if err != nil {
 		return fmt.Errorf("encode the snapshot: %w", err)
 	}
-	if s.token == "" || time.Until(s.tokenExpiry) < time.Minute {
-		if s.token, err = requestActionsOIDCToken(ctx, s.client, s.getenv, s.server); err != nil {
+	if s.credential.token == "" || time.Until(s.tokenExpiry) < time.Minute {
+		if s.credential, err = requestCICredential(ctx, s.client, s.getenv, s.server); err != nil {
 			return err
 		}
-		s.tokenExpiry = oidcTokenExpiry(s.token)
+		s.tokenExpiry = s.credential.expiry()
 	}
-	runID, err := sendCIResults(ctx, s.client, s.server, s.token, s.runID, data)
+	runID, err := sendCIResults(ctx, s.client, s.server, s.credential, s.runID, data)
 	if err != nil {
 		return err
 	}

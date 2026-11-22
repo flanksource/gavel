@@ -1,5 +1,5 @@
-// `gavel ci upload`: sends a results file from a GitHub Actions job to a hosted gavel,
-// authenticated by the job's OIDC token for that server.
+// `gavel ci upload`: sends a results file from a GitHub Actions, GitLab CI or Azure Pipelines job to
+// a hosted gavel, authenticated by the job's own credential for that server.
 package main
 
 import (
@@ -23,10 +23,13 @@ func init() {
 	var server, file, run string
 	upload := &cobra.Command{
 		Use:   "upload",
-		Short: "Upload a gavel results file from GitHub Actions to a hosted gavel",
-		Long: "Upload a gavel results file (gavel test --json-file) from a GitHub Actions job. The job " +
-			"authenticates with its OIDC token, so the workflow needs permissions: id-token: write, and the " +
-			"repository must be linked to a gavel organization through the gavel GitHub App.",
+		Short: "Upload a gavel results file from GitHub Actions, GitLab CI or Azure Pipelines to a hosted gavel",
+		Long: "Upload a gavel results file (gavel test --json-file) from a CI job, authenticated by the job's own " +
+			"credential. GitHub Actions: its OIDC token, so the workflow needs permissions: id-token: write, and the " +
+			"repository must be linked through the gavel GitHub App. GitLab CI: the ID token the job declares as " +
+			"id_tokens: GAVEL_ID_TOKEN: aud: <server>, for a project a gitlab connection syncs. Azure Pipelines: " +
+			"the job's access token, mapped as SYSTEM_ACCESSTOKEN: $(System.AccessToken), for a build of a " +
+			"repository an azure_devops connection syncs.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if server == "" || file == "" {
@@ -35,7 +38,7 @@ func init() {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
 			defer cancel()
 			client := &http.Client{Timeout: time.Minute}
-			token, err := requestActionsOIDCToken(ctx, client, os.Getenv, strings.TrimRight(server, "/"))
+			credential, err := requestCICredential(ctx, client, os.Getenv, strings.TrimRight(server, "/"))
 			if err != nil {
 				return err
 			}
@@ -43,7 +46,7 @@ func init() {
 			if err != nil {
 				return fmt.Errorf("read the results: %w", err)
 			}
-			runID, err := sendCIResults(ctx, client, server, token, run, data)
+			runID, err := sendCIResults(ctx, client, server, credential, run, data)
 			if err != nil {
 				return err
 			}
@@ -51,7 +54,7 @@ func init() {
 			return nil
 		},
 	}
-	upload.Flags().StringVar(&server, "server", "", "The hosted gavel's URL, which is also the OIDC token's audience")
+	upload.Flags().StringVar(&server, "server", "", "The hosted gavel's URL, which is also the GitHub or GitLab token's audience")
 	upload.Flags().StringVar(&file, "file", "", "The results JSON to upload")
 	upload.Flags().StringVar(&run, "run", "", "Replace this run, the one gavel test streamed to the server while it ran, instead of adding a new run")
 	ciCmd.AddCommand(upload)
@@ -74,7 +77,7 @@ func oidcTokenRequestURL(requestURL, audience string) (string, error) {
 func requestActionsOIDCToken(ctx context.Context, client *http.Client, getenv func(string) string, audience string) (string, error) {
 	requestURL, requestToken := getenv("ACTIONS_ID_TOKEN_REQUEST_URL"), getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 	if requestURL == "" || requestToken == "" {
-		return "", errors.New("ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN are not set: run in GitHub Actions with permissions: id-token: write")
+		return "", errActionsTokenMissing
 	}
 	target, err := oidcTokenRequestURL(requestURL, audience)
 	if err != nil {
@@ -102,9 +105,9 @@ func requestActionsOIDCToken(ctx context.Context, client *http.Client, getenv fu
 	return body.Value, nil
 }
 
-// sendCIResults posts data, a results snapshot, to server with token and returns the stored
+// sendCIResults posts data, a results snapshot, to server with credential and returns the stored
 // run's ID. With runID it replaces that run instead.
-func sendCIResults(ctx context.Context, client *http.Client, server, token, runID string, data []byte) (string, error) {
+func sendCIResults(ctx context.Context, client *http.Client, server string, credential ciCredential, runID string, data []byte) (string, error) {
 	method, target, want := http.MethodPost, strings.TrimRight(server, "/")+"/api/ci/results", http.StatusCreated
 	if runID != "" {
 		method, target, want = http.MethodPut, target+"/"+url.PathEscape(runID), http.StatusOK
@@ -113,7 +116,10 @@ func sendCIResults(ctx context.Context, client *http.Client, server, token, runI
 	if err != nil {
 		return "", fmt.Errorf("upload the results: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+credential.token)
+	for key, value := range credential.headers {
+		req.Header.Set(key, value)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {

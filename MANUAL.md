@@ -610,6 +610,33 @@ gavel ui serve run.json --url-file /tmp/gavel-ui-url
 
 This is the command to reach for when someone hands you `gavel-results.json` and you want the full UI instead of reading the raw artifact.
 
+### `gavel ci upload`
+
+`ci upload` sends a results file (`gavel test --json-file`) from a CI job to a hosted gavel. Setting `GAVEL_CI_SERVER` to the same URL makes `gavel test` stream its in-flight results there while it runs. The job authenticates with its own credential, never a stored secret:
+
+- **GitHub Actions**: the job's OIDC token. The workflow needs `permissions: id-token: write`, and the repository must be linked through the gavel GitHub App.
+- **GitLab CI**: an ID token the job declares for gavel. The project must be one a `gitlab` connection syncs; gitlab.com is trusted, and a self-managed GitLab is trusted once a connection syncs repositories from it.
+
+  ```yaml
+  test:
+    id_tokens:
+      GAVEL_ID_TOKEN:
+        aud: https://gavel.example.com
+    script:
+      - gavel test --json-file results.json
+      - gavel ci upload --server https://gavel.example.com --file results.json
+  ```
+
+- **Azure Pipelines**: the job's access token, mapped into the step. The server reads the running build with that token and accepts it only for a repository an `azure_devops` connection syncs.
+
+  ```yaml
+  - script: |
+      gavel test --json-file results.json
+      gavel ci upload --server https://gavel.example.com --file results.json
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+  ```
+
 ## Review, Authoring, And TODO Automation
 
 This part of the CLI is about turning diffs and failure reports into actionable next steps: review findings, generated commit messages, and TODO execution loops.
@@ -866,7 +893,7 @@ These commands help when the unit of work is no longer "run tests" but "understa
 
 ### `gavel pr status`
 
-Use `pr status` to inspect or follow GitHub Actions state for a pull request. It can resolve the current branch's PR automatically, fall back to the most recent PR, and optionally fetch failed job logs.
+Use `pr status` to inspect or follow GitHub Actions state for a pull request, or the pipelines of an Azure DevOps pull request or GitLab merge request (by its URL, or from a checkout whose origin is on Azure DevOps, gitlab.com or a GitLab a connection names). It can resolve the current branch's PR automatically, fall back to the most recent PR, and optionally fetch failed job logs.
 
 This is the fastest command for:
 
