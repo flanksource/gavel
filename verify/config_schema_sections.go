@@ -1,6 +1,8 @@
 package verify
 
 import (
+	"maps"
+
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/prompts"
@@ -68,7 +70,17 @@ func lintSchema() map[string]any {
 		},
 	)
 	linters := schema["properties"].(map[string]any)["linters"].(map[string]any)
-	linters["properties"] = map[string]any{"github": githubLinterSchema(linters["additionalProperties"].(map[string]any))}
+	base := linters["additionalProperties"].(map[string]any)
+	tsc := maps.Clone(base)
+	properties := maps.Clone(base["properties"].(map[string]any))
+	properties["engine"] = map[string]any{
+		"type":        "string",
+		"description": "Compiler for TypeScript linting. `auto` prefers tsrs when available. `typescript` uses the project's TypeScript package through Node.",
+		"enum":        []TSCEngine{TSCEngineAuto, TSCEngineTypeScript},
+		"default":     TSCEngineAuto,
+	}
+	tsc["properties"] = properties
+	linters["properties"] = map[string]any{"github": githubLinterSchema(base), "tsc": tsc}
 	return schema
 }
 

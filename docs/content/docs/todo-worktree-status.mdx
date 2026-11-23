@@ -7,6 +7,8 @@ The TODO overview shows a worktree as soon as Captain prepares it. This includes
 
 The overview shows its branch, path, commit count, and live staged, unstaged, untracked, conflict, and line-change counts. Git tracker updates refresh these counts independently of the agent's status. A failed or cancelled run retains its worktree information. After removal, the recorded path and removal status remain visible.
 
+Messaging a session whose worktree was removed recreates the worktree from its branch, at its original path, and continues there. The recreated worktree is kept when the conversation ends, so uncommitted edits survive. A session whose branch was deleted, or whose branch is checked out in another worktree, cannot continue.
+
 Inspect an attempt's recorded workspace through the session detail API, supplying its owning project directory:
 
 ```sh

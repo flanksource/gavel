@@ -5,6 +5,14 @@ description: Send comment threads to Claude and Codex sessions, and send new com
 
 Gavel stores comments made in `gavel edit`, the dashboard, `gavel launch serve` and the playground grabber. Each comment lives under a scope, such as `gavel://project/<name>` for a project, and its target URI sits beneath that scope (`.../files/<path>` for a file, `.../pages/<url>` for a web page).
 
+## Review comments in the dashboard
+
+Open **Comments** in the Gavel navbar to browse threads from visible dashboard projects. Use the project scope and inbox filters to find a thread, then expand it to reply or update its status. **Review resolved** lets you close a thread or reopen it with feedback.
+
+On a local dashboard, **Send to agent** delivers a thread to an existing session or previews a managed run before sending. Expand an agent’s patch proposal to see its diff, apply or stage it, reject it, or request a revision.
+
+Choose **Maximise** from a thread’s actions to see its screenshot, source and HTML in **Capture**, or follow the linked agent transcript in **Session**. **Send to agent** stays available at the top of the maximized thread.
+
 ## List comments for a file or directory
 
 ```bash
@@ -18,11 +26,10 @@ The path is either a positional argument or `--path`, not both. Gavel resolves i
 
 ## Send a thread to an agent
 
-Any open thread can be handed to an agent. Gavel assigns the thread to the agent, acknowledges it as the agent, and delivers it with the commands the agent uses to reply and resolve it. The hand-off is recorded on the thread as its `agentRun`: the session, when it was requested, its state (`queued`, `sent`, `done`, or `error` with the error), and where it went.
-
-There are two kinds of target:
+Any open thread can be handed to an agent. Gavel records the hand-off as the thread’s `agentRun`, including the session, request time, delivery state and any error. Captain sessions can acknowledge, reply to, and resolve Gavel comments with the tools or commands they receive.
 
 - **A live session.** The thread is delivered into a Claude or Codex session that is already running, through Captain.
+- **An Amp Orb thread.** Amp accepts the comment as a message in an existing Orb conversation. Use **Open in Amp** to follow the conversation and manage the comment’s status in Gavel.
 - **A managed run.** Gavel starts or continues a session from a prompt (for example the library's `editor-comments`) in the project's directory. Comments in the same scope share a session by default, across pages. A group key selects a separate conversation. The session gets tools that list, reply to and resolve the threads on its target.
 
 Comments arriving while a managed session is starting or working join the same conversation. Captain runs those turns in delivery order, retaining each comment's tools, permissions and outcome. A failed turn reports its error on the comment, including failures before the provider starts; it does not remain marked `queued`.
@@ -42,11 +49,21 @@ A failed delivery is recorded on the thread as an error and reported by the comm
 
 The agent receives the thread with the context it was left in, whenever the comment has it: the page URL and title, the element's component and source file, the locators that find the element again, its HTML (trimmed to 4 KB), and links to the thread's attachments such as screenshots, followed by the comment and its replies.
 
+### Send to Amp
+
+Set `AMP_API_KEY` in the environment of `gavel serve`, `gavel edit`, or the CLI you run directly. Use an Amp personal access token with `amp.api:threads:read` and `amp.api:threads:write`. Gavel lists the token owner’s available Orb threads for the project’s repositories. Select one from the editor or extension, or paste a thread ID or URL. Amp runs the message as the token owner.
+
+```sh
+gavel comments deliver <id> --session 'https://ampcode.com/threads/T-…'
+```
+
+Gavel records the Amp thread ID and accepted message ID in the hand-off. A `sent` receipt means Amp accepted the message. Amp replies and tool output stay in Amp. For `--edits propose`, the message asks the agent to produce a patch in Amp and leave the files unchanged. Attachment links require access to the Gavel host. If the hand-off is unconfirmed, check the thread in Amp before retrying.
+
 ## Send new comments to agents automatically
 
 A comment agent sends every new comment on a file to an agent, without anyone choosing **Send to agent**. Only comments written by a person are sent; replies, review decisions and comments written by agents are not. Delivery runs in the background, so creating a comment never waits for it.
 
-The Gavel extension enables **Auto-run new comments on this page** by default when you open an unconfigured page. It saves the page's agent in the project's database settings, so the choice survives closing the panel or reloading the page. Turning auto-run off saves an explicit opt-out and keeps the agent's other settings. An existing page or inherited setting with `enabled: false` stays off.
+The Gavel extension does not turn comment agents on. Instead, its popup and the panel's **Settings** menu set where a site's comments go by default: turn the site on, choose **Global session** (one session shared by every site) or **This page's agent**, pick a model, name the session, and press **Start**. The name is required; it suggests `gavel-<host>[:port]` for a page and `gavel-global` for the global session, and gavel appends six random characters. Gavel starts the session at once, before any comment exists, and the extension saves its id: in the page's `localStorage` for a page agent, or in the extension's own storage for the global session. From then on every new comment on the site goes to that session. **Change** switches to another active session, **Restart** starts a new one, and **Clear** forgets the session so comments follow the page's comment agent again.
 
 Comment agents are configured as `comments.agents` in the gavel settings of the file: the `.gavel.yaml` and `.gavel.<name>.yaml` files of your home directory, the project root and each folder down to the file, plus settings saved in the database where no file exists. A layer has a `default` agent for everything beneath its directory, and a `pages` map of agents for single files, keyed by path relative to the layer's directory:
 
@@ -66,7 +83,7 @@ Layers merge field by field, ancestors first, and within a layer its `default` t
 
 A delivery never gets in the way of the comment's author: attaching a screenshot right after creating the comment, with the version the create returned, succeeds while the agent picks the thread up.
 
-A comment can also name where it goes when it is created: `deliver` on the create request is a delivery target (see [HTTP API](#http-api)) that replaces the comment agent for that comment, including its `assign`. The thread is delivered there once, in the background, even on a file no comment agent covers, and an invalid target fails the create before anything is stored. In the Gavel extension, the composer's target chip previews the page's comment agent while no target is chosen: **Auto: &lt;agent&gt;** when new comments are delivered to it, **Not delivered** when they are only posted. Pick `@session`, `@claude` or `@codex`, or type one in the comment, to send it elsewhere.
+A comment can also name where it goes when it is created: `deliver` on the create request is a delivery target (see [HTTP API](#http-api)) that replaces the comment agent for that comment, including its `assign`. The thread is delivered there once, in the background, even on a file no comment agent covers, and an invalid target fails the create before anything is stored. In the Gavel extension, the composer's **Runs on** menu chooses where one comment goes, without changing the site's default: **Default** (the site's session, or the page's comment agent when it has none), the global session, this page's session, another active session, a new session on a chosen model, an @mention, or an Amp thread. Beside the menu, the composer previews where the comment will be delivered. Typing `@session`, `@claude` or `@codex` in the comment also sends it elsewhere.
 
 ### Mentions
 
@@ -142,9 +159,12 @@ Every host that serves `/api/v1/comments` also serves:
 | `GET /api/v1/comments?scope=[&target=][&after=]` | | Threads, each with `readVersion`, `unread` and, for a thread whose selector carries a patch, `anchor` (below) |
 | `POST /api/v1/comments` | `{target, bodyMarkdown, workflowId, requestId, content?, links?, deliver?, attachments?}` | The new thread; `attachments` (below) are stored with it before it is delivered |
 | `POST /api/v1/comments/read` | `{target: {scopeUri, uri}}` | Marks every thread on the target read for the caller at its current version: `{marked}`, the number not already read |
-| `GET /api/v1/comments/agent-sessions[?scope=][&group=][&all=1]` | | Live and resumable managed sessions; `group` requires `scope` and returns only that group's current session |
+| `POST /api/v1/comments/{id}/reopen` | `{expectedVersion, bodyMarkdown?}` | Reopens the thread and records optional feedback as a reply in the same mutation |
+| `GET /api/v1/comments/agent-sessions[?scope=][&group=][&all=1]` | | Live sessions, resumable managed sessions, and available Amp Orb threads; `group` requires `scope` and returns only that group's current session |
+| `POST /api/v1/comments/agent-sessions` | `{scope, target, prefix, prompt?, runOptions?, groupKey?, edits?}` | Starts a session for the page `target` before any comment exists and answers 201 with it once the agent reports its id, titled `<prefix>-` plus six random characters; 400 for a blank `prefix`, 502 when the agent ends or takes over 60 seconds without reporting an id |
 | `GET /api/v1/comments/mentionables?scope=&target=` | | The agents a comment on `target` can mention: `[{id, name, kind: "agent"}]`, with ids `agent`, `runtime:<family>` and `session:<id>`; 501 on a host without agent delivery |
 | `POST /api/v1/comments/{id}/deliver` | `{expectedVersion, requestId, target}` | The updated comment; 409 on a stale version, 502 when delivery failed |
+| `POST /api/v1/comments/delivery/preview` | `{target, bodyMarkdown?, deliver?, delivery?}` | The draft's effective delivery target and its session, when available. `deliver` and `delivery` are mutually exclusive. |
 | `POST /api/v1/comments/{id}/deliver/preview` | `{target}` | The resolved run and its tools, without starting it |
 | `GET /api/v1/comments/agent?scope=&uri=` | | The target's comment agent: `{settings, agent, session?}`; `session` is the live session `gavel edit --session` routes every new human thread to, ahead of the agent |
 | `PUT /api/v1/comments/agent` | `{target: {scopeUri, uri}, layer, page, agent}` | Patches the agent entry at a layer and answers `{settings, agent, session?}`; only a person can save one |

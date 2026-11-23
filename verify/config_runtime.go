@@ -110,6 +110,10 @@ func (c GavelConfig) validateRuntime() error {
 			return fmt.Errorf("lint.linters.%s declares a command, but %s is a built-in linter; name the command linter differently", name, name)
 		case !builtin && len(config.Command) == 0:
 			return fmt.Errorf("unknown linter %q in lint.linters; declare its command to add an external linter", name)
+		case config.Engine != "" && name != "tsc":
+			return fmt.Errorf("lint.linters.%s.engine applies only to the tsc linter", name)
+		case config.Engine != "" && config.Engine != TSCEngineAuto && config.Engine != TSCEngineTypeScript:
+			return fmt.Errorf("lint.linters.tsc.engine: expected %q or %q, got %q", TSCEngineAuto, TSCEngineTypeScript, config.Engine)
 		case len(config.Includes) > 0 && len(config.Command) == 0:
 			return fmt.Errorf("lint.linters.%s.includes applies only to a linter declared by command", name)
 		}

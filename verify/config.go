@@ -194,9 +194,17 @@ type LintConfig struct {
 	Linters map[string]LintLinterConfig `yaml:"linters,omitempty" json:"linters,omitempty"`
 }
 
+type TSCEngine string
+
+const (
+	TSCEngineAuto       TSCEngine = "auto"
+	TSCEngineTypeScript TSCEngine = "typescript"
+)
+
 type LintLinterConfig struct {
 	Options runconfig.Lint         `yaml:"options,omitempty" json:"options,omitempty"`
 	Enabled *bool                  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Engine  TSCEngine              `yaml:"engine,omitempty" json:"engine,omitempty"`
 	Args    []string               `yaml:"args,omitempty" json:"args,omitempty"`
 	Runtime processruntime.Options `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Config  map[string]any         `yaml:"config,omitempty" json:"config,omitempty"`

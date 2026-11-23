@@ -52,6 +52,19 @@ LIMIT 25;
 The view is cumulative. Record `pg_stat_statements_info.stats_reset` with any
 measurement so rankings have a clear time window.
 
+## Live HTTP and SQL traces with Telltale
+
+The local Gavel dashboard starts a Telltale SDK agent on a private Unix socket. Set `TELLTALE_AGENT=0` to disable it. For a hosted dashboard, set `TELLTALE_AGENT=1` to enable local attachment, or configure a Telltale hub with `TELLTALE_URL` and `TELLTALE_TOKEN`.
+
+Use `telltale agents list` to find the Gavel agent ID. Start the captures in separate terminals and reproduce the slow request while they are running.
+
+```sh
+telltale run http --seam agent --agent AGENT_ID --duration 30s
+telltale run sql --seam agent --agent AGENT_ID --connections self --duration 30s
+```
+
+The HTTP trace includes traffic across the Gavel process and can retain request and response bodies. Look for `/api/projects` in the captured exchanges to see its response status and wall time. The SQL trace includes statements from the Gavel database pool, including background work during the capture window.
+
 ## Captain session storage
 
 Captain exposes the same read-only measurement as

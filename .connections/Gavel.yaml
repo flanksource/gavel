@@ -1,0 +1,14 @@
+apiVersion: mission-control.flanksource.com/v1
+kind: Connection
+metadata:
+  name: Gavel
+spec:
+  certificate: {}
+  password: {}
+  port: {}
+  type: postgres
+  url:
+    value: postgres://moshe@localhost/gavel?sslmode=disable
+  username: {}
+status:
+  ref: ""

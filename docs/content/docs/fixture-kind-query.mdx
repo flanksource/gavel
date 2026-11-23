@@ -92,7 +92,7 @@ The repository's [database progress examples](https://github.com/flanksource/gav
 
 Each fixture opens the existing connection picker, filtered to its database engine. Select a saved connection, or supply `--param connection=<name>` to use it without prompting. Both routines are session-local and disappear when the query connection closes. PostgreSQL forwards raw `RAISE NOTICE` messages; SQL Server flushes severity-zero `RAISERROR` messages with `WITH NOWAIT`. Neither fixture provisions a database or requires a database CLI. Keep each fixture next to its SQL script when copying it.
 
-Workflow commands update the running step and are removed from its stdout; ordinary batch-completion messages remain in the output. SQL Server uses a procedure because its functions cannot emit `RAISERROR` messages.
+Workflow commands update the running step and are removed from its stdout; its log keeps them, so the log viewer lists each status among the ordinary batch-completion messages and Raw shows every message as the server sent it. SQL Server uses a procedure because its functions cannot emit `RAISERROR` messages.
 
 ## Results and findings
 

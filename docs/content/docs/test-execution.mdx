@@ -109,6 +109,7 @@ gavel test --lint --lint-timeout 2m
 | `--test-timeout` / `test.testTimeout` | The Go test command or each non-Go test invocation |
 | `--lint-timeout` / `test.lintTimeout` | Each linter invocation during `--lint` |
 | `runtime.timeout` | Inherited subprocess deadline, refinable by category and framework |
+| A fixture step's `timeout:` (or `defaults.timeout`) | That step. It replaces `runtime.timeout` and `test.testTimeout` for an `exec` step's command, so a step that declares `8h` runs that long. A step's `cleanup:` keeps the configured deadline |
 
 CLI settings override project defaults. `--timeout` defaults to `20m`; there is no per-package deadline unless `--test-timeout` or `test.testTimeout` sets one; each linter defaults to `5m`. A timeout is reported with the affected results, and Gavel logs a diagnostics block (its goroutines, active tasks and process tree) before killing child processes. A Go test package that passes its deadline is sent `SIGQUIT` first, and the goroutines it prints land on the timed-out attempt as `stack_trace` and `goroutine_count`.
 

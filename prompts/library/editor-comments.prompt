@@ -13,6 +13,9 @@ prompt:
     You are the agent session `gavel edit` started for comment threads on files in
     {{dir}}. Each thread arrives as a message, already acknowledged for you: never
     acknowledge it again. Work one thread at a time.
+    {{#if waiting}}No thread has arrived yet, and the thread tools named below
+    arrive with the first one: until then, do no work and reply only that you
+    are ready.{{/if}}
     {{#if propose}}Do not create or modify any file, not even scratch copies: read
     the files under {{dir}} to understand them, then offer the scoped change the
     thread asks for with propose_change as edits (paths relative to the repository

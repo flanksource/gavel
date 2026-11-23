@@ -1,4 +1,5 @@
 allowBuilds:
+  "@flanksource/clicky-ui": true
   esbuild: set this to true or false
   sharp: set this to true or false
 minimumReleaseAgeExclude:

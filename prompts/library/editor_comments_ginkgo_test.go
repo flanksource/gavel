@@ -31,6 +31,20 @@ var _ = Describe("editor-comments.prompt", func() {
 		Expect(spec.Tools).To(BeEmpty())
 	})
 
+	DescribeTable("tells a session started before its first thread that the thread tools come with it",
+		func(waiting bool, matcher OmegaMatcher) {
+			tpl, err := promptlib.LoadFS(library.FS, "editor-comments.prompt")
+			Expect(err).NotTo(HaveOccurred())
+			spec, _, err := tpl.Render(promptlib.RenderOptions{Declared: true, Data: map[string]any{
+				"dir": "/src/acme", "message": "ready?", "waiting": waiting,
+			}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(spec.Prompt.System).To(matcher)
+		},
+		Entry("waiting for threads", true, ContainSubstring("No thread has arrived yet")),
+		Entry("started with threads", false, Not(ContainSubstring("No thread has arrived yet"))),
+	)
+
 	It("is discoverable with valid unrendered frontmatter", func() {
 		raw, err := fs.ReadFile(library.FS, "editor-comments.prompt")
 		Expect(err).NotTo(HaveOccurred())
