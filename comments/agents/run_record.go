@@ -14,6 +14,7 @@ import (
 // the comment's content in clicky-ui's CommentAgentRun shape.
 type AgentRun struct {
 	SessionID   string         `json:"sessionId"`
+	MessageID   string         `json:"messageId,omitempty"`
 	RequestedAt time.Time      `json:"requestedAt"`
 	State       string         `json:"state"`
 	Error       string         `json:"error,omitempty"`

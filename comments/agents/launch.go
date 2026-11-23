@@ -49,9 +49,14 @@ func decodeRunOptions(raw json.RawMessage) (RunOptions, error) {
 }
 
 // sessionRequest is a managed session for threads (one scope's, the first
-// leading): what it runs, as which agent, where.
+// leading), or with none for the page Target ahead of its threads: what it
+// runs, as which agent, where.
 type sessionRequest struct {
 	Threads []comments.Comment
+	// Target is the page a session without threads starts for; one with threads works on the first's.
+	Target comments.Target
+	// Name titles the run's task; empty names it after its prompt.
+	Name    string
 	Dir     string
 	Agent   comments.Actor
 	Prompt  string
@@ -64,40 +69,63 @@ type sessionRequest struct {
 func (d delivery) launch(ctx context.Context, threads []comments.Comment, target comments.DeliverTarget) (AgentRun, error) {
 	run := AgentRun{RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: targetLabel(target)}, Edits: target.Edits}
 	session := comments.ManagedSession{ScopeURI: threads[0].Target.ScopeURI, GroupKey: target.GroupKey, Prompt: target.Prompt, RunOptions: target.RunOptions, Label: firstLine(threads[0].Body)}
-	return d.start(ctx, threads, session, run, target.Fresh)
+	return d.start(ctx, threadStart(threads, session, run, target.Fresh))
 }
 
 // resume restarts an ended managed session with its recorded prompt and run
 // options, resuming its conversation with the threads under this delivery's edits policy.
 func (d delivery) resume(ctx context.Context, threads []comments.Comment, session comments.ManagedSession, edits string) (AgentRun, error) {
 	run := AgentRun{SessionID: session.ID, RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: session.Label}, Edits: edits}
-	return d.start(ctx, threads, session, run, false)
+	return d.start(ctx, threadStart(threads, session, run, false))
+}
+
+// sessionStart is what start launches: Session on Target of Tenant, for
+// Threads, or with none ahead of the page's threads.
+type sessionStart struct {
+	Tenant  string
+	Target  comments.Target
+	Threads []comments.Comment
+	Session comments.ManagedSession
+	Run     AgentRun
+	Fresh   bool
+	// Started receives the session id the run reports, or why it reported none; nil when no one waits.
+	Started chan<- startOutcome
+}
+
+func threadStart(threads []comments.Comment, session comments.ManagedSession, run AgentRun, fresh bool) sessionStart {
+	return sessionStart{Tenant: threads[0].TenantID, Target: threads[0].Target, Threads: threads, Session: session, Run: run, Fresh: fresh}
 }
 
 // start claims the threads for a new gavel agent and launches session's prompt
 // for them, resuming session.ID when set, recording the session it reports.
-func (d delivery) start(ctx context.Context, threads []comments.Comment, session comments.ManagedSession, run AgentRun, fresh bool) (AgentRun, error) {
+func (d delivery) start(ctx context.Context, s sessionStart) (AgentRun, error) {
+	run, session := s.Run, s.Session
 	options, err := decodeRunOptions(session.RunOptions)
 	if err != nil {
 		return run, err
 	}
-	dir, err := d.Workdir(ctx, threads[0].Target)
+	dir, err := d.Workdir(ctx, s.Target)
 	if err != nil {
 		return run, err
 	}
 	agent := comments.Actor{Kind: "agent", ID: "gavel:" + uuid.NewString(), Label: "Gavel agent"}
-	if threads, err = d.claim(ctx, threads, agent, run); err != nil {
+	threads, err := d.claim(ctx, s.Threads, agent, run)
+	if err != nil {
 		return run, err
 	}
-	invocation, err := d.invocation(sessionRequest{Threads: threads, Dir: dir, Agent: agent, Prompt: session.Prompt, Options: options, Edits: run.Edits})
+	name := ""
+	if len(threads) == 0 {
+		name = session.Label
+	}
+	invocation, err := d.invocation(sessionRequest{Threads: threads, Target: s.Target, Name: name, Dir: dir, Agent: agent, Prompt: session.Prompt, Options: options, Edits: run.Edits})
 	if err != nil {
 		return run, err
 	}
 	invocation.Options.Resume = session.ID
 	if session.GroupKey != "" {
-		invocation.SessionKey = threads[0].TenantID + "/" + session.ScopeURI + "/" + session.GroupKey
+		invocation.SessionKey = s.Tenant + "/" + session.ScopeURI + "/" + session.GroupKey
 	}
-	invocation.Fresh = fresh
+	invocation.Fresh = s.Fresh
 	// The session outlives this request; it keeps the request's values (the
 	// host's database, principal and prompt sources) but not its cancellation.
 	background, err := promptRunContext(context.WithoutCancel(ctx), dir)
@@ -105,12 +133,20 @@ func (d delivery) start(ctx context.Context, threads []comments.Comment, session
 		return run, err
 	}
 	session.CWD = dir
-	recorder := &runRecorder{delivery: d, ctx: background, threads: threads, run: run, session: session}
+	recorder := &runRecorder{delivery: d, ctx: background, tenant: s.Tenant, threads: threads, run: run, session: session, started: s.Started}
 	invocation.OnEvent, invocation.OnComplete = recorder.event, recorder.complete
 	if _, err = d.Bridge.Launch(background, invocation); err != nil {
-		return run, fmt.Errorf("starting an agent session for %s: %w", threadIDs(threads), err)
+		return run, fmt.Errorf("starting an agent session for %s: %w", startedFor(s), err)
 	}
 	return run, nil
+}
+
+// startedFor names what a session starts for in a message: its threads, or its page.
+func startedFor(s sessionStart) string {
+	if len(s.Threads) == 0 {
+		return "page " + s.Target.URI
+	}
+	return threadIDs(s.Threads)
 }
 
 // invocation is the prompt run a session starts (or previews): the chosen
@@ -121,19 +157,22 @@ func (d delivery) invocation(session sessionRequest) (captaincli.PromptInvocatio
 	if err != nil {
 		return captaincli.PromptInvocation{}, fmt.Errorf("locate the gavel executable for the session: %w", err)
 	}
-	message, err := sessionMessage(session.Threads, messageOptions{BaseURL: d.BaseURL, Edits: session.Edits, Dir: session.Dir, Instructions: session.Options.Instructions})
-	if err != nil {
-		return captaincli.PromptInvocation{}, err
+	o := messageOptions{BaseURL: d.BaseURL, Edits: session.Edits, Dir: session.Dir, Instructions: session.Options.Instructions}
+	lead, message, tools := session.Target, readyMessage(session.Target, o), []api.ToolDefinition(nil)
+	if len(session.Threads) > 0 {
+		lead, tools = session.Threads[0].Target, threadTools(d.service, session.Threads, session.Agent, session.Edits)
+		if message, err = sessionMessage(session.Threads, o); err != nil {
+			return captaincli.PromptInvocation{}, err
+		}
 	}
 	vars := maps.Clone(session.Options.Variables)
 	if vars == nil {
 		vars = map[string]any{}
 	}
-	lead := session.Threads[0].Target
 	maps.Copy(vars, map[string]any{
 		"dir": session.Dir, "scope": lead.ScopeURI, "target": lead.URI,
 		"actor": commentapi.EncodeActor(session.Agent), "gavelExecutable": gavel, "message": message,
-		"propose": session.Edits == comments.EditsPropose,
+		"propose": session.Edits == comments.EditsPropose, "waiting": len(session.Threads) == 0,
 	})
 	encoded, err := json.Marshal(vars)
 	if err != nil {
@@ -143,12 +182,15 @@ func (d delivery) invocation(session sessionRequest) (captaincli.PromptInvocatio
 	if session.Options.Presets != nil {
 		options.Presets, options.PresetsSet = session.Options.Presets, true
 	}
-	prompt := strings.TrimSpace(session.Prompt)
+	prompt, name := strings.TrimSpace(session.Prompt), session.Name
+	if name == "" {
+		name = prompt
+	}
 	return captaincli.PromptInvocation{
-		Reference: prompt, Name: prompt, Options: options,
+		Reference: prompt, Name: name, Options: options,
 		// The session's input is its variables; the host's own stdin is never the prompt's.
 		Stdin: strings.NewReader(""),
-		Tools: threadTools(d.service, session.Threads, session.Agent, session.Edits),
+		Tools: tools,
 	}, nil
 }
 

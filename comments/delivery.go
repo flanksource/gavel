@@ -70,9 +70,8 @@ func (t DeliverTarget) Validate() error {
 	return fmt.Errorf("%w: target must be {kind:\"session\", sessionId} or {kind:\"run\", prompt, runOptions?, groupKey?, fresh?}", ErrInvalid)
 }
 
-// AgentSession is a Claude or Codex session a thread can be delivered to: a
-// live one, or a managed session the host started for the scope that has ended
-// (Status "ended") and is resumed by delivering to it.
+// AgentSession is a deliverable destination: a live agent session, an ended
+// managed session that a delivery resumes, or an existing Amp Orb thread.
 type AgentSession struct {
 	ID     string `json:"id"`
 	Source string `json:"source"`
@@ -122,13 +121,15 @@ type SessionQuery struct {
 	ScopeURI string
 	GroupKey string
 	All      bool
+	// SessionID requests the draft's exact destination, including outside the scope's picker results.
+	SessionID string
 }
 
 // Delivery executes deliver-agent operations for a host that opted into agents.
 type Delivery interface {
 	Executor
-	// Check rejects a target the host cannot run (e.g. malformed runOptions) before it is queued.
-	Check(DeliverTarget) error
+	// NormalizeTarget validates host-specific options and resolves alternate forms of a target ID.
+	NormalizeTarget(DeliverTarget) (DeliverTarget, error)
 	Sessions(context.Context, SessionQuery) ([]AgentSession, error)
 	// Mentionables are the agents, besides the rule's @agent, a comment on the
 	// query's target addresses with an @name token, each with where it delivers:
@@ -139,6 +140,55 @@ type Delivery interface {
 	// RecordFailure records on the thread an automatic delivery to target that
 	// failed before its executor ran (a route lookup, or a queue that kept conflicting).
 	RecordFailure(ctx context.Context, commentID string, target DeliverTarget, cause error) error
+	// StartSession starts a named managed session for a page ahead of its
+	// threads and answers it once the session reports its id; later deliveries
+	// to that id resume it with their threads.
+	StartSession(context.Context, StartSessionRequest) (AgentSession, error)
+}
+
+// StartSessionRequest starts a managed session for the page Target of
+// ScopeURI before any thread is delivered to it, titled <Prefix>-<6 random
+// lowercase letters or digits>. Prompt defaults to the host's comment agent
+// prompt, GroupKey to Target, and an empty Edits inherits the target's comment
+// agent rule as a delivery's does.
+type StartSessionRequest struct {
+	ScopeURI   string          `json:"scope"`
+	Target     string          `json:"target"`
+	Prefix     string          `json:"prefix"`
+	Prompt     string          `json:"prompt,omitempty"`
+	RunOptions json.RawMessage `json:"runOptions,omitempty"`
+	GroupKey   string          `json:"groupKey,omitempty"`
+	Edits      string          `json:"edits,omitempty"`
+	// TenantID is the requesting principal's, set by Service.StartAgentSession.
+	TenantID string `json:"-"`
+}
+
+// StartAgentSession starts req's session as the principal's, once the
+// principal may deliver threads on its target.
+func (s *Service) StartAgentSession(ctx context.Context, req StartSessionRequest) (AgentSession, error) {
+	if err := s.requireDelivery(); err != nil {
+		return AgentSession{}, err
+	}
+	if strings.TrimSpace(req.Prefix) == "" || req.ScopeURI == "" || req.Target == "" {
+		return AgentSession{}, fmt.Errorf("%w: starting a session needs scope, target and a non-blank prefix", ErrInvalid)
+	}
+	if req.Edits != "" && req.Edits != EditsDirect && req.Edits != EditsPropose {
+		return AgentSession{}, fmt.Errorf("%w: edits must be %q or %q, not %q", ErrInvalid, EditsDirect, EditsPropose, req.Edits)
+	}
+	p, err := s.principal(ctx)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	target := Target{ScopeURI: req.ScopeURI, URI: req.Target}
+	if err = s.access.Authorize(ctx, p, DeliverAgent, target); err != nil {
+		return AgentSession{}, err
+	}
+	resolved, err := s.withRuleEdits(ctx, target, DeliverTarget{Edits: req.Edits})
+	if err != nil {
+		return AgentSession{}, err
+	}
+	req.Prefix, req.Edits, req.TenantID = strings.TrimSpace(req.Prefix), resolved.Edits, p.TenantID
+	return s.delivery.StartSession(ctx, req)
 }
 
 type DeliverRequest struct {
@@ -176,22 +226,24 @@ func (s *Service) requireDelivery() error {
 	return nil
 }
 
-func (s *Service) checkTarget(t DeliverTarget) error {
+func (s *Service) normalizeDeliveryTarget(t DeliverTarget) (DeliverTarget, error) {
 	if err := s.requireDelivery(); err != nil {
-		return err
+		return t, err
 	}
 	if err := t.Validate(); err != nil {
-		return err
+		return t, err
 	}
-	return s.delivery.Check(t)
+	return s.delivery.NormalizeTarget(t)
 }
 
 // Deliver queues deliver-agent for one thread and processes exactly that
 // operation inline. A failed delivery returns the updated comment with ErrDelivery.
 func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (Comment, error) {
-	if err := s.checkTarget(req.Target); err != nil {
+	target, err := s.normalizeDeliveryTarget(req.Target)
+	if err != nil {
 		return Comment{}, err
 	}
+	req.Target = target
 	c, err := s.Get(ctx, req.CommentID)
 	if err != nil {
 		return Comment{}, err
@@ -218,9 +270,11 @@ func (s *Service) Deliver(ctx context.Context, req DeliverRequest) (Comment, err
 // the whole batch. It is one deliver-agent operation on the first thread,
 // idempotent by RequestID as Deliver is.
 func (s *Service) DeliverBatch(ctx context.Context, req DeliverBatchRequest) ([]Comment, error) {
-	if err := s.checkTarget(req.Target); err != nil {
+	target, err := s.normalizeDeliveryTarget(req.Target)
+	if err != nil {
 		return nil, err
 	}
+	req.Target = target
 	ids, err := s.checkBatch(ctx, req)
 	if err != nil {
 		return nil, err
@@ -367,10 +421,8 @@ func (s *Service) AgentSessions(ctx context.Context, q SessionQuery) ([]AgentSes
 
 // PreviewDelivery renders a run target for a thread without claiming or launching it.
 func (s *Service) PreviewDelivery(ctx context.Context, id string, target DeliverTarget) (json.RawMessage, error) {
-	if err := s.requireDelivery(); err != nil {
-		return nil, err
-	}
-	if err := s.checkTarget(target); err != nil {
+	target, err := s.normalizeDeliveryTarget(target)
+	if err != nil {
 		return nil, err
 	}
 	if target.Kind != "run" {

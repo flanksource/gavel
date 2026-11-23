@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,10 +16,27 @@ type runRecorder struct {
 	mu                 sync.Mutex
 	delivery           delivery
 	ctx                context.Context
+	tenant             string
 	threads            []comments.Comment
 	run                AgentRun
 	session            comments.ManagedSession
 	reported, finished bool
+	// started, when set, receives the reported session once it is recorded, or
+	// why the run ended without reporting one; it is buffered for that one outcome.
+	started chan<- startOutcome
+}
+
+// startOutcome is the session a started run reported, or why it reported none.
+type startOutcome struct {
+	session comments.ManagedSession
+	err     error
+}
+
+func (r *runRecorder) signal(outcome startOutcome) {
+	if r.started != nil {
+		r.started <- outcome
+		r.started = nil
+	}
 }
 
 func (r *runRecorder) event(_ int, event api.Event) {
@@ -39,11 +57,15 @@ func (r *runRecorder) event(_ int, event api.Event) {
 	}
 	if err := r.delivery.setRuns(r.ctx, r.threads, r.run); err != nil {
 		logger.Errorf("recording session %s on %s: %v", event.SessionID, threadIDs(r.threads), err)
+		r.signal(startOutcome{err: fmt.Errorf("recording session %s: %w", event.SessionID, err)})
 		return
 	}
-	if err := r.delivery.Groups.RecordSession(r.ctx, r.threads[0].TenantID, r.session); err != nil {
+	if err := r.delivery.Groups.RecordSession(r.ctx, r.tenant, r.session); err != nil {
 		logger.Errorf("recording managed session %s: %v", event.SessionID, err)
+		r.signal(startOutcome{err: fmt.Errorf("recording managed session %s: %w", event.SessionID, err)})
+		return
 	}
+	r.signal(startOutcome{session: r.session})
 }
 
 func (r *runRecorder) complete(summary captaincli.PromptRunSummary) {
@@ -65,6 +87,9 @@ func (r *runRecorder) complete(summary captaincli.PromptRunSummary) {
 	}
 	if r.run.SessionID == "" {
 		r.run.SessionID = summary.SessionID
+	}
+	if !r.reported {
+		r.signal(startOutcome{err: fmt.Errorf("agent run ended before reporting a session id: %s", r.run.Error)})
 	}
 	for _, thread := range r.threads {
 		if _, err := setAgentRun(r.ctx, r.delivery.service, thread.ID, r.run); err != nil {

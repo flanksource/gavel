@@ -135,7 +135,15 @@ func draftDeliverySchema() map[string]any {
 // deliveryPaths are the agent delivery operations RegisterDeliveryRoutes mounts.
 func deliveryPaths(id map[string]any, parameter func(name, kind string, required bool) map[string]any) map[string]any {
 	str := map[string]string{"type": "string"}
-	target := map[string]any{"type": "object", "required": []string{"kind"}, "description": `{kind:"session", sessionId} or {kind:"run", prompt, runOptions?, groupKey?, fresh?}`, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": []string{"session", "run"}}, "sessionId": str, "prompt": str, "runOptions": map[string]string{"type": "object"}, "groupKey": str, "fresh": map[string]string{"type": "boolean", "description": "Run targets only: always start a new session instead of reusing groupKey's; it becomes the group's session"}, "edits": map[string]any{"type": "string", "enum": []string{"direct", "propose"}, "description": "direct lets the agent edit files; omitted inherits the target's comment agent edits, direct when it sets none; propose has it answer with an edits (or patch) reply a person accepts, without file write tools"}}}
+	target := map[string]any{"type": "object", "required": []string{"kind"}, "description": "Deliver to a Captain session, an Amp Orb thread, or a managed run.", "properties": map[string]any{
+		"kind":       map[string]any{"type": "string", "enum": []string{"session", "run"}},
+		"sessionId":  map[string]string{"type": "string", "description": "Captain session ID or Amp Orb thread ID or URL"},
+		"prompt":     str,
+		"runOptions": map[string]string{"type": "object"},
+		"groupKey":   str,
+		"fresh":      map[string]string{"type": "boolean", "description": "Run targets only. Start a new session and make it the group's current session."},
+		"edits":      map[string]any{"type": "string", "enum": []string{"direct", "propose"}, "description": "The edit policy. Inherits from the target's comment agent when omitted."},
+	}}
 	body := func(schema map[string]any) map[string]any {
 		return map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": schema}}}
 	}
@@ -177,12 +185,15 @@ func deliveryPaths(id map[string]any, parameter func(name, kind string, required
 			"get": map[string]any{"operationId": "comments-agent", "summary": "Read the comment agent a target's settings configure", "parameters": []any{parameter("scope", "string", true), parameter("uri", "string", true)}, "responses": agentResponses},
 			"put": map[string]any{"operationId": "comments-save-agent", "summary": "Patch or remove the comment agent at one settings layer of a target", "requestBody": body(saveBody), "responses": saveResponses},
 		},
-		"/comments/agent-sessions": map[string]any{"get": map[string]any{"operationId": "comments-agent-sessions", "summary": "List deliverable sessions; group narrows to the current session of that group and requires scope", "parameters": []any{parameter("scope", "string", false), parameter("group", "string", false), parameter("all", "string", false)}, "responses": sessionsResponses(ok)}},
-		"/comments/mentionables":   map[string]any{"get": map[string]any{"operationId": "comments-mentionables", "summary": "List the agents a comment on a target addresses with an @name token: @agent (its comment agent rule), @<runtime family> (a fresh run of its default agent model) and @<session slug>", "parameters": []any{parameter("scope", "string", true), parameter("target", "string", true)}, "responses": mentionablesResponses(ok)}},
-		"/comments/deliver":        map[string]any{"post": map[string]any{"operationId": "comments-deliver-batch", "summary": "Deliver several threads of one scope to one target in a single message", "requestBody": body(batchBody), "responses": batchResponses}},
+		"/comments/agent-sessions": map[string]any{
+			"get":  map[string]any{"operationId": "comments-agent-sessions", "summary": "List deliverable sessions; group narrows to the current session of that group and requires scope", "parameters": []any{parameter("scope", "string", false), parameter("group", "string", false), parameter("all", "string", false)}, "responses": sessionsResponses(ok)},
+			"post": startSessionOperation(body, ok),
+		},
+		"/comments/mentionables": map[string]any{"get": map[string]any{"operationId": "comments-mentionables", "summary": "List the agents a comment on a target addresses with an @name token: @agent (its comment agent rule), @<runtime family> (a fresh run of its default agent model) and @<session slug>", "parameters": []any{parameter("scope", "string", true), parameter("target", "string", true)}, "responses": mentionablesResponses(ok)}},
+		"/comments/deliver":      map[string]any{"post": map[string]any{"operationId": "comments-deliver-batch", "summary": "Deliver several threads of one scope to one target in a single message", "requestBody": body(batchBody), "responses": batchResponses}},
 		"/comments/delivery/preview": map[string]any{"post": map[string]any{
 			"operationId": "comments-create-delivery-preview", "summary": "Resolve delivery for a new human-review comment without posting it",
-			"requestBody": body(map[string]any{"type": "object", "required": []string{"target"}, "properties": map[string]any{"target": map[string]string{"type": "object"}, "bodyMarkdown": str, "delivery": draftDeliverySchema()}}),
+			"requestBody": body(map[string]any{"type": "object", "required": []string{"target"}, "properties": map[string]any{"target": map[string]string{"type": "object"}, "bodyMarkdown": str, "deliver": target, "delivery": draftDeliverySchema()}}),
 			"responses":   ok("Effective route and existing session, when present. Mention marks a draft-specific override. No route means post only."),
 		}},
 		"/comments/{id}/deliver":         map[string]any{"post": map[string]any{"operationId": "comments-deliver", "summary": "Deliver a thread to a live agent session or a new managed run", "parameters": []any{id}, "requestBody": body(map[string]any{"type": "object", "required": []string{"expectedVersion", "requestId", "target"}, "properties": map[string]any{"expectedVersion": map[string]string{"type": "integer", "format": "int64"}, "requestId": str, "target": target}}), "responses": deliverResponses}},
@@ -203,22 +214,46 @@ func mentionablesResponses(ok func(string) map[string]any) map[string]any {
 	return responses
 }
 
+// startSessionOperation describes POST /comments/agent-sessions: comments.StartSessionRequest.
+func startSessionOperation(body func(map[string]any) map[string]any, ok func(string) map[string]any) map[string]any {
+	str := map[string]string{"type": "string"}
+	request := map[string]any{"type": "object", "required": []string{"scope", "target", "prefix"}, "properties": map[string]any{
+		"scope":      str,
+		"target":     map[string]string{"type": "string", "description": "The page target URI the session is for, e.g. <scope>/pages/<page key>"},
+		"prefix":     map[string]string{"type": "string", "description": "The session name's prefix; the session is titled <prefix>-<6 random lowercase letters or digits>"},
+		"prompt":     map[string]string{"type": "string", "description": "The prompt the session runs; the host's comment agent prompt (editor-comments) when omitted"},
+		"runOptions": map[string]any{"type": "object", "description": "{spec?, presets?, variables?, instructions?}"},
+		"groupKey":   map[string]string{"type": "string", "description": "The delivery group the session becomes the current session of; the target when omitted"},
+		"edits":      map[string]any{"type": "string", "enum": []string{"direct", "propose"}, "description": "The edit policy. Inherits from the target's comment agent when omitted."},
+	}}
+	responses := ok("")
+	delete(responses, "200")
+	responses["201"] = map[string]any{"description": "The started session, as GET /comments/agent-sessions lists it", "content": map[string]any{"application/json": map[string]any{"schema": agentSessionSchema()}}}
+	responses["400"] = map[string]any{"description": "No scope or target, a blank prefix, or an invalid edits policy or runOptions"}
+	responses["502"] = map[string]any{"description": "The run ended, or the request or 60s cap ran out, before the session reported its id"}
+	return map[string]any{"operationId": "comments-start-agent-session", "summary": "Start a named managed session for a page ahead of its comment threads", "requestBody": body(request), "responses": responses}
+}
+
 // sessionsResponses describe GET /comments/agent-sessions: comments.AgentSession items.
 func sessionsResponses(ok func(string) map[string]any) map[string]any {
+	responses := ok("Agent sessions")
+	responses["400"] = map[string]any{"description": "A group filter requires scope"}
+	responses["200"] = map[string]any{"description": "Agent sessions", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "array", "items": agentSessionSchema()}}}}
+	return responses
+}
+
+// agentSessionSchema is a comments.AgentSession.
+func agentSessionSchema() map[string]any {
 	str, flag := map[string]string{"type": "string"}, func(description string) map[string]string {
 		return map[string]string{"type": "boolean", "description": description}
 	}
-	session := map[string]any{"type": "object", "required": []string{"id", "source", "title", "inCmux"}, "properties": map[string]any{
+	return map[string]any{"type": "object", "required": []string{"id", "source", "title", "inCmux"}, "properties": map[string]any{
 		"id": str, "source": str, "title": str, "model": str, "cwd": str, "inCmux": map[string]string{"type": "boolean"},
 		"status":    map[string]string{"type": "string", "description": `The live session's status, or "ended" for a managed session that is no longer live`},
 		"managed":   flag("A session the host launched for the scope's threads"),
 		"resumable": flag("An ended managed session: delivering to it resumes it with its recorded prompt and run options"),
 		"context":   map[string]any{"type": "object", "properties": map[string]any{"usedTokens": map[string]string{"type": "integer"}, "windowTokens": map[string]string{"type": "integer"}}},
 	}}
-	responses := ok("Agent sessions")
-	responses["400"] = map[string]any{"description": "A group filter requires scope"}
-	responses["200"] = map[string]any{"description": "Agent sessions", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "array", "items": session}}}}
-	return responses
 }
 
 type documentResponse struct {

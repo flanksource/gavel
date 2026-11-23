@@ -52,7 +52,9 @@ func (d *revisionDelivery) Execute(_ context.Context, op comments.Operation) (js
 	d.targets = append(d.targets, target)
 	return json.RawMessage(`{}`), nil
 }
-func (d *revisionDelivery) Check(comments.DeliverTarget) error { return nil }
+func (d *revisionDelivery) NormalizeTarget(target comments.DeliverTarget) (comments.DeliverTarget, error) {
+	return target, nil
+}
 func (d *revisionDelivery) Sessions(context.Context, comments.SessionQuery) ([]comments.AgentSession, error) {
 	return nil, nil
 }
@@ -64,6 +66,9 @@ func (d *revisionDelivery) Preview(context.Context, comments.Comment, comments.D
 }
 func (d *revisionDelivery) RecordFailure(context.Context, string, comments.DeliverTarget, error) error {
 	return nil
+}
+func (d *revisionDelivery) StartSession(context.Context, comments.StartSessionRequest) (comments.AgentSession, error) {
+	return comments.AgentSession{}, comments.ErrUnsupported
 }
 
 func proposalOf(m comments.Message) comments.Proposal {

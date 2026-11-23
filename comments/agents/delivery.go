@@ -12,6 +12,7 @@ import (
 	"time"
 
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	"github.com/flanksource/captain/pkg/session/amp"
 	"github.com/flanksource/gavel/comments"
 )
 
@@ -30,8 +31,10 @@ type SessionStore interface {
 
 // Options opt a comments host into agent delivery.
 type Options struct {
-	Bridge Bridge
-	Groups SessionStore
+	Bridge       Bridge
+	Groups       SessionStore
+	Amp          AmpThreads
+	Repositories func(ctx context.Context, scope string) ([]string, error)
 	// Workdir is the directory a target's managed sessions run in, and that a
 	// scope's session listing is narrowed to.
 	Workdir func(context.Context, comments.Target) (string, error)
@@ -45,6 +48,9 @@ type Options struct {
 func Delivery(options Options) (func(*comments.Service) comments.Delivery, error) {
 	if options.Bridge == nil || options.Groups == nil || options.Workdir == nil {
 		return nil, errors.New("agent delivery requires a bridge, a session store and a workdir resolver")
+	}
+	if options.Amp != nil && options.Repositories == nil {
+		return nil, errors.New("Amp thread discovery requires a project repository resolver")
 	}
 	if options.BaseURL != "" {
 		if u, err := url.Parse(options.BaseURL); err != nil || u.Scheme == "" || u.Host == "" {
@@ -84,7 +90,7 @@ func (d delivery) Execute(ctx context.Context, op comments.Operation) (json.RawM
 		}
 		run.State, run.Error, run.Edits = "error", err.Error(), payload.Edits
 		for _, thread := range threads {
-			_, recordErr := setAgentRun(ctx, d.service, thread.ID, run)
+			_, recordErr := setAgentRun(context.WithoutCancel(ctx), d.service, thread.ID, run)
 			err = errors.Join(err, recordErr)
 		}
 	}
@@ -157,12 +163,20 @@ func (d delivery) deliver(ctx context.Context, threads []comments.Comment, targe
 	return d.resume(ctx, threads, *managed, edits)
 }
 
-func (d delivery) Check(target comments.DeliverTarget) error {
-	if target.Kind != "run" {
-		return nil
+func (d delivery) NormalizeTarget(target comments.DeliverTarget) (comments.DeliverTarget, error) {
+	if target.Kind == "run" {
+		_, err := decodeRunOptions(target.RunOptions)
+		return target, err
 	}
-	_, err := decodeRunOptions(target.RunOptions)
-	return err
+	ref := strings.TrimSpace(target.SessionID)
+	if strings.HasPrefix(ref, "T-") || strings.Contains(ref, "://") {
+		id, err := amp.ParseThreadRef(ref)
+		if err != nil {
+			return target, fmt.Errorf("%w: %v", comments.ErrInvalid, err)
+		}
+		target.SessionID = id
+	}
+	return target, nil
 }
 
 // live is the live record of session id, or nil when it is no longer live.
@@ -198,10 +212,19 @@ func (d delivery) managed(ctx context.Context, thread comments.Comment, id strin
 // directory unless All, and with a scope its managed sessions: a live one
 // marked managed, an ended one as a resumable "ended" session.
 func (d delivery) Sessions(ctx context.Context, q comments.SessionQuery) ([]comments.AgentSession, error) {
+	if strings.HasPrefix(q.SessionID, "T-") {
+		session, err := d.resolveAmp(ctx, q.SessionID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", comments.ErrInvalid, err)
+		}
+		return []comments.AgentSession{session}, nil
+	}
 	dir := ""
 	if !q.All && q.ScopeURI != "" {
 		var err error
-		if dir, err = d.Workdir(ctx, comments.Target{ScopeURI: q.ScopeURI}); err != nil {
+		if dir, err = d.Workdir(ctx, comments.Target{ScopeURI: q.ScopeURI}); errors.Is(err, comments.ErrNoWorkdir) && d.Amp != nil {
+			return d.ampSessions(ctx, q), nil
+		} else if err != nil {
 			return nil, err
 		}
 	}
@@ -233,15 +256,19 @@ func (d delivery) sessions(ctx context.Context, q comments.SessionQuery, dir str
 			return nil, fmt.Errorf("listing the managed sessions of %s: %w", q.ScopeURI, err)
 		}
 	}
-	isManaged := map[string]bool{}
+	managedByID := map[string]comments.ManagedSession{}
 	for _, session := range managed {
-		isManaged[session.ID] = true
+		managedByID[session.ID] = session
 	}
 	sessions, live := []comments.AgentSession{}, map[string]bool{}
 	for _, record := range records {
 		session := agentSession(record)
-		if record.Live != nil && (dir == "" || isManaged[record.ID] || overlaps(dir, session.CWD)) {
-			session.Managed, live[record.ID] = isManaged[record.ID], true
+		m, isManaged := managedByID[record.ID]
+		if record.Live != nil && (dir == "" || isManaged || overlaps(dir, session.CWD)) {
+			session.Managed, live[record.ID] = isManaged, true
+			if m.Label != "" {
+				session.Title = m.Label
+			}
 			sessions = append(sessions, session)
 		}
 	}
@@ -253,7 +280,7 @@ func (d delivery) sessions(ctx context.Context, q comments.SessionQuery, dir str
 	if selected != "" {
 		sessions = slices.DeleteFunc(sessions, func(session comments.AgentSession) bool { return session.ID != selected })
 	}
-	return sessions, nil
+	return append(sessions, d.ampSessions(ctx, q)...), nil
 }
 
 // endedSession lists a managed session that is no longer live, for a delivery to resume.

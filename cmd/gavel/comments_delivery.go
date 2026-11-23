@@ -29,7 +29,7 @@ type deliverTargetFlags struct {
 }
 
 func (f *deliverTargetFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.session, "session", "", "Live Captain session to deliver into")
+	cmd.Flags().StringVar(&f.session, "session", "", "Captain session ID or Amp Orb thread ID or URL to deliver into")
 	cmd.Flags().StringVar(&f.prompt, "prompt", "", "Prompt a new managed session runs")
 	cmd.Flags().StringVar(&f.group, "group", "", "Reuse the live session recorded for this group key (with --prompt)")
 	cmd.Flags().StringVar(&f.runOptions, "run-options", "", "Run options as JSON: presets, spec, variables, instructions (with --prompt)")
@@ -62,7 +62,7 @@ func printJSON(out io.Writer, value any) error {
 
 func commentsDeliverCommand() *cobra.Command {
 	var flags deliverTargetFlags
-	cmd := &cobra.Command{Use: "deliver <id>", Short: "Send a comment thread to a live agent session, or start a managed session for it", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "deliver <id>", Short: "Send a comment to an agent session or Amp thread, or start a managed session", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		target, err := flags.target()
 		if err != nil {
 			return err

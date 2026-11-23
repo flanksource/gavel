@@ -96,7 +96,7 @@ var _ = Describe("Delivering comment threads to agents", Ordered, func() {
 		Expect(launched).To(HaveLen(1))
 		var vars map[string]any
 		Expect(json.Unmarshal([]byte(launched[0].Options.Vars), &vars)).To(Succeed())
-		Expect([]any{launched[0].Reference, vars["dir"], vars["scope"], vars["target"], vars["propose"]}).To(Equal([]any{"editor-comments", dir, scope, first.Target.URI, false}))
+		Expect([]any{launched[0].Reference, vars["dir"], vars["scope"], vars["target"], vars["propose"], vars["waiting"]}).To(Equal([]any{"editor-comments", dir, scope, first.Target.URI, false, false}))
 		Expect(vars["message"]).To(ContainSubstring("## Additional instructions\n\nKeep the copy short"))
 		run := contentOf(get(ctx, started.ID)).AgentRun
 		Expect([]any{run.State, run.SessionID}).To(Equal([]any{"sent", "managed-1"}))

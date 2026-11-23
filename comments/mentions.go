@@ -210,8 +210,7 @@ func (s *Service) mentionRoute(ctx context.Context, p Principal, t Target, body 
 	if len(found) == 0 {
 		return nil, nil
 	}
-	route := found[0].Route
-	return &route, s.checkTarget(route.Target)
+	return s.normalizeRoute(found[0].Route)
 }
 
 // unmatched is whether a token names none of mentionables.

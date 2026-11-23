@@ -88,7 +88,7 @@ func (s *Service) revisionTarget(c Comment) (DeliverTarget, error) {
 		return DeliverTarget{}, fmt.Errorf("%w: comment %s has no agent session to ask for a revision", ErrInvalid, c.ID)
 	}
 	target := DeliverTarget{Kind: "session", SessionID: run.SessionID, Edits: EditsPropose}
-	return target, s.checkTarget(target)
+	return s.normalizeDeliveryTarget(target)
 }
 
 // decideProposal handles a human's decision on a reply's proposal.

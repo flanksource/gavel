@@ -26,7 +26,7 @@ func (d delivery) Mentionables(ctx context.Context, q comments.MentionQuery) ([]
 	}
 	dir, err := d.Workdir(ctx, comments.Target{ScopeURI: q.Target.ScopeURI})
 	if errors.Is(err, comments.ErrNoWorkdir) {
-		return runtimes, nil
+		return append(runtimes, sessionMentionables(d.ampSessions(ctx, comments.SessionQuery{TenantID: q.TenantID, ScopeURI: q.Target.ScopeURI}), nil, nil)...), nil
 	}
 	if err != nil {
 		return nil, err

@@ -19,7 +19,7 @@ import (
 
 type actionFlags struct {
 	Version   int64               `flag:"expectedVersion" required:"true" help:"Required current comment version"`
-	Body      string              `flag:"bodyMarkdown" help:"Reply or updated Markdown; a reply naming @agent, @<runtime> or @<session> is delivered to it"`
+	Body      string              `flag:"bodyMarkdown" help:"Reply, edited Markdown or feedback saved with reopen; a reply naming @agent, @<runtime> or @<session> is delivered to it"`
 	Summary   string              `flag:"summary" help:"Resolution or closure summary"`
 	ParentID  string              `flag:"parentId" help:"Local parent reply identity"`
 	Assignee  *comments.Actor     `flag:"assignee" help:"Assignee as JSON; null clears it"`

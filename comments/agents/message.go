@@ -161,6 +161,21 @@ func sessionMessage(threads []comments.Comment, o messageOptions) (string, error
 	return message, nil
 }
 
+// readyMessage is what a session started ahead of its threads is given: the
+// page it is for, its edits policy, that the threads follow as later messages,
+// and the run's extra instructions.
+func readyMessage(target comments.Target, o messageOptions) string {
+	policy := "Edits policy: direct. For each thread, implement the scoped change it asks for, verify it, reply with what you changed and how you verified it, and resolve the thread."
+	if o.proposes() {
+		policy = "Edits policy: propose. " + proposeRule(o.Dir, "propose_change") + " A person accepts, rejects or asks for revisions, so never resolve a thread yourself."
+	}
+	message := fmt.Sprintf("Gavel started this session for comment threads on the page %s in %s. There are none yet: gavel delivers each comment thread on the page to this session later, as its own message with the tools to answer it. Do not start any work until then; reply only that you are ready.\n\n%s\n", target.URI, target.ScopeURI, policy)
+	if instructions := strings.TrimSpace(o.Instructions); instructions != "" {
+		message += "\n## Additional instructions\n\n" + instructions + "\n"
+	}
+	return message
+}
+
 // proposeRule is the propose-mode rule: gavel builds the commit from the
 // agent's edits, sent with via, so the agent writes no file at all.
 func proposeRule(dir, via string) string {

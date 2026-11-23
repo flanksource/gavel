@@ -100,6 +100,22 @@ var _ = Describe("comment list and create contracts over HTTP", Ordered, func() 
 		return c
 	}
 
+	It("reopens with one feedback message and rejects stale feedback without appending it", func(ctx SpecContext) {
+		thread := create(ctx, scope+"/review.go", "reopen-feedback", map[string]any{"kind": "document"})
+		resolved, err := svc.Act(ctx, comments.ActionRequest{ID: thread.ID, ExpectedVersion: thread.Version, Action: "resolve"})
+		Expect(err).NotTo(HaveOccurred())
+		path := "/api/v1/comments/" + thread.ID + "/reopen"
+		body := map[string]any{"expectedVersion": resolved.Version, "bodyMarkdown": "The error path still needs coverage"}
+		w := call(http.MethodPost, path, body)
+		Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+		Expect(call(http.MethodPost, path, body).Code).To(Equal(http.StatusConflict))
+		reopened, err := svc.Get(ctx, thread.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reopened.Status).To(Equal("open"))
+		Expect(reopened.Version).To(Equal(resolved.Version + 1))
+		Expect(reopened.Messages).To(ConsistOf(HaveField("Body", "The error path still needs coverage")))
+	})
+
 	It("lists each patch-anchored thread's anchor resolved against the target's current text, and none where there is no patch or no file content", func(ctx SpecContext) {
 		const file, page = scope + "/widget.go", scope + "/pages/home"
 		original := "package widget\n\nfunc A() {}\n\nfunc B() {}\n"

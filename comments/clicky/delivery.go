@@ -17,6 +17,7 @@ import (
 // do not implement comments.CommentAgents answers it 501.
 func RegisterDeliveryRoutes(router *route.Router, resolve Resolver) {
 	router.Raw("GET /api/v1/comments/agent-sessions", serve(resolve, agentSessions), route.Meta{Entity: "comments", Verb: "agent-sessions", ReadOnly: true})
+	router.Raw("POST /api/v1/comments/agent-sessions", serveStatus(resolve, http.StatusCreated, startAgentSession), route.Meta{Entity: "comments", Verb: "start-agent-session"})
 	router.Raw("GET /api/v1/comments/mentionables", serve(resolve, mentionables), route.Meta{Entity: "comments", Verb: "mentionables", ReadOnly: true})
 	router.Raw("GET /api/v1/comments/agent", serve(resolve, commentAgent), route.Meta{Entity: "comments", Verb: "agent", ReadOnly: true})
 	router.Raw("PUT /api/v1/comments/agent", serve(resolve, saveCommentAgent), route.Meta{Entity: "comments", Verb: "save-agent"})
@@ -30,6 +31,11 @@ func RegisterDeliveryRoutes(router *route.Router, resolve Resolver) {
 type handlerFunc func(ctx context.Context, service *comments.Service, r *http.Request) (any, error)
 
 func serve(resolve Resolver, handle handlerFunc) http.Handler {
+	return serveStatus(resolve, http.StatusOK, handle)
+}
+
+// serveStatus is serve answering a JSON body with status.
+func serveStatus(resolve Resolver, status int, handle handlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := rpc.ContextWithRequest(r.Context(), r)
 		service, err := resolve(ctx)
@@ -47,6 +53,7 @@ func serve(resolve Resolver, handle handlerFunc) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
 		if err := json.NewEncoder(w).Encode(out); err != nil {
 			return
 		}
@@ -56,6 +63,14 @@ func serve(resolve Resolver, handle handlerFunc) http.Handler {
 func agentSessions(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {
 	q := r.URL.Query()
 	return service.AgentSessions(ctx, comments.SessionQuery{ScopeURI: q.Get("scope"), GroupKey: q.Get("group"), All: q.Get("all") == "1"})
+}
+
+func startAgentSession(ctx context.Context, service *comments.Service, _ *http.Request) (any, error) {
+	var req comments.StartSessionRequest
+	if err := decode(ctx, bodyLimit, &req); err != nil {
+		return nil, err
+	}
+	return service.StartAgentSession(ctx, req)
 }
 
 func mentionables(ctx context.Context, service *comments.Service, r *http.Request) (any, error) {

@@ -212,6 +212,15 @@ func (s *Service) mutate(ctx context.Context, p Principal, req ActionRequest, pr
 					c.Outcome = nil
 					c.Resolution = nil
 					c.Assignee = nil
+					if req.Body != "" {
+						if err := s.access.Authorize(ctx, p, "reply", c.Target); err != nil {
+							return Change{}, err
+						}
+						change.Message, _, err = reply(&c, p.Actor, ActionRequest{Body: req.Body}, nil, now)
+						if err != nil {
+							return Change{}, err
+						}
+					}
 				}
 			}
 		}

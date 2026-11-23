@@ -141,9 +141,12 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Comment, error
 	if len(req.Content) > 0 && !json.Valid(req.Content) {
 		return Comment{}, fmt.Errorf("%w: malformed content", ErrInvalid)
 	}
-	route, err := s.createRoute(ctx, p, target, req)
+	route, err := s.draftRoute(ctx, p, CreateDeliveryDraft{Target: target, Body: req.Body, Deliver: req.Deliver, Delivery: req.Delivery})
 	if err != nil {
 		return Comment{}, err
+	}
+	if req.Deliver != nil {
+		req.Deliver = &route.Target
 	}
 	files, err := s.createAttachments(p, req.Attachments)
 	if err != nil {
@@ -187,18 +190,6 @@ func (s *Service) resolveCreateTarget(ctx context.Context, p Principal, input Ta
 		return Target{}, fmt.Errorf("%w: resolved target needs URI, scope and kind", ErrInvalid)
 	}
 	return target, s.access.Authorize(ctx, p, "create", target)
-}
-
-// createRoute is the route req's root is delivered through instead of its
-// automatic one: its explicit deliver target, agent mention, or remembered session.
-func (s *Service) createRoute(ctx context.Context, p Principal, target Target, req CreateRequest) (*Route, error) {
-	if req.Deliver != nil {
-		if req.Delivery != nil {
-			return nil, fmt.Errorf("%w: deliver and delivery cannot be combined", ErrInvalid)
-		}
-		return &Route{Source: "deliver", Target: *req.Deliver}, s.checkTarget(*req.Deliver)
-	}
-	return s.draftRoute(ctx, p, CreateDeliveryDraft{Target: target, Body: req.Body, Delivery: req.Delivery})
 }
 
 // createFile is one of a create's attachments, checked and described.

@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/flanksource/gavel/comments"
@@ -11,6 +12,9 @@ import (
 // toSession delivers threads into session id: live, or an ended managed
 // session of their scope, which is resumed. Any other session is an error.
 func (d delivery) toSession(ctx context.Context, threads []comments.Comment, id, edits string) (AgentRun, error) {
+	if strings.HasPrefix(id, "T-") {
+		return d.toAmp(ctx, threads, id, edits)
+	}
 	run := AgentRun{SessionID: id, RequestedAt: time.Now().UTC(), State: "queued", Target: AgentRunTarget{Label: id}, Edits: edits}
 	live, err := d.live(ctx, id)
 	if err != nil {

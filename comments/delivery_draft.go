@@ -15,6 +15,7 @@ type CreateDeliveryChoice struct {
 type CreateDeliveryDraft struct {
 	Target   Target                `json:"target"`
 	Body     string                `json:"bodyMarkdown,omitempty"`
+	Deliver  *DeliverTarget        `json:"deliver,omitempty"`
 	Delivery *CreateDeliveryChoice `json:"delivery,omitempty"`
 }
 
@@ -27,6 +28,12 @@ type CreateDeliveryPreview struct {
 const rememberedSessionSource = "remembered-session"
 
 func (s *Service) draftRoute(ctx context.Context, p Principal, draft CreateDeliveryDraft) (*Route, error) {
+	if draft.Deliver != nil {
+		if draft.Delivery != nil {
+			return nil, fmt.Errorf("%w: deliver and delivery cannot be combined", ErrInvalid)
+		}
+		return s.normalizeRoute(Route{Source: "deliver", Target: *draft.Deliver})
+	}
 	choice := draft.Delivery
 	if choice != nil && (choice.MentionID != "" || choice.DefaultSessionID != "") {
 		if p.Actor.Kind != "user" {
@@ -44,7 +51,13 @@ func (s *Service) draftRoute(ctx context.Context, p Principal, draft CreateDeliv
 		return route, err
 	}
 	target := DeliverTarget{Kind: "session", SessionID: choice.DefaultSessionID}
-	return &Route{Source: rememberedSessionSource, Target: target}, s.checkTarget(target)
+	return s.normalizeRoute(Route{Source: rememberedSessionSource, Target: target})
+}
+
+func (s *Service) normalizeRoute(route Route) (*Route, error) {
+	target, err := s.normalizeDeliveryTarget(route.Target)
+	route.Target = target
+	return &route, err
 }
 
 func (s *Service) pickedMentionRoute(ctx context.Context, p Principal, target Target, id string) (*Route, error) {
@@ -54,7 +67,7 @@ func (s *Service) pickedMentionRoute(ctx context.Context, p Principal, target Ta
 	}
 	for _, mention := range mentionables {
 		if mention.ID == id {
-			return &mention.Route, s.checkTarget(mention.Route.Target)
+			return s.normalizeRoute(mention.Route)
 		}
 	}
 	return nil, fmt.Errorf("%w: delivery mention %q is no longer available", ErrInvalid, id)
@@ -71,7 +84,7 @@ func (s *Service) PreviewCreateDelivery(ctx context.Context, draft CreateDeliver
 		return CreateDeliveryPreview{}, err
 	}
 	route, err := s.draftRoute(ctx, p, draft)
-	mention := route != nil && route.Source != rememberedSessionSource
+	mention := route != nil && route.Source != rememberedSessionSource && route.Source != "deliver"
 	if err == nil && route == nil {
 		route, err = s.automaticRoute(ctx, Comment{Target: draft.Target, Author: p.Actor, WorkflowID: HumanReview().ID})
 	}
@@ -93,6 +106,8 @@ func (s *Service) previewSession(ctx context.Context, scope string, target Deliv
 	query := SessionQuery{ScopeURI: scope, All: true}
 	if target.Kind == "run" {
 		query.GroupKey = target.EffectiveGroupKey()
+	} else {
+		query.SessionID = target.SessionID
 	}
 	sessions, err := s.AgentSessions(ctx, query)
 	if err != nil {
