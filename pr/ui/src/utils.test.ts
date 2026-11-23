@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateGavelShards, authorProfileURL, commitWebURL, failedTestsLabel, groupByOrg, repoWebURL } from './utils';
+import { aggregateGavelShards, authorProfileURL, commitWebURL, failedTestsLabel, groupByOrg, prsAwaitingFirstFetch, repoWebURL } from './utils';
 import type { GavelResultsSummary, PRItem } from './types';
 
 function makeShard(overrides: Partial<GavelResultsSummary> = {}): GavelResultsSummary {
@@ -90,5 +90,17 @@ describe('provider links', () => {
     expect(commitWebURL(github, 'abc123')).toBe('https://github.com/acme/api/commit/abc123');
     expect(commitWebURL(azure, 'abc123')).toBe('https://dev.azure.com/acme/Platform/_git/rules/commit/abc123');
     expect(commitWebURL(gitlab, 'abc123')).toBe('https://gitlab.example.com/acme/platform/api/-/commit/abc123');
+  });
+});
+
+describe('prsAwaitingFirstFetch', () => {
+  it('is loading until the server has finished a fetch', () => {
+    expect(prsAwaitingFirstFetch({ fetchedAt: '' })).toBe(true);
+    expect(prsAwaitingFirstFetch({ fetchedAt: '0001-01-01T00:00:00Z' })).toBe(true);
+    expect(prsAwaitingFirstFetch({ fetchedAt: '2026-11-23T09:00:00Z' })).toBe(false);
+  });
+
+  it('is not loading once a fetch failed, so the error shows instead', () => {
+    expect(prsAwaitingFirstFetch({ fetchedAt: '0001-01-01T00:00:00Z', error: 'GitHub token not configured' })).toBe(false);
   });
 });

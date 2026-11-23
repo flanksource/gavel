@@ -1,3 +1,5 @@
+// The PR dashboard's root: loads pull requests, projects and todos, and lays out the sidebar list,
+// filters and the selected pull request's detail for the desktop, mobile and menu-bar views.
 import { useState, useEffect, useEffectEvent, useMemo, useCallback, useRef } from 'react';
 import type { PRItem, PRInfo, SearchConfig, Project } from './types';
 import { PRList } from './components/PRList';
@@ -27,7 +29,7 @@ import { currentAuthMode } from './query';
 import { GrabberExtensionHelp } from './components/GrabberExtensionHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
-import { aggregateGavelShards, computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
+import { aggregateGavelShards, computeCounts, collectRepos, collectAuthors, filterPRs, prKey, prsAwaitingFirstFetch } from './utils';
 import { useCopyFeedback } from './useCopyFeedback';
 import {
   annotateRoutePaths,
@@ -757,7 +759,7 @@ export function App() {
   // The PR filters, count and exports describe the list, so a phone showing a
   // PR's detail page leaves them out.
   const prListChrome = activeTab === 'prs' && !(isMobile && selected);
-  const prListProps = { prs: filtered, selected, onSelect: handleSelect, unread, syncStatus, gavelResults: gavelResultsMap, projectsByRepo, onProcChanged };
+  const prListProps = { prs: filtered, selected, onSelect: handleSelect, unread, syncStatus, gavelResults: gavelResultsMap, projectsByRepo, onProcChanged, loading: prsAwaitingFirstFetch(snapshot) };
   const prFilterBar = prListChrome
     ? <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} />
     : undefined;

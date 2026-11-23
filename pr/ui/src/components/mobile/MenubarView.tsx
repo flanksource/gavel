@@ -1,3 +1,5 @@
+// The menu-bar popover's compact dashboard: tabs for pull requests, projects, todos and sessions,
+// and the selected pull request's detail.
 import { useMemo } from 'react';
 import type { PRItem, PRDetail, SearchConfig, PRSyncStatus, GavelResultsSummary, Project } from '../../types';
 import { Button } from '@flanksource/clicky-ui/components';
@@ -10,7 +12,7 @@ import { ProjectsPlaceholder } from '../ProjectsPlaceholder';
 import { WorkspaceGroup } from '../ProcessTable';
 import { SessionsSidebar, type SessionsQueryView } from '../sessions/SessionsView';
 import { MobileSessionScreen } from '../sessions/MobileSessionScreen';
-import { aggregateDotClass, flattenProcesses, prKey, emptyProcStatus } from '../../utils';
+import { aggregateDotClass, flattenProcesses, prKey, emptyProcStatus, prsAwaitingFirstFetch } from '../../utils';
 import { useProcStatus } from '../../procStatusQuery';
 import type { MobileTab } from '../../mobileTabs';
 import { CopyLinkButton } from './CopyLinkButton';
@@ -231,6 +233,7 @@ export function MenubarView({
             gavelResults={gavelResults}
             projectsByRepo={projectsByRepo}
             onProcChanged={onProcChanged}
+            loading={prsAwaitingFirstFetch({ fetchedAt, ...(error ? { error } : {}) })}
           />
         )}
       </div>

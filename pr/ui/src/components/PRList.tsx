@@ -1,3 +1,5 @@
+// The sidebar list of pull requests, grouped by organization and repository, with each group's
+// open and failing counts; it says so while the first fetch is loading or when there are none.
 import { useState } from 'react';
 import { IconButton, ListMenu, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
 import { useProcStatus } from '../procStatusQuery';
@@ -7,6 +9,7 @@ import { ProcControl } from './ProcControl';
 import { groupByOrg, prKey, computeCounts, type RepoGroup } from '../utils';
 import { Avatar } from './Avatar';
 import { UiChevronDown, UiChevronRight, UiError, UiGitPr } from '@flanksource/clicky-ui/icons';
+import { Spinner } from '../icons/Spinner';
 import { RepoIcon } from './RepoIcon';
 import { TodoBadge } from './TodoBadge';
 import { GitChangesBadge } from './GitChangesBadge';
@@ -20,6 +23,8 @@ interface Props {
   gavelResults?: Record<string, GavelResultsSummary>;
   projectsByRepo?: Record<string, Project>;
   onProcChanged?: () => void;
+  /** True until the server's first fetch of pull requests finishes. */
+  loading?: boolean;
 }
 
 // GroupCounts shows per-group open (green) and failing (red) totals on the
@@ -43,7 +48,15 @@ function GroupCounts({ items }: { items: PRItem[] }) {
   );
 }
 
-export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged }: Props) {
+export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged, loading }: Props) {
+  if (prs.length === 0 && loading) {
+    return (
+      <div role="status" className="p-6 flex items-center justify-center gap-2 text-muted-foreground">
+        <Spinner />
+        <p>Loading pull requests…</p>
+      </div>
+    );
+  }
   if (prs.length === 0) {
     return (
       <div className="p-6 text-center text-muted-foreground">

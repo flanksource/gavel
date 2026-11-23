@@ -1,6 +1,18 @@
-import type { PRItem, PRComment, CheckSummary, GavelResultsSummary, Project, ProcStatus, ProcProcess } from './types';
+// Helpers the dashboard shares over pull requests, their checks and projects: keys, grouping,
+// counts, filters and provider links.
+import type { PRItem, PRComment, CheckSummary, GavelResultsSummary, Project, ProcStatus, ProcProcess, Snapshot } from './types';
 import type { Filters } from './components/FilterBar';
 import { prAgeBucket } from './prAge';
+
+/**
+ * Whether the server has yet to finish its first fetch of pull requests (it reports
+ * Go's zero time until then) with none failing, so the list is still loading.
+ */
+export function prsAwaitingFirstFetch(snapshot: Pick<Snapshot, 'fetchedAt' | 'error'>): boolean {
+  if (snapshot.error) return false;
+  const fetched = Date.parse(snapshot.fetchedAt);
+  return !Number.isFinite(fetched) || new Date(fetched).getUTCFullYear() <= 1;
+}
 
 // prKey mirrors the Go-side poller.prKey() so the unread map keys match.
 export function prKey(pr: { repo: string; number: number }): string {
