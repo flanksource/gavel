@@ -254,6 +254,8 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	if app != nil {
 		link := &ui.GitHubLink{App: app, Store: store, Clerk: backend, SecretKey: secret}
 		mux.Handle("/api/github/", link.Handler())
+	} else {
+		mux.Handle("/api/github/", ui.GitHubWithoutApp())
 	}
 	mux.Handle("/", orgs.Handler())
 

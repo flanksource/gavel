@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { setAuthMode } from '../query';
@@ -63,7 +63,7 @@ describe('UserMenu', () => {
     expect(await screen.findByText('local')).toBeTruthy();
   });
 
-  it('shows the Clerk org switcher and user button in clerk mode', () => {
+  it('shows the Clerk org switcher and user button in clerk mode', async () => {
     const fetchMock = stubMe(null);
     setAuthMode('clerk', vi.fn());
     renderMenu();
@@ -77,6 +77,8 @@ describe('UserMenu', () => {
     expect(page.dataset.url).toBe('ssh-keys');
     const orgPages = screen.getAllByTestId('organization-profile-page');
     expect(orgPages.map(orgPage => [orgPage.dataset.label, orgPage.dataset.url])).toEqual([['Model keys', 'model-keys'], ['Usage and budgets', 'usage']]);
-    expect(fetchMock).not.toHaveBeenCalled();
+    // The local identity isn't read; Connect GitHub asks only whether this gavel has a GitHub App.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock.mock.calls.map(call => (call as unknown[])[0])).toEqual(['/api/github/app']);
   });
 });

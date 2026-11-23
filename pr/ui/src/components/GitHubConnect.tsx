@@ -1,11 +1,11 @@
 // Connects a hosted organization to the gavel GitHub App: a dialog that links installations
 // the user's GitHub account reaches or starts a new install, and the page GitHub returns to.
 import { useEffect, useRef, useState } from 'react';
-import { useAuth } from '@clerk/react';
+import { useAuth, useClerk } from '@clerk/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Modal } from '@flanksource/clicky-ui/components';
 import { UiGitPr } from '@flanksource/clicky-ui/icons';
-import { fetchJSON, mutationJSON, queryKeys } from '../query';
+import { fetchJSON, HttpError, mutationJSON, queryKeys } from '../query';
 
 // Both requests carry a token fetched just before they're sent: the session cookie
 // expires within a minute, and a visit to GitHub's install page can outlast it.
@@ -21,20 +21,39 @@ function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+const noAppText = 'This gavel has no GitHub App configured; ask its operator to set one up.';
+
+// notConnectedText is serve's explanation when the user's account has no GitHub connection
+// in Clerk, which the user fixes in their account settings; otherwise empty.
+function notConnectedText(cause: unknown): string {
+  if (!(cause instanceof HttpError)) return '';
+  const body = cause.body as { code?: unknown; error?: unknown } | undefined;
+  return body?.code === 'github_not_connected' && typeof body.error === 'string' ? body.error : '';
+}
+
 export function ConnectGitHubButton({ navigate = url => window.location.assign(url) }: { navigate?: (url: string) => void }) {
   const [open, setOpen] = useState(false);
+  const app = useQuery({
+    queryKey: queryKeys.githubApp(),
+    queryFn: ({ signal }) => fetchJSON<{ configured: boolean }>({ url: '/api/github/app', signal, context: 'Read the GitHub App' }),
+  });
+  const noApp = app.data?.configured === false;
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => setOpen(true)}
-        title="Link a gavel GitHub App installation to this organization, to see its pull requests"
-      >
-        <UiGitPr className="shrink-0 text-sm" />
-        Connect GitHub
-      </Button>
+      {/* A disabled button shows no tooltip, so the reason sits on its wrapper. */}
+      <span title={noApp ? noAppText : undefined}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={noApp}
+          onClick={() => setOpen(true)}
+          title={noApp ? undefined : 'Link a gavel GitHub App installation to this organization, to see its pull requests'}
+        >
+          <UiGitPr className="shrink-0 text-sm" />
+          Connect GitHub
+        </Button>
+      </span>
       {open && <ConnectGitHubDialog navigate={navigate} onClose={() => setOpen(false)} />}
     </>
   );
@@ -42,6 +61,7 @@ export function ConnectGitHubButton({ navigate = url => window.location.assign(u
 
 function ConnectGitHubDialog({ navigate, onClose }: { navigate: (url: string) => void; onClose: () => void }) {
   const { getToken } = useAuth();
+  const { openUserProfile } = useClerk();
   const queryClient = useQueryClient();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -49,6 +69,7 @@ function ConnectGitHubDialog({ navigate, onClose }: { navigate: (url: string) =>
     queryKey: queryKeys.githubInstallations(),
     queryFn: ({ signal }) => fetchJSON<Installation[]>({ url: '/api/github/installations', signal, context: 'List GitHub installations' }),
   });
+  const notConnected = notConnectedText(installations.error);
 
   const run = async (action: (token: string | undefined) => Promise<void>) => {
     setBusy(true);
@@ -86,7 +107,15 @@ function ConnectGitHubDialog({ navigate, onClose }: { navigate: (url: string) =>
     >
       <div className="space-y-3 text-sm">
         {installations.isPending && <p className="text-muted-foreground">Reading your GitHub installations…</p>}
-        {installations.error && <p className="text-destructive">{errorText(installations.error)}</p>}
+        {notConnected && (
+          <div className="space-y-2">
+            <p>{notConnected}</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => openUserProfile()}>
+              Open account settings
+            </Button>
+          </div>
+        )}
+        {installations.error && !notConnected && <p className="text-destructive">{errorText(installations.error)}</p>}
         {installations.data?.length === 0 && (
           <p className="text-muted-foreground">
             Your GitHub account can't reach any installation of the gavel App. Install it on a GitHub organization or account.

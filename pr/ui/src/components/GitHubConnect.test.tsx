@@ -4,10 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setAuthMode } from '../query';
 import { ConnectGitHubButton, GitHubSetupPage } from './GitHubConnect';
 
-// Clerk's hook is a stand-in: these tests cover what the components send with the
-// token Clerk issues, not how Clerk issues it.
+// Clerk's hooks are stand-ins: these tests cover what the components send with the
+// token Clerk issues and when they open Clerk's account settings, not how Clerk does either.
+const clerk = vi.hoisted(() => ({ openUserProfile: vi.fn() }));
 vi.mock('@clerk/react', () => ({
   useAuth: () => ({ getToken: async () => 'fresh-token' }),
+  useClerk: () => clerk,
 }));
 
 function stubFetch(status: number, payload: unknown) {
@@ -21,13 +23,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// route answers fetch by "METHOD url", recording each request it was sent.
+// route answers fetch by "METHOD url", recording each request it was sent. This gavel
+// has a GitHub App unless the answers say otherwise.
 function route(answers: Record<string, () => [number, unknown]>) {
   const calls: { key: string; init?: RequestInit }[] = [];
+  const routes: Record<string, () => [number, unknown]> = { 'GET /api/github/app': () => [200, { configured: true }], ...answers };
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const key = `${init?.method ?? 'GET'} ${url}`;
     calls.push({ key, init });
-    const answer = answers[key];
+    const answer = routes[key];
     if (!answer) return new Response(JSON.stringify({ error: `unexpected ${key}` }), { status: 500 });
     const [status, payload] = answer();
     return new Response(JSON.stringify(payload), { status });
@@ -83,6 +87,29 @@ describe('ConnectGitHubButton', () => {
     renderButton();
     fireEvent.click(await screen.findByRole('button', { name: 'Link ada' }));
     expect(await screen.findByText(/linked to another organization/)).toBeTruthy();
+  });
+
+  it("tells a user whose account isn't connected to GitHub how to connect it", async () => {
+    const message = "Your account isn't connected to GitHub. Connect GitHub in your account settings, then try again.";
+    route({ 'GET /api/github/installations': () => [403, { error: message, code: 'github_not_connected' }] });
+    renderButton();
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Open account settings' }));
+    expect(clerk.openUserProfile).toHaveBeenCalled();
+  });
+
+  it('is disabled when this gavel has no GitHub App, saying why', async () => {
+    route({ 'GET /api/github/app': () => [200, { configured: false }] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ConnectGitHubButton />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Connect GitHub' }).hasAttribute('disabled')).toBe(true));
+    expect(screen.getByTitle("This gavel has no GitHub App configured; ask its operator to set one up.")).toBeTruthy();
   });
 
   it("sends the user to GitHub's install page for another account, with a fresh token", async () => {

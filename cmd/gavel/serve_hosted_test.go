@@ -141,6 +141,13 @@ func TestHostedDashboard(t *testing.T) {
 	assert.Equal(t, "alpha", me.Org.Slug)
 	assert.Len(t, me.Orgs, 2)
 
+	status, body = do(http.MethodGet, "/api/github/app", "", cookie)
+	require.Equal(t, http.StatusOK, status, body)
+	assert.JSONEq(t, `{"configured": false}`, body, "without a GitHub App, the dashboard can say so")
+	status, body = do(http.MethodGet, "/api/github/installations", "", cookie)
+	assert.Equal(t, http.StatusServiceUnavailable, status)
+	assert.Contains(t, body, "no GitHub App configured")
+
 	status, body = do(http.MethodGet, "/api/todos/verification/schema", "", cookie)
 	assert.Equal(t, http.StatusOK, status, "the verification fixture editor's schema: %s", body)
 
