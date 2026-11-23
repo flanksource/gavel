@@ -341,10 +341,6 @@ func fetchRuns(opts WatchOptions, pr *model.PRInfo) (map[int64]*model.WorkflowRu
 		}
 		seen[runID] = true
 
-		// FetchRunJobs short-circuits via the persistent github cache when
-		// the run is already completed — and atomically attaches failed-job
-		// logs before caching when opts.Logs is set, so a previously
-		// log-less cache entry can't suppress --logs.
 		run, err := github.FetchRunJobs(opts.Options, runID, github.RunLogOptions{
 			FetchLogs: opts.Logs,
 			TailLines: opts.TailLogs,

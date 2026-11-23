@@ -119,24 +119,34 @@ type WorkflowRun struct {
 }
 
 type Job struct {
-	NativeID    string    `json:"nativeId,omitempty"`
-	DatabaseID  int64     `json:"databaseId"`
-	Name        string    `json:"name"`
-	Status      string    `json:"status"`
-	Conclusion  string    `json:"conclusion"`
-	StartedAt   time.Time `json:"startedAt"`
-	CompletedAt time.Time `json:"completedAt"`
-	URL         string    `json:"url"`
-	Steps       []Step    `json:"steps"`
-	Logs        string    `json:"logs,omitempty"`
+	NativeID    string       `json:"nativeId,omitempty"`
+	DatabaseID  int64        `json:"databaseId"`
+	Name        string       `json:"name"`
+	Status      string       `json:"status"`
+	Conclusion  string       `json:"conclusion"`
+	StartedAt   time.Time    `json:"startedAt"`
+	CompletedAt time.Time    `json:"completedAt"`
+	URL         string       `json:"url"`
+	Steps       []Step       `json:"steps"`
+	Logs        string       `json:"logs,omitempty"`
+	LogHeadings []LogHeading `json:"logHeadings,omitempty"`
 }
 
 type Step struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	Number     int    `json:"number"`
-	Logs       string `json:"logs,omitempty"`
+	Name        string       `json:"name"`
+	Status      string       `json:"status"`
+	Conclusion  string       `json:"conclusion"`
+	Number      int          `json:"number"`
+	Logs        string       `json:"logs,omitempty"`
+	LogHeadings []LogHeading `json:"logHeadings,omitempty"`
+}
+
+// LogHeading names a group of lines in Logs. Line is zero-based and EndLine is exclusive.
+type LogHeading struct {
+	Title   string `json:"title"`
+	Line    int    `json:"line"`
+	EndLine int    `json:"endLine"`
+	Depth   int    `json:"depth"`
 }
 
 type PRComment struct {
@@ -322,12 +332,7 @@ func (s Step) Pretty() api.Text {
 	text := clicky.Text("      ", "").
 		Add(StatusIcon(strings.ToUpper(s.Status), strings.ToUpper(s.Conclusion))).
 		Append(" "+s.Name, "text-gray-500")
-	if s.Logs != "" {
-		for _, line := range strings.Split(strings.TrimSpace(s.Logs), "\n") {
-			text = text.NewLine().Append("        "+line, "text-gray-500")
-		}
-	}
-	return text
+	return appendLogLines(text, "        ", s.Logs, s.LogHeadings)
 }
 
 func (j Job) Pretty() api.Text {
@@ -342,24 +347,42 @@ func (j Job) Pretty() api.Text {
 		return text
 	}
 
-	hasStepLogs := false
 	for _, step := range j.Steps {
 		text = text.NewLine().Add(step.Pretty())
-		if step.Logs != "" {
-			hasStepLogs = true
-		}
 	}
 
-	if !hasStepLogs && j.Logs != "" {
-		text = text.NewLine().Add(prettyLogTail(j.Logs))
+	if j.Logs != "" || len(j.LogHeadings) > 0 {
+		text = text.NewLine().Append("      ── Log tail ──────────", "text-red-600")
+		text = appendLogLines(text, "        ", j.Logs, j.LogHeadings)
 	}
 	return text
 }
 
-func prettyLogTail(logTail string) api.Text {
-	text := clicky.Text("      ── Log tail ──────────", "text-red-600")
-	for _, line := range strings.Split(strings.TrimSpace(logTail), "\n") {
-		text = text.NewLine().Append("      "+line, "text-gray-500")
+func appendLogLines(text api.Text, indent, logs string, headings []LogHeading) api.Text {
+	var lines []string
+	if logs != "" {
+		lines = strings.Split(logs, "\n")
+	}
+	var active []LogHeading
+	for i := 0; i <= len(lines); i++ {
+		for len(active) > 0 && active[len(active)-1].EndLine <= i {
+			active = active[:len(active)-1]
+		}
+		for len(headings) > 0 && headings[0].Line == i {
+			heading := headings[0]
+			headings = headings[1:]
+			text = text.NewLine().Append(indent+strings.Repeat("  ", heading.Depth)+heading.Title, "font-bold")
+			if heading.EndLine > i {
+				active = append(active, heading)
+			}
+		}
+		if i < len(lines) {
+			depth := 0
+			if len(active) > 0 {
+				depth = active[len(active)-1].Depth + 1
+			}
+			text = text.NewLine().Append(indent+strings.Repeat("  ", depth)+lines[i], "text-gray-500")
+		}
 	}
 	return text
 }

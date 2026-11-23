@@ -248,11 +248,7 @@ func (s restStep) toStep() model.Step {
 	}
 }
 
-// RunLogOptions selects an exact job when JobID is set, and controls whether
-// FetchRunJobs attaches failed-job logs before caching complete runs. Attaching
-// logs before caching keeps "fetch + cache" atomic: a run cached with
-// FetchLogs=false can never hide logs from a later FetchLogs=true caller,
-// because that caller re-enriches the cached payload (see FetchRunJobs).
+// RunLogOptions selects an exact job and controls which log tail to attach.
 type RunLogOptions struct {
 	JobID     int64
 	FetchLogs bool
@@ -269,17 +265,20 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 		return nil, err
 	}
 
-	// Phase 3 short-circuit: completed runs are immutable, so once we've
-	// stored one we never have to talk to GitHub again — except that a run
-	// cached without logs must still be enriched (and re-cached) when the
-	// caller now wants logs, otherwise --logs would be a silent no-op.
 	if payload := opts.cacheStore().GetCompletedRunPayload(runID); logOpts.JobID == 0 && payload != nil {
 		var cached model.WorkflowRun
 		if err := json.Unmarshal(payload, &cached); err == nil {
 			logger.Tracef("github cache hit for completed run %d", runID)
-			if logOpts.FetchLogs && !runHasFailureLogs(&cached) {
+			// Older cached payloads contain tails from a previous request.
+			for i := range cached.Jobs {
+				job := &cached.Jobs[i]
+				job.Logs, job.LogHeadings = "", nil
+				for j := range job.Steps {
+					job.Steps[j].Logs, job.Steps[j].LogHeadings = "", nil
+				}
+			}
+			if logOpts.FetchLogs {
 				FetchAndAttachLogs(opts, &cached, logOpts.TailLines)
-				persistCompletedRun(opts.cacheStore(), repo, runID, &cached)
 			}
 			return &cached, nil
 		}
@@ -307,19 +306,12 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 	logger.Debugf("fetched run %d %q: status=%s conclusion=%s jobs=%d",
 		result.DatabaseID, result.Name, result.Status, result.Conclusion, len(result.Jobs))
 
-	// Attach logs BEFORE persisting so the cached payload always reflects the
-	// logs-requested intent of this call. Gate on the JOBS, not the run
-	// conclusion — an in-progress run can already have failed or cancelled
-	// jobs worth logs.
-	if logOpts.FetchLogs && model.RunNeedsJobLogs(result) {
-		FetchAndAttachLogs(opts, result, logOpts.TailLines)
-	}
-
-	// Persist completed runs into the immutable cache. Subsequent calls
-	// (including from new processes) will short-circuit at the top of this
-	// function.
+	// Cache the run metadata before attaching request-specific tails from raw job logs.
 	if result.Status == "completed" && logOpts.JobID == 0 {
 		persistCompletedRun(opts.cacheStore(), repo, runID, result)
+	}
+	if logOpts.FetchLogs {
+		FetchAndAttachLogs(opts, result, logOpts.TailLines)
 	}
 
 	return result, nil
@@ -390,27 +382,6 @@ func FetchAndAttachLogs(opts Options, run *model.WorkflowRun, tailLines int) {
 			logger.Warnf("failed to fetch logs for job %d (%s): %v", job.DatabaseID, job.Name, err)
 		}
 	}
-}
-
-// runHasFailureLogs reports whether any failed or cancelled job in the run already carries
-// attached log output. Used to decide whether a cached run satisfies a
-// logs-requested fetch or must be enriched.
-func runHasFailureLogs(run *model.WorkflowRun) bool {
-	for i := range run.Jobs {
-		job := &run.Jobs[i]
-		if !model.NeedsJobLogs(job.Conclusion) {
-			continue
-		}
-		if job.Logs != "" {
-			return true
-		}
-		for _, step := range job.Steps {
-			if step.Logs != "" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // FetchJobLogs fetches logs for a single job from the GitHub API and attaches them
@@ -513,114 +484,6 @@ func FetchWorkflowDefinition(opts Options, run *model.WorkflowRun) (string, erro
 		opts.cacheStore().PutWorkflowDef(repo, run.WorkflowID, run.HeadSHA, wf.Path, yaml)
 	}
 	return yaml, nil
-}
-
-// cleanRawLog is a job log's output: timestamps, group markers and
-// annotations stripped, and without the runner's echo of each step. A "Run
-// ..." group holds the step's command, shell and env (its output follows the
-// group), and start-action/end-action mark a composite action's steps.
-func cleanRawLog(s string) string {
-	var sb strings.Builder
-	wroteLine := false
-	inStepEcho := false
-	for _, line := range strings.Split(s, "\n") {
-		display, control := prepareLogLine(line)
-		switch {
-		case strings.HasPrefix(control, "##[group]"):
-			inStepEcho = strings.HasPrefix(control, "##[group]Run ")
-			continue
-		case strings.HasPrefix(control, "##[endgroup]"):
-			inStepEcho = false
-			continue
-		case inStepEcho, strings.HasPrefix(control, "##[start-action "), strings.HasPrefix(control, "##[end-action "):
-			continue
-		}
-		display = actionsAnnotation.ReplaceAllString(display, "")
-		if wroteLine {
-			sb.WriteByte('\n')
-		}
-		sb.WriteString(display)
-		wroteLine = true
-	}
-	return sb.String()
-}
-
-func attachLogsToSteps(job *model.Job, rawLog string, tailLines int) {
-	job.Logs = tailString(cleanRawLog(rawLog), tailLines)
-	sections := parseLogSections(rawLog)
-	for i := range job.Steps {
-		step := &job.Steps[i]
-		if !strings.EqualFold(step.Conclusion, "failure") && !strings.EqualFold(step.Conclusion, "cancelled") {
-			continue
-		}
-		if logs, ok := sections[step.Name]; ok {
-			step.Logs = tailString(logs, tailLines)
-		}
-	}
-}
-
-var logTimestampPrefix = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*`)
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-var actionsAnnotation = regexp.MustCompile(`##\[(error|warning|debug|notice|command)\]`)
-
-func stripANSI(s string) string {
-	return ansiEscape.ReplaceAllString(s, "")
-}
-
-func prepareLogLine(line string) (display string, control string) {
-	display = logTimestampPrefix.ReplaceAllString(line, "")
-	display = ansiEscape.ReplaceAllStringFunc(display, func(sequence string) string {
-		if strings.HasSuffix(sequence, "m") {
-			return sequence
-		}
-		return ""
-	})
-	return display, stripANSI(display)
-}
-
-func parseLogSections(raw string) map[string]string {
-	sections := make(map[string]string)
-	var currentStep string
-	var buf strings.Builder
-	afterEndGroup := false
-
-	for _, line := range strings.Split(raw, "\n") {
-		display, control := prepareLogLine(line)
-		if strings.HasPrefix(control, "##[group]") {
-			if currentStep != "" {
-				sections[currentStep] = buf.String()
-			}
-			currentStep = strings.TrimPrefix(control, "##[group]")
-			buf.Reset()
-			afterEndGroup = false
-			continue
-		}
-		if strings.HasPrefix(control, "##[endgroup]") {
-			// GitHub emits run-step command output after ##[endgroup],
-			// so keep accumulating until we hit the terminal error line.
-			afterEndGroup = true
-			continue
-		}
-		if currentStep != "" {
-			if afterEndGroup && strings.HasPrefix(control, "##[error]Process completed") {
-				buf.WriteString("\n")
-				buf.WriteString(actionsAnnotation.ReplaceAllString(display, ""))
-				sections[currentStep] = buf.String()
-				currentStep = ""
-				buf.Reset()
-				continue
-			}
-			display = actionsAnnotation.ReplaceAllString(display, "")
-			if buf.Len() > 0 {
-				buf.WriteByte('\n')
-			}
-			buf.WriteString(display)
-		}
-	}
-	if currentStep != "" {
-		sections[currentStep] = buf.String()
-	}
-	return sections
 }
 
 func tailString(s string, maxLines int) string {

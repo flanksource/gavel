@@ -520,13 +520,28 @@ func TestStripANSI(t *testing.T) {
 	}
 }
 
-func TestParseLogSectionsPreservesANSI(t *testing.T) {
+func stepLogOutput(raw string, names ...string) map[string]string {
+	var job model.Job
+	for _, name := range names {
+		job.Steps = append(job.Steps, model.Step{Name: name, Conclusion: "failure"})
+	}
+	attachLogsToSteps(&job, raw, 0)
+	output := make(map[string]string)
+	for _, step := range job.Steps {
+		if step.Logs != "" {
+			output[step.Name] = step.Logs
+		}
+	}
+	return output
+}
+
+func TestStepLogPreservesANSI(t *testing.T) {
 	raw := "2024-01-15T10:00:00.0000000Z \x1b[35m##[group]Run tests\x1b[0m\n" +
-		"2024-01-15T10:00:01.0000000Z \x1b[31mFAIL\x1b[0m: TestFoo\n" +
-		"2024-01-15T10:00:02.0000000Z \x1b[35m##[endgroup]\x1b[0m\n" +
+		"2024-01-15T10:00:01.0000000Z \x1b[35m##[endgroup]\x1b[0m\n" +
+		"2024-01-15T10:00:02.0000000Z \x1b[31mFAIL\x1b[0m: TestFoo\n" +
 		"2024-01-15T10:00:03.0000000Z \x1b[1m##[error]Process completed with exit code 1\x1b[0m"
 
-	sections := parseLogSections(raw)
+	sections := stepLogOutput(raw, "Run tests")
 	require.Contains(t, sections, "Run tests")
 	assert.Equal(t, "\x1b[31mFAIL\x1b[0m: TestFoo\n\x1b[1mProcess completed with exit code 1\x1b[0m", sections["Run tests"])
 	assert.NotContains(t, sections["Run tests"], "##[error]")
@@ -534,17 +549,17 @@ func TestParseLogSectionsPreservesANSI(t *testing.T) {
 	assert.NotContains(t, sections["Run tests"], "##[endgroup]")
 }
 
-func TestParseLogSections(t *testing.T) {
+func TestStepLogSections(t *testing.T) {
 	raw := `2024-01-15T10:00:00.0000000Z ##[group]Set up job
 2024-01-15T10:00:01.0000000Z Preparing environment
 2024-01-15T10:00:02.0000000Z ##[endgroup]
 2024-01-15T10:00:03.0000000Z ##[group]Run tests
 2024-01-15T10:00:04.0000000Z go test ./...
-2024-01-15T10:00:05.0000000Z FAIL: TestFoo
-2024-01-15T10:00:06.0000000Z exit status 1
-2024-01-15T10:00:07.0000000Z ##[endgroup]`
+2024-01-15T10:00:05.0000000Z ##[endgroup]
+2024-01-15T10:00:06.0000000Z FAIL: TestFoo
+2024-01-15T10:00:07.0000000Z exit status 1`
 
-	sections := parseLogSections(raw)
+	sections := stepLogOutput(raw, "Set up job", "Run tests")
 	require.Contains(t, sections, "Set up job")
 	require.Contains(t, sections, "Run tests")
 	assert.Contains(t, sections["Set up job"], "Preparing environment")
@@ -552,7 +567,7 @@ func TestParseLogSections(t *testing.T) {
 	assert.Contains(t, sections["Run tests"], "exit status 1")
 }
 
-func TestParseLogSectionsRunStep(t *testing.T) {
+func TestStepLogIncludesOutputAfterRunnerEcho(t *testing.T) {
 	raw := "2024-01-15T10:00:00.0000000Z ##[group]Run vp install\n" +
 		"2024-01-15T10:00:01.0000000Z \x1b[36;1mvp install\x1b[0m\n" +
 		"2024-01-15T10:00:02.0000000Z shell: /usr/bin/bash -e {0}\n" +
@@ -564,7 +579,7 @@ func TestParseLogSectionsRunStep(t *testing.T) {
 		"2024-01-15T10:00:08.0000000Z Cleaning up\n" +
 		"2024-01-15T10:00:09.0000000Z ##[endgroup]"
 
-	sections := parseLogSections(raw)
+	sections := stepLogOutput(raw, "Run vp install", "Post Run actions/checkout@v4")
 	require.Contains(t, sections, "Run vp install")
 	assert.Contains(t, sections["Run vp install"], "ERR_PNPM_OUTDATED_LOCKFILE")
 	assert.Contains(t, sections["Run vp install"], "Scope: all 5 workspace projects")
@@ -575,7 +590,7 @@ func TestParseLogSectionsRunStep(t *testing.T) {
 	assert.Contains(t, sections["Post Run actions/checkout@v4"], "Cleaning up")
 }
 
-func TestParseLogSectionsRunStepLastGroup(t *testing.T) {
+func TestStepLogExcludesCleanupAfterExit(t *testing.T) {
 	raw := "2024-01-15T10:00:00.0000000Z ##[group]Run vp install\n" +
 		"2024-01-15T10:00:01.0000000Z vp install\n" +
 		"2024-01-15T10:00:02.0000000Z shell: /usr/bin/bash -e {0}\n" +
@@ -586,7 +601,7 @@ func TestParseLogSectionsRunStepLastGroup(t *testing.T) {
 		"2024-01-15T10:00:07.0000000Z [command]/usr/bin/git version\n" +
 		"2024-01-15T10:00:08.0000000Z Cleaning up orphan processes"
 
-	sections := parseLogSections(raw)
+	sections := stepLogOutput(raw, "Run vp install")
 	require.Contains(t, sections, "Run vp install")
 	assert.Contains(t, sections["Run vp install"], "ERR_PNPM_OUTDATED_LOCKFILE")
 	assert.NotContains(t, sections["Run vp install"], "Post job cleanup",
@@ -664,7 +679,7 @@ func TestCleanRawLog(t *testing.T) {
 		"2024-01-15T10:00:03.0000000Z \x1b[2K\x1b[31mFAIL\x1b[0m: TestFoo\n" +
 		"2024-01-15T10:00:04.0000000Z \x1b[1m##[error]Process completed with exit code 1\x1b[0m"
 
-	result := cleanRawLog(raw)
+	result := strings.Join(parseActionsLog(raw, nil).lines, "\n")
 	assert.Equal(t, "\x1b[31mFAIL\x1b[0m: TestFoo\n\x1b[1mProcess completed with exit code 1\x1b[0m", result)
 	assert.NotContains(t, result, "\x1b[2K", "unsupported cursor controls stripped")
 }
@@ -702,7 +717,7 @@ func TestCleanRawLogDropsTheActionShellWrapper(t *testing.T) {
 		"09:18:48.014 INF Test run completed. 2 total failures.",
 		"Process completed with exit code 143.",
 		"The runner has received a shutdown signal.",
-	}, "\n"), cleanRawLog(strings.Join(lines, "\n")))
+	}, "\n"), strings.Join(parseActionsLog(strings.Join(lines, "\n"), nil).lines, "\n"))
 }
 
 // A group a step prints itself (::group::) is output, and is kept.
@@ -710,7 +725,7 @@ func TestCleanRawLogKeepsAStepsOwnGroups(t *testing.T) {
 	raw := "2026-10-25T09:00:00.0000000Z ##[group]Vitest summary\n" +
 		"2026-10-25T09:00:01.0000000Z 980 passed\n" +
 		"2026-10-25T09:00:02.0000000Z ##[endgroup]"
-	assert.Equal(t, "980 passed", cleanRawLog(raw))
+	assert.Equal(t, []string{"980 passed"}, parseActionsLog(raw, nil).lines)
 }
 
 func TestAttachLogsToStepsCleansFallback(t *testing.T) {

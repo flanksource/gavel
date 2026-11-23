@@ -146,9 +146,11 @@ gavel pr status 42 --ai-fix --worktree   # fix in an isolated worktree at the PR
 | `--fail-fast` | With `--follow`, return at the first definitive failure instead of waiting for the rest |
 | `--interval` | Poll interval (default: `30s`) |
 | `--logs` | Fetch and include failed job logs (uses extra API quota) |
-| `--tail-logs` | Number of failed log lines to show per step (default: `100`) |
+| `--tail-logs` | Last N output lines per job log or step excerpt (default `100`, use `0` for all) |
 | `--comments` | Filter review comments by MatchItem patterns over comment ID and `@author`/`@bot` tokens |
 | `--actions` | Filter workflow actions by MatchItem patterns over run/workflow ID, YAML path, workflow name, or job/check name |
+
+GitHub Actions logs show named groups in the terminal, including nested groups in step excerpts. Group headings do not count toward `--tail-logs`.
 
 ## Recommend reviewers
 

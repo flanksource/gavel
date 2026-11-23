@@ -59,7 +59,7 @@ type PRStatusOptions struct {
 	FailFast bool            `flag:"fail-fast" help:"With --follow, stop as soon as any check or job fails definitively instead of waiting for the rest"`
 	Interval string          `flag:"interval" help:"Poll interval (e.g. 30s, 1m)" default:"30s"`
 	Logs     bool            `flag:"logs" help:"Fetch and include the logs of failed, timed out and cancelled jobs (uses extra API quota)"`
-	TailLogs int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
+	TailLogs int             `flag:"tail-logs" help:"Last N output lines per job log or step excerpt (0 for all, with --logs)" default:"100"`
 	Comments []string        `flag:"comments" help:"Filter review comments by MatchItem patterns over comment ID and @author/@bot tokens, e.g. '1,2,!3,*,!@coderabbit'"`
 	Actions  []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, workflow name, job ID, and job/check name"`
 	Args     []string        `args:"true"`
@@ -121,7 +121,7 @@ Key flags:
                     whole rollup (--interval sets the cadence, default 30s)
   --fail-fast       With --follow, return at the first definitive failure (FAILURE,
                     TIMED_OUT, STARTUP_FAILURE) instead of waiting for the rest
-  --logs            Also fetch failed, timed out and cancelled job logs (--tail-logs lines per step; extra API quota)
+  --logs            Also fetch failed, timed out and cancelled job logs (--tail-logs limits each job log and step excerpt)
   --comments LIST   Filter comments by MatchItem patterns over IDs and @author/@bot tokens
   --actions LIST    Filter actions by MatchItem patterns over run/workflow IDs, YAML path, workflow name, or job/check name
   --ai-fix          Fix failures/comments with AI, committing and pushing each turn, then

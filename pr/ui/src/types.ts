@@ -254,12 +254,20 @@ export interface StatusCheck {
   detailsUrl?: string;
 }
 
+export interface LogHeading {
+  title: string;
+  line: number;
+  endLine: number;
+  depth: number;
+}
+
 export interface Step {
   name: string;
   status: string;
   conclusion: string;
   number: number;
   logs?: string;
+  logHeadings?: LogHeading[];
 }
 
 export interface Job {
@@ -272,6 +280,7 @@ export interface Job {
   url?: string;
   steps?: Step[];
   logs?: string;
+  logHeadings?: LogHeading[];
 }
 
 export interface WorkflowRun {

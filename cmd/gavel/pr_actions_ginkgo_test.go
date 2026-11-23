@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -37,9 +38,28 @@ var _ = Describe("Actions URL status", func() {
 				}
 				fmt.Fprintf(w, `{"id":7,"run_id":101,"name":"build","status":%q,"conclusion":%q}`, status, conclusion)
 			case "/repos/acme/widgets/actions/jobs/8":
-				fmt.Fprint(w, `{"id":8,"run_id":101,"name":"lint","status":"completed","conclusion":"failure"}`)
+				fmt.Fprint(w, `{"id":8,"run_id":101,"name":"lint","status":"completed","conclusion":"failure","steps":[{"name":"Run ./action","number":1,"status":"completed","conclusion":"failure"},{"name":"Post Run ./action","number":2,"status":"completed","conclusion":"success"}]}`)
 			case "/repos/acme/widgets/actions/jobs/8/logs":
-				fmt.Fprint(w, "lint failed: invalid configuration\n")
+				fmt.Fprint(w, `##[group]Run ./action
+shell: bash
+##[endgroup]
+opening output
+##[start-action display=Lint workspace;id=lint]
+##[group]Diagnostics
+early lint output
+##[error]Process completed with exit code 1.
+checking workspace
+lint failed: invalid configuration
+##[endgroup]
+##[end-action id=lint;outcome=failure]
+Post job cleanup.
+##[start-action display=Lint workspace;id=lint]
+post-action output
+##[end-action id=lint;outcome=success]
+##[group]Post Run ./action
+cleanup output
+##[endgroup]
+`)
 			default:
 				http.Error(w, "unexpected request", http.StatusNotFound)
 			}
@@ -90,6 +110,21 @@ var _ = Describe("Actions URL status", func() {
 		Expect(requests).To(ContainElement("/repos/acme/widgets/actions/jobs/8/logs"))
 		Expect(exitCode).To(Equal(1))
 	})
+
+	DescribeTable("renders grouped step and job tails independently", func(limit int, stepLog string) {
+		result, err := runPRStatus(PRStatusOptions{Args: []string{"https://github.com/acme/widgets/actions/runs/101/job/8"}, Logs: true, TailLogs: limit, Interval: "1ms"})
+		Expect(err).NotTo(HaveOccurred())
+		status := result.(*prwatch.PRWatchResult)
+		Expect(status.Runs[101].Jobs[0].Steps[0].Logs).To(Equal(stepLog))
+		payload, err := json.Marshal(status)
+		Expect(err).NotTo(HaveOccurred())
+		var decoded prwatch.PRWatchResult
+		Expect(json.Unmarshal(payload, &decoded)).To(Succeed())
+		Expect(decoded.Pretty().String()).To(MatchRegexp(`(?s)Lint workspace.*Diagnostics.*lint failed: invalid configuration.*Log tail.*cleanup output`))
+	},
+		Entry("limited", 2, "checking workspace\nlint failed: invalid configuration"),
+		Entry("unlimited", 0, "opening output\nearly lint output\nProcess completed with exit code 1.\nchecking workspace\nlint failed: invalid configuration"),
+	)
 
 	It("does not fetch logs of jobs outside the URL's scope", func() {
 		_, err := runPRStatus(PRStatusOptions{Args: []string{"https://github.com/acme/widgets/actions/runs/101/job/7"}, Logs: true, Interval: "1ms"})
