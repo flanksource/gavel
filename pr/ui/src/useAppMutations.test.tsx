@@ -153,6 +153,7 @@ describe('useAppMutations', () => {
       queryKeys.filters(),
       todoQueryKeys.workspaceList('hidden-projects'),
       queryKeys.orgs(),
+      queryKeys.prSnapshot(),
     ]);
   });
 
@@ -172,6 +173,26 @@ describe('useAppMutations', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: 'acme' }),
+    });
+  });
+
+  it("sends a hosted repository owner to the hidden-repo-owners filter and refreshes what it hides", async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ name: 'hidden-repo-owners', kind: 'repo-owner', values: ['github.com/acme'] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const client = createClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined);
+    const { result } = renderHook(useAppMutations, { wrapper: wrapper(client) });
+
+    act(() => result.current.setOwnerHidden({ owner: 'github.com/acme', hidden: true }));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.prSnapshot(), exact: true }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.projects(), exact: true });
+    expect(fetch).toHaveBeenCalledWith('/api/filters/hidden-repo-owners/values', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: 'github.com/acme' }),
     });
   });
 

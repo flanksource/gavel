@@ -1,6 +1,8 @@
+// The dashboard's mutations: marking PRs seen, refreshing, pausing, search configuration, and
+// hiding projects, GitHub orgs and hosted repository owners through the user's filters.
 import { useCallback, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { HIDDEN_GITHUB_ORGS_FILTER, type UserFilter } from './components/oneShotQueries';
+import { HIDDEN_GITHUB_ORGS_FILTER, HIDDEN_REPO_OWNERS_FILTER, type UserFilter } from './components/oneShotQueries';
 import { HIDDEN_PROJECTS_FILTER, todoQueryKeys } from './components/todos/todoQueries';
 import { mutationJSON, queryKeys } from './query';
 import type { PRItem, SearchConfig, Snapshot } from './types';
@@ -18,6 +20,8 @@ export interface AppMutations {
   // dir is the project's workspace root: the value stored in the hidden-projects filter.
   setProjectHidden: (change: { dir: string; hidden: boolean }) => void;
   setOrgHidden: (change: { login: string; hidden: boolean }) => void;
+  /** Hides or shows every repository of a hosted organization's owner, as host/owner. */
+  setOwnerHidden: (change: { owner: string; hidden: boolean }) => void;
 }
 
 export function useAppMutations(): AppMutations {
@@ -157,6 +161,8 @@ export function useAppMutations(): AppMutations {
         queryClient.invalidateQueries({ queryKey: queryKeys.filters() }),
         queryClient.invalidateQueries({ queryKey: todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER), exact: true }),
         queryClient.invalidateQueries({ queryKey: queryKeys.orgs() }),
+        // A hosted member's PR list leaves out the repositories they hide.
+        queryClient.invalidateQueries({ queryKey: queryKeys.prSnapshot(), exact: true }),
       ]);
     },
     onError: reportError,
@@ -166,6 +172,9 @@ export function useAppMutations(): AppMutations {
   }), [filterValueMutation.mutate]);
   const setOrgHidden = useCallback(({ login, hidden }: { login: string; hidden: boolean }) => filterValueMutation.mutate({
     filter: HIDDEN_GITHUB_ORGS_FILTER, value: login, hidden, context: 'Update organization visibility',
+  }), [filterValueMutation.mutate]);
+  const setOwnerHidden = useCallback(({ owner, hidden }: { owner: string; hidden: boolean }) => filterValueMutation.mutate({
+    filter: HIDDEN_REPO_OWNERS_FILTER, value: owner, hidden, context: 'Update repository owner visibility',
   }), [filterValueMutation.mutate]);
 
   return {
@@ -179,6 +188,7 @@ export function useAppMutations(): AppMutations {
     setShowClosed: closedMutation.mutate,
     setProjectHidden,
     setOrgHidden,
+    setOwnerHidden,
   };
 }
 

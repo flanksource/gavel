@@ -3,6 +3,7 @@
 import { useState, useEffect, useEffectEvent, useMemo, useCallback, useRef } from 'react';
 import type { PRItem, PRInfo, SearchConfig, Project } from './types';
 import { PRList } from './components/PRList';
+import { RepoVisibilityPicker } from './components/RepoVisibilityPicker';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { AppShell, Button } from '@flanksource/clicky-ui/components';
@@ -191,6 +192,7 @@ export function App() {
     setShowClosed,
     setProjectHidden,
     setOrgHidden,
+    setOwnerHidden,
   } = useAppMutations();
   const { detail, loading: detailLoading, refresh: refreshDetail } = usePRDetailStream(selected);
   const rawPrs = snapshot.prs;
@@ -718,8 +720,14 @@ export function App() {
       {!overflow && chatButton}
       {hostControls && <TaskManagerButton basePath="/api/v1" />}
       {hostControls && <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />}
-      {githubScopeVisible(authMode) && (
+      {githubScopeVisible(authMode) ? (
         <OrgChooser config={{ ...config, project: scopeProject }} projects={allProjects} onChange={updateScopeConfig} onSetProjectHidden={hideProject} onSetOrgHidden={hideOrg} />
+      ) : (
+        <RepoVisibilityPicker
+          projects={allProjects}
+          onSetRepoHidden={(dir, hidden) => setProjectHidden({ dir, hidden })}
+          onSetOwnerHidden={(owner, hidden) => setOwnerHidden({ owner, hidden })}
+        />
       )}
       <StatusIndicator
         onOpenChange={setStatusOpen}

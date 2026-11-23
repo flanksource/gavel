@@ -1,3 +1,5 @@
+// One-shot queries the dashboard's pickers and dialogs read: the user's named filters, GitHub orgs,
+// prompt specs and runtimes.
 import { queryOptions } from '@tanstack/react-query';
 import { familiesFromRuntimeCatalog, type PromptSpecDetail, type RuntimeCatalogFamily } from '@flanksource/clicky-ui/ai';
 import type { ChatModel } from '@flanksource/clicky-ui/chat';
@@ -91,6 +93,8 @@ export interface UserFilter {
 }
 
 export const HIDDEN_GITHUB_ORGS_FILTER = 'hidden-github-orgs';
+/** A hosted member's hidden repository owners, as host/owner. */
+export const HIDDEN_REPO_OWNERS_FILTER = 'hidden-repo-owners';
 
 export function userFilterQuery(name: string) {
   return queryOptions({

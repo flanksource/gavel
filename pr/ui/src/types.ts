@@ -1,3 +1,5 @@
+// The dashboard's wire types: pull requests and their detail, projects, processes, the PR snapshot
+// and search configuration, as the Go server serves them.
 import type { TodoCounts } from './types/todos';
 export * from './types/todos';
 export * from './types/sessions';
@@ -81,6 +83,10 @@ export interface Project {
   // Hidden projects are returned by /api/projects but left out of every project
   // list and not tracked for git state; only the project picker lists them.
   hidden?: boolean;
+  // A hosted repository's owner as host/owner (absent for a pushed one), and whether the
+  // member hides that owner, which hides the project too.
+  owner?: string;
+  ownerHidden?: boolean;
   // Absent when this workspace's todo store could not be reached — see error.
   // A project is still listed (and its processes still managed) in that case, so
   // never read a missing todoCounts as "zero todos".
