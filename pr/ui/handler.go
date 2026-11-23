@@ -176,6 +176,9 @@ type Server struct {
 	catalogDB *gorm.DB
 	// connectionsChanged, when set, is told the organization's connections changed.
 	connectionsChanged func()
+	// connectionClientOptions, when set, configures the provider client a hosted organization's
+	// connection is tested with; unset, it reaches only public addresses (Defensive).
+	connectionClientOptions *git.ClientOptions
 	// prRemote, when set, reaches the repository of a listed pull request a git connection
 	// brings; without it such a pull request has no detail.
 	prRemote PRRemote
@@ -205,6 +208,12 @@ func (s *Server) SetOrg(org uuid.UUID, db *gorm.DB) {
 // SetConnectionsChanged has changed run after an admin creates, changes or deletes one of the
 // organization's connections, so the repositories they bring are re-read.
 func (s *Server) SetConnectionsChanged(changed func()) { s.connectionsChanged = changed }
+
+// SetConnectionClientOptions configures the provider client a hosted organization's connection is
+// tested with, in place of one that reaches only public addresses.
+func (s *Server) SetConnectionClientOptions(options git.ClientOptions) {
+	s.connectionClientOptions = &options
+}
 
 // SetConnectionCatalog keeps a local dashboard's encrypted connections in db. Call it before
 // serving.

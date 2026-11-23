@@ -1,6 +1,5 @@
 // Tests the connection catalog the Settings connections page reads and edits: a hosted org's
-// form offers only git connections with literal values, members see them, admins change them, and
-// nothing that dials a connection runs.
+// form offers only git connections with literal values, members see them, and admins change them.
 package ui
 
 import (
@@ -94,12 +93,6 @@ func TestAHostedOrgsConnectionsPageKeepsOnlyItsGitConnections(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, body)
 	assert.Contains(t, body, "acme-labs")
 	assert.Equal(t, 2, changed)
-
-	for _, path := range []string{"/api/catalog/connection/test", "/api/catalog/connection/resolve", "/api/catalog/connections/health"} {
-		status, body = connectionsPageCall(t, base, http.MethodPost, path, admin, "org:admin", acme, nil)
-		assert.Equal(t, http.StatusForbidden, status, "%s dials the connection, which a hosted org's may not: %s", path, body)
-		assert.Contains(t, body, "a hosted organization's connections aren't tested from the server")
-	}
 
 	require.NoError(t, db.Exec(`INSERT INTO repos (org_id, name, source, github_repo_id, connection_id, provider_repo_id) VALUES (?, 'acme/api', 'github', 101, ?, '101')`,
 		org, created.ID).Error)

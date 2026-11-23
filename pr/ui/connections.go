@@ -1,3 +1,5 @@
+// Serves the connections page's catalog of an organization's connections: its form schema, dashboard
+// and edits, a hosted organization's limited to git connections that are tested but never hydrated.
 package ui
 
 import (
@@ -27,17 +29,18 @@ const catalogBase = "/api/catalog"
 var hostedConnectionPolicy = shared.Policy{AllowedTypes: forge.GitTypes,
 	SecretSources: []string{shared.SourceValue}, URLSources: []string{shared.SourceValue}}
 
-// openConnectionCatalog opens the catalog of the request's organization, for a member to read and
-// an admin to change; ok is false once it has answered the request with why it can't.
-func (s *Server) openConnectionCatalog(w http.ResponseWriter, r *http.Request) (*shared.Service, *gorm.DB, tenant.Scope, func() error, bool) {
+// connectionCatalogAccess is the request's organization and the database its catalog is in, for a
+// member to read and an admin to change; ok is false once it has answered the request with why it
+// can't.
+func (s *Server) connectionCatalogAccess(w http.ResponseWriter, r *http.Request) (*gorm.DB, tenant.Scope, bool) {
 	scope := tenant.FromContext(r.Context())
 	if scope.OrgID != s.orgID() {
 		writeJSONError(w, http.StatusForbidden, fmt.Errorf("organization mismatch"))
-		return nil, nil, scope, nil, false
+		return nil, scope, false
 	}
 	if r.Method != http.MethodGet && !scope.IsLocal() && scope.Role != "org:admin" {
 		writeJSONError(w, http.StatusForbidden, fmt.Errorf("organization admin required"))
-		return nil, nil, scope, nil, false
+		return nil, scope, false
 	}
 	db := s.orgDB
 	if db == nil {
@@ -45,6 +48,16 @@ func (s *Server) openConnectionCatalog(w http.ResponseWriter, r *http.Request) (
 	}
 	if db == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, fmt.Errorf("connections require a database"))
+		return nil, scope, false
+	}
+	return db, scope, true
+}
+
+// openConnectionCatalog opens the catalog of the request's organization, for a member to read and
+// an admin to change; ok is false once it has answered the request with why it can't.
+func (s *Server) openConnectionCatalog(w http.ResponseWriter, r *http.Request) (*shared.Service, *gorm.DB, tenant.Scope, func() error, bool) {
+	db, scope, ok := s.connectionCatalogAccess(w, r)
+	if !ok {
 		return nil, nil, scope, nil, false
 	}
 	options := catalog.Options{DB: db, Scope: scope}
@@ -60,11 +73,15 @@ func (s *Server) openConnectionCatalog(w http.ResponseWriter, r *http.Request) (
 }
 
 // handleConnectionCatalog serves the connections page's form schema and dashboard from the
-// catalog's service. Testing or resolving a connection, and checking the fleet's health, dial it,
-// which a hosted organization's may not have the server do.
+// catalog's service. A hosted organization's connection is tested by gavel, at public addresses;
+// resolving one or checking the fleet's health would hydrate it, which a hosted one never is.
 func (s *Server) handleConnectionCatalog(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && s.hosted {
-		writeJSONError(w, http.StatusForbidden, fmt.Errorf("a hosted organization's connections aren't tested from the server: it reaches only public addresses, and only when it syncs or reads their repositories"))
+		if strings.TrimSuffix(r.URL.Path, "/") == catalogBase+"/connection/test" {
+			s.testHostedConnection(w, r)
+			return
+		}
+		writeJSONError(w, http.StatusForbidden, fmt.Errorf("a hosted organization's connections are tested, but never resolved or health-checked, from the server: it reaches only public addresses, with the values the organization saved"))
 		return
 	}
 	service, _, _, close, ok := s.openConnectionCatalog(w, r)
