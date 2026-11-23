@@ -1,5 +1,5 @@
-// Package filters stores each user's named filters, such as the projects and GitHub
-// orgs they hide. A list endpoint references a filter by name (?exclude=hidden-projects)
+// Package filters stores each user's named filters, such as the projects, GitHub orgs and
+// hosted repository owners they hide. A list endpoint references a filter by name (?exclude=hidden-projects)
 // instead of the client sending the values. Local mode has no user: its filters belong
 // to the local org with a null owner.
 package filters
@@ -21,12 +21,16 @@ import (
 const (
 	HiddenProjects   = "hidden-projects"    // Kind workspace
 	HiddenGitHubOrgs = "hidden-github-orgs" // Kind github-org
+	HiddenRepoOwners = "hidden-repo-owners" // Kind repo-owner
 
 	// KindWorkspace values are todo workspace roots: an absolute directory locally,
 	// repo:<id> in hosted mode.
 	KindWorkspace = "workspace"
 	// KindGitHubOrg values are GitHub org logins.
 	KindGitHubOrg = "github-org"
+	// KindRepoOwner values are a hosted organization's repository owners as lowercased
+	// host/owner: a GitHub org or user, a top-level GitLab group, an Azure DevOps organization.
+	KindRepoOwner = "repo-owner"
 )
 
 var (
@@ -38,7 +42,7 @@ var (
 )
 
 // wellKnown maps each filter name to its kind.
-var wellKnown = map[string]string{HiddenProjects: KindWorkspace, HiddenGitHubOrgs: KindGitHubOrg}
+var wellKnown = map[string]string{HiddenProjects: KindWorkspace, HiddenGitHubOrgs: KindGitHubOrg, HiddenRepoOwners: KindRepoOwner}
 
 // Filter is a named set of values. Values is never nil and is sorted.
 type Filter struct {
@@ -135,13 +139,13 @@ func (s *Store) Remove(ctx context.Context, scope tenant.Scope, name, value stri
 func kindOf(name string) (string, error) {
 	kind, ok := wellKnown[name]
 	if !ok {
-		return "", fmt.Errorf("%w %q: expected %s or %s", ErrUnknownFilter, name, HiddenProjects, HiddenGitHubOrgs)
+		return "", fmt.Errorf("%w %q: expected %s, %s or %s", ErrUnknownFilter, name, HiddenProjects, HiddenGitHubOrgs, HiddenRepoOwners)
 	}
 	return kind, nil
 }
 
-// validate returns the filter's kind and value normalized for it: trimmed, and a
-// workspace directory cleaned.
+// validate returns the filter's kind and value normalized for it: trimmed, a workspace
+// directory cleaned, and a repository owner lowercased.
 func validate(name, value string) (string, string, error) {
 	kind, err := kindOf(name)
 	if err != nil {
@@ -150,6 +154,12 @@ func validate(name, value string) (string, string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", "", fmt.Errorf("%w for filter %q: value is blank", ErrInvalidValue, name)
+	}
+	if kind == KindRepoOwner {
+		if host, owner, ok := strings.Cut(value, "/"); !ok || host == "" || owner == "" || strings.Contains(owner, "/") {
+			return "", "", fmt.Errorf("%w for filter %q: %q is not host/owner", ErrInvalidValue, name, value)
+		}
+		return kind, strings.ToLower(value), nil
 	}
 	if kind != KindWorkspace || strings.HasPrefix(value, "repo:") {
 		return kind, value, nil

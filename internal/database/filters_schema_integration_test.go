@@ -1,3 +1,5 @@
+// Tests the user_filters schema: one row per owner and name, the local null owner included, and
+// only the filter kinds gavel knows.
 package database_test
 
 import (
@@ -29,4 +31,6 @@ func TestUserFiltersSchemaTreatsNullOwnerAsOne(t *testing.T) {
 	dbtest.RequireConstraintViolation(t, dbtest.Quiet(db.Gorm()).Exec(insert, tenant.LocalOrgID, "workspace").Error, "user_filters_owner_name_key")
 	dbtest.RequireConstraintViolation(t, dbtest.Quiet(db.Gorm()).Exec(
 		`INSERT INTO user_filters (org_id, name, kind) VALUES (?, 'hidden-labels', 'label')`, tenant.LocalOrgID).Error, "user_filters_kind_check")
+	require.NoError(t, db.Gorm().Exec(`INSERT INTO user_filters (org_id, name, kind) VALUES (?, 'hidden-repo-owners', 'repo-owner')`, tenant.LocalOrgID).Error,
+		"a repository owner is a kind of filter value")
 }

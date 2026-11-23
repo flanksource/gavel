@@ -6,8 +6,8 @@ import "github.com/flanksource/gavel/filters"
 // endpoints reference with ?exclude=<name>.
 func addFiltersOpenAPI(document map[string]any) {
 	filter := map[string]any{"type": "object", "required": []string{"name", "kind", "values"}, "properties": map[string]any{
-		"name":   map[string]any{"type": "string", "enum": []string{filters.HiddenProjects, filters.HiddenGitHubOrgs}},
-		"kind":   map[string]any{"type": "string", "enum": []string{filters.KindWorkspace, filters.KindGitHubOrg}},
+		"name":   map[string]any{"type": "string", "enum": []string{filters.HiddenProjects, filters.HiddenGitHubOrgs, filters.HiddenRepoOwners}},
+		"kind":   map[string]any{"type": "string", "enum": []string{filters.KindWorkspace, filters.KindGitHubOrg, filters.KindRepoOwner}},
 		"values": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Sorted. Workspace roots (an absolute directory locally, repo:<id> hosted) or GitHub org logins"},
 	}}
 	name := []any{map[string]any{"name": "name", "in": "path", "required": true, "schema": filter["properties"].(map[string]any)["name"]}}

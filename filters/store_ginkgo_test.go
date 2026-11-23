@@ -79,10 +79,11 @@ var _ = Describe("filters.Store", Ordered, func() {
 		orgs := func(values ...string) filters.Filter {
 			return filters.Filter{Name: filters.HiddenGitHubOrgs, Kind: filters.KindGitHubOrg, Values: values}
 		}
+		owners := filters.Filter{Name: filters.HiddenRepoOwners, Kind: filters.KindRepoOwner, Values: []string{}}
 		Expect(lists).To(Equal(map[string][]filters.Filter{
-			"ada":   {orgs("acme-legacy"), projects()},
-			"bob":   {orgs("example-sandbox"), projects()},
-			"local": {orgs("tenant-x"), projects("/src/alpha")},
+			"ada":   {orgs("acme-legacy"), projects(), owners},
+			"bob":   {orgs("example-sandbox"), projects(), owners},
+			"local": {orgs("tenant-x"), projects("/src/alpha"), owners},
 		}))
 	})
 
@@ -104,5 +105,14 @@ var _ = Describe("filters.Store", Ordered, func() {
 		got, err := store.Add(ctx, ada, filters.HiddenProjects, value)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.Values).To(Equal([]string{value}))
+	})
+
+	It("keeps a hosted repository owner as its lowercased host/owner, so it hides the owner's repositories on that host", func() {
+		got, err := store.Add(ctx, ada, filters.HiddenRepoOwners, "  GitLab.com/Acme-Platform ")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(filters.Filter{Name: filters.HiddenRepoOwners, Kind: filters.KindRepoOwner, Values: []string{"gitlab.com/acme-platform"}}))
+		_, err = store.Add(ctx, ada, filters.HiddenRepoOwners, "acme")
+		Expect(err).To(MatchError(filters.ErrInvalidValue))
+		Expect(err).To(MatchError(ContainSubstring(`"acme" is not host/owner`)))
 	})
 })

@@ -61,6 +61,6 @@ table "user_filters" {
   index "user_filters_user_id_idx" { columns = [column.user_id] }
   check "user_filters_name_nonempty" { expr = "name <> '' AND name = btrim(name)" }
   check "user_filters_kind_check" {
-    expr = "kind = ANY (ARRAY['workspace'::text, 'github-org'::text])"
+    expr = "kind = ANY (ARRAY['workspace'::text, 'github-org'::text, 'repo-owner'::text])"
   }
 }
