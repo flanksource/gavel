@@ -74,6 +74,10 @@ func (c ClerkOrganizations) User(ctx context.Context, clerkUserID string) (Clerk
 	return profile, nil
 }
 
+// ErrNoGitHubConnection is GitHubToken's error for a user who hasn't connected a GitHub
+// account in Clerk.
+var ErrNoGitHubConnection = errors.New("the user has no GitHub connection in Clerk")
+
 // GitHubToken returns clerkUserID's GitHub OAuth access token. Clerk refreshes an
 // expired token before returning it.
 func (c ClerkOrganizations) GitHubToken(ctx context.Context, clerkUserID string) (string, error) {
@@ -87,7 +91,7 @@ func (c ClerkOrganizations) GitHubToken(ctx context.Context, clerkUserID string)
 		return "", err
 	}
 	if len(tokens) == 0 || tokens[0].Token == "" {
-		return "", errors.New("the user has no GitHub connection in Clerk")
+		return "", ErrNoGitHubConnection
 	}
 	return tokens[0].Token, nil
 }
