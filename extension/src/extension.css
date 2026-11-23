@@ -13,9 +13,14 @@ body,
   margin: 0;
 }
 
-/* The popup is a fixed-width column that grows with its content; wide enough for the runtime bar's model name (Chrome caps popups at 800px). */
+/* The floating comment frame covers the page while a menu is open, so only the card may paint (clicky-ui tokens give body the theme background). */
+body[data-floating-draft] {
+  background: transparent;
+}
+
+/* The popup is a fixed-width column (w-96) that grows with its content (Chrome caps popups at 800px). */
 body[data-popup],
 body[data-popup] #app {
-  width: 460px;
+  width: 24rem;
   height: auto;
 }

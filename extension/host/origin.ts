@@ -1,4 +1,5 @@
 import type { AgentSessionGrouping, AgentSessionRuntime } from "../contracts/agent-session-store";
+import type { SessionTarget } from "./site-settings";
 
 export function bookmarkletParentOrigin(url: string): string {
   const parsed = new URL(url);
@@ -17,6 +18,10 @@ export type GavelPanelFrame = {
   grouping?: AgentSessionGrouping;
   /** The Captain session this site's comments go to; distinct from the bridge session. */
   agentSession?: string;
+  /** Where this site's comments go: the global session, this page's own, or wherever Gavel routes them (`auto`, which has no `agentSession`); the panel shows and changes all three. */
+  sessionTarget?: SessionTarget;
+  pageSession?: string;
+  globalSession?: string;
 };
 
 function extensionPage(input: string, what: string): { url: URL; origin: string } {
@@ -38,6 +43,9 @@ export function bookmarkletFrame(
       ...(options.panel.runtime ? { runtime: JSON.stringify(options.panel.runtime) } : {}),
       ...(options.panel.grouping ? { grouping: options.panel.grouping } : {}),
       ...(options.panel.agentSession ? { session: options.panel.agentSession } : {}),
+      ...(options.panel.sessionTarget ? { sessionTarget: options.panel.sessionTarget } : {}),
+      ...(options.panel.pageSession ? { pageSession: options.panel.pageSession } : {}),
+      ...(options.panel.globalSession ? { globalSession: options.panel.globalSession } : {}),
       parentOrigin,
       bridgeSession: options.session,
     }).toString();

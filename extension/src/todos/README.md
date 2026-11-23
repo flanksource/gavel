@@ -1,6 +1,6 @@
 # Offline todo capture
 
-The extension bundles the todo form in `todo-relay.html`. **Add to gavel todo**, **Screenshot to gavel todo**, and the popup's **Capture todo / saved captures** use this local page. Neither the playground nor Gavel needs to be running to save a new todo or a comment on an existing issue.
+The extension bundles the todo form in `todo-relay.html`. **Add to gavel todo**, **Screenshot to gavel todo**, and the popup footer's sync error, which opens the saved captures, use this local page; the grabber's menu captures a todo. Neither the playground nor Gavel needs to be running to save a new todo or a comment on an existing issue.
 
 Build and load it:
 

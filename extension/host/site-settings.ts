@@ -6,14 +6,26 @@ export const SITE_SETTINGS_KEY = "flanksource.grabber";
 export const GROUPINGS: readonly AgentSessionGrouping[] = ["shared", "page"];
 
 /**
+ * Where this site's comments go: `global` is the one extension-wide session, `page` the agent session
+ * remembered for this site, and `auto` leaves routing to Gavel (per `grouping`) while `site.session` stays remembered.
+ */
+export type SessionTarget = "global" | "page" | "auto";
+export const SESSION_TARGETS: readonly SessionTarget[] = ["global", "page", "auto"];
+
+function oneOf(options: readonly string[]): string {
+  return options.length < 3 ? options.join(" or ") : `${options.slice(0, -1).join(", ")} or ${options[options.length - 1]}`;
+}
+
+/**
  * Only the fields that differ from the global defaults, plus the site's agent
  * session and whether the extension is enabled on this site. `enabled` is stored
- * only as `true`: switching it off removes the key.
+ * only as `true`: switching it off removes the key. `session` is always the page
+ * agent's id; `target` decides whether it, the global session or Gavel's own routing (`auto`) is the default.
  */
-export type SiteSettings = { server?: string; project?: string; runtime?: AgentSessionRuntime; grouping?: AgentSessionGrouping; session?: string; enabled?: true };
+export type SiteSettings = { server?: string; project?: string; runtime?: AgentSessionRuntime; grouping?: AgentSessionGrouping; session?: string; target?: SessionTarget; enabled?: true };
 
 const TEXT_FIELDS = ["server", "project", "session"] as const;
-const FIELDS = [...TEXT_FIELDS, "runtime", "grouping", "enabled"];
+const FIELDS = [...TEXT_FIELDS, "runtime", "grouping", "target", "enabled"];
 
 /** The old string `agent` setting ("claude" | "codex") named no model, so it cannot be carried over; it is refused rather than guessed at. */
 export function removedAgentError(where: string): Error {
@@ -27,6 +39,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseGrouping(value: unknown, label: string): AgentSessionGrouping {
   if (!GROUPINGS.includes(value as AgentSessionGrouping)) throw new Error(`${label} grouping must be ${GROUPINGS.join(" or ")}, got ${JSON.stringify(value)}`);
   return value as AgentSessionGrouping;
+}
+
+export function parseSessionTarget(value: unknown, label: string): SessionTarget {
+  if (!SESSION_TARGETS.includes(value as SessionTarget)) throw new Error(`${label} target must be ${oneOf(SESSION_TARGETS)}, got ${JSON.stringify(value)}`);
+  return value as SessionTarget;
 }
 
 /** The runtime new agent sessions start with: a spec naming a model, and optional presets. Anything else is a corrupt entry. */
@@ -66,6 +83,7 @@ export function parseSiteSettings(raw: string | null): SiteSettings {
   }
   if (parsed["runtime"] !== undefined) site.runtime = parseRuntime(parsed["runtime"], "Grabber settings");
   if (parsed["grouping"] !== undefined) site.grouping = parseGrouping(parsed["grouping"], "Grabber settings");
+  if (parsed["target"] !== undefined) site.target = parseSessionTarget(parsed["target"], "Grabber settings");
   if (parsed["enabled"] !== undefined) {
     if (parsed["enabled"] !== true) throw new Error(`Grabber settings enabled must be true (remove the key to disable), got ${JSON.stringify(parsed["enabled"])}`);
     site.enabled = true;
@@ -88,6 +106,14 @@ export function withSiteSession(raw: string | null, session: string | null): str
   if (session === null) delete site.session;
   else if (session === "") throw new Error("Grabber session must be a non-empty string");
   else site.session = session;
+  return serializeSiteSettings(site);
+}
+
+/** The stored entry with only the target changed; `page` is the default, so choosing it removes the key. */
+export function withSiteTarget(raw: string | null, target: SessionTarget): string | null {
+  const site = parseSiteSettings(raw);
+  if (parseSessionTarget(target, "Grabber settings") === "page") delete site.target;
+  else site.target = target;
   return serializeSiteSettings(site);
 }
 

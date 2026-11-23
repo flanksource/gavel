@@ -1,20 +1,21 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentPicker } from "../agents/AgentPicker";
+import { EnableCard } from "../agents/EnableCard";
 import { GavelRail, type GavelRailProps } from "./GavelPanel";
 import { GAVEL_COMMENT_CONFIG } from "./useGavelComments";
 
 afterEach(() => { cleanup(); localStorage.clear(); });
 
 function renderRail() {
-  const onAutoRunChange = vi.fn();
+  const onClose = vi.fn();
+  const onTarget = vi.fn();
   const onAssignAll = vi.fn();
   const props: GavelRailProps = {
     host: { send: vi.fn(), requestMode: vi.fn(), maximize: vi.fn() },
     state: { url: "https://example.test/review", title: "Review" },
     comments: {
       comments: [], loading: false, error: null,
-      create: vi.fn(), reply: vi.fn(), updateStatus: vi.fn(), acknowledge: vi.fn(),
+      refresh: vi.fn(), reply: vi.fn(), edit: vi.fn(), editReply: vi.fn(), updateStatus: vi.fn(), acknowledge: vi.fn(),
       assign: vi.fn(), close: vi.fn(), remove: vi.fn(), applyProposal: vi.fn(),
       rejectProposal: vi.fn(), requestRevision: vi.fn(), loadProposalDiff: vi.fn(),
       deliver: vi.fn(), deliverAll: vi.fn(),
@@ -24,25 +25,42 @@ function renderRail() {
     renderRunDetails: () => null,
     session: { sessionId: undefined, session: undefined },
     sessionContent: <p>Session transcript</p>,
-    settingsContent: <AgentPicker heading="Agent settings" autoRun={{ checked: false, onChange: onAutoRunChange }} />,
+    settingsContent: <EnableCard
+      host="example.test"
+      enabled={{ value: true, onChange: onClose }}
+      target={{ value: "page", onChange: onTarget }}
+      runtime={{ value: undefined, catalog: undefined, onChange: vi.fn() }}
+      sessions={{ items: [], state: "ready" }}
+      onStart={vi.fn()}
+      onUse={vi.fn()}
+    />,
     extraAssignItems: () => [], assignAll: { label: "Assign all to review session", onSelect: onAssignAll },
   };
-  return { ...render(<GavelRail {...props} />), onAutoRunChange, onAssignAll };
+  return { ...render(<GavelRail {...props} />), onClose, onTarget, onAssignAll };
 }
 
 describe("GavelRail settings menu", () => {
-  it("opens settings over the transcript without adding a settings tab", () => {
-    const { onAutoRunChange } = renderRail();
+  it("opens the enable card over the transcript without adding a settings tab, and has no auto-run switch", () => {
+    const { onTarget } = renderRail();
     fireEvent.click(screen.getByRole("tab", { name: "New session" }));
     expect([screen.getByText("Session transcript") !== null, screen.queryByRole("switch")]).toEqual([true, null]);
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.click(screen.getByRole("switch", { name: "Auto-run new comments on this page" }));
-    expect([onAutoRunChange.mock.calls, screen.queryByRole("tab", { name: "Settings" }), screen.getByText("Session transcript") !== null]).toEqual([[[true]], null, true]);
+    expect(screen.getByRole("switch", { name: "Gavel on example.test" })).toBeTruthy();
+    expect(screen.queryByRole("switch", { name: "Auto-run new comments on this page" })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "Global session" }));
+    expect([onTarget.mock.calls, screen.queryByRole("tab", { name: "Settings" }), screen.getByText("Session transcript") !== null]).toEqual([[["global"]], null, true]);
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByRole("tab", { name: /^Comments/ }));
     expect([screen.queryByRole("switch"), screen.getByTestId("comment-compose-input") !== null]).toEqual([null, true]);
+  });
+
+  it("switches the enabled switch off to close the grabber from the card", () => {
+    const { onClose } = renderRail();
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Gavel on example.test" }));
+    expect(onClose.mock.calls).toEqual([[false]]);
   });
 
   it("keeps bulk assignment in the settings menu and closes after assigning", () => {

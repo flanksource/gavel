@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { useCommentRailWidth } from "@flanksource/clicky-ui/comments";
 import { sidebarWidth } from "./host-resize";
 import { matchesBookmarkletParent } from "./origin";
-import { parseAnchors, parseFabPosition, parseHostState, parsePresentation, validateParentOrigin } from "./bridge-parse";
+import { parseAnchors, parseDraftBox, parseFabPosition, parseHostState, parsePresentation, validateParentOrigin, type DraftBox } from "./bridge-parse";
 import { hoverSize, type HoverSize } from "./host-hover-resize";
+import type { SessionTarget } from "./site-settings";
 import { bridgeMessage, envelope, panelMode, type AnchorState, type HostState, type PanelMessage, type PanelMode, type Presentation } from "./model";
 
 export type HostConnection = { parentOrigin: string; session: string };
@@ -41,7 +42,17 @@ export function sendToHost(message: PanelMessage) {
   window.parent.postMessage(envelope(session, message), peer === "null" ? "*" : peer);
 }
 
-export async function saveHostSession(session: string | undefined): Promise<void> {
+/** Stores the site's page agent session in the page's grabber settings; `undefined` clears it. */
+export function saveHostSession(session: string | undefined): Promise<void> {
+  return saveHostSettings({ session: session ?? null });
+}
+
+/** Stores where this site's comments go by default: its own page agent's session, the global one, or wherever Gavel routes them (`auto`). */
+export function saveHostTarget(target: SessionTarget): Promise<void> {
+  return saveHostSettings({ target });
+}
+
+async function saveHostSettings(change: { session: string | null } | { target: SessionTarget }): Promise<void> {
   const host = connection;
   if (!host) throw new Error("Bookmarklet bridge is not attached to a parent document");
   const requestId = crypto.randomUUID();
@@ -61,7 +72,7 @@ export async function saveHostSession(session: string | undefined): Promise<void
     const timer = window.setTimeout(() => finish("The page did not confirm the session change"), 5000);
     window.addEventListener("message", receive);
     try {
-      sendToHost({ type: "settings", requestId, session: session ?? null });
+      sendToHost({ type: "settings", requestId, ...change });
     } catch (cause) {
       finish(cause instanceof Error ? cause.message : String(cause));
     }
@@ -75,6 +86,7 @@ export function useHostBridge() {
   const [focus, setFocus] = useState<string>();
   const [error, setError] = useState("");
   const [presentation, setPresentation] = useState<Presentation>("compact");
+  const [draftBox, setDraftBox] = useState<DraftBox>();
   useEffect(() => {
     if (!connection || window.parent === window) {
       setError("Open the grabber by enabling the Gavel extension on this site.");
@@ -110,6 +122,8 @@ export function useHostBridge() {
           setAnchors([]);
           setFocus(undefined);
           setError("");
+        } else if (message["type"] === "draft-box") {
+          setDraftBox(parseDraftBox(message));
         } else if (message["type"] === "anchors") {
           setAnchors(parseAnchors(message["anchors"]));
         } else if (message["type"] === "focus" && typeof message["anchor"] === "string") {
@@ -136,5 +150,5 @@ export function useHostBridge() {
     } catch (cause) { setError(String(cause)); }
     return () => window.removeEventListener("message", receive);
   }, []);
-  return { state, anchors, focus, error, floating: presentation === "draft", presentation };
+  return { state, anchors, focus, error, floating: presentation === "draft", presentation, draftBox };
 }

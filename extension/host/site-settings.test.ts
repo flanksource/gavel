@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { parseGrouping, parseRuntime, parseSiteSettings, serializeSiteSettings, withSiteEnabled, withSiteSession } from "./site-settings";
+import { parseGrouping, parseRuntime, parseSiteSettings, parseSessionTarget, serializeSiteSettings, withSiteEnabled, withSiteSession, withSiteTarget } from "./site-settings";
 
 const runtime = { spec: { model: "example-model", effort: "high" }, presets: ["fast"] };
 
@@ -8,9 +8,11 @@ it("reads an absent entry as no overrides", () => {
 });
 
 it("reads every known field", () => {
-  expect(parseSiteSettings(JSON.stringify({ backend: "gavel", server: "http://localhost:9092", project: "site", runtime, grouping: "shared", session: "s-1", enabled: true }))).toEqual({
-    server: "http://localhost:9092", project: "site", runtime, grouping: "shared", session: "s-1", enabled: true,
+  expect(parseSiteSettings(JSON.stringify({ backend: "gavel", server: "http://localhost:9092", project: "site", runtime, grouping: "shared", session: "s-1", target: "global", enabled: true }))).toEqual({
+    server: "http://localhost:9092", project: "site", runtime, grouping: "shared", session: "s-1", target: "global", enabled: true,
   });
+  expect(parseSiteSettings(JSON.stringify({ target: "page" }))).toEqual({ target: "page" });
+  expect(parseSiteSettings(JSON.stringify({ session: "s-1", target: "auto" }))).toEqual({ session: "s-1", target: "auto" });
 });
 
 it.each([
@@ -24,6 +26,8 @@ it.each([
   { name: "enabled: false, which is stored as no key", raw: JSON.stringify({ enabled: false }), error: /enabled must be true/ },
   { name: "a non-boolean enabled", raw: JSON.stringify({ enabled: "yes" }), error: /enabled must be true/ },
   { name: "an unknown grouping", raw: JSON.stringify({ grouping: "global" }), error: /grouping must be shared or page/ },
+  { name: "an unknown target", raw: JSON.stringify({ target: "everywhere" }), error: /target must be global, page or auto, got "everywhere"/ },
+  { name: "a non-string target", raw: JSON.stringify({ target: true }), error: /target must be global, page or auto, got true/ },
   { name: "a runtime that is a string", raw: JSON.stringify({ runtime: "codex" }), error: /runtime must be an object/ },
   { name: "a runtime without a model", raw: JSON.stringify({ runtime: { spec: {} } }), error: /runtime spec.model must be a non-empty string/ },
   { name: "a runtime with an unknown field", raw: JSON.stringify({ runtime: { spec: { model: "m" }, model: "m" } }), error: /runtime has unknown field "model"/ },
@@ -37,6 +41,9 @@ it("validates a runtime and a grouping wherever they are stored, naming where", 
   expect(parseGrouping("page", "Global default")).toBe("page");
   expect(() => parseRuntime({ spec: {} }, "Global default")).toThrow(/Global default runtime spec.model/);
   expect(() => parseGrouping(1, "Global default")).toThrow(/Global default grouping must be shared or page, got 1/);
+  expect(parseSessionTarget("global", "Grabber settings")).toBe("global");
+  expect(parseSessionTarget("auto", "Grabber settings")).toBe("auto");
+  expect(() => parseSessionTarget("site", "Grabber settings")).toThrow(/Grabber settings target must be global, page or auto, got "site"/);
 });
 
 it("removes the entry when nothing overrides the defaults", () => {
@@ -52,6 +59,18 @@ it("changes only enabled in the stored entry and removes the entry once empty", 
   expect(withSiteEnabled(JSON.stringify({ project: "site", enabled: true }), false)).toBe('{"project":"site"}');
   expect(withSiteEnabled(JSON.stringify({ enabled: true }), false)).toBeNull();
   expect(withSiteEnabled(null, false)).toBeNull();
+});
+
+it("changes only the target of the stored entry: global and auto are stored, page (the default) removes the key and the entry once empty", () => {
+  const stored = JSON.stringify({ project: "site", session: "s-2" });
+  expect(JSON.parse(withSiteTarget(stored, "global") ?? "")).toEqual({ project: "site", session: "s-2", target: "global" });
+  expect(JSON.parse(withSiteTarget(stored, "auto") ?? "")).toEqual({ project: "site", session: "s-2", target: "auto" });
+  expect(JSON.parse(withSiteTarget(null, "global") ?? "")).toEqual({ target: "global" });
+  expect(JSON.parse(withSiteTarget(JSON.stringify({ target: "global" }), "auto") ?? "")).toEqual({ target: "auto" });
+  expect(withSiteTarget(JSON.stringify({ project: "site", target: "global" }), "page")).toBe('{"project":"site"}');
+  expect(withSiteTarget(JSON.stringify({ project: "site", target: "auto" }), "page")).toBe('{"project":"site"}');
+  expect(withSiteTarget(JSON.stringify({ target: "global" }), "page")).toBeNull();
+  expect(() => withSiteTarget(null, "nowhere" as never)).toThrow(/target must be global, page or auto/);
 });
 
 it("changes only the session of the stored entry and removes the entry once empty", () => {
