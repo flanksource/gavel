@@ -53,7 +53,7 @@ func newWorkspaceSet(values []string) workspaceSet {
 func (w workspaceSet) has(dir string) bool { return w[filepath.Clean(dir)] }
 
 // hiddenProjects is the seam the project surfaces read the caller's hidden-projects
-// filter through. Package tests that don't exercise hiding swap it to skip PostgreSQL.
+// filter through, with a hosted caller's hidden owners' repositories. Package tests that don't exercise hiding swap it to skip PostgreSQL.
 var hiddenProjects = func(ctx context.Context, s *Server) (workspaceSet, error) {
 	store, err := s.filterStore(ctx)
 	if err != nil {
@@ -63,7 +63,12 @@ var hiddenProjects = func(ctx context.Context, s *Server) (workspaceSet, error) 
 	if err != nil {
 		return nil, err
 	}
-	return newWorkspaceSet(filter.Values), nil
+	set := newWorkspaceSet(filter.Values)
+	byOwner, err := s.ownerHiddenWorkspaces(ctx, tenant.FromContext(ctx))
+	for _, dir := range byOwner {
+		set[dir] = true
+	}
+	return set, err
 }
 
 // visibleProjects is the project catalog without the projects the caller hides.

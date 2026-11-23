@@ -158,8 +158,9 @@ func (w HostedWorkspaces) repoID(org uuid.UUID, ref string) (uuid.UUID, bool) {
 }
 
 // projectList is the dashboard's projects: the organization's repositories in hosted mode,
-// the host's registered projects otherwise. Each is marked hidden when the caller's
-// hidden-projects filter holds it, and a hidden one carries no TODO counts.
+// each with its owner, the host's registered projects otherwise. Each is marked hidden when the
+// caller's hidden-projects filter holds it or, hosted, the caller hides its owner; a hidden one
+// carries no TODO counts.
 func (s *Server) projectList(ctx context.Context) ([]projectInfo, error) {
 	if s.hosted && s.workspaceData == nil && s.workspaces == nil {
 		return nil, errNoHostedWorkspaces
@@ -169,14 +170,21 @@ func (s *Server) projectList(ctx context.Context) ([]projectInfo, error) {
 		return nil, err
 	}
 	if s.workspaceData != nil {
-		return s.catalogProjectCounts(ctx, hidden)
+		projects, err := s.catalogProjectCounts(ctx, hidden)
+		if err != nil {
+			return nil, err
+		}
+		return projects, s.withOwners(ctx, projects)
 	}
 	if s.workspaces != nil {
 		projects, err := s.workspaces.Projects(ctx, s.orgID())
+		if err != nil {
+			return nil, err
+		}
 		for i := range projects {
 			projects[i].Hidden = hidden.has(projects[i].Dir)
 		}
-		return projects, err
+		return projects, s.withOwners(ctx, projects)
 	}
 	return listProjects(ctx, hidden)
 }

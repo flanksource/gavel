@@ -35,7 +35,11 @@ type projectInfo struct {
 	TodoBackend   string      `json:"todoBackend"`
 	TodoCounts    *todoCounts `json:"todoCounts,omitempty"`
 	Hidden        bool        `json:"hidden,omitempty"`
-	Error         string      `json:"error,omitempty"`
+	// Owner is a hosted repository's owner as host/owner, and OwnerHidden whether the caller
+	// hides it, which hides the project too.
+	Owner       string `json:"owner,omitempty"`
+	OwnerHidden bool   `json:"ownerHidden,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // procStatus is the wire shape for /api/proc/status. hasProcfile=false is the

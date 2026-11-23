@@ -75,6 +75,7 @@ var _ = Describe("hidden-projects filter", func() {
 		Expect(listed).To(Equal(map[string][]filters.Filter{"filters": {
 			{Name: filters.HiddenGitHubOrgs, Kind: filters.KindGitHubOrg, Values: []string{}},
 			{Name: filters.HiddenProjects, Kind: filters.KindWorkspace, Values: []string{}},
+			{Name: filters.HiddenRepoOwners, Kind: filters.KindRepoOwner, Values: []string{}},
 		}}))
 		Expect(serveProjectGit(tracked.server, http.MethodGet, "/api/projects/acme/git", nil).Code).To(Equal(http.StatusOK))
 	})
@@ -141,6 +142,7 @@ var _ = Describe("hidden-projects filter", func() {
 		Expect(stored).To(Equal([]filters.Filter{
 			{Name: filters.HiddenGitHubOrgs, Kind: filters.KindGitHubOrg, Values: []string{"acme-legacy", "tenant-x"}},
 			{Name: filters.HiddenProjects, Kind: filters.KindWorkspace, Values: []string{f.repo}},
+			{Name: filters.HiddenRepoOwners, Kind: filters.KindRepoOwner, Values: []string{}},
 		}))
 		var projectsFile []map[string]any
 		var settingsFile map[string]any

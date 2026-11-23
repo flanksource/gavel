@@ -128,3 +128,63 @@ func TestAHostedMembersPRListLeavesOutWhatTheyHide(t *testing.T) {
 		assert.Equal(t, []string{"acme/Platform/rules#4", "acme/api#1", "globex/app#5"}, prKeys(t, next()), "unhiding the Azure DevOps organization brings its PR back")
 	})
 }
+
+func TestAHostedMembersProjectsAndTodosLeaveOutTheOwnersTheyHide(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	creator, member := uuid.New(), uuid.New()
+	for name, id := range map[string]uuid.UUID{"ada": creator, "grace": member} {
+		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
+	}
+	dataDir := t.TempDir()
+	app := "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
+	toolID := pushedRepo(t, db, org, dataDir, "tool")
+	tool := "repo:" + toolID.String()
+	api := visibleRepoRow(t, db, org, "github", "acme/api", "")
+	web := visibleRepoRow(t, db, org, "github", "acme/web", "")
+	base := hostedTodosServer(t, db, org, dataDir)
+	for _, todo := range []map[string]any{{"dir": app, "title": "App plan", "visibility": "public"}, {"dir": tool, "title": "Tool plan", "visibility": "public"}} {
+		status, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", todo)
+		require.Equal(t, http.StatusCreated, status, created)
+	}
+	// The tool repository comes from a GitLab connection; listing todos reads only the database.
+	require.NoError(t, db.Exec(`UPDATE repos SET source = 'gitlab', name = 'platform/tool', remote_url = 'https://gitlab.example.com/platform/tool.git' WHERE id = ?`, toolID).Error)
+	for _, value := range []string{"gitlab.example.com/platform", "github.com/acme"} {
+		status, hidden := hostedCall(t, base, http.MethodPost, "/api/filters/hidden-repo-owners/values", member, "org:member", map[string]any{"value": value})
+		require.Equal(t, http.StatusOK, status, hidden)
+	}
+
+	t.Run("projects carry their owner, and a hidden owner's are hidden", func(t *testing.T) {
+		status, body := connectionsPageCall(t, base, http.MethodGet, "/api/projects", member, "org:member", nil, nil)
+		require.Equal(t, http.StatusOK, status, body)
+		var projects []struct {
+			Dir, Owner          string
+			Hidden, OwnerHidden bool
+		}
+		require.NoError(t, json.Unmarshal([]byte(body), &projects), body)
+		got := map[string]string{}
+		for _, project := range projects {
+			got[project.Dir] = fmt.Sprintf("owner=%q hidden=%t ownerHidden=%t", project.Owner, project.Hidden, project.OwnerHidden)
+		}
+		assert.Equal(t, map[string]string{
+			app:  `owner="" hidden=false ownerHidden=false`,
+			tool: `owner="gitlab.example.com/platform" hidden=true ownerHidden=true`,
+			api:  `owner="github.com/acme" hidden=true ownerHidden=true`,
+			web:  `owner="github.com/acme" hidden=true ownerHidden=true`,
+		}, got)
+	})
+
+	t.Run("todos of a hidden owner's repositories are left out of the member's list alone", func(t *testing.T) {
+		listed := func(user uuid.UUID) []string {
+			status, list := hostedCall(t, base, http.MethodGet, "/api/todos?exclude=hidden-projects", user, "org:member", nil)
+			require.Equal(t, http.StatusOK, status, list)
+			titles := []string{}
+			for _, item := range list["items"].([]any) {
+				titles = append(titles, item.(map[string]any)["title"].(string))
+			}
+			sort.Strings(titles)
+			return titles
+		}
+		assert.Equal(t, []string{"App plan"}, listed(member))
+		assert.Equal(t, []string{"App plan", "Tool plan"}, listed(creator))
+	})
+}

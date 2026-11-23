@@ -1,5 +1,6 @@
 // What a hosted organization's member hides of its repositories: those they hid one by one
-// (hidden-projects, repo:<id>) and every repository of an owner they hid (hidden-repo-owners).
+// (hidden-projects, repo:<id>) and every repository of an owner they hid (hidden-repo-owners), in
+// their PR list, projects and todos.
 package ui
 
 import (
@@ -84,14 +85,11 @@ func (s *Server) repoVisibility(ctx context.Context, scope tenant.Scope) (repoVi
 	if err != nil {
 		return repoVisibility{}, err
 	}
-	hiddenOwners, err := store.Get(ctx, scope, filters.HiddenRepoOwners)
+	owners, err := s.hiddenOwners(ctx, scope)
 	if err != nil {
 		return repoVisibility{}, err
 	}
-	visibility := repoVisibility{repos: map[string]bool{}, owners: map[string]bool{}}
-	for _, owner := range hiddenOwners.Values {
-		visibility.owners[owner] = true
-	}
+	visibility := repoVisibility{repos: map[string]bool{}, owners: owners}
 	var ids []uuid.UUID
 	for _, value := range hiddenRepos.Values {
 		if id, err := uuid.Parse(strings.TrimPrefix(value, "repo:")); err == nil && strings.HasPrefix(value, "repo:") {
@@ -119,4 +117,92 @@ func (s *Server) repoVisibility(ctx context.Context, scope tenant.Scope) (repoVi
 		}
 	}
 	return visibility, nil
+}
+
+// hiddenOwners is the repository owners scope's member hides, as lowercased host/owner; none
+// outside a hosted dashboard.
+func (s *Server) hiddenOwners(ctx context.Context, scope tenant.Scope) (map[string]bool, error) {
+	owners := map[string]bool{}
+	if s == nil || !s.hosted || scope.IsLocal() {
+		return owners, nil
+	}
+	store, err := s.filterStore(ctx)
+	if err != nil {
+		return nil, err
+	}
+	hidden, err := store.Get(ctx, scope, filters.HiddenRepoOwners)
+	if err != nil {
+		return nil, err
+	}
+	for _, owner := range hidden.Values {
+		owners[owner] = true
+	}
+	return owners, nil
+}
+
+// hostedRepoOwners is the owner of each of the hosted organization's repositories, as lowercased
+// host/owner, by its workspace (repo:<id>); a pushed repository has none.
+func (s *Server) hostedRepoOwners(ctx context.Context) (map[string]string, error) {
+	var rows []struct {
+		ID           uuid.UUID
+		Source, Name string
+		RemoteURL    *string
+	}
+	if err := s.orgDB.WithContext(ctx).Raw(`SELECT id, source, name, remote_url FROM repos WHERE org_id = ?`, s.orgID()).
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("read the organization's repositories: %w", err)
+	}
+	owners := make(map[string]string, len(rows))
+	for _, row := range rows {
+		remote := ""
+		if row.RemoteURL != nil {
+			remote = *row.RemoteURL
+		}
+		if host, fullName, ok := repoPlace(row.Source, row.Name, remote); ok {
+			owner, _, _ := strings.Cut(fullName, "/")
+			owners[RepoWorkspace(row.ID)] = strings.ToLower(host + "/" + owner)
+		}
+	}
+	return owners, nil
+}
+
+// ownerHiddenWorkspaces is the workspaces (repo:<id>) of the repositories whose owner scope's
+// member hides.
+func (s *Server) ownerHiddenWorkspaces(ctx context.Context, scope tenant.Scope) ([]string, error) {
+	hidden, err := s.hiddenOwners(ctx, scope)
+	if err != nil || len(hidden) == 0 || s.orgDB == nil {
+		return nil, err
+	}
+	owners, err := s.hostedRepoOwners(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var dirs []string
+	for dir, owner := range owners {
+		if hidden[owner] {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs, nil
+}
+
+// withOwners marks each hosted project with its repository's owner, and whether the caller hides
+// that owner.
+func (s *Server) withOwners(ctx context.Context, projects []projectInfo) error {
+	if !s.hosted || s.orgDB == nil {
+		return nil
+	}
+	owners, err := s.hostedRepoOwners(ctx)
+	if err != nil {
+		return err
+	}
+	hidden, err := s.hiddenOwners(ctx, tenant.FromContext(ctx))
+	if err != nil {
+		return err
+	}
+	for i := range projects {
+		projects[i].Owner = owners[projects[i].Dir]
+		projects[i].OwnerHidden = hidden[projects[i].Owner]
+	}
+	return nil
 }

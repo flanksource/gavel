@@ -115,7 +115,8 @@ func listProjectInfos(ctx context.Context, ps []Project, hidden workspaceSet) []
 // handleProjects is the collection endpoint of the projects entity:
 //
 //	GET  /api/projects → list (clicky table when negotiated, else []projectInfo);
-//	                     ?exclude=hidden-projects drops the projects that filter holds
+//	                     ?exclude=hidden-projects drops the projects that filter holds, and a
+//	                     hosted caller's hidden owners' repositories
 //	POST /api/projects → create (409 if the name is already taken)
 //
 // Per-entity reads and mutations live in handleProjectByName.
@@ -132,7 +133,8 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		out = slices.DeleteFunc(out, func(p projectInfo) bool { return workspaceSet(excluded).has(p.Dir) })
+		hidesOwners := slices.Contains(r.URL.Query()["exclude"], filters.HiddenProjects)
+		out = slices.DeleteFunc(out, func(p projectInfo) bool { return workspaceSet(excluded).has(p.Dir) || hidesOwners && p.OwnerHidden })
 		if wantsClicky(r) {
 			writeProjectsClicky(w, out)
 			return

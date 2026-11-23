@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/gavel/filters"
 	gavelgit "github.com/flanksource/gavel/git"
+	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -29,6 +30,20 @@ func (s *Server) handleOrgTodosList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeTodoError(w, filterErrorStatus(err), err)
 		return
+	}
+	if slices.Contains(r.URL.Query()["exclude"], filters.HiddenProjects) {
+		// A hosted caller's hidden owners hide their repositories' todos too.
+		byOwner, err := s.ownerHiddenWorkspaces(r.Context(), tenant.FromContext(r.Context()))
+		if err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if excluded == nil {
+			excluded = map[string]bool{}
+		}
+		for _, dir := range byOwner {
+			excluded[dir] = true
+		}
 	}
 	todoFilters, err := todoFiltersFromRequest(r)
 	if err != nil {
