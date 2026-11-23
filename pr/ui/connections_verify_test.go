@@ -1,5 +1,5 @@
-// Tests the connections page's Test for a hosted organization: it checks a git connection's
-// credentials against its provider, only for an admin, and only at public addresses by default.
+// Tests the connections page's Test and health check for a hosted organization: each checks a git
+// connection's credentials against its provider, at public addresses only by default.
 package ui
 
 import (
@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/flanksource/commons-db/git"
 	"github.com/google/uuid"
@@ -108,12 +109,10 @@ func TestAHostedOrgsConnectionTestChecksItsCredentials(t *testing.T) {
 		assert.Contains(t, body, "a hosted organization keeps only git connections")
 	})
 
-	t.Run("resolving a connection or checking their health is still refused", func(t *testing.T) {
-		for _, path := range []string{"/api/catalog/connection/resolve", "/api/catalog/connections/health"} {
-			status, body := connectionsPageCall(t, base, http.MethodPost, path, admin, "org:admin", draft("glpat-good"), nil)
-			assert.Equal(t, http.StatusForbidden, status, "%s: %s", path, body)
-			assert.Contains(t, body, "a hosted organization's connections are tested, but never resolved or health-checked, from the server")
-		}
+	t.Run("resolving a connection is still refused", func(t *testing.T) {
+		status, body := connectionsPageCall(t, base, http.MethodPost, "/api/catalog/connection/resolve", admin, "org:admin", draft("glpat-good"), nil)
+		assert.Equal(t, http.StatusForbidden, status, body)
+		assert.Contains(t, body, "a hosted organization's connections are tested and health-checked, but never resolved, from the server")
 	})
 }
 
@@ -140,4 +139,91 @@ func TestAHostedOrgsConnectionTestReachesOnlyPublicAddresses(t *testing.T) {
 	assert.Contains(t, result.Message, "gitlab didn't confirm the connection's credentials", "the test's failure names the provider")
 	assert.Contains(t, result.Message, "defensive HTTP client refuses localhost address 127.0.0.1")
 	assert.False(t, asked, "a hosted server never dials a private address")
+}
+
+// connectionHealthReply is what the connections page's health check answers.
+type connectionHealthReply struct {
+	Results []struct {
+		ID, State, Detail string
+		CheckedAt         time.Time
+	}
+}
+
+func TestAHostedOrgsConnectionHealthChecksEachConnectionsCredentials(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	t.Setenv("GAVEL_SECRET_KEEPER_CONNECTION", "")
+	t.Setenv("GAVEL_SECRET_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("h"), 32)))
+	admin, member := uuid.New(), uuid.New()
+	for name, id := range map[string]uuid.UUID{"admin": admin, "member": member} {
+		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
+	}
+	gitlab := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v4/user" && r.Header.Get("Authorization") == "Bearer glpat-good" {
+			_, _ = w.Write([]byte(`{"id":1,"username":"batman"}`))
+			return
+		}
+		http.Error(w, `{"message":"401 Unauthorized"}`, http.StatusUnauthorized)
+	}))
+	t.Cleanup(gitlab.Close)
+	down := httptest.NewTLSServer(http.NotFoundHandler())
+	down.Close()
+
+	srv := &Server{}
+	srv.SetOrg(org, db)
+	srv.SetHostedMode(true)
+	srv.SetConnectionClientOptions(git.ClientOptions{})
+	base := serveActingAs(t, srv, org)
+	save := func(name, url, token string) string {
+		t.Helper()
+		status, body := connectionsPageCall(t, base, http.MethodPost, "/api/catalog/connection", admin, "org:admin",
+			map[string]any{"name": name, "type": "gitlab", "url": url, "password": token, "insecure_tls": true}, nil)
+		require.Equal(t, http.StatusOK, status, body)
+		var saved struct{ ID string }
+		require.NoError(t, json.Unmarshal([]byte(body), &saved))
+		return saved.ID
+	}
+	good, stolen, gone := save("good", gitlab.URL, "glpat-good"), save("stolen", gitlab.URL, "glpat-stolen"), save("gone", down.URL, "glpat-good")
+
+	t.Run("a member sees each connection's state: healthy, refused credentials, or unreachable", func(t *testing.T) {
+		before := time.Now()
+		status, body := connectionsPageCall(t, base, http.MethodPost, "/api/catalog/connections/health", member, "org:member",
+			map[string]any{"ids": []string{good, stolen, gone}, "force": true}, nil)
+		require.Equal(t, http.StatusOK, status, body)
+		assert.NotContains(t, body, "glpat-")
+		var reply connectionHealthReply
+		require.NoError(t, json.Unmarshal([]byte(body), &reply), body)
+		require.Len(t, reply.Results, 3, body)
+		states := map[string]string{}
+		for _, result := range reply.Results {
+			states[result.ID] = result.State
+			assert.False(t, result.CheckedAt.Before(before.Truncate(time.Second)), "checked now: %s", body)
+		}
+		assert.Equal(t, map[string]string{good: "healthy", stolen: "credentials", gone: "unreachable"}, states, body)
+		for _, result := range reply.Results {
+			switch result.ID {
+			case good:
+				assert.Equal(t, "gitlab accepted the connection's credentials", result.Detail)
+			case stolen:
+				assert.Contains(t, result.Detail, "gitlab didn't confirm the connection's credentials")
+				assert.Contains(t, result.Detail, "401")
+			case gone:
+				assert.Contains(t, result.Detail, "gitlab didn't confirm the connection's credentials")
+			}
+		}
+	})
+
+	t.Run("a connection the organization doesn't have is refused", func(t *testing.T) {
+		other := uuid.NewString()
+		status, body := connectionsPageCall(t, base, http.MethodPost, "/api/catalog/connections/health", admin, "org:admin",
+			map[string]any{"ids": []string{good, other}}, nil)
+		assert.Equal(t, http.StatusBadRequest, status, body)
+		assert.Contains(t, body, "unknown connection ids: "+other)
+	})
+
+	t.Run("a check names at least one connection", func(t *testing.T) {
+		status, body := connectionsPageCall(t, base, http.MethodPost, "/api/catalog/connections/health", admin, "org:admin",
+			map[string]any{"ids": []string{}}, nil)
+		assert.Equal(t, http.StatusBadRequest, status, body)
+		assert.Contains(t, body, "name the connections to check in ids")
+	})
 }

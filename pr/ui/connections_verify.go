@@ -1,5 +1,5 @@
-// Tests a hosted organization's git connection for the connections page: its credentials, checked
-// against its provider at public addresses only, on the unsaved form or a saved connection.
+// Checks a hosted organization's git connections for the connections page: Test checks the form's
+// credentials, and the health check each saved connection's, with its provider at public addresses.
 package ui
 
 import (
@@ -32,7 +32,7 @@ type connectionCheck struct {
 // its provider, as the form has them and never hydrated. An edit form leaves a saved connection's
 // token blank, so the organization's saved token stands in for it.
 func (s *Server) testHostedConnection(w http.ResponseWriter, r *http.Request) {
-	db, scope, ok := s.connectionCatalogAccess(w, r)
+	db, scope, ok := s.connectionCatalogAccess(w, r, true)
 	if !ok {
 		return
 	}
@@ -61,21 +61,33 @@ func (s *Server) testHostedConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	_, err = s.verifyConnection(r.Context(), draft)
+	writeJSON(w, connectionCheck{OK: err == nil, Message: verifiedMessage(draft.Type, err)})
+}
+
+// verifyConnection checks connection's credentials with its provider, through a client that
+// reaches only public addresses unless the server was given other options. configuration is true
+// when the connection can't make a client at all, such as one with no token.
+func (s *Server) verifyConnection(ctx context.Context, connection models.Connection) (configuration bool, err error) {
 	options := git.ClientOptions{Defensive: true}
 	if s.connectionClientOptions != nil {
 		options = *s.connectionClientOptions
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), connectionTestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, connectionTestTimeout)
 	defer cancel()
-	client, err := git.FromConnection(dbcontext.NewContext(ctx), draft, options)
-	if err == nil {
-		err = client.Provider.Verify(ctx)
-	}
+	client, err := git.FromConnection(dbcontext.NewContext(ctx), connection, options)
 	if err != nil {
-		writeJSON(w, connectionCheck{Message: fmt.Sprintf("%s didn't confirm the connection's credentials: %v", draft.Type, err)})
-		return
+		return true, err
 	}
-	writeJSON(w, connectionCheck{OK: true, Message: draft.Type + " accepted the connection's credentials"})
+	return false, client.Provider.Verify(ctx)
+}
+
+// verifiedMessage says whether a connection of kind passed its check, and if not, why.
+func verifiedMessage(kind string, err error) string {
+	if err != nil {
+		return fmt.Sprintf("%s didn't confirm the connection's credentials: %v", kind, err)
+	}
+	return kind + " accepted the connection's credentials"
 }
 
 // connectionDraft is the connection body holds.
