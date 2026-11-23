@@ -5,7 +5,7 @@ import { UiCheck, UiEllipsis, UiGitMerge, UiSync } from '@flanksource/clicky-ui/
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { ComponentType } from 'react';
 import type { PRItem, PRDetail } from '../types';
-import { prActionFormKey, prActionMutationKey, type PendingPRAction, type PRActionAvailability } from './prActionDraft';
+import { prActionFormKey, prActionMutationKey, type MergeMessageSource, type PendingPRAction, type PRActionAvailability } from './prActionDraft';
 
 // ExtraAction is a caller-supplied button (e.g. "New todo") folded into the PR
 // action cluster so it collapses together with the GitHub actions: an outline
@@ -131,10 +131,14 @@ export function PRActions({
 
   function open(pending: PendingPRAction) {
     if (loading || (pending.type === 'merge' && mergeDisabled)) return;
+    const mergeSource: MergeMessageSource | undefined = info && {
+      number: pr.number, title: info.title, body: info.body,
+      headRef: `${pr.repo.split('/')[0]}/${info.headRefName}`, commits: info.prCommits ?? [],
+    };
     openModal(prActionFormKey(pending.type), {
       repo: pr.repo, number: pr.number, url: pr.url, base,
       nodeId: nodeId ?? '', headSha: info?.headRefOid ?? '', azure,
-      pending, comment: '', availability, onChanged,
+      pending, comment: '', commitTitle: '', commitBody: '', availability, mergeSource, onChanged,
     });
   }
 

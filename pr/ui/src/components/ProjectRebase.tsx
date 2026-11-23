@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { SessionTail } from '@flanksource/clicky-ui/ai';
-import { Button, Combobox, Modal, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
-import { AnsiHtml } from '@flanksource/clicky-ui/data';
-import { UiGitMerge, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { compactAISpecRuntime, SessionTail, SpecRuntimeBar, type AISpecRuntimeValue } from '@flanksource/clicky-ui/ai';
+import { Button, Combobox, Modal, SplitButton, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
+import { ActionError, AnsiHtml } from '@flanksource/clicky-ui/data';
+import { UiGitMerge, UiSparkles, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import { fetchJSON, HttpError, mutationJSON, queryKeys } from '../query';
+import { chatModelsQuery, chatRuntimesQuery } from './oneShotQueries';
 import type { RebaseContext, RebaseOperation } from '../types/branchRebase';
 import { projectDiffQueryKey } from './projectMutations';
 import { usePromptRun } from './promptRun';
@@ -29,6 +30,7 @@ interface Props {
 export function ProjectRebase({ projectName, worktree, branch, generation, children }: Props) {
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [runtimeOpen, setRuntimeOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [target, setTarget] = useState('refs/remotes/origin/main');
   const url = `/api/projects/${encodeURIComponent(projectName)}/branch/rebase`;
@@ -60,9 +62,10 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
   const reason = !worktree ? 'Select a checked-out branch to rebase.' : !branch && !operation ? 'Detached worktrees cannot start a rebase.' : '';
   const error = mutation.error?.message || context.error?.message || operation?.error;
   const active = operation && operation.phase !== 'done' && operation.phase !== 'aborted';
-  const send = () => {
+  const send = (runtime: AISpecRuntimeValue = {}) => {
     if (!operation || !context.data?.executable) return;
-    void ai.start({ gavelExecutable: context.data.executable, worktree: operation.worktree, operation: operation.id, branch: operation.branch, target: operation.target, targetSha: operation.targetSha, phase: operation.phase, error: operation.error, conflicts: operation.conflicts, stashSha: operation.stashSha });
+    setRuntimeOpen(false);
+    void ai.start({ gavelExecutable: context.data.executable, worktree: operation.worktree, operation: operation.id, branch: operation.branch, target: operation.target, targetSha: operation.targetSha, phase: operation.phase, error: operation.error, conflicts: operation.conflicts, stashSha: operation.stashSha }, { spec: compactAISpecRuntime(runtime) });
   };
   const openDialog = () => { mutation.reset(); setOpen(true); void context.refetch(); };
   const disabled = !!reason || busy || !!active;
@@ -77,7 +80,8 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
       {active && <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
         <span className="min-w-0 break-words">Rebase of {operation.branch}: {operation.phase}{operation.stashSha && ` · saved edits: ${operation.stashSha.slice(0, 8)}`}</span>
         {!error && <ConflictPaths paths={operation.conflicts} />}
-        <Button variant="outline" size="sm" disabled={busy || !context.data?.executable} onClick={send}>Send to rebase prompt</Button>
+        <SplitButton variant="outline" size="sm" disabled={busy || !context.data?.executable} title="Rebase prompt options" label="Send to rebase prompt" onClick={() => send()}
+          items={[{ label: <span className="flex items-center gap-2"><UiSparkles />Choose runtime…</span>, onSelect: () => setRuntimeOpen(true) }]} />
         <Button variant="outline" size="sm" disabled={busy || operation.phase.startsWith('restore')} onClick={() => mutation.mutate({ abort: true, operation })}>Abort and restore edits</Button>
       </div>}
       {ai.active && <span className="flex min-w-0 flex-1 items-center gap-2">
@@ -100,9 +104,32 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
         {context.error && <p role="alert" className="text-destructive">{context.error.message}</p>}
       </div>
     </Modal>
+    {runtimeOpen && <RebaseRuntimeDialog busy={busy} onClose={() => setRuntimeOpen(false)} onSend={send} />}
   </>;
 
   return <>{children({ action, status })}</>;
+}
+
+// Picks the Captain runtime (mode, model, effort…) layered over the branch-rebase
+// prompt's frontmatter; unset fields inherit it.
+function RebaseRuntimeDialog({ busy, onClose, onSend }: { busy: boolean; onClose: () => void; onSend: (runtime: AISpecRuntimeValue) => void }) {
+  const [runtime, setRuntime] = useState<AISpecRuntimeValue>({});
+  const models = useQuery(chatModelsQuery());
+  const families = useQuery(chatRuntimesQuery());
+  const catalogError = models.error ?? families.error;
+  return (
+    <Modal open onClose={onClose} title="Send to rebase prompt" size="md" footer={<>
+      <Button variant="ghost" onClick={onClose}>Cancel</Button>
+      <Button disabled={busy || !models.data || !families.data} onClick={() => onSend(runtime)}>Send to rebase prompt</Button>
+    </>}>
+      <div className="flex flex-col gap-2 text-sm">
+        {catalogError ? <ActionError error={catalogError} title="Could not load agent runtimes" /> : models.data && families.data
+          ? <SpecRuntimeBar ariaLabel="Rebase prompt runtime" models={models.data} families={families.data} value={runtime} onChange={setRuntime} readOnly={busy} />
+          : <p role="status" className="text-muted-foreground">Loading agent runtimes…</p>}
+        <p className="text-xs text-muted-foreground">Unset options inherit the branch-rebase prompt's runtime.</p>
+      </div>
+    </Modal>
+  );
 }
 
 function ConflictPaths({ paths }: { paths: string[] }) {

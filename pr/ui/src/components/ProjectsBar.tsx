@@ -131,7 +131,7 @@ function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, pr
         label={`Open ${project.name} project`}
         selected={selected === project.name && !selectedRunId}
         onSelect={onOpen}
-        icon={<RepoIcon repo={project.repos[0] || project.name} size={28} />}
+        icon={<RepoIcon repo={project.repoIcon?.repo ?? project.repos[0] ?? project.name} homepageUrl={project.repoIcon?.homepageUrl} size={28} />}
         status={status?.hasProcfile ? <ProcStatusIcon status={status} compact /> : undefined}
         title={project.name}
         titleHint={project.dir}
@@ -152,14 +152,10 @@ function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, pr
             <Chevron />
           </Button>
         ) : undefined}
-        actions={<>
-          <Button variant="ghost" size="icon" type="button" onClick={() => onSettings(project)} title={`Edit ${project.name} .gavel.yaml`} aria-label={`Edit ${project.name} settings`} className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground">
-            <UiCog />
-          </Button>
-          <Button variant="ghost" size="icon" type="button" onClick={() => onHide(project)} title={`Hide ${project.name} from project lists`} aria-label={`Hide ${project.name} project`} className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground">
-            <UiEyeClosed />
-          </Button>
-        </>}
+        menuItems={[
+          { label: 'Edit settings…', icon: UiCog, title: `Edit ${project.name} .gavel.yaml`, onSelect: () => onSettings(project) },
+          { label: 'Hide project', icon: UiEyeClosed, title: `Hide ${project.name} from project lists`, onSelect: () => onHide(project) },
+        ]}
       />
       {historyEnabled && open && (
         <div role="group" aria-label={`${project.name} test and lint runs`}>

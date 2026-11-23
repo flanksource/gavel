@@ -3,10 +3,11 @@ import type { PRItem, PRInfo, SearchConfig, Project } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
-import { AppShell, Button } from '@flanksource/clicky-ui/components';
+import { AppShell, Button, SplitButton } from '@flanksource/clicky-ui/components';
 import { TaskManager, TaskManagerButton } from '@flanksource/clicky-ui/data';
 import { ChatButton } from '@flanksource/clicky-ui/ai';
 import { ActivityView } from './components/ActivityView';
+import { CommentsView } from './components/comments/CommentsView';
 import { TodoNewButton, TodoNavbarDensityPicker, TodoNavbarLayoutPicker, TodoWorkspaceList, TodoDetailPane, TodoFullPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { PlanReviewBar, TodoReviewButton, useReviewMode } from './components/todos/PlanReview';
@@ -24,14 +25,14 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
 import { currentAuthMode } from './query';
-import { GrabberExtensionHelp } from './components/GrabberExtensionHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
-import { aggregateGavelShards, computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
+import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
 import { useCopyFeedback } from './useCopyFeedback';
 import {
   annotateRoutePaths,
   buildRoute,
+  emptyCommentFilters,
   findPRByRoutePath,
   parseRoute,
   type RouteState,
@@ -47,7 +48,7 @@ import { useAppQueries } from './useAppQueries';
 import { useAppMutations } from './useAppMutations';
 import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiArrowLeft, UiCheck, UiCog, UiCopy, UiDotsVertical, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiPlay, UiRobotAi, UiSearch, UiTerminal } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiAdd, UiArrowLeft, UiChatDots, UiCheck, UiCog, UiCopy, UiDotsVertical, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiPlay, UiRobotAi, UiSearch, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
 import { MenubarView } from './components/mobile/MenubarView';
 import { MobilePRList } from './components/mobile/MobilePRList';
@@ -133,6 +134,7 @@ export function App() {
   const [projectRef, setProjectRef] = useState(initialRoute.projectRef);
   const [todoView, setTodoView] = useState(initialRoute.todoView);
   const [taskTimeRange, setTaskTimeRange] = useState(initialRoute.taskTimeRange);
+  const [commentFilters, setCommentFilters] = useState(initialRoute.commentFilters);
   const authMode = currentAuthMode();
   const hostControls = hostControlsVisible(authMode);
   const [activeTab, setActiveTab] = useState<Tab>(() => tabFor(authMode, initialRoute.tab));
@@ -175,7 +177,6 @@ export function App() {
     projectsLoaded,
     projectError,
     processError,
-    updateSnapshot,
     refreshProjectsAndProcesses,
   } = useAppQueries({ enabled: streamsActive, prsEnabled: (!isTodoNewPage && !isProcessesPage && (isMenubar ? menubarTab === 'prs' : activeTab === 'prs')) || paletteOpen || statusOpen, hostData: hostControls, initialConfig });
   const {
@@ -231,8 +232,8 @@ export function App() {
   const scopedPRs = projectScope.prs;
 
   const routeState: RouteState = useMemo(
-    () => ({ tab: activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, taskTimeRange, filters }),
-    [activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, taskTimeRange, filters],
+    () => ({ tab: activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, taskTimeRange, commentFilters, filters }),
+    [activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, taskTimeRange, commentFilters, filters],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
@@ -246,6 +247,7 @@ export function App() {
     setProjectRef(next.projectRef);
     setTodoView(next.todoView);
     setTaskTimeRange(next.taskTimeRange);
+    setCommentFilters(next.commentFilters);
     setFilters(next.filters);
     const url = buildRoute(next);
     const current = `${window.location.pathname}${window.location.search}`;
@@ -343,8 +345,9 @@ export function App() {
     enabled: onTodosTab || paletteOpen,
   });
   const openCreateTodo = useOpenCreateTodo();
+  const todoWorkspaces = visibleProjects.filter(project => !!project.dir);
   const newTodo = () => openCreateTodo({
-    workspaces: visibleProjects.filter(project => !!project.dir),
+    workspaces: todoWorkspaces,
     defaultDir: todos.selected?.dir ?? scopedProjects[0]?.dir,
     onOpen: todos.created,
   });
@@ -387,6 +390,7 @@ export function App() {
       setProjectRef(next.projectRef);
       setTodoView(next.todoView);
       setTaskTimeRange(next.taskTimeRange);
+      setCommentFilters(next.commentFilters);
       setFilters(next.filters);
     };
     window.addEventListener('popstate', onPopState);
@@ -459,6 +463,8 @@ export function App() {
   }, [scopedProjects]);
 
   const openAdd = useCallback(() => setAddOpen(true), []);
+  // Settings replaces the body until the user navigates: any tab or route change closes it.
+  useEffect(() => setSettingsScope(null), [activeTab, selectedPath]);
   const openGlobalSettings = useCallback(() => setSettingsScope({ kind: 'global' }), []);
   const openProjectSettings = useCallback(
     (p: Project) => setSettingsScope({ kind: 'project', project: p }),
@@ -473,17 +479,6 @@ export function App() {
       ? mergePRItemFromDetail(current, detail.pr!)
       : current);
   }, [detail?.pr, selected?.number, selected?.repo]);
-
-  const selectedKey = selected ? prKey(selected) : '';
-  useEffect(() => {
-    if (!selectedKey || !detail?.gavelResults) return;
-    const aggregate = aggregateGavelShards(detail.gavelResults);
-    if (!aggregate) return;
-    updateSnapshot(current => ({
-      ...current,
-      gavelResults: { ...current.gavelResults, [selectedKey]: aggregate },
-    }));
-  }, [detail?.gavelResults, selectedKey, updateSnapshot]);
 
   function loadPR(pr: PRItem) {
     if (selected?.repo === pr.repo && selected.number === pr.number) refreshDetail();
@@ -514,6 +509,7 @@ export function App() {
 
   function handleRefresh() {
     refreshPRs();
+    if (selected) refreshDetail();
   }
 
   function handlePause() {
@@ -545,7 +541,7 @@ export function App() {
         commitRoute({
           ...routeState,
           scopeProject: partial.project,
-          selectedPath: activeTab === 'prs' || activeTab === 'projects' || activeTab === 'todos' ? '' : routeState.selectedPath,
+          selectedPath: activeTab === 'prs' || activeTab === 'projects' || activeTab === 'todos' || activeTab === 'comments' ? '' : routeState.selectedPath,
           projectDiffPath: activeTab === 'projects' ? '' : routeState.projectDiffPath,
           projectRunId: activeTab === 'projects' ? '' : routeState.projectRunId,
           projectRef: activeTab === 'projects' ? '' : routeState.projectRef,
@@ -645,10 +641,10 @@ export function App() {
     onDiffPathChange={navigateProjectDiff}
     onChanged={onProcChanged}
   />;
-  const projectDialogs = <>
-    <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />
-    {settingsScope && <SettingsPage scope={settingsScope} repoOptions={reposList} onClose={() => setSettingsScope(null)} onSaved={onProcChanged} />}
-  </>;
+  const projectDialogs = <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />;
+  // Settings is a page, not a dialog: the dashboard shows it in the AppShell body
+  // (keeping the nav and header actions), the menubar in a full-window container.
+  const settingsPage = settingsScope && <SettingsPage scope={settingsScope} repoOptions={reposList} onClose={() => setSettingsScope(null)} onSaved={onProcChanged} />;
   function selectPRFromPalette(pr: PRItem) {
     commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
     loadPR(pr);
@@ -695,6 +691,7 @@ export function App() {
         onSessionChange={setMenubarSessionId}
       />
       {projectDialogs}
+      {settingsPage && <div className="fixed inset-0 z-50">{settingsPage}</div>}
       </>
     );
   }
@@ -723,8 +720,7 @@ export function App() {
       {activeTab === 'todos' && <TodoReviewButton review={review} />}
       {activeTab === 'todos' && <TodoNavbarLayoutPicker todos={todos} />}
       {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
-      {activeTab === 'todos' && <GrabberExtensionHelp />}
-      {activeTab === 'todos' && <TodoNewButton todos={todos} onNew={newTodo} />}
+      {!overflow && <TodoNewButton disabled={todoWorkspaces.length === 0} onNew={newTodo} />}
       {!overflow && chatButton}
       {hostControls && <TaskManagerButton basePath="/api/v1" />}
       {hostControls && <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />}
@@ -740,7 +736,7 @@ export function App() {
         rateLimit={rateLimit}
         onRefresh={handleRefresh}
         onPause={handlePause}
-        networkBusy={detailLoading}
+        networkBusy={detailLoading || refreshingPRs}
       />
       {hostControls && (
         <Button
@@ -765,7 +761,7 @@ export function App() {
     todos: { selected: selectedPath !== '', onBack: () => navigateTodo(''), label: 'Back to todos' },
     sessions: { selected: selectedPath !== '', onBack: () => navigateSession(''), label: 'Back to sessions' },
   };
-  const bodyBack = activeTab === 'todos' && todosFullWidth ? undefined : bodyBackByTab[activeTab];
+  const bodyBack = settingsPage || (activeTab === 'todos' && todosFullWidth) ? undefined : bodyBackByTab[activeTab];
   // AppShell's own back bar is a row of its own; a phone puts the same action
   // in the header, beside the brand, instead.
   const headerBack = isMobile && bodyBack?.selected ? bodyBack : undefined;
@@ -774,24 +770,27 @@ export function App() {
   // PR's detail page leaves them out.
   const prListChrome = activeTab === 'prs' && !(isMobile && selected);
   const prListProps = { prs: filtered, selected, onSelect: handleSelect, unread, syncStatus, gavelResults: gavelResultsMap, projectsByRepo, onProcChanged, viewer };
-  const prCount = prListChrome ? (
+  const prCount = prListChrome && isMobile ? (
     <span className="whitespace-nowrap text-xs text-muted-foreground">
       {filtered.length} pull request{filtered.length !== 1 ? 's' : ''}
     </span>
   ) : undefined;
-  const prExports = prListChrome ? (
-    <ExportButtons
+  const exportButton = (
+    <ExportSplitButton
       onJSON={onDownloadJSON}
       onMarkdown={onDownloadMarkdown}
       onCopy={onCopyForAgent}
       copyState={copyState}
       copyError={copyError}
     />
-  ) : undefined;
+  );
+  // On a wide screen the exports sit with the selected PR's actions; a phone
+  // keeps them under ⋮ for the list too.
+  const prExports = prListChrome && isMobile ? exportButton : undefined;
   // A phone keeps the list's chrome to one row: the count sits beside the
   // Filters button and the exports move under ⋮.
   const prFilterBar = prListChrome
-    ? <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} trailing={isMobile ? prCount : undefined} />
+    ? <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} trailing={prCount} />
     : undefined;
   // A phone gets the playground's AppShell header: tabs move into the
   // navigation drawer, the header keeps search, the assistant and ⋮, and ⋮
@@ -828,6 +827,8 @@ export function App() {
               mobileActions: (
                 <MobileShellActions
                   chat={chatButton}
+                  newTodoDisabled={todoWorkspaces.length === 0}
+                  onNewTodo={newTodo}
                   moreOpen={mobileMoreOpen}
                   onSearch={() => setPaletteOpen(true)}
                   onToggleMore={() => setMobileMoreOpen(open => !open)}
@@ -842,10 +843,8 @@ export function App() {
               toolbar: prFilterBar,
             })}
         actions={shellActions(false)}
-        bodyHeader={isMobile ? undefined : prCount}
-        bodyActions={isMobile ? undefined : prExports}
         bodySidebar={
-          activeTab === 'prs' ? (
+          settingsPage ? undefined : activeTab === 'prs' ? (
             isMobile && !selected
               ? <MobilePRList {...prListProps} onRefresh={refreshPRs} refreshing={refreshingPRs} />
               : <PRList {...prListProps} />
@@ -867,12 +866,12 @@ export function App() {
         // table wants the whole viewport, but the detail wants the contained
         // measure so markdown and session logs stay readable. Every other tab
         // passes a body sidebar, which AppShell already forces to full width.
-        contentWidth={todosFullWidth ? (todos.selected ? 'contained' : 'full') : undefined}
+        contentWidth={settingsPage || activeTab === 'comments' ? 'full' : todosFullWidth ? (todos.selected ? 'contained' : 'full') : undefined}
         contentClassName="overflow-hidden"
       >
-        {activeTab === 'prs' ? (
+        {settingsPage ? settingsPage : activeTab === 'prs' ? (
           selected ? (
-            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={scopedProjects} onActionDone={refreshDetail} onClose={closeSelectedPR} />
+            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={scopedProjects} onActionDone={refreshDetail} onRefresh={refreshDetail} onClose={closeSelectedPR} exportAction={exportButton} />
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
               <div className="text-center">
@@ -901,6 +900,22 @@ export function App() {
               )}
             </div>
           </div>
+        ) : activeTab === 'comments' ? (
+          <CommentsView
+            projects={visibleProjects}
+            scopedProjects={scopedProjects}
+            projectsLoaded={projectsLoaded}
+            projectError={projectError}
+            local={hostControls}
+            visible={visible}
+            filters={{ ...(commentFilters ?? emptyCommentFilters), project: scopeProject }}
+            selectedId={selectedPath}
+            onSelect={(id) => commitRoute({ ...routeState, selectedPath: id ?? '' })}
+            onFiltersChange={({ project, ...next }) => commitRoute({
+              ...routeState, scopeProject: project, commentFilters: next,
+              selectedPath: project === scopeProject ? selectedPath : '',
+            }, 'replace')}
+          />
         ) : activeTab === 'sessions' ? (
           <SessionsDetailPane query={agentSessions} selectedId={selectedPath} onOpenTodo={navigateTodo} onOpenWorktree={navigateSessionWorktree} />
         ) : activeTab === 'tasks' ? (
@@ -949,6 +964,7 @@ const allTabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
   { id: 'prs', label: 'PRs', icon: UiGitPr },
   { id: 'projects', label: 'Projects', icon: UiFolderGit },
   { id: 'todos', label: 'Todos', icon: UiCheck },
+  { id: 'comments', label: 'Comments', icon: UiChatDots },
   { id: 'runs', label: 'Runs', icon: UiPlay },
   { id: 'sessions', label: 'Sessions', icon: UiTerminal },
   { id: 'tasks', label: 'Tasks', icon: UiListChecks },
@@ -963,8 +979,10 @@ function shownTabs() {
 
 const mobileIconButton = 'inline-flex size-11 items-center justify-center rounded-md border transition-colors';
 
-function MobileShellActions({ chat, moreOpen, onSearch, onToggleMore }: {
+function MobileShellActions({ chat, newTodoDisabled, onNewTodo, moreOpen, onSearch, onToggleMore }: {
   chat: ReactNode;
+  newTodoDisabled: boolean;
+  onNewTodo: () => void;
   moreOpen: boolean;
   onSearch: () => void;
   onToggleMore: () => void;
@@ -979,6 +997,16 @@ function MobileShellActions({ chat, moreOpen, onSearch, onToggleMore }: {
         className={`${mobileIconButton} border-border bg-background text-muted-foreground hover:text-foreground`}
       >
         <UiSearch className="size-4" />
+      </button>
+      <button
+        type="button"
+        onClick={onNewTodo}
+        disabled={newTodoDisabled}
+        aria-label="New todo"
+        title="New todo"
+        className={`${mobileIconButton} border-border bg-background text-muted-foreground hover:text-foreground disabled:opacity-50`}
+      >
+        <UiAdd className="size-4" />
       </button>
       {chat}
       <button
@@ -1022,7 +1050,7 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
   );
 }
 
-function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
+function ExportSplitButton({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
   onJSON: () => void;
   onMarkdown: () => void;
   onCopy: () => void;
@@ -1030,41 +1058,23 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
   copyError: string;
 }) {
   const CopyIcon = copyState === 'copied' ? UiCheck : copyState === 'copying' ? Spinner : UiCopy;
+  const tone = copyState === 'copied' ? 'text-green-700' : copyState === 'error' ? 'text-red-700' : '';
   return (
-    <div className="flex items-center gap-1">
-      <Button
-        variant="ghost"
-        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors h-auto justify-start"
-        onClick={onJSON}
-        title="Download current view as JSON"
-      >
-        <UiJson className="mr-0.5" />
-        JSON
-      </Button>
-      <Button
-        variant="ghost"
-        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors h-auto justify-start"
-        onClick={onMarkdown}
-        title="Download current view as Markdown"
-      >
-        <UiMarkdown className="mr-0.5" />
-        Markdown
-      </Button>
-      <Button
-        variant="ghost"
-        className={`text-xs px-2 py-1 rounded border transition-colors h-auto justify-start ${
-          copyState === 'copied'
-            ? 'border-green-300 bg-green-50 text-green-700'
-            : copyState === 'error'
-              ? 'border-red-300 bg-red-50 text-red-700'
-              : 'border-gray-300 text-gray-600 hover:bg-gray-200'
-        }`}
-        onClick={onCopy}
-        title={copyError || 'Copy Markdown export for agent'}
-      >
-        <CopyIcon className="mr-0.5" />
-        {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy for Agent'}
-      </Button>
-    </div>
+    <SplitButton
+      variant="outline"
+      size="sm"
+      title="Export options"
+      label={(
+        <span className={`flex items-center gap-1 ${tone}`} title={copyError || 'Copy Markdown export for agent'}>
+          <CopyIcon />
+          {copyState === 'copying' ? 'Copying…' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy'}
+        </span>
+      )}
+      onClick={onCopy}
+      items={[
+        { label: <span className="flex items-center gap-2"><UiJson />Download JSON</span>, title: 'Download current view as JSON', onSelect: onJSON },
+        { label: <span className="flex items-center gap-2"><UiMarkdown />Download Markdown</span>, title: 'Download current view as Markdown', onSelect: onMarkdown },
+      ]}
+    />
   );
 }

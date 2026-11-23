@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,7 +13,31 @@ vi.mock('./promptRun', () => ({
     return { state: { status: 'idle' }, active: false, start: prompt.start, stop: vi.fn() };
   },
 }));
-vi.mock('@flanksource/clicky-ui/ai', () => ({ SessionTail: () => null }));
+const MODEL = 'acme-large';
+vi.mock('@flanksource/clicky-ui/ai', async (importOriginal) => {
+  return {
+    ...await importOriginal<typeof import('@flanksource/clicky-ui/ai')>(),
+    SessionTail: () => null,
+    // The RuntimeBar is clicky-ui's (tested there); this double plays a model pick.
+    SpecRuntimeBar: ({ ariaLabel, onChange }: { ariaLabel: string; onChange: (value: { model: string }) => void }) => (
+      <button type="button" aria-label={ariaLabel} onClick={() => onChange({ model: MODEL })}>Runtime</button>
+    ),
+  };
+});
+// The real SplitButton mounts floating-ui, which crashes under vitest; this double
+// renders the primary action and each menu item as plain buttons.
+vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@flanksource/clicky-ui/components')>();
+  return {
+    ...actual,
+    SplitButton: ({ label, onClick, disabled, items }: { label: ReactNode; onClick: () => void; disabled?: boolean; items: Array<{ label: ReactNode; onSelect: () => void }> }) => (
+      <div>
+        <actual.Button disabled={disabled} onClick={onClick}>{label}</actual.Button>
+        {items.map(item => <actual.Button key={String(item.label)} disabled={disabled} onClick={item.onSelect}>{item.label}</actual.Button>)}
+      </div>
+    ),
+  };
+});
 
 const WORKTREE = '/src/acme/.worktrees/topic';
 const operation: RebaseOperation = { id: 'op-123', worktree: WORKTREE, branch: 'topic', target: 'refs/heads/main', targetSha: 'target', originalHead: 'before', stashSha: 'saved', phase: 'rebase', error: 'Conflicting rebase', conflicts: ['shared file.txt'], aborted: false };
@@ -21,7 +46,9 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 
 function setup(value = context, fail = false) {
   let live = value;
-  const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === '/api/chat/models') return json([{ id: MODEL, provider: 'example', label: MODEL, configured: true, runtime: { model: MODEL, mode: 'agent' } }]);
+    if (url === '/api/chat/runtimes') return json([{ family: 'example', provider: 'example', catalogPrefix: 'example', modes: [{ mode: 'agent', schema: { type: 'object', properties: { model: { type: 'string' } } } }] }]);
     if (init?.method === 'POST') {
       if (fail) return json({ error: operation.error, operation }, 409);
       return json({ ...operation, phase: 'done' });
@@ -56,8 +83,18 @@ describe('Project rebase', () => {
     const send = await screen.findByRole('button', { name: 'Send to rebase prompt' });
     expect(prompt.start).not.toHaveBeenCalled();
     fireEvent.click(send);
-    expect(prompt.start).toHaveBeenCalledWith(expect.objectContaining({ operation: operation.id, worktree: WORKTREE, targetSha: 'target', stashSha: 'saved' }));
+    expect(prompt.start).toHaveBeenCalledWith(expect.objectContaining({ operation: operation.id, worktree: WORKTREE, targetSha: 'target', stashSha: 'saved' }), { spec: {} });
     expect(screen.getByText('shared file.txt')).toBeTruthy();
+  });
+
+  it('sends the rebase prompt with the runtime chosen from the split button menu', async () => {
+    setup({ ...context, branch: '', operation });
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose runtime…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Send to rebase prompt' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Rebase prompt runtime' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send to rebase prompt' }));
+    expect(prompt.start).toHaveBeenCalledWith(expect.objectContaining({ operation: operation.id }), { spec: { model: MODEL } });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Send to rebase prompt' })).toBeNull());
   });
 
   it('clears the failed request after successful AI recovery instead of keeping a stale operation', async () => {

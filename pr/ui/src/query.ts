@@ -122,6 +122,12 @@ function reloadWhenSignedOut(response: Response) {
   reloadPage();
 }
 
+export async function dashboardFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const response = await fetch(input, init);
+  reloadWhenSignedOut(response);
+  return response;
+}
+
 export async function fetchJSON<T>({ url, signal, context }: QueryRequest): Promise<T> {
   const response = await request({ url, signal, context });
   let payload: unknown;
@@ -154,12 +160,11 @@ export async function mutationJSON<T>({ url, method, body, token, headers: extra
   if (body !== undefined) init.body = JSON.stringify(body);
   let response: Response;
   try {
-    response = await fetch(url, init);
+    response = await dashboardFetch(url, init);
   } catch (cause) {
     if (signal?.aborted) throw cause;
     throw new Error(`${context}: ${cause instanceof Error ? cause.message : 'request failed'}`, { cause });
   }
-  reloadWhenSignedOut(response);
   const text = await response.text();
   if (!response.ok) {
     let payload: unknown;
@@ -180,9 +185,7 @@ export async function mutationJSON<T>({ url, method, body, token, headers: extra
 
 async function request({ url, signal, context }: QueryRequest): Promise<Response> {
   try {
-    const response = await fetch(url, { signal });
-    reloadWhenSignedOut(response);
-    return response;
+    return await dashboardFetch(url, { signal });
   } catch (cause) {
     if (signal.aborted) throw cause;
     throw new Error(`${context}: ${cause instanceof Error ? cause.message : 'request failed'}`, { cause });

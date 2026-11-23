@@ -97,7 +97,7 @@ export function PromptsView({ projects, scopeProject, selectedId, onNavigate }: 
           No prompt {selectedPromptId} in this scope.
         </div>
       )}
-      {lifecycleRoute ? <LifecyclesView key={`${scopeQuery}:${selectedId}`} scopeQuery={scopeQuery} kind={selectedId === 'lifecycles/pr' ? 'pr' : 'todos'} onSelect={kind => onNavigate(`lifecycles/${kind}`, scopeProject)} /> : !presetRoute ? (
+      {lifecycleRoute ? <LifecyclesView key={`${scopeQuery}:${selectedId}`} scopeQuery={scopeQuery} kind={selectedId === 'lifecycles/pr' ? 'pr' : 'todos'} onSelect={kind => onNavigate(`lifecycles/${kind}`, scopeProject)} models={models ?? []} families={families ?? []} /> : !presetRoute ? (
         <div className="min-h-0 flex-1 p-4">
           <PromptCatalogTable
             className="min-h-0 flex-1"

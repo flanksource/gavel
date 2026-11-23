@@ -45,6 +45,7 @@ type PRInfo struct {
 	HeadRefOID        string       `json:"headRefOid,omitempty"`
 	HeadRepositoryURL string       `json:"headRepositoryUrl,omitempty"`
 	URL               string       `json:"url"`
+	UpdatedAt         time.Time    `json:"updatedAt,omitzero"`
 	Additions         int          `json:"additions"`
 	Deletions         int          `json:"deletions"`
 	ChangedFiles      int          `json:"changedFiles"`
@@ -116,6 +117,9 @@ type WorkflowRun struct {
 	WorkflowPath string `json:"workflowPath,omitempty"`
 	WorkflowYAML string `json:"workflowYaml,omitempty"`
 	Jobs         []Job  `json:"jobs"`
+	// Stale says why this is an earlier copy of the run: GitHub could not be
+	// asked for the current one. Empty when the run is current.
+	Stale string `json:"stale,omitempty"`
 }
 
 type Job struct {

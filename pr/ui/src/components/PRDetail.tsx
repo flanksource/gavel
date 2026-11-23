@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useCallback, type ReactNode, type ComponentType } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Project } from '../types';
+import type { PRItem, PRDetail, PRComment, PRFileInfo, GavelResultsSummary, Project } from '../types';
 import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
 import { PREVIEW_LIMIT, ShardLintFindings, ShardTestFailures } from './ShardFindings';
 import { newPRTodoFormKey } from './todos/prTodoDraft';
@@ -39,6 +39,7 @@ import {
   UiLinkExternal,
   UiMarkdown,
   UiPass,
+  UiRefresh,
   UiServerProcess,
   UiWarningTriangle,
 } from '@flanksource/clicky-ui/icons';
@@ -46,11 +47,12 @@ import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
 import { VercelIcon } from '../icons/VercelIcon';
 import { Button, useModal } from '@flanksource/clicky-ui/components';
-import { AnsiHtml, GitChangedFilesSummary, GitCommitList, GitFileList, type GitCommitItem, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
+import { AnsiHtml, GitChangedFilesSummary, GitFileList, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
 import { useTimeoutFlash } from '../useTimeoutFlash';
 import { copyText } from '../clipboard';
 import { useContainerWidth } from '../useContainerWidth';
-import { prCommitDiffQuery, prFileDiffQuery } from './oneShotQueries';
+import { prFileDiffQuery } from './oneShotQueries';
+import { PRCommitList } from './PRCommitList';
 
 function formatWorkflowsText(runs: WorkflowRun[]): string {
   return runs.map(r => {
@@ -152,15 +154,21 @@ interface Props {
   // onActionDone fires after a merge/approve/auto-merge action lands so the host
   // can re-fetch the PR detail and reflect the new state.
   onActionDone?: () => void;
+  // onRefresh, when set, renders a refresh button that re-fetches the PR's
+  // detail and workflow status from GitHub, bypassing the server cache.
+  onRefresh?: () => void;
   // onClose, when set, renders a close button in the header that dismisses the
   // panel. Only the desktop split-pane layout wires it; the menu-bar view has
   // its own back button and leaves this unset.
   onClose?: () => void;
+  // exportAction is the host's copy/download control for the current view,
+  // placed with the PR's own actions.
+  exportAction?: ReactNode;
 }
 
 type DetailTab = 'overview' | 'commits' | 'files';
 
-export function PRDetailPanel({ pr, detail, loading, projects, onActionDone, onClose }: Props) {
+export function PRDetailPanel({ pr, detail, loading, projects, onActionDone, onRefresh, onClose, exportAction }: Props) {
   const { openModal } = useModal();
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const workspaces = useMemo(() => (projects ?? []).filter(p => !!p.dir), [projects]);
@@ -199,6 +207,21 @@ export function PRDetailPanel({ pr, detail, loading, projects, onActionDone, onC
               collapsed={collapsedActions}
               extras={extraActions}
             />
+            {exportAction}
+            {onRefresh && (
+              <Button
+                variant="ghost"
+                size="icon"
+                type="button"
+                onClick={onRefresh}
+                disabled={loading}
+                title="Refresh PR status and workflows"
+                aria-label="Refresh pull request status"
+                className="h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                {loading ? <Spinner className="text-base" /> : <UiRefresh className="text-base" />}
+              </Button>
+            )}
             {onClose && (
               <Button
                 variant="ghost"
@@ -248,6 +271,13 @@ export function PRDetailPanel({ pr, detail, loading, projects, onActionDone, onC
           <PRLinkedTodos prUrl={pr.url} />
           <PRLifecycleActions key={pr.url} pr={pr} projects={workspaces} />
 
+          {detail?.runsError && (
+            <div role="alert" className="mt-3 p-2 bg-red-50 border border-red-100 rounded text-xs text-red-700 whitespace-pre-wrap">
+              <UiError className="mr-1" />
+              {detail.runsError}
+            </div>
+          )}
+
           {detail?.runs && Object.keys(detail.runs).length > 0 && (
             <Section
               title="Workflows"
@@ -276,7 +306,7 @@ export function PRDetailPanel({ pr, detail, loading, projects, onActionDone, onC
       )}
 
       {activeTab === 'commits' && (
-        <CommitsTab commits={commits} pr={pr} />
+        <PRCommitList commits={commits} repo={pr.repo} className="mt-2" diffMaxHeightClassName="max-h-[560px]" />
       )}
 
       {activeTab === 'files' && (
@@ -356,40 +386,6 @@ function DetailTabBar({ active, onChange, commitCount, fileCount }: {
         );
       })}
     </div>
-  );
-}
-
-function CommitsTab({ commits, pr }: { commits: PRCommitInfo[]; pr: PRItem }) {
-  const queryClient = useQueryClient();
-  const items = useMemo<GitCommitItem[]>(() => commits.map(commit => ({
-    id: commit.oid,
-    sha: commit.oid,
-    shortSha: commit.oid.slice(0, 7),
-    title: commit.messageHeadline,
-    body: commit.messageBody,
-    authorName: commit.authorName,
-    authorLogin: commit.authorLogin,
-    authorAvatarUrl: commit.authorAvatarUrl,
-    committedAt: commit.committedDate,
-    additions: commit.additions,
-    deletions: commit.deletions,
-    changedFiles: commit.changedFiles,
-    href: `https://github.com/${pr.repo}/commit/${commit.oid}`,
-  })), [commits, pr.repo]);
-
-  const loadDiff = useCallback(
-    (commit: GitCommitItem) => queryClient.fetchQuery(prCommitDiffQuery(pr.repo, commit.sha)),
-    [pr.repo, queryClient],
-  );
-
-  return (
-    <GitCommitList
-      commits={items}
-      loadDiff={loadDiff}
-      renderTime={iso => <RelativeTime iso={iso} />}
-      className="mt-2"
-      diffMaxHeightClassName="max-h-[560px]"
-    />
   );
 }
 
@@ -853,6 +849,7 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
   // A shard that produced no cards but carries an error knows why it produced
   // nothing — say that instead of the generic "no data" text.
   const errored = shards.filter(s => s.error);
+  const outdated = shards.filter(s => s.outdated);
 
   return (
     <Section
@@ -863,6 +860,14 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
         markdown: () => formatGavelMarkdown(agg),
       }}
     >
+      {outdated.length > 0 && (
+        <div className="text-xs text-amber-700 pb-1">
+          <UiWarningTriangle className="mr-1" />
+          {outdated.length === shards.length
+            ? 'From an earlier run, not the head commit.'
+            : `From an earlier run, not the head commit: ${outdated.map(s => s.stickyId || `artifact ${s.artifactId}`).join(', ')}`}
+        </div>
+      )}
       {headerCards.length > 0 ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2">
           {headerCards.map((c) => (
@@ -1270,8 +1275,8 @@ function FailureList({ title, icon: Icon, iconColor, shown, total, moreHref, chi
   const rows = children;
   const truncated = total !== undefined && total > shown;
   return (
-    <div className="mt-3">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
+    <div className="mt-2">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">
         <Icon className={iconColor} />
         <span className="font-semibold">{title}</span>
         {truncated && (

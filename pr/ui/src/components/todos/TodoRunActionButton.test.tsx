@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoRunOptions } from '../../types';
-import { TodoRunActionButton } from './TodoRunActionButton';
+import { TodoRunActionButton, TodoRunRuntimeBar } from './TodoRunActionButton';
 import type { RunContext } from './providers';
 import { setAuthMode } from '../../query';
 
@@ -55,12 +55,18 @@ vi.mock('./run', async importOriginal => ({
   useTodoRunContext: () => ({ context: FIXTURE_CONTEXT, loading: false, error: '' }),
 }));
 
+const { runtimeBarProps } = vi.hoisted(() => ({ runtimeBarProps: { current: null as null | Record<string, unknown> } }));
+
 vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
   ...(await importOriginal<typeof import('@flanksource/clicky-ui/ai')>()),
-  RuntimeBar: ({ ariaLabel, onChange, value }: { ariaLabel?: string; onChange: (value: Record<string, unknown>) => void; value: Record<string, unknown> }) => (
-    // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for RuntimeBar itself.
-    <button type="button" aria-label={ariaLabel} onClick={() => onChange({ ...value, model: 'claude-opus-4-9' })}>runtime</button>
-  ),
+  RuntimeBar: (props: { ariaLabel?: string; onChange: (value: Record<string, unknown>) => void; value: Record<string, unknown> }) => {
+    runtimeBarProps.current = props;
+    const { ariaLabel, onChange, value } = props;
+    return (
+      // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for RuntimeBar itself.
+      <button type="button" aria-label={ariaLabel} onClick={() => onChange({ ...value, model: 'claude-opus-4-9' })}>runtime</button>
+    );
+  },
 }));
 
 beforeEach(() => {
@@ -141,6 +147,35 @@ describe('TodoRunActionButton', () => {
     expect(onOptionsChange).toHaveBeenCalledWith(expect.objectContaining({
       spec: expect.objectContaining({ model: 'claude-opus-4-9' }),
     }) as TodoRunOptions);
+  });
+});
+
+describe('TodoRunRuntimeBar', () => {
+  it('offers the full runtime options: timeout, cost, permission mode, worktree source and commits', () => {
+    render(<TodoRunRuntimeBar action="run" context={FIXTURE_CONTEXT} options={{ step: 'run' }} onChange={vi.fn()} />);
+
+    const props = runtimeBarProps.current as { showTimeout?: boolean; showCost?: boolean; actions?: { fields?: { id: string }[] } };
+    expect({
+      showTimeout: props.showTimeout,
+      showCost: props.showCost,
+      fields: props.actions?.fields?.map(field => field.id),
+    }).toEqual({
+      showTimeout: true,
+      showCost: true,
+      fields: expect.arrayContaining(['setup.checkout.worktree.mode', 'workflow.commits']),
+    });
+  });
+
+  it('applies a commit cadence picked in the options menu to the run options', () => {
+    const onChange = vi.fn();
+    render(<TodoRunRuntimeBar action="run" context={FIXTURE_CONTEXT} options={{ step: 'run' }} onChange={onChange} />);
+
+    type Item = { label: { props: { text?: string } }; onSelect: () => void };
+    const fields = (runtimeBarProps.current as { actions: { fields: { id: string; items: Item[] }[] } }).actions.fields;
+    const everyTurn = fields.find(field => field.id === 'workflow.commits')!.items.find(item => item.label.props.text === 'Every turn')!;
+    everyTurn.onSelect();
+
+    expect(onChange.mock.calls.at(-1)?.[0]?.spec?.workflow).toEqual({ commits: [{ on: 'turn' }] });
   });
 });
 

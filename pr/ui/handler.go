@@ -32,7 +32,6 @@ import (
 	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/pr/model"
 	promptlibrary "github.com/flanksource/gavel/prompts/library"
-	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/tenant"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/google/uuid"
@@ -945,18 +944,19 @@ func (s *Server) snapshotLocked() snapshot {
 }
 
 // setGavelSummary caches a PR's gavel summary and triggers a snapshot
-// push so the sidebar can re-render with fresh badges. Safe to call
-// with no server lock held.
+// push so the sidebar can re-render with fresh badges. A nil summary
+// clears the PR's badge. Safe to call with no server lock held.
 func (s *Server) setGavelSummary(repo string, number int, summary *GavelResultsSummary) {
-	if summary == nil {
-		return
-	}
 	key := fmt.Sprintf("%s#%d", repo, number)
 	s.mu.Lock()
 	if s.gavelCache == nil {
 		s.gavelCache = make(map[string]*GavelResultsSummary)
 	}
-	s.gavelCache[key] = summary
+	if summary == nil {
+		delete(s.gavelCache, key)
+	} else {
+		s.gavelCache[key] = summary
+	}
 	s.mu.Unlock()
 	s.notify()
 }
@@ -1126,10 +1126,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	select {
-	case s.refreshCh <- struct{}{}:
-	default:
-	}
+	s.requestPoll()
 	w.WriteHeader(http.StatusAccepted)
 	fmt.Fprint(w, `{"status":"refresh requested"}`)
 }
@@ -1427,249 +1424,6 @@ func (s *Server) knownHomepage(homepage string) bool {
 	return false
 }
 
-type prDetail struct {
-	PR       *model.PRInfo                `json:"pr,omitempty"`
-	Runs     map[int64]*model.WorkflowRun `json:"runs,omitempty"`
-	Comments []model.PRComment            `json:"comments,omitempty"`
-	// GavelResults holds one summary per gavel sticky comment on the PR
-	// (typically one per matrix shard). Order matches the order of the
-	// sticky comments on the PR.
-	GavelResults []*GavelResultsSummary `json:"gavelResults,omitempty"`
-	Error        string                 `json:"error,omitempty"`
-}
-
-// prFrame builds the SSE `pr` payload. Comments are normalized to a non-nil
-// slice: a PR with no actionable comments would otherwise marshal as
-// `"comments":null`, which the UI rejects as a malformed frame.
-func prFrame(pr *model.PRInfo, comments []model.PRComment) map[string]any {
-	if comments == nil {
-		comments = []model.PRComment{}
-	}
-	return map[string]any{"pr": pr, "comments": comments}
-}
-
-func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
-	numStr := r.URL.Query().Get("number")
-	if repo == "" || numStr == "" {
-		http.Error(w, `{"error":"repo and number params required"}`, http.StatusBadRequest)
-		return
-	}
-	prNumber, err := strconv.Atoi(numStr)
-	if err != nil {
-		http.Error(w, `{"error":"invalid number"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Stream progressive detail via SSE so the UI can render sections
-	// as they arrive rather than waiting for all GitHub round-trips.
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		// Fallback: non-streaming response
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(s.fetchPRDetail(repo, prNumber)) //nolint:errcheck
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	emit := func(event string, data any) {
-		b, _ := json.Marshal(data)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		flusher.Flush()
-	}
-
-	// Serve from detail cache if available
-	cacheKey := SyncStatusKey(repo, prNumber)
-	if entry, ok := s.detailCache.Get(cacheKey); ok {
-		d := entry.Detail
-		if d.PR != nil {
-			emit("pr", prFrame(d.PR, d.Comments))
-		}
-		if len(d.Runs) > 0 {
-			emit("runs", map[string]any{"runs": d.Runs})
-		}
-		if len(d.GavelResults) > 0 {
-			emit("gavel", map[string]any{"gavelResults": d.GavelResults})
-		}
-		emit("done", nil)
-
-		// Trigger background re-sync if stale
-		if s.detailCache.IsStale(cacheKey, s.prUpdatedAt(repo, prNumber)) {
-			if s.detailSyncer != nil {
-				s.detailSyncer.Notify()
-			}
-		}
-		return
-	}
-
-	opts := s.ghOpts
-	opts.Repo = repo
-
-	// Phase 1: PR metadata + comments (single GraphQL call)
-	pr, err := github.FetchPR(opts, prNumber)
-	if err != nil {
-		logger.Warnf("failed to fetch PR %s#%d: %v", repo, prNumber, err)
-		emit("error", map[string]string{"error": err.Error()})
-		emit("done", nil)
-		return
-	}
-	comments := prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
-	emit("pr", prFrame(pr, comments))
-
-	// Phase 2: Workflow runs + gavel results in parallel
-	type runResult struct {
-		id  int64
-		run *model.WorkflowRun
-	}
-
-	// Collect unique run IDs
-	var runIDs []int64
-	seen := make(map[int64]bool)
-	for _, check := range pr.StatusCheckRollup {
-		runID, err := github.ExtractRunID(check.DetailsURL)
-		if err != nil || seen[runID] {
-			continue
-		}
-		seen[runID] = true
-		runIDs = append(runIDs, runID)
-	}
-
-	// Start gavel results fetch in parallel — one goroutine per sticky
-	// shard, with bounded concurrency so PRs with many matrix shards
-	// don't hammer the artifacts API.
-	allComments := append(pr.Comments, pr.ReviewThreads...)
-	artifacts := github.FindGavelArtifacts(allComments)
-	var gavelSummaries []*GavelResultsSummary
-	gavelDone := make(chan struct{})
-	if len(artifacts) > 0 {
-		go func() {
-			defer close(gavelDone)
-			gavelSummaries = fetchGavelArtifacts(opts, artifacts)
-		}()
-	} else {
-		close(gavelDone)
-	}
-
-	// Fetch workflow runs in parallel
-	runCh := make(chan runResult, len(runIDs))
-	for _, id := range runIDs {
-		go func(runID int64) {
-			run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{})
-			if err != nil {
-				logger.Warnf("failed to fetch run %d: %v", runID, err)
-				runCh <- runResult{runID, nil}
-				return
-			}
-			runCh <- runResult{runID, run}
-		}(id)
-	}
-
-	runs := make(map[int64]*model.WorkflowRun, len(runIDs))
-	for range runIDs {
-		rr := <-runCh
-		if rr.run != nil {
-			runs[rr.id] = rr.run
-		}
-	}
-	if len(runs) > 0 {
-		emit("runs", map[string]any{"runs": runs})
-	}
-
-	// Wait for all gavel artifacts (parallel fetch above)
-	<-gavelDone
-	if len(gavelSummaries) > 0 {
-		emit("gavel", map[string]any{"gavelResults": gavelSummaries})
-		s.setGavelSummary(repo, prNumber, aggregateGavelSummaries(gavelSummaries))
-	}
-
-	emit("done", nil)
-
-	// Cache the result for future requests
-	detail := prDetail{PR: pr, Runs: runs, Comments: comments, GavelResults: gavelSummaries}
-	prUpdated := s.prUpdatedAt(repo, prNumber)
-	s.detailCache.Put(cacheKey, detail, prUpdated)
-	s.detailCache.SetStatus(cacheKey, PRSyncStatus{State: SyncUpToDate, LastSynced: time.Now()})
-	s.notify()
-}
-
-// fetchPRDetail loads full PR metadata, workflow runs, and comments from
-// GitHub. Returns a prDetail with Error set on failure rather than an error
-// value so callers (handleDetail, export) can embed it directly.
-func (s *Server) fetchPRDetail(repo string, number int) prDetail {
-	opts := s.ghOpts
-	opts.Repo = repo
-
-	result := prDetail{}
-
-	pr, err := github.FetchPR(opts, number)
-	if err != nil {
-		logger.Warnf("failed to fetch PR %s#%d: %v", repo, number, err)
-		result.Error = err.Error()
-		return result
-	}
-	result.PR = pr
-
-	runs := make(map[int64]*model.WorkflowRun)
-	seen := make(map[int64]bool)
-	for _, check := range pr.StatusCheckRollup {
-		runID, err := github.ExtractRunID(check.DetailsURL)
-		if err != nil || seen[runID] {
-			continue
-		}
-		seen[runID] = true
-		run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{})
-		if err != nil {
-			logger.Warnf("failed to fetch run %d: %v", runID, err)
-			continue
-		}
-		runs[runID] = run
-	}
-	result.Runs = runs
-	result.Comments = prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
-
-	// Scan all comments (including general issue comments, not just review
-	// threads) for gavel sticky comments — one per matrix shard.
-	allComments := append(pr.Comments, pr.ReviewThreads...)
-	artifacts := github.FindGavelArtifacts(allComments)
-	if len(artifacts) > 0 {
-		summaries := fetchGavelArtifacts(opts, artifacts)
-		result.GavelResults = summaries
-		s.setGavelSummary(repo, number, aggregateGavelSummaries(summaries))
-	}
-
-	return result
-}
-
-// populatePRDetail fills a PRViewNode's detail fields using the same fetch
-// logic that powers /api/prs/detail. Returns a non-nil error only when the
-// PR metadata fetch itself fails (in which case the node is left unchanged).
-func (s *Server) populatePRDetail(node *PRViewNode) error {
-	detail := s.fetchPRDetail(node.Repo, node.Number)
-	if detail.Error != "" {
-		return fmt.Errorf("%s", detail.Error)
-	}
-	node.PR = detail.PR
-	node.Runs = detail.Runs
-	node.Comments = detail.Comments
-	node.GavelResults = detail.GavelResults
-	return nil
-}
-
-// prUpdatedAt returns the UpdatedAt for a PR in the current server state.
-func (s *Server) prUpdatedAt(repo string, number int) time.Time {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, pr := range s.prs {
-		if pr.Repo == repo && pr.Number == number {
-			return pr.UpdatedAt
-		}
-	}
-	return time.Time{}
-}
-
 type jobLogsResponse struct {
 	JobID int64        `json:"jobId"`
 	Logs  string       `json:"logs,omitempty"`
@@ -1699,12 +1453,6 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 	opts := s.ghOpts
 	opts.Repo = repo
 
-	// We don't know the steps ahead of time — callers that already have the run can pass
-	// steps via the runId route. Simpler: fetch the run to learn the job's steps, then
-	// call FetchJobLogs. But that's an extra GitHub round-trip. Since the frontend already
-	// has the job + step metadata in memory (from /api/prs/detail), it can reconstruct
-	// the Job shell and we only need jobID for the log fetch. attachLogsToSteps needs
-	// step names to split — so we also need runId here.
 	runIDStr := r.URL.Query().Get("runId")
 	if runIDStr == "" {
 		http.Error(w, `{"error":"runId param required"}`, http.StatusBadRequest)
@@ -1719,7 +1467,8 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	resp := jobLogsResponse{JobID: jobID}
 
-	run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{})
+	// The exact job, with its step names: a re-run replaces the jobs the run lists.
+	run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{JobID: jobID})
 	if err != nil {
 		logger.Warnf("failed to fetch run %d: %v", runID, err)
 		resp.Error = err.Error()
@@ -1727,18 +1476,7 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var job *model.Job
-	for i := range run.Jobs {
-		if run.Jobs[i].DatabaseID == jobID {
-			job = &run.Jobs[i]
-			break
-		}
-	}
-	if job == nil {
-		http.Error(w, `{"error":"job not found in run"}`, http.StatusNotFound)
-		return
-	}
-
+	job := &run.Jobs[0]
 	if err := github.FetchJobLogs(opts, job, tail); err != nil {
 		logger.Warnf("failed to fetch logs for job %d: %v", jobID, err)
 		resp.Error = err.Error()

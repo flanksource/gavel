@@ -95,7 +95,7 @@ describe('ProjectsBar', () => {
           runs={[]}
           procStatus={{ gavel: { hasProcfile: true, running: true, processes: [] } }}
           gitSummary={gitSummary}
-          selected=""
+            selected=""
           selectedRunId=""
           historyEnabled={false}
           onSelect={onSelect}
@@ -121,6 +121,60 @@ describe('ProjectsBar', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows the project's repo homepage favicon in the icon box, and a letter avatar when no homepage is known", () => {
+    const homepage = 'https://ui.example.com/';
+    render(
+      <ProjectsBar
+        projects={[
+          { name: 'ui', dir: '/work/ui', repos: ['acme/ui-fork', 'acme/ui'], repoIcon: { repo: 'acme/ui', homepageUrl: homepage } },
+          { name: 'tools', dir: '/work/tools', repos: ['acme/tools'] },
+        ]}
+        runs={[]}
+        procStatus={{}}
+        gitSummary={noGitSummary}
+        selected=""
+        selectedRunId=""
+        historyEnabled={false}
+        onSelect={() => {}}
+        onSelectRun={() => {}}
+        onHistoryChange={() => {}}
+        onChanged={() => {}}
+        onAdd={() => {}}
+        onSettings={() => {}}
+        onHide={() => {}}
+      />,
+    );
+
+    const [ui, tools] = screen.getAllByTestId('listing-card-icon');
+    expect(within(ui!).getByRole('img', { name: 'acme/ui' }).getAttribute('src')).toBe(`/api/repos/favicon?homepage=${encodeURIComponent(homepage)}`);
+    expect(within(tools!).queryByRole('img')).toBeNull();
+    expect(within(tools!).getByTitle('acme/tools').textContent).toBe('T');
+  });
+
+  it('keeps project rows free of settings and hide buttons', () => {
+    render(
+      <ProjectsBar
+        projects={[{ name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] }]}
+        runs={[]}
+        procStatus={{}}
+        gitSummary={noGitSummary}
+        selected=""
+        selectedRunId=""
+        historyEnabled={false}
+        onSelect={() => {}}
+        onSelectRun={() => {}}
+        onHistoryChange={() => {}}
+        onChanged={() => {}}
+        onAdd={() => {}}
+        onSettings={() => {}}
+        onHide={() => {}}
+      />,
+    );
+
+    const card = screen.getByTestId('listing-card');
+    expect(within(card).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['Open gavel project']);
   });
 
   it('selects a project from the dedicated projects list without treating settings as selection', () => {
@@ -150,12 +204,13 @@ describe('ProjectsBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open gavel project' }));
     expect(onSelect).toHaveBeenCalledWith(project);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit gavel settings' }));
+    fireEvent.contextMenu(screen.getByTestId('listing-card'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit settings…' }));
     expect(onSettings).toHaveBeenCalledWith(project);
     expect(onSelect).toHaveBeenCalledOnce();
   });
 
-  it('hides a project from its row without selecting it or opening its settings', () => {
+  it('hides a project from its row context menu without selecting it or opening its settings', () => {
     const projects: Project[] = [
       { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] },
       { name: 'clicky', dir: '/work/clicky', repos: [] },
@@ -183,7 +238,8 @@ describe('ProjectsBar', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Hide clicky project' }));
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open clicky project' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Hide project' }));
 
     expect(onHide).toHaveBeenCalledExactlyOnceWith(projects[1]);
     expect(onSelect).not.toHaveBeenCalled();

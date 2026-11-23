@@ -1,10 +1,11 @@
-import { useEffect, type ReactNode } from 'react';
+import { isValidElement, useEffect, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatWindowManagerProvider } from '@flanksource/clicky-ui/ai';
 import type { AgentSession, Project } from './types';
 import { App } from './App';
+import { SettingsPage } from './components/settings/SettingsPage';
 
 const { isMobileMock, refreshMock, saveConfigMock, setProjectHiddenMock, agentSessionsMock, inspectorProps, openCreateTodoMock } = vi.hoisted(() => ({
   openCreateTodoMock: vi.fn(),
@@ -36,7 +37,6 @@ vi.mock('./useAppQueries', () => ({
     projectsLoaded: true,
     projectError: '',
     processError: '',
-    updateSnapshot: vi.fn(),
     refreshProjects: vi.fn(),
     refreshProjectsAndProcesses: vi.fn(),
   }),
@@ -68,6 +68,8 @@ vi.mock('./components/todos/useWorkspaceTodos', () => ({
     filters: { workspaces: {} },
     setFilters: vi.fn(),
     layout: 'split',
+    setLayout: vi.fn(),
+    aggregate: { total: 0 },
     selected: null,
   }),
 }));
@@ -118,9 +120,12 @@ vi.mock('./components/StatusIndicator', () => ({ StatusIndicator: () => null }))
 vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
   ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
   // Keep the shell slots under test while leaving layout to the browser checks.
-  AppShell: ({ brand, navSections, mobileActions, toolbar, bodyHeader, bodyActions, bodySidebar, bodyPane, onBodyBack, bodyBackLabel }: {
+  AppShell: ({ brand, nav, navSections, actions, mobileActions, toolbar, bodyHeader, bodyActions, bodySidebar, bodyPane, onBodyBack, bodyBackLabel, children }: {
+    children?: ReactNode;
     brand?: ReactNode;
+    nav?: ReactNode;
     navSections?: { items: { key: string; label: string; to: string; active?: boolean }[] }[];
+    actions?: ReactNode;
     mobileActions?: ReactNode;
     toolbar?: ReactNode;
     bodyHeader?: ReactNode;
@@ -129,20 +134,23 @@ vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
     bodyPane?: 'sidebar' | 'main';
     onBodyBack?: () => void;
     bodyBackLabel?: string;
-  }) => navSections ? (
+  }) => navSections || nav ? (
     <div data-testid="shell" data-body-pane={bodyPane} data-body-back-bar={String(bodyPane === 'main' && !!onBodyBack)}>
       <header data-testid="brand">{brand}</header>
       {bodyPane === 'main' && onBodyBack && <button type="button" onClick={onBodyBack}>{bodyBackLabel}</button>}
       <nav>
-        {navSections.flatMap(section => section.items).map(item => (
+        {nav}
+        {(navSections ?? []).flatMap(section => section.items).map(item => (
           <a key={item.key} href={item.to} aria-current={item.active ? 'page' : undefined}>{item.label}</a>
         ))}
       </nav>
-      {mobileActions}
+      {mobileActions ?? <div data-testid="actions">{actions}</div>}
       <div data-testid="toolbar">{toolbar}</div>
       {bodyHeader}
       {bodyActions}
-      {bodyPane === 'sidebar' && navSections.some(section => section.items.some(item => item.key === 'prs' && item.active)) && bodySidebar}
+      {bodyPane === 'sidebar' && (navSections ?? []).some(section => section.items.some(item => item.key === 'prs' && item.active)) && bodySidebar}
+      {/* Only the settings page renders from the body; other panes stay out of the slot test. */}
+      {isValidElement(children) && children.type === SettingsPage && <main>{children}</main>}
     </div>
   ) : null,
 }));
@@ -168,6 +176,9 @@ vi.mock('./components/todos/CreateTodoDialog', () => ({
 }));
 
 vi.mock('./components/AddProjectDialog', () => ({ AddProjectDialog: () => null }));
+vi.mock('./components/settings/SettingsPage', () => ({
+  SettingsPage: () => <div data-testid="settings-page">settings</div>,
+}));
 vi.mock('./components/CommandPalette', () => ({
   CommandPalette: () => null,
   SearchTrigger: () => null,
@@ -233,6 +244,50 @@ describe('todo creation project choices', () => {
     const draft = openCreateTodoMock.mock.calls[0][0] as { workspaces: Project[]; defaultDir?: string };
     expect(draft.workspaces.map(project => project.name)).toEqual(['gavel', 'clicky']);
     expect(draft.defaultDir).toBe('/work/gavel');
+  });
+
+  it.each(['/sessions', '/projects', '/'])('shows the New todo button on %s too', (path) => {
+    window.history.replaceState({}, '', path);
+    openCreateTodoMock.mockClear();
+
+    renderApp();
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+
+    expect(openCreateTodoMock).toHaveBeenCalledOnce();
+  });
+
+  it('compacts New todo to a + in the phone header, outside the ⋮ row', () => {
+    isMobileMock.mockReturnValue(true);
+    window.history.replaceState({}, '', '/sessions');
+    openCreateTodoMock.mockClear();
+
+    renderApp();
+    const plus = screen.getByRole('button', { name: 'New todo' });
+    expect({ text: plus.textContent, wide: screen.queryByRole('button', { name: 'New' }) }).toEqual({ text: '', wide: null });
+    fireEvent.click(plus);
+    expect(openCreateTodoMock).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.getAllByRole('button', { name: /^New( todo)?$/ })).toHaveLength(1);
+  });
+});
+
+describe('settings page', () => {
+  it('opens inside the AppShell body, keeping nav and header actions, and closes on tab navigation', () => {
+    window.history.replaceState({}, '', '/sessions');
+    renderApp();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Global settings' }));
+    const shell = screen.getByTestId('shell');
+    expect({
+      inShell: shell.contains(screen.getByTestId('settings-page')),
+      nav: within(shell).getByRole('navigation') !== null,
+      newTodo: within(shell).queryByRole('button', { name: 'New' }) !== null,
+      sessionsList: screen.queryByText('Refactor parser'),
+    }).toEqual({ inShell: true, nav: true, newTodo: true, sessionsList: null });
+
+    fireEvent.click(within(shell).getByRole('button', { name: 'Todos' }));
+    expect(screen.queryByTestId('settings-page')).toBeNull();
   });
 });
 
@@ -336,15 +391,27 @@ describe('mobile shell', () => {
     window.history.replaceState({}, '', '/prs?project=gavel');
     renderApp();
 
-    const exports =['Download current view as JSON', 'Download current view as Markdown', 'Copy Markdown export for agent'];
     const filterRow = screen.getByRole('button', { name: 'Filters' }).closest('[data-slot="filter-bar"]');
     expect(filterRow?.textContent).toContain('0 pull requests');
     expect(screen.getAllByText('0 pull requests')).toHaveLength(1);
-    expect(exports.filter(title => screen.queryByTitle(title))).toEqual([]);
+    expect(screen.queryByTitle('Copy Markdown export for agent')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
 
-    expect(exports.filter(title => within(screen.getByTestId('toolbar')).queryByTitle(title))).toEqual(exports);
+    const toolbar = within(screen.getByTestId('toolbar'));
+    fireEvent.click(toolbar.getByRole('button', { name: 'Export options' }));
+    expect([
+      toolbar.queryByTitle('Copy Markdown export for agent') !== null,
+      screen.getAllByRole('menuitem').map(item => item.textContent),
+    ]).toEqual([true, ['Download JSON', 'Download Markdown']]);
+  });
+
+  it('leaves the desktop PR list without a count and exports line', () => {
+    isMobileMock.mockReturnValue(false);
+    window.history.replaceState({}, '', '/prs?project=gavel');
+    renderApp();
+
+    expect([screen.queryByText('0 pull requests'), screen.queryByTitle('Copy Markdown export for agent')]).toEqual([null, null]);
   });
 
   it.each(['/sessions', '/prs/acme/gavel/7'])('leaves %s outside the pull-to-refresh region', path => {
@@ -363,6 +430,7 @@ describe('mobile shell', () => {
       ['PRs', '/prs?project=gavel&authors=-%40bots', null],
       ['Projects', '/projects?project=gavel', null],
       ['Todos', '/todos?project=gavel', null],
+      ['Comments', '/comments?project=gavel', null],
       ['Sessions', '/sessions?project=gavel', 'page'],
       ['Tasks', '/tasks?project=gavel', null],
       ['Prompts', '/prompts?project=gavel', null],

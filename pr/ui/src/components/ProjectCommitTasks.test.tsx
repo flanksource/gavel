@@ -259,6 +259,26 @@ describe('ProjectCommitTasks', () => {
     expect(screen.getByRole('button', { name: 'Stop group' })).toBeTruthy();
   });
 
+  const PR_URL = 'https://github.com/acme/gavel/pull/42';
+  const withPR = (status: string) => snapshots.map(snapshot => ({
+    ...snapshot, status, controls: [],
+    ...(snapshot.type === 'task' ? { details: { pr: { number: 42, url: PR_URL, title: 'feat: one', created: true } } } : {}),
+  }));
+
+  it.each([
+    { name: 'beside a successful run\'s one-line summary', status: 'success' },
+    { name: 'above a failed run\'s expanded progress', status: 'failed' },
+  ])('links the PR the run opened $name', async ({ status }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => withPR(status) }) as Response));
+    renderWithClient(createClient(),
+      <ProjectCommitTasks projectName="gavel" preferredRunId="commit-run-1" onLockedFilesChange={vi.fn()} onErrorChange={vi.fn()} onComplete={vi.fn()} onRunChange={vi.fn()} />,
+    );
+
+    const link = await screen.findByRole('link', { name: 'PR #42' });
+    expect({ href: link.getAttribute('href'), target: link.getAttribute('target'), title: link.getAttribute('title') })
+      .toEqual({ href: PR_URL, target: '_blank', title: 'Opened "feat: one"' });
+  });
+
   it('keeps a failed run expanded so its retry stays in reach', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => failedSnapshots }) as Response));
     renderWithClient(createClient(),

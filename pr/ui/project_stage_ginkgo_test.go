@@ -196,7 +196,7 @@ var _ = Describe("project index staging", func() {
 		writeDiffFile(dir, "lines.txt", "changed\n")
 		if snapshot {
 			runDiffGit(dir, "add", "lines.txt")
-			server.SetProjectCommitRunner(func(context.Context, []string, io.Writer) error { return nil })
+			server.SetProjectCommitRunner(func(context.Context, []string, io.Writer) (*commit.Result, error) { return nil, nil })
 		}
 		lock := filepath.Join(dir, ".git", "index.lock")
 		Expect(os.WriteFile(lock, nil, 0o600)).To(Succeed())
@@ -254,14 +254,13 @@ var _ = Describe("committing what is staged through the commit queue", func() {
 		ready := make(chan struct{})
 		releaseCommits := sync.OnceFunc(func() { close(ready) })
 		DeferCleanup(releaseCommits)
-		server.SetProjectCommitRunner(func(ctx context.Context, args []string, _ io.Writer) error {
+		server.SetProjectCommitRunner(func(ctx context.Context, args []string, _ io.Writer) (*commit.Result, error) {
 			select {
 			case <-ready:
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil, ctx.Err()
 			}
-			_, err := commit.Run(ctx, commit.Options{WorkDir: args[2], IndexPatch: args[slices.Index(args, "--index-patch")+1]})
-			return err
+			return commit.Run(ctx, commit.Options{WorkDir: args[2], IndexPatch: args[slices.Index(args, "--index-patch")+1]})
 		})
 
 		writeDiffFile(dir, "lines.txt", "a\nB\nc\nD\ne\nf\n")

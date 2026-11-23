@@ -76,6 +76,8 @@ export interface Project {
   // Set when repos were derived from the directory's upstream/origin GitHub
   // remotes because none were registered.
   reposInferred?: boolean;
+  // The first of repos whose homepage a tracked PR reports; its favicon is the project's icon.
+  repoIcon?: { repo: string; homepageUrl: string };
   hasProcfile?: boolean;
   // Hidden projects are returned by /api/projects but left out of every project
   // list and not tracked for git state; only the project picker lists them.
@@ -290,6 +292,8 @@ export interface WorkflowRun {
   conclusion: string;
   url?: string;
   jobs?: Job[];
+  // stale says why this is an earlier copy of the run. Absent when current.
+  stale?: string;
 }
 
 export interface PRComment {
@@ -314,6 +318,8 @@ export interface GavelResultsSummary {
   stickyId?: string;
   artifactId: number;
   artifactUrl: string;
+  // outdated marks results whose run is not one of the PR head's.
+  outdated?: boolean;
   testsPassed: number;
   testsFailed: number;
   // testsTimedOut is the subset of testsFailed that timed out; omitted when zero.
@@ -344,6 +350,8 @@ export interface GavelResultsSummary {
 export interface PRDetail {
   pr?: PRInfo;
   runs?: Record<string, WorkflowRun>;
+  // runsError says which workflow runs could not be loaded.
+  runsError?: string;
   comments?: PRComment[];
   // One summary per gavel sticky comment on the PR (typically one per
   // matrix shard). Order matches the order of the sticky comments.

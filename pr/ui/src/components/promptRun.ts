@@ -90,13 +90,14 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
     };
   }, [runId]);
 
-  const start = async (variables: Record<string, unknown>) => {
+  // `spec` layers a Captain runtime (model, mode, effort…) over the prompt's frontmatter.
+  const start = async (variables: Record<string, unknown>, { spec }: { spec?: Record<string, unknown> } = {}) => {
     setState({ status: 'starting' });
     try {
       const started = await mutationJSON<PromptRunStarted>({
         url: `/api/v1/prompt/run?args=${encodeURIComponent(prompt)}`,
         method: 'POST',
-        body: { variables },
+        body: { variables, ...(spec && Object.keys(spec).length > 0 && { spec }) },
         context: `Could not start the ${label}`,
       });
       if (!started.runId) throw new Error(`Could not start the ${label}: no run id in the response`);

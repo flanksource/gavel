@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"io"
 
+	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/spf13/cobra"
 )
 
-func runDashboardCommit(ctx context.Context, args []string, output io.Writer) error {
+func runDashboardCommit(ctx context.Context, args []string, output io.Writer) (*commitpkg.Result, error) {
 	if len(args) == 0 || args[0] != "commit" {
-		return fmt.Errorf("expected a commit command, received %q", args)
+		return nil, fmt.Errorf("expected a commit command, received %q", args)
 	}
+	var result *commitpkg.Result
 	parent := &cobra.Command{Use: "gavel", SilenceUsage: true, SilenceErrors: true}
 	cmd := registerCommitCommand(parent, func(opts CommitOptions) (any, error) {
-		result, err := executeCommit(ctx, opts, output)
+		var err error
+		result, err = executeCommit(ctx, opts, output)
 		if result != nil {
 			if _, writeErr := fmt.Fprintln(output, result.Pretty().String()); writeErr != nil {
 				return nil, writeErr
@@ -25,5 +28,5 @@ func runDashboardCommit(ctx context.Context, args []string, output io.Writer) er
 	cmd.SetOut(output)
 	cmd.SetErr(output)
 	parent.SetArgs(args)
-	return parent.ExecuteContext(ctx)
+	return result, parent.ExecuteContext(ctx)
 }

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { buildRoute, emptyRouteState, parseRoute } from './routes';
 
+describe('comments routes', () => {
+  it('restores a thread, project scope and inbox filters after a reload', () => {
+    const location = new URL('http://localhost:9092/comments?project=My+project&thread=thread-1&q=retry+logic&status=open&phase=active&author=ada&kind=file&unread=true');
+    const route = parseRoute(location as unknown as Location);
+    expect(route).toMatchObject({ tab: 'comments', selectedPath: 'thread-1', scopeProject: 'My project', commentFilters: { q: 'retry logic', status: 'open', phase: 'active', author: 'ada', kind: 'file', unread: true } });
+    expect(buildRoute(route)).toBe(location.pathname + location.search);
+  });
+});
+
 describe('dashboard project scope routes', () => {
   it('round-trips the selected project on the todos route', () => {
     const parsed = parseRoute(new URL('http://localhost:9092/todos?project=Clicky%20UI') as unknown as Location);

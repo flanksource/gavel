@@ -103,6 +103,8 @@ export interface BranchMergeRequest {
   branch: string;
   mode: BranchMergeMode;
   message?: string;
+  /** Local branch to land onto; the base branch when omitted. Must be checked out in a project checkout. */
+  target?: string;
 }
 
 // POST /api/projects/{name}/branch/merge

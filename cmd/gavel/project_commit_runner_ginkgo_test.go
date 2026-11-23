@@ -39,7 +39,7 @@ var _ = Describe("dashboard commit command", func() {
 		before := exitCode
 		finished := make(chan error, 1)
 		run := task.StartTask("dashboard commit", func(ctx commonscontext.Context, _ *task.Task) (int, error) {
-			err := runDashboardCommit(ctx, []string{"commit", "--work-dir", repo, "--message=fix: example", "--dry-run", "--tidy=false", "--lint=false", "--lint-secrets=false", "change.txt"}, io.Discard)
+			_, err := runDashboardCommit(ctx, []string{"commit", "--work-dir", repo, "--message=fix: example", "--dry-run", "--tidy=false", "--lint=false", "--lint-secrets=false", "change.txt"}, io.Discard)
 			finished <- err
 			return 0, err
 		}, task.WithContext(ctx))

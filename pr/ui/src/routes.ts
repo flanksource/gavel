@@ -3,15 +3,19 @@ import type { PRItem } from './types';
 import { emptyFilters, type Filters, type FilterMode } from './components/FilterBar';
 import { isProjectRefParam } from './projectRef';
 import { isTodoDetailTab, type TodoDetailTabKey } from './components/todos/TodoDetailTabs';
+import type { InboxFilters } from '@flanksource/clicky-ui/comments/gavel';
 
 export type ExportFormat = 'json' | 'md';
 
 // Tab is the top-level view, encoded as the first path segment. PRs, projects,
 // todos, sessions, tasks, prompts and sandbox runs carry their selection in the path;
 // PR facets and the task time range are encoded in the query.
-export type Tab = 'prs' | 'projects' | 'processes' | 'todos' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs';
+export type Tab = 'prs' | 'projects' | 'processes' | 'todos' | 'comments' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs';
 
-const SPA_TABS: readonly Tab[] = ['projects', 'processes', 'todos', 'sessions', 'activity', 'tasks', 'prompts', 'runs'];
+const SPA_TABS: readonly Tab[] = ['projects', 'processes', 'todos', 'comments', 'sessions', 'activity', 'tasks', 'prompts', 'runs'];
+const commentFilterKeys = ['q', 'status', 'phase', 'author', 'kind'] as const;
+export type CommentFilters = Omit<InboxFilters, 'project'>;
+export const emptyCommentFilters: CommentFilters = { q: '', status: '', phase: '', author: '', kind: '', unread: false };
 
 export interface RouteState {
   tab: Tab;
@@ -32,6 +36,7 @@ export interface RouteState {
   // pane's defaults (and are left out of the URL).
   todoView: TodoDetailView;
   taskTimeRange?: { from: string; to: string } | undefined;
+  commentFilters?: CommentFilters | undefined;
   filters: Filters;
 }
 
@@ -97,6 +102,7 @@ export function parseRoute(location: Location): RouteState {
 
   const params = new URLSearchParams(location.search);
   const scopeProject = params.get('project') ?? '';
+  if (tab === 'comments') selectedPath = params.get('thread') ?? '';
   return {
     tab,
     selectedPath,
@@ -107,6 +113,10 @@ export function parseRoute(location: Location): RouteState {
     projectResults: tab === 'projects' && params.get('results') === 'true',
     projectRef: tab === 'projects' && !projectRunId && selectedPath && isProjectRefParam(params.get('ref') ?? '') ? params.get('ref') ?? '' : '',
     todoView: tab === 'todos' && selectedPath ? parseTodoView(params) : {},
+    ...(tab === 'comments' ? { commentFilters: {
+      q: params.get('q') ?? '', status: params.get('status') ?? '', phase: params.get('phase') ?? '',
+      author: params.get('author') ?? '', kind: params.get('kind') ?? '', unread: params.get('unread') === 'true',
+    } } : {}),
     ...(tab === 'tasks' && (params.has('from') || params.has('to'))
       ? { taskTimeRange: { from: params.get('from') ?? '', to: params.get('to') ?? '' } }
       : {}),
@@ -147,6 +157,11 @@ export function buildRoute(state: RouteState): string {
     if (!state.projectRunId && state.projectRef) params.set('ref', state.projectRef);
   } else if (state.tab === 'todos' && state.selectedPath) {
     setTodoViewParams(params, state.todoView);
+  } else if (state.tab === 'comments') {
+    if (state.selectedPath) params.set('thread', state.selectedPath);
+    const filters = state.commentFilters ?? emptyCommentFilters;
+    for (const key of commentFilterKeys) if (filters[key]) params.set(key, filters[key]);
+    if (filters.unread) params.set('unread', 'true');
   } else if (state.tab === 'tasks' && state.taskTimeRange) {
     const { from, to } = state.taskTimeRange;
     if (from || !to) params.set('from', from);

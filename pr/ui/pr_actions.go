@@ -56,6 +56,12 @@ func (s *Server) afterPRAction(repo string, number int) {
 	if s.detailCache != nil && repo != "" && number != 0 {
 		s.detailCache.Invalidate(SyncStatusKey(repo, number))
 	}
+	s.requestPoll()
+}
+
+// requestPoll asks the poller for a full list fetch; one already requested
+// covers this request too.
+func (s *Server) requestPoll() {
 	select {
 	case s.refreshCh <- struct{}{}:
 	default:
@@ -65,6 +71,14 @@ func (s *Server) afterPRAction(repo string, number int) {
 type prMergePayload struct {
 	URL string `json:"url"`
 	model.MergeInput
+}
+
+// prMergeRefusal is the body of a merge the host refused: nothing was merged.
+// RebaseNotAllowed tells the UI to offer squash or a merge commit instead.
+type prMergeRefusal struct {
+	Error            string `json:"error"`
+	Detail           string `json:"detail,omitempty"`
+	RebaseNotAllowed bool   `json:"rebaseNotAllowed,omitempty"`
 }
 
 // handlePRMerge completes a linked hosted PR using its native merge strategy.
@@ -96,8 +110,23 @@ func (s *Server) handlePRMerge(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = client.MergePR(r.Context(), number, body.MergeInput)
 	}
-	if err != nil {
+	var rejected *github.GraphQLError
+	refusal, status := prMergeRefusal{}, 0
+	switch {
+	case errors.Is(err, github.ErrRebaseNotAllowed):
+		refusal.Error = "GitHub can't rebase this branch onto its base: its commits don't replay cleanly (the branch holds a merge commit or a commit conflicts). Squash it or create a merge commit instead."
+		refusal.RebaseNotAllowed, status = true, http.StatusConflict
+	case errors.As(err, &rejected):
+		refusal.Error, status = "GitHub refused the merge: "+strings.Join(rejected.Messages, "; "), http.StatusUnprocessableEntity
+	case err != nil:
 		writeJSONError(w, http.StatusBadGateway, err)
+		return
+	}
+	if status != 0 {
+		refusal.Detail = err.Error()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(refusal) //nolint:errcheck
 		return
 	}
 	s.afterPRAction(repo, number)

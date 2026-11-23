@@ -72,6 +72,27 @@ describe('PRDetailPanel', () => {
 
     expect(screen.queryByLabelText('Close pull request details')).toBeNull();
   });
+
+  it('fires onRefresh from the refresh button and disables it while loading', () => {
+    const onRefresh = vi.fn();
+    const { rerender } = renderPRDetail(<PRDetailPanel pr={makePR()} detail={null} loading={false} onRefresh={onRefresh} />);
+
+    fireEvent.click(screen.getByLabelText('Refresh pull request status'));
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <PRDetailPanel pr={makePR()} detail={null} loading onRefresh={onRefresh} />
+      </QueryClientProvider>,
+    );
+    expect((screen.getByLabelText('Refresh pull request status') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('omits the refresh button when onRefresh is not provided', () => {
+    renderPRDetail(<PRDetailPanel pr={makePR()} detail={null} loading={false} />);
+
+    expect(screen.queryByLabelText('Refresh pull request status')).toBeNull();
+  });
 });
 
 function makeGavelShard(overrides: Partial<GavelResultsSummary> = {}): GavelResultsSummary {
@@ -93,6 +114,24 @@ function makeGavelShard(overrides: Partial<GavelResultsSummary> = {}): GavelResu
 // reason it produced nothing is the only useful thing to show; falling back to
 // "No test, lint, or bench data" reads as if the artifact was never found.
 describe('Gavel Results section', () => {
+  it('names the shards whose results are not from the head commit', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard({ stickyId: 'gavel-unit' }), makeGavelShard({ stickyId: 'gavel-e2e', artifactId: 2, outdated: true })] }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('From an earlier run, not the head commit: gavel-e2e')).toBeTruthy();
+  });
+
+  it('reports workflow runs that could not be loaded', () => {
+    renderPRDetail(<PRDetailPanel pr={makePR()} detail={{ runs: {}, runsError: 'load workflow run 42: status 403' }} loading={false} />);
+
+    expect(screen.getByRole('alert').textContent).toContain('load workflow run 42: status 403');
+  });
+
   const crashMessage = 'pre-build: compiling Go test binaries failed (exit 1)';
 
   it('shows the crash reason, exit code and log tail instead of the no-data text', () => {
@@ -173,7 +212,9 @@ describe('Gavel Results section', () => {
     expect(screen.getAllByText('saves records').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/expected record to persist/).length).toBeGreaterThan(0);
     const file = document.querySelector('[data-lint-list-linter="golangci-lint"] [data-lint-list-file="pkg/store/save.go"]');
-    expect(file?.querySelector('[data-lint-line]')?.textContent).toBe(':23 return value is not checked (errcheck)');
+    const line = file?.querySelector('[data-lint-line]');
+    expect([line?.querySelector('[data-lint-location]')?.textContent, line?.querySelector('[data-lint-message]')?.textContent])
+      .toEqual(['pkg/store/save.go:23 (errcheck)', 'return value is not checked']);
     // Counts stay exact even though the payload carries only a sample.
     expect(screen.getByText('showing 1 of 2')).toBeTruthy();
     expect(screen.getByText('showing 1 of 3')).toBeTruthy();
@@ -210,7 +251,7 @@ describe('Gavel Results section', () => {
     });
   });
 
-  it('previews the first five failures as a list and links the rest to the full results view', () => {
+  it('previews the first five failures as a bare list, without a view toolbar, and links the rest to the full results view', () => {
     const failures = Array.from({ length: 7 }, (_, i) => ({ name: `TestCase${i + 1}`, failed: true, message: `case ${i + 1} broke` }));
     renderPRDetail(
       <PRDetailPanel
@@ -226,12 +267,12 @@ describe('Gavel Results section', () => {
       rows,
       showing: screen.getByText('showing 5 of 7') !== null,
       href: new URL(showAll.getAttribute('href')!, 'http://dashboard').pathname + new URL(showAll.getAttribute('href')!, 'http://dashboard').searchParams.get('filter'),
-      viewToggle: screen.getByRole('radiogroup', { name: 'View' }) !== null,
+      toolbar: document.querySelector('[data-test-list-toolbar]'),
     }).toEqual({
       rows: ['TestCase1', 'TestCase2', 'TestCase3', 'TestCase4', 'TestCase5'],
       showing: true,
       href: `/results/${makePR().repo}/4242/testsfailed`,
-      viewToggle: true,
+      toolbar: null,
     });
   });
 

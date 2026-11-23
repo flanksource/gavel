@@ -334,6 +334,11 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	if err != nil {
 		return fmt.Errorf("invalid interval %q: %w", opts.Interval, err)
 	}
+	stopTelltale, err := startDashboardTelltale(false)
+	if err != nil {
+		return err
+	}
+	defer stopTelltale()
 
 	searchOpts.Status = true
 
@@ -503,7 +508,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 			}
 		}
 
-		go http.Serve(listener, srv.Handler()) //nolint:errcheck
+		go http.Serve(listener, dashboardHTTPHandler(srv.Handler())) //nolint:errcheck
 
 		logger.Infof("%s", testui.Banner("PR Dashboard", dashboardURL, networkURL))
 	}

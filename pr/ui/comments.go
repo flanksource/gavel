@@ -61,7 +61,7 @@ func OpenComments(ctx context.Context) (*comments.Service, error) {
 	options := comments.Options{Store: store, Access: access, Targets: access, Workflows: []comments.Workflow{comments.HumanReview(), comments.NativePR()}, Blobs: blobs, AttachmentLimit: 10 << 20, Providers: []comments.Provider{providers.GitHub{Resolve: commentGitHub}, providers.Azure{Resolve: commentAzure}}}
 	// Agent delivery reaches this machine's Captain sessions, so only the local tenant gets it.
 	if tenant.FromContext(ctx).IsLocal() {
-		if options.Delivery, err = agents.Delivery(agents.Options{Bridge: agents.Captain{}, Groups: store, Workdir: CommentWorkdir}); err != nil {
+		if options.Delivery, err = agents.Delivery(agents.Options{Bridge: agents.Captain{}, Groups: store, Workdir: CommentWorkdir, Amp: agents.AmpFromEnvironment(), Repositories: CommentRepositories}); err != nil {
 			return nil, err
 		}
 		catalog, err := projects.Shared(ctx)
@@ -113,6 +113,11 @@ func CommentWorkdir(ctx context.Context, t comments.Target) (string, error) {
 	return projects.CanonicalPath(project.Dir)
 }
 
+func CommentRepositories(ctx context.Context, scope string) ([]string, error) {
+	project, err := commentProject(ctx, scope)
+	return project.Repos, err
+}
+
 var _ comments.TargetSources = CommentAccess{}
 
 // TargetSource is the text on disk of a gavel://project file target
@@ -122,6 +127,9 @@ var _ comments.TargetSources = CommentAccess{}
 // threads were written resolves as empty text, so every anchor on it is
 // outdated; any other read failure is an error.
 func (CommentAccess) TargetSource(ctx context.Context, t comments.Target) (string, bool, error) {
+	if !tenant.FromContext(ctx).IsLocal() {
+		return "", false, nil
+	}
 	if !strings.HasPrefix(t.ScopeURI, "gavel://project/") || !strings.HasPrefix(t.URI, t.ScopeURI+"/files/") {
 		return "", false, nil
 	}

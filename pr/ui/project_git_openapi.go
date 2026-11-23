@@ -139,6 +139,7 @@ func projectGitOpenAPISchemas() map[string]any {
 		"ProjectBranchMergeRequest": objectSchema([]string{"branch", "mode"}, map[string]any{
 			"branch": typed("string"), "mode": map[string]any{"type": "string", "enum": []string{"squash", "incremental"}},
 			"message": map[string]any{"type": "string", "description": "Squash commit message; generated from the branch's commits when empty"},
+			"target":  map[string]any{"type": "string", "description": "Local branch to land onto; defaults to the base branch in the primary checkout. Any other target must be checked out in one of the project's checkouts"},
 		}),
 		"ProjectBranchMergeResponse": objectSchema([]string{"targetBranch", "landedSha", "mode", "commits", "worktreeRemoved", "branchDeleted"}, map[string]any{
 			"targetBranch": typed("string"), "landedSha": typed("string"), "mode": typed("string"), "commits": typed("integer"),

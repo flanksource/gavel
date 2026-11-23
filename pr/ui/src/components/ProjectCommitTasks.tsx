@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Icon, TaskProgress, taskStatusColor, taskStatusIcon, type TaskControlAction, type TaskSnapshot } from '@flanksource/clicky-ui/data';
 import { useTaskRun, useTaskRuns } from '@flanksource/clicky-ui/hooks';
 import { Button } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiChevronDown, UiChevronUp } from '@flanksource/clicky-ui/icons';
+import { UiCheck, UiChevronDown, UiChevronUp, UiGitPr } from '@flanksource/clicky-ui/icons';
 import { formatDuration } from '@flanksource/clicky-ui/utils';
 import { createPortal } from 'react-dom';
 import { useIsMobile } from '../useIsMobile';
@@ -153,6 +153,7 @@ export function ProjectCommitTasks({
   const summarized = !mobile && succeeded;
   const expanded = (!collapsed && !summarized) || expandedRun === runId;
   const toggleExpanded = () => setExpandedRun(expanded ? '' : runId);
+  const prs = pushedPRs(snapshots);
   const chip = collapsed && (
     <Button variant="ghost" size="icon" type="button" className="size-8 shrink-0 text-green-700 dark:text-green-400" aria-expanded={expanded}
       aria-label={expanded ? 'Hide commit details' : 'Show commit details'} title={expanded ? 'Hide commit details' : 'Commit complete · show details'}
@@ -170,6 +171,7 @@ export function ProjectCommitTasks({
           {confirming && <div role="status" className="flex items-center gap-1.5 text-xs font-medium text-green-700 dark:text-green-400"><UiCheck />Commit complete</div>}
           {chip && !slot && !confirming && <div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">Commit complete</span>{chip}</div>}
           {reportedError && <div role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{reportedError}</div>}
+          {!summarized && prs.length > 0 && <div className="mb-2 flex flex-wrap items-center gap-3"><PRLinks prs={prs} /></div>}
           {!ownership.error && expanded && !confirming && (
             <TaskProgress
               className={summarized ? 'mt-1.5' : undefined}
@@ -186,7 +188,44 @@ export function ProjectCommitTasks({
   );
 }
 
-/** A finished commit run on one line: its outcome, its steps, how long it took, and a toggle for the full progress. */
+/** The PR a commit task pushed to, as `gavel commit --push` reported it on the task's details. */
+export interface PushedPR {
+  number: number;
+  url: string;
+  title?: string;
+  created?: boolean;
+}
+
+/** Every PR the run's tasks pushed to, in task order, each once. */
+export function pushedPRs(snapshots: readonly TaskSnapshot[]): PushedPR[] {
+  const seen = new Map<string, PushedPR>();
+  for (const task of snapshots) {
+    if (task.type !== 'task') continue;
+    const pr = (task.details as { pr?: Partial<PushedPR> } | undefined)?.pr;
+    if (!pr) continue;
+    if (typeof pr.number !== 'number' || typeof pr.url !== 'string' || pr.url === '') {
+      throw new Error(`commit task ${task.id} reported a malformed PR: ${JSON.stringify(pr)}`);
+    }
+    seen.set(pr.url, pr as PushedPR);
+  }
+  return [...seen.values()];
+}
+
+function PRLinks({ prs }: { prs: readonly PushedPR[] }) {
+  return (
+    <>
+      {prs.map(pr => (
+        <a key={pr.url} href={pr.url} target="_blank" rel="noreferrer" data-commit-run-pr=""
+          title={`${pr.created ? 'Opened' : 'Pushed to'} ${pr.title ? `"${pr.title}"` : `PR #${pr.number}`}`}
+          className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline">
+          <UiGitPr />PR #{pr.number}
+        </a>
+      ))}
+    </>
+  );
+}
+
+/** A finished commit run on one line: its outcome, its steps, how long it took, the PR it opened, and a toggle for the full progress. */
 function CommitRunSummary({ snapshots, expanded, onToggle }: { snapshots: TaskSnapshot[]; expanded: boolean; onToggle: () => void }) {
   const group = snapshots.find(snapshot => snapshot.type === 'group');
   if (!group) throw new Error('commit run has no group snapshot');
@@ -194,9 +233,11 @@ function CommitRunSummary({ snapshots, expanded, onToggle }: { snapshots: TaskSn
   const done = tasks.filter(task => task.status !== 'running' && task.status !== 'pending').length;
   const elapsed = group.startedAt && group.finishedAt ? Date.parse(group.finishedAt) - Date.parse(group.startedAt) : undefined;
   return (
+    <div className="flex w-full min-w-0 items-center gap-3">
     <button type="button" aria-expanded={expanded} onClick={onToggle} data-commit-run-summary=""
       title={expanded ? 'Hide commit details' : 'Show commit details'}
-      className="flex w-full min-w-0 items-center gap-2 text-left text-xs hover:text-foreground">
+      className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs hover:text-foreground">
+      <Icon icon={expanded ? UiChevronUp : UiChevronDown} className="shrink-0 text-muted-foreground" />
       <Icon icon={taskStatusIcon(group.status)} className={`shrink-0 ${taskStatusColor(group.status)}`} />
       <span className="shrink-0 font-medium text-foreground">{group.name}</span>
       <span className="flex min-w-0 flex-1 items-center gap-2 truncate text-muted-foreground">
@@ -209,7 +250,8 @@ function CommitRunSummary({ snapshots, expanded, onToggle }: { snapshots: TaskSn
       </span>
       {tasks.length > 0 && <span className="shrink-0 tabular-nums text-muted-foreground">{done}/{tasks.length}</span>}
       {elapsed !== undefined && <span className="shrink-0 tabular-nums text-muted-foreground">{formatDuration(elapsed)}</span>}
-      <Icon icon={expanded ? UiChevronUp : UiChevronDown} className="shrink-0 text-muted-foreground" />
     </button>
+    <PRLinks prs={pushedPRs(snapshots)} />
+    </div>
   );
 }

@@ -78,6 +78,14 @@ const newTodo: ExtraAction = { label: 'New todo', icon: UiAdd as ComponentType<I
 
 const detail = { pr: { nodeId: 'PR_node_7', state: 'OPEN' } } as PRDetail;
 
+const prCommit = (oid: string, messageHeadline: string) => ({
+  oid, messageHeadline, committedDate: '2026-01-01T00:00:00Z', additions: 1, deletions: 0, changedFiles: 1,
+});
+const mergeDetail = { pr: {
+  nodeId: 'PR_node_7', state: 'OPEN', headRefOid: 'head-1', title: 'Add widgets', headRefName: 'feature',
+  prCommits: [prCommit('a'.repeat(40), 'feat: add widget'), prCommit('b'.repeat(40), 'test: cover widget')],
+} } as PRDetail;
+
 function renderActions(props: Partial<React.ComponentProps<typeof PRActions>> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const tree = (child: ReactNode) => <QueryClientProvider client={client}>
@@ -122,19 +130,60 @@ describe('PRActions responsive collapse', () => {
   it('offers one Merge button and picks the method and auto-merge in its confirmation', async () => {
     const fetchMock = vi.fn(async () => new Response('{"status":"ok"}'));
     vi.stubGlobal('fetch', fetchMock);
-    renderActions({ detail: { pr: { nodeId: 'PR_node_7', state: 'OPEN', headRefOid: 'head-1' } } as PRDetail });
+    renderActions({ detail: mergeDetail });
     expect(screen.getAllByRole('button', { name: /merge/i }).map(button => button.textContent)).toEqual(['Merge']);
 
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
     const dialog = screen.getByRole('dialog', { name: 'Merge pull request' });
     expect(Array.from(dialog.querySelectorAll('[role="radio"]')).map(radio => radio.textContent)).toEqual(['Rebase', 'Squash', 'Merge commit']);
+    expect(screen.queryByRole('textbox', { name: 'Commit title' })).toBeNull();
     fireEvent.click(screen.getByRole('radio', { name: /Squash/ }));
     fireEvent.click(screen.getByRole('switch', { name: /Auto-merge/ }));
     expect(dialog.textContent).toContain('Once all required checks pass, acme/widget#7 merges: it squashes its commits into one commit on main.');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Commit title' }), { target: { value: 'feat: widgets (#7)' } });
     fireEvent.click(screen.getByRole('button', { name: 'Enable auto-merge' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/prs/merge', expect.objectContaining({
-      body: JSON.stringify({ url: 'https://github.com/acme/widget/pull/7', method: 'squash', auto: true, headSha: 'head-1' }),
+      body: JSON.stringify({
+        url: 'https://github.com/acme/widget/pull/7', method: 'squash', auto: true, headSha: 'head-1',
+        commitTitle: 'feat: widgets (#7)', commitBody: '* feat: add widget\n\n* test: cover widget',
+      }),
+    })));
+  });
+
+  it('lists the commits being merged', () => {
+    renderActions({ detail: mergeDetail });
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    const dialog = screen.getByRole('dialog', { name: 'Merge pull request' });
+    expect(dialog.textContent).toContain('2 commits into main');
+    expect(dialog.textContent).toContain('feat: add widget');
+    expect(dialog.textContent).toContain('test: cover widget');
+  });
+
+  it('explains a refused rebase and switches to a prefilled merge commit instead', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      error: 'GitHub can\'t rebase this branch onto its base', detail: 'GraphQL errors: This branch can\'t be rebased', rebaseNotAllowed: true,
+    }), { status: 409, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderActions({ detail: mergeDetail });
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Merge' }).at(-1)!);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('GitHub can\'t rebase this branch onto its base');
+    expect(alert.textContent).not.toContain('Submission outcome unknown');
+    expect((screen.getAllByRole('button', { name: 'Merge' }).at(-1) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /Create a merge commit instead/ }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect((screen.getByRole('textbox', { name: 'Commit title' }) as HTMLInputElement).value).toBe('Merge pull request #7 from acme/feature');
+    expect((screen.getByRole('textbox', { name: 'Commit message' }) as HTMLTextAreaElement).value).toBe('Add widgets');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Merge' }).at(-1)!);
+    await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith('/api/prs/merge', expect.objectContaining({
+      body: JSON.stringify({
+        url: 'https://github.com/acme/widget/pull/7', method: 'merge', auto: false, headSha: 'head-1',
+        commitTitle: 'Merge pull request #7 from acme/feature', commitBody: 'Add widgets',
+      }),
     })));
   });
   it('renders every action inline when not collapsed', () => {

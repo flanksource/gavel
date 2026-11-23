@@ -153,9 +153,14 @@ export function chatRuntimesQuery() {
   });
 }
 
+// jobLogsKey names every job log of a repository.
+export function jobLogsKey(repo: string) {
+  return ['prs', 'job-logs', repo] as const;
+}
+
 export function jobLogsQuery(repo: string, runId: number, jobId: number, tail = 100) {
   return queryOptions({
-    queryKey: ['prs', 'job-logs', repo, runId, jobId, tail] as const,
+    queryKey: [...jobLogsKey(repo), runId, jobId, tail] as const,
     queryFn: async ({ signal }) => {
       const url = `/api/prs/job-logs?repo=${encodeURIComponent(repo)}&runId=${runId}&jobId=${jobId}&tail=${tail}`;
       const result = await fetchJSON<JobLogsResponse>(url, signal, `Failed to load logs for job ${jobId}`);

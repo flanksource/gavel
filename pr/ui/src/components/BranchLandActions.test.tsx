@@ -4,8 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { queryKeys } from '../query';
-import type { BranchMergeResult } from '../types';
-import { BranchLandActions, branchAIMergeBlockedReason, branchLandBlockedReasons, type BranchLandActionsProps } from './BranchLandActions';
+import type { BranchMergeResult, GitWorktree } from '../types';
+import { BranchLandActions, branchAIMergeBlockedReason, branchLandBlockedReasons, mergeTargets, type BranchLandActionsProps } from './BranchLandActions';
 
 /* oxlint-disable clicky-ui/prefer-clicky-components --
    These raw elements ARE the test doubles for clicky-ui's Button/SplitButton/InputField:
@@ -112,10 +112,10 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 
 // Every POST answers status/body; the project's git state (read for the
 // primary checkout) is served separately and never counted as a land request.
-function stubLand(status: number, body: unknown) {
+function stubLand(status: number, body: unknown, git = projectGit) {
   const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(status, body));
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => (
-    url === `/api/projects/${PROJECT}/git` ? json(200, projectGit) : fetchMock(url, init)
+    url === `/api/projects/${PROJECT}/git` ? json(200, git) : fetchMock(url, init)
   )));
   return fetchMock;
 }
@@ -151,6 +151,17 @@ describe('branchLandBlockedReasons', () => {
 
   it('pluralises one uncommitted change', () => {
     expect(branchLandBlockedReasons({ ...ready, dirtyCount: 1 }).merge).toMatch(/1 uncommitted change[^s]/);
+  });
+});
+
+describe('mergeTargets', () => {
+  it('offers every other checked-out branch, sorted, but not the base, the branch itself, detached or prunable checkouts', () => {
+    const at = (branch: string, extra: Partial<GitWorktree> = {}): GitWorktree => ({ ...projectGit.worktrees[1]!, path: `/wt/${branch || 'detached'}`, branch, ...extra });
+    expect(mergeTargets({
+      base: 'main',
+      branch: BRANCH,
+      worktrees: [projectGit.worktrees[0]!, projectGit.worktrees[1]!, at('release/2.x'), at('hotfix'), at('', { detached: true }), at('stale', { prunable: true })],
+    })).toEqual([{ branch: 'hotfix', path: '/wt/hotfix' }, { branch: 'release/2.x', path: '/wt/release/2.x' }]);
   });
 });
 
@@ -216,6 +227,20 @@ describe('BranchLandActions', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(posted(fetchMock, 'merge')).toEqual({ branch: BRANCH, mode: 'incremental' });
+  });
+
+  it('merges into a target picked from the split button, naming it in the dialog and the request', async () => {
+    const release = { ...projectGit.worktrees[1]!, path: '/src/gavel/.worktrees/release', branch: 'release/1.x', ahead: 0 };
+    const fetchMock = stubLand(200, { ...mergeResult, targetBranch: 'release/1.x' }, { ...projectGit, worktrees: [...projectGit.worktrees, release] });
+    renderActions();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Merge into release\/1\.x/ }));
+    const dialog = screen.getByRole('dialog', { name: `Merge ${BRANCH} into release/1.x` });
+    expect(dialog.textContent).toContain('Squashes every commit into one commit on release/1.x.');
+    fireEvent.click(confirmButton(/^Squash & merge$/));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(posted(fetchMock, 'merge')).toEqual({ branch: BRANCH, mode: 'squash', target: 'release/1.x' });
   });
 
   it.each([

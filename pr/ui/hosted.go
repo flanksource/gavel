@@ -53,9 +53,10 @@ var hostedPassThrough = []string{
 	// The todo entity acts for the organization's user (see todo_entity.go).
 	"GET /api/entities", "GET /api/v1/todo", "POST /api/v1/todo", "GET /api/v1/todo/{id}",
 	"GET /api/v1/comments", "POST /api/v1/comments", "GET /api/v1/comments/{id}",
-	"GET /api/v1/comments/events", "GET /api/v1/comments/{id}/capabilities", "POST /api/v1/comments/{id}/read",
+	"GET /api/v1/comments/events", "GET /api/v1/comments/{id}/capabilities", "POST /api/v1/comments/{id}/read", "POST /api/v1/comments/read",
 	"POST /api/v1/comments/{id}/reply", "POST /api/v1/comments/{id}/assign", "POST /api/v1/comments/{id}/acknowledge",
 	"POST /api/v1/comments/{id}/edit", "POST /api/v1/comments/{id}/resolve", "POST /api/v1/comments/{id}/close", "POST /api/v1/comments/{id}/reopen",
+	"POST /api/v1/comments/{id}/edit-reply",
 	"POST /api/v1/comments/sync", "POST /api/v1/comments/{id}/publish", "POST /api/v1/comments/{id}/publish-reply",
 	"POST /api/v1/comments/{id}/resolve-native", "POST /api/v1/comments/{id}/reopen-native", "GET /api/v1/comments/{id}/operation",
 	"POST /api/v1/comments/{id}/attachments", "GET /api/v1/comments/{id}/attachments/{attachment}",

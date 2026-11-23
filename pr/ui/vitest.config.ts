@@ -42,6 +42,7 @@ export default defineConfig({
         inline: [
           /@flanksource\/clicky-ui/,
           /@floating-ui\/react/,
+          /@lexical\/react/,
           /@tanstack\/react-virtual/,
           /@radix-ui\//,
           /country-flag-icons/,

@@ -1,12 +1,63 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Button, JsonSchemaForm, Tabs, type JsonSchemaObject } from '@flanksource/clicky-ui/components';
+import { Button, JsonSchemaForm, Tabs, type JsonSchemaObject, type PostExtension, type PreExtension } from '@flanksource/clicky-ui/components';
+import { RuntimeBar, runtimeSpecFields, type AISpecRuntimeValue, type PromptCatalogEntry, type SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
+import type { ChatModel } from '@flanksource/clicky-ui/chat';
 import { settingsSchemaQuery } from '../settings/queries';
+import { promptCatalogOptions, promptCatalogQuery } from './promptCatalog';
+
+/**
+ * Turns a lifecycle step's prompt id into a picker over the prompt catalog. A
+ * custom value stays allowed so a `file:<project prompt path>` reference still
+ * commits. Only the string-typed `prompt` is a step's prompt id; the schema's
+ * other `prompt` property is an inline prompt object.
+ */
+export function stepPromptPicker(entries: readonly PromptCatalogEntry[]): PreExtension {
+  const options = promptCatalogOptions(entries);
+  return field => (field.key === 'prompt' && field.schema.type === 'string'
+    ? { ...field, kind: 'enum', options, allowCustomValue: true }
+    : field);
+}
+
+/**
+ * Replaces a lifecycle step's Captain `spec` section with one RuntimeBar: mode,
+ * model and effort on the bar, permissions, worktree, commits, budget and
+ * timeout under its options. Spec keys the bar does not edit pass through.
+ */
+export function stepRuntimeBar({ models, families }: { models: ChatModel[]; families: SpecRuntimeFamily[] }): PostExtension {
+  return (field, nodes) => {
+    if (field.key !== 'spec' || field.schema.type !== 'object' || !field.schema.properties?.mode) return nodes;
+    const value = (field.value ?? {}) as AISpecRuntimeValue;
+    const change = (next: AISpecRuntimeValue) => field.onChange(next);
+    return {
+      label: nodes.label,
+      value: (
+        <RuntimeBar<AISpecRuntimeValue>
+          ariaLabel="Step runtime"
+          value={value}
+          onChange={change}
+          models={models}
+          families={families}
+          showTimeout
+          showCost
+          actions={{ fields: runtimeSpecFields({ value, onChange: change, families, models }) }}
+        />
+      ),
+    };
+  };
+}
 
 interface Step { name: string; prompt: string; [key: string]: unknown }
 interface Definition { name?: string; subject?: Record<string, string>; steps?: Step[]; order?: string[]; disabled?: string[]; file?: string }
 interface View { path: string; revision: string; source: Definition; fileSource?: Definition; inherited: Definition; effective: Definition }
-interface Props { scopeQuery: string; kind: 'todos' | 'pr'; onSelect: (kind: 'todos' | 'pr') => void }
+interface Props {
+  scopeQuery: string;
+  kind: 'todos' | 'pr';
+  onSelect: (kind: 'todos' | 'pr') => void;
+  /** Model and runtime-family catalogs the step RuntimeBar offers. */
+  models: ChatModel[];
+  families: SpecRuntimeFamily[];
+}
 
 async function request(url: string, method = 'GET', body?: unknown): Promise<View> {
   const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
@@ -14,10 +65,13 @@ async function request(url: string, method = 'GET', body?: unknown): Promise<Vie
   return response.json() as Promise<View>;
 }
 
-export function LifecyclesView({ scopeQuery, kind, onSelect }: Props) {
+export function LifecyclesView({ scopeQuery, kind, onSelect, models, families }: Props) {
   const url = `/api/settings/lifecycles?${scopeQuery}&kind=${kind}`;
   const query = useQuery({ queryKey: ['lifecycles', scopeQuery, kind], queryFn: () => request(url) });
   const schema = useQuery(settingsSchemaQuery());
+  const catalog = useQuery(promptCatalogQuery(scopeQuery));
+  const pre = useMemo(() => [stepPromptPicker(catalog.data ?? [])], [catalog.data]);
+  const post = useMemo(() => [stepRuntimeBar({ models, families })], [models, families]);
   const [source, setSource] = useState<Definition>({});
   const [preview, setPreview] = useState<View>();
   const [error, setError] = useState('');
@@ -57,7 +111,7 @@ export function LifecyclesView({ scopeQuery, kind, onSelect }: Props) {
   return <div className="min-h-0 flex-1 overflow-y-auto p-4">
     <Tabs tabs={[{ id: 'todos', label: 'TODO lifecycle' }, { id: 'pr', label: 'PR lifecycle' }]} value={kind} onChange={next => onSelect(next as Props['kind'])} />
     <p className="my-3 text-sm text-muted-foreground">Steps run in priority order. PR actions start manually from PR details. Preview validates conditions and shows the resolved workflow before saving.</p>
-    {(error || query.error || schema.error) && <p role="alert" className="my-3 text-sm text-destructive">{error || query.error?.message || schema.error?.message}</p>}
+    {(error || query.error || schema.error || catalog.error) && <p role="alert" className="my-3 text-sm text-destructive">{error || query.error?.message || schema.error?.message || catalog.error?.message}</p>}
     {view && lifecycleSchema && <>
       <p className="my-3 break-all text-xs text-muted-foreground">{view.path}{view.source.file ? ` → ${view.source.file}` : ''}</p>
       <div className="mb-4 space-y-2">{steps.map((step, index) => {
@@ -71,7 +125,7 @@ export function LifecyclesView({ scopeQuery, kind, onSelect }: Props) {
           <Button size="sm" variant="outline" onClick={() => change({ ...source, steps: overridden ? source.steps?.filter(item => item.name !== step.name) : [...(source.steps ?? []), step] })}>{overridden ? 'Reset' : 'Edit'} {step.name}</Button>
         </div>;
       })}</div>
-      <JsonSchemaForm schema={{ ...lifecycleSchema, $defs: schema.data?.$defs }} value={source as Record<string, unknown>} onChange={next => change(next as Definition)} showPreferencesMenu={false} persistPreferences={false} />
+      <JsonSchemaForm schema={{ ...lifecycleSchema, $defs: schema.data?.$defs }} value={source as Record<string, unknown>} onChange={next => change(next as Definition)} pre={pre} post={post} showPreferencesMenu={false} persistPreferences={false} />
       <div className="my-4 flex flex-wrap gap-2">
         <Button variant="outline" onClick={() => change({})}>Reset scope overrides</Button>
         <Button variant="outline" onClick={() => change(view.fileSource ?? view.source)}>Discard changes</Button>

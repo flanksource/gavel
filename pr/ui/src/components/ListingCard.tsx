@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { ContextMenu, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
 import { cn } from '@flanksource/clicky-ui/utils';
 
 export interface ListingCardProps {
@@ -21,6 +22,8 @@ export interface ListingCardProps {
   leading?: ReactNode;
   /** After the content, outside the selection target: row buttons. */
   actions?: ReactNode;
+  /** Item actions offered on right-click of the whole card, keeping the row free of buttons. */
+  menuItems?: DropdownMenuItem[];
   selected?: boolean;
   /** Accessible name of the selection button. */
   label: string;
@@ -34,11 +37,13 @@ export interface ListingCardProps {
  * button. Interactive slot content (links, buttons) stops propagation so it
  * never doubles as a selection.
  */
-export function ListingCard({ icon, status, title, titleHint, titleBadges, meta, badges, age, leading, actions, selected, label, onSelect }: ListingCardProps) {
+export function ListingCard({ icon, status, title, titleHint, titleBadges, meta, badges, age, leading, actions, menuItems, selected, label, onSelect }: ListingCardProps) {
+  const [card, setCard] = useState<HTMLDivElement | null>(null);
   return (
     // The title button is the keyboard and screen-reader target; the card's
     // click only widens its pointer target.
     <div
+      ref={setCard}
       data-testid="listing-card"
       onClick={onSelect}
       className={cn(
@@ -77,6 +82,8 @@ export function ListingCard({ icon, status, title, titleHint, titleBadges, meta,
         </span>
       </span>
       {actions ? <span className="flex shrink-0 items-center" onClick={event => event.stopPropagation()}>{actions}</span> : null}
+      {/* React bubbles portal events through the tree, so menu picks must not reach the card's select. */}
+      {menuItems?.length ? <span className="contents" onClick={event => event.stopPropagation()}><ContextMenu contextTarget={card} menuLabel={`${label} actions`} menuItems={menuItems} /></span> : null}
     </div>
   );
 }

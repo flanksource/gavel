@@ -33,15 +33,15 @@ import { TodoToolbar } from './todos/TodoToolbar';
 // useWorkspaceTodos data layer the App owns.
 
 // TodoNewButton is the primary "create todo" action. It lives in the AppShell's
-// top-bar actions cluster (the action header) alongside the other global
-// controls, not the body row. Disabled until at least one workspace exists.
-export function TodoNewButton({ todos, onNew }: { todos: WorkspaceTodos; onNew: () => void }) {
+// top-bar actions cluster on every tab, alongside the other global controls.
+// Disabled until a project with a directory exists to create the todo in.
+export function TodoNewButton({ disabled, onNew }: { disabled: boolean; onNew: () => void }) {
   return (
     <Button
       type="button"
       variant="ghost"
       onClick={onNew}
-      disabled={todos.workspaces.length === 0}
+      disabled={disabled}
       title="New todo"
       className="inline-flex h-8 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
     >

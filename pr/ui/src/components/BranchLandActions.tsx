@@ -3,7 +3,7 @@ import { SessionTail } from '@flanksource/clicky-ui/ai';
 import { Button, InputField, Modal, SegmentedControl, SplitButton, type SegmentedOption } from '@flanksource/clicky-ui/components';
 import { UiGitCommit, UiGitMerge, UiGitPr, UiSparkles } from '@flanksource/clicky-ui/icons';
 import { useProjectGit } from '../projectGitQueries';
-import type { BranchMergeMode, BranchMergeResult } from '../types';
+import type { BranchMergeMode, BranchMergeResult, GitWorktree } from '../types';
 import { useBranchAIMerge } from './branchAIMerge';
 import { landConflicts, useBranchLandMutation, type BranchLandRequest } from './projectGitMutations';
 import { useRebaseAction } from './rebaseAction';
@@ -42,6 +42,18 @@ export function branchAIMergeBlockedReason({ merge, worktreePath, repo }: { merg
   if (!worktreePath) return 'The AI merge rebases in the branch\'s worktree, and this branch has none.';
   if (!repo) return 'Loading the project\'s primary checkout…';
   return '';
+}
+
+/**
+ * The branches besides the base a branch can be merged into: each one checked
+ * out in a project checkout, since the merge lands in that checkout's working
+ * tree. The branch itself, detached and prunable checkouts are left out.
+ */
+export function mergeTargets({ worktrees, base, branch }: { worktrees: readonly GitWorktree[]; base: string; branch: string }): { branch: string; path: string }[] {
+  return worktrees
+    .filter(worktree => !worktree.detached && !worktree.prunable && worktree.branch && worktree.branch !== base && worktree.branch !== branch)
+    .map(worktree => ({ branch: worktree.branch, path: worktree.path }))
+    .sort((a, b) => a.branch.localeCompare(b.branch));
 }
 
 export interface BranchLandActionsProps extends BranchLandReasonInput {
@@ -87,14 +99,21 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
   const { base } = reasonInput;
   const land = useBranchLandMutation({ projectName, onMerged });
   const ai = useBranchAIMerge({ projectName, onMerged });
-  const repo = useProjectGit(projectName).data?.worktrees.find(worktree => worktree.primary)?.path;
+  const worktrees = useProjectGit(projectName).data?.worktrees ?? [];
+  const targets = mergeTargets({ worktrees, base, branch });
   const rebaseAction = useRebaseAction();
   const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState(base);
   const [method, setMethod] = useState<LandMethod>('squash');
   const [message, setMessage] = useState('');
   const reasons = branchLandBlockedReasons(reasonInput);
-  const aiReason = branchAIMergeBlockedReason({ merge: reasons.merge, worktreePath: reasonInput.worktreePath, repo });
-  const reason = method === 'ai' ? aiReason : reasons.merge;
+  // The base needs the primary checkout on it; any other target is offered only
+  // because a checkout already has it, so only the branch's own state can block it.
+  const mergeReason = target === base ? reasons.merge : reasons.pr;
+  const repo = target === base ? worktrees.find(worktree => worktree.primary)?.path : targets.find(candidate => candidate.branch === target)?.path;
+  const aiReason = branchAIMergeBlockedReason({ merge: mergeReason, worktreePath: reasonInput.worktreePath, repo });
+  const reason = method === 'ai' ? aiReason : mergeReason;
+  const openMerge = (next: string) => { setTarget(next); land.reset(); setOpen(true); };
   const aiActive = ai.state.status === 'starting' || ai.state.status === 'running';
   const busy = land.isPending || aiActive;
   const submit = (request: BranchLandRequest) => land.mutate(request);
@@ -103,7 +122,7 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
     if (!repo || !reasonInput.worktreePath) return;
     land.reset();
     void ai.start({
-      repo, worktree: reasonInput.worktreePath, branch, base, mode,
+      repo, worktree: reasonInput.worktreePath, branch, base: target, mode,
       message, conflicts, ahead: reasonInput.ahead,
     });
   };
@@ -112,7 +131,7 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
     if (method === 'ai') return mergeWithAI('squash');
     const text = message.trim();
     land.mutate(
-      { via: 'merge', branch, mode: method, ...(method === 'squash' && text ? { message: text } : {}) },
+      { via: 'merge', branch, mode: method, ...(method === 'squash' && text ? { message: text } : {}), ...(target !== base ? { target } : {}) },
       { onSuccess: () => setOpen(false) },
     );
   };
@@ -126,7 +145,7 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
     <Modal
       open
       onClose={() => setOpen(false)}
-      title={`Merge ${branch} into ${base}`}
+      title={`Merge ${branch} into ${target}`}
       size="lg"
       footer={
         <div className="flex justify-end gap-2">
@@ -138,8 +157,8 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
       }
     >
       <div className="space-y-3 text-sm text-foreground">
-        <SegmentedControl aria-label="Merge method" size="sm" value={method} options={landMethods(base)} onChange={setMethod} />
-        <p className="text-muted-foreground">{landEffect(method, base)}</p>
+        <SegmentedControl aria-label="Merge method" size="sm" value={method} options={landMethods(target)} onChange={setMethod} />
+        <p className="text-muted-foreground">{landEffect(method, target)}</p>
         {method !== 'incremental' && (
           <InputField
             aria-label="Squash commit message"
@@ -184,9 +203,22 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
   return (
     <span className="flex min-w-0 flex-col items-end gap-1 max-sm:!items-stretch">
       <span className="flex flex-wrap items-center justify-end gap-1.5 max-sm:!justify-start">
-        <Button variant="outline" size="sm" className="h-8 gap-1 px-3 text-xs" title={reasons.merge || undefined} onClick={() => setOpen(true)}>
-          {aiActive ? <><UiSparkles />Merging with AI…</> : <><UiGitMerge />Merge into {base}</>}
-        </Button>
+        <span className="inline-flex" title={reasons.merge || undefined}>
+          <SplitButton
+            variant="outline"
+            size="sm"
+            title="Merge target"
+            label={aiActive
+              ? <span className="flex items-center gap-1"><UiSparkles />Merging with AI…</span>
+              : <span className="flex items-center gap-1"><UiGitMerge />Merge into {base}</span>}
+            onClick={() => (aiActive ? setOpen(true) : openMerge(base))}
+            items={aiActive ? [] : targets.map(candidate => ({
+              label: <span className="flex items-center gap-2"><UiGitMerge />Merge into {candidate.branch}</span>,
+              title: candidate.path,
+              onSelect: () => openMerge(candidate.branch),
+            }))}
+          />
+        </span>
         <span className="inline-flex" title={reasons.pr || undefined}>
           <SplitButton
             variant="outline"

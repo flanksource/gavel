@@ -70,7 +70,7 @@ func (c gitHubClient) Status(ctx context.Context, number int, opts model.StatusO
 		if _, found := runs[id]; found {
 			continue
 		}
-		run, err := github.FetchRunJobs(c.opts, id, github.RunLogOptions{FetchLogs: opts.Logs, TailLines: opts.TailLogs})
+		run, err := github.FetchRunJobs(c.opts, id, github.RunLogOptions{FetchLogs: opts.Logs, TailLines: opts.TailLogs, Checks: pr.StatusCheckRollup})
 		if err != nil {
 			return nil, err
 		}

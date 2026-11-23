@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { EventSourceLike } from '@flanksource/clicky-ui/hooks';
 import { openEventStream } from './eventHub';
+import { jobLogsKey } from './components/oneShotQueries';
 import { queryKeys } from './query';
 import type { GavelResultsSummary, PRDetail, PRInfo, PRItem, PRComment, WorkflowRun } from './types';
 
@@ -16,7 +17,19 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
   const streamRef = useRef<EventSourceLike | null>(null);
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
-  const refresh = useCallback(() => setRevision(current => current + 1), []);
+  // forcedRef names the PR + revision a refresh asked to re-fetch, so that
+  // stream bypasses the server's detail cache while opening a PR still serves
+  // the cached detail. A key (not a consume-once flag) survives effect re-runs.
+  const forcedRef = useRef('');
+  const streamKey = `${pr?.repo ?? ''}#${pr?.number ?? 0}`;
+  const refresh = useCallback(() => {
+    setRevision(current => {
+      forcedRef.current = `${streamKey}@${current + 1}`;
+      return current + 1;
+    });
+    // An open job log may still be growing.
+    void queryClient.invalidateQueries({ queryKey: jobLogsKey(pr?.repo ?? '') });
+  }, [pr?.repo, queryClient, streamKey]);
   const detailKey = queryKeys.prDetail(pr?.repo ?? '', pr?.number ?? 0);
   const detailQuery = useQuery<PRDetail>({
     queryKey: detailKey,
@@ -32,9 +45,16 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
       return;
     }
     const key = queryKeys.prDetail(pr.repo, pr.number);
-    const stream = openEventStream(`/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`);
+    const force = forcedRef.current === `${pr.repo}#${pr.number}@${revision}`;
+    const stream = openEventStream(`/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}${force ? '&refresh=1' : ''}`);
     streamRef.current = stream;
     setLoading(true);
+
+    const finish = () => {
+      setLoading(false);
+      stream.close();
+      streamRef.current = null;
+    };
 
     const onPR = (event: Event) => {
       try {
@@ -45,13 +65,12 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
         if (data.comments != null && !Array.isArray(data.comments)) throw new Error('invalid PR frame');
         queryClient.setQueryData<PRDetail>(key, current => ({
           ...current,
+          error: undefined,
           pr: data.pr as PRInfo | undefined,
           comments: (data.comments ?? []) as PRComment[],
         }));
-        setLoading(false);
       } catch {
         failFrame(queryClient, key, 'Pull request detail stream received an invalid PR update.');
-        setLoading(false);
       }
     };
     const onRuns = (event: Event) => {
@@ -61,6 +80,7 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
         queryClient.setQueryData<PRDetail>(key, current => current ? {
           ...current,
           runs: data.runs as Record<string, WorkflowRun> | undefined,
+          runsError: typeof data.error === 'string' && data.error ? data.error : undefined,
         } : current);
       } catch {
         failFrame(queryClient, key, 'Pull request detail stream received an invalid runs update.');
@@ -84,17 +104,15 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
       try {
         const data = frame(messageEvent.data);
         const message = typeof data.error === 'string' && data.error ? data.error : 'Load pull request detail failed';
-        queryClient.setQueryData<PRDetail>(key, current => current ?? { error: message });
+        queryClient.setQueryData<PRDetail>(key, current => ({ ...current, error: message }));
       } catch {
         failFrame(queryClient, key, 'Pull request detail stream received an invalid error update.');
       }
-      setLoading(false);
+      finish();
     };
     const onDone = () => {
       if (streamRef.current !== stream) return;
-      setLoading(false);
-      stream.close();
-      streamRef.current = null;
+      finish();
     };
     stream.addEventListener('pr', onPR);
     stream.addEventListener('runs', onRuns);
@@ -103,10 +121,8 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
     stream.addEventListener('done', onDone);
     stream.onerror = () => {
       if (streamRef.current !== stream) return;
-      queryClient.setQueryData<PRDetail>(key, current => current ?? { error: 'Connection lost' });
-      setLoading(false);
-      stream.close();
-      streamRef.current = null;
+      queryClient.setQueryData<PRDetail>(key, current => ({ ...current, error: 'Connection lost' }));
+      finish();
     };
 
     return () => {

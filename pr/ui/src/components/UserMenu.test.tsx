@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { setAuthMode } from '../query';
+import { GRABBER_HELP_TITLE } from './GrabberExtensionHelp';
 import { UserMenu } from './UserMenu';
 
 // Clerk's components are stand-ins: these tests cover what UserMenu renders in
@@ -11,6 +12,10 @@ vi.mock('@clerk/react', () => {
   const UserButton = ({ children }: { children?: ReactNode }) => <div data-testid="user-button">{children}</div>;
   UserButton.UserProfilePage = ({ label, url }: { label: string; url: string }) => (
     <div data-testid="profile-page" data-label={label} data-url={url} />
+  );
+  UserButton.MenuItems = ({ children }: { children?: ReactNode }) => <div data-testid="user-menu-items">{children}</div>;
+  UserButton.Action = ({ label, onClick }: { label: string; onClick?: () => void }) => (
+    <button type="button" onClick={onClick}>{label}</button>
   );
   const OrganizationSwitcher = (props: { hidePersonal?: boolean; afterSelectOrganizationUrl?: string; children?: ReactNode }) => (
     <div data-testid="organization-switcher" data-hide-personal={String(props.hidePersonal)} data-after={props.afterSelectOrganizationUrl}>
@@ -57,6 +62,14 @@ describe('UserMenu', () => {
     expect(screen.queryByRole('button', { name: 'Connect GitHub' })).toBeNull();
   });
 
+  it('opens the Grabber help from the local identity menu', async () => {
+    stubMe({ name: 'Ada Lovelace' });
+    renderMenu();
+    fireEvent.click(await screen.findByRole('button', { name: 'User menu: Ada Lovelace' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Grabber/ }));
+    expect(await screen.findByText(GRABBER_HELP_TITLE)).toBeTruthy();
+  });
+
   it('shows "local" in none mode when nobody is logged in', async () => {
     stubMe(null);
     renderMenu();
@@ -79,5 +92,14 @@ describe('UserMenu', () => {
     expect(orgPage.dataset.label).toBe('Model keys');
     expect(orgPage.dataset.url).toBe('model-keys');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('adds a Grabber action to the Clerk user button that opens the Grabber help', async () => {
+    stubMe(null);
+    setAuthMode('clerk', vi.fn());
+    renderMenu();
+    const items = screen.getByTestId('user-menu-items');
+    fireEvent.click(within(items).getByRole('button', { name: 'Grabber' }));
+    expect(await screen.findByText(GRABBER_HELP_TITLE)).toBeTruthy();
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { githubScopeVisible, hostControlsVisible, runtimeChoiceVisible, tabFor, todoVisibilityVisible, visibleTabs } from './hostedUI';
 import type { Tab } from './routes';
 
-const allTabs: Tab[] = ['prs', 'projects', 'todos', 'sessions', 'tasks', 'prompts', 'activity', 'runs'];
+const allTabs: Tab[] = ['prs', 'projects', 'todos', 'comments', 'sessions', 'tasks', 'prompts', 'activity', 'runs'];
 
 describe('hosted UI', () => {
   it('keeps every tab but the sandbox runs and every host control locally', () => {
@@ -12,8 +12,8 @@ describe('hosted UI', () => {
     expect(tabFor('none', 'runs'), 'a local dashboard runs nothing in a sandbox').toBe('prs');
   });
 
-  it('shows a hosted org only the PR, project, todo and sandbox run tabs and no host controls', () => {
-    expect(visibleTabs('clerk', allTabs)).toEqual(['prs', 'projects', 'todos', 'runs']);
+  it('shows a hosted org the PR, project, todo, comments and sandbox run tabs', () => {
+    expect(visibleTabs('clerk', allTabs)).toEqual(['prs', 'projects', 'todos', 'comments', 'runs']);
     expect(tabFor('clerk', 'projects')).toBe('projects');
     expect(tabFor('clerk', 'runs')).toBe('runs');
     expect(hostControlsVisible('clerk')).toBe(false);
@@ -35,7 +35,7 @@ describe('hosted UI', () => {
   });
 
   it('opens the PR tab for a hosted link to a host-only tab', () => {
-    for (const tab of allTabs.filter(tab => tab !== 'projects' && tab !== 'todos' && tab !== 'runs')) {
+    for (const tab of allTabs.filter(tab => !['projects', 'todos', 'comments', 'runs'].includes(tab))) {
       expect(tabFor('clerk', tab)).toBe('prs');
     }
     expect(tabFor('clerk', 'todos')).toBe('todos');

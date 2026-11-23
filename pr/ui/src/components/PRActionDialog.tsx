@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import { SessionTail } from '@flanksource/clicky-ui/ai';
@@ -6,10 +6,12 @@ import { Button, Modal, SegmentedControl, Switch, zIndex, type HostedModalProps,
 import { UiGitGraph, UiGitMerge, UiGitPr, UiRocket, UiSparkles } from '@flanksource/clicky-ui/icons';
 import { HttpError, mutationJSON, queryKeys } from '../query';
 import { usePromptRun } from './promptRun';
-import { prActionFormKey, prActionMutationKey, readPRActionDraft, type MergeMethod, type PendingPRAction, type PRActionAvailability } from './prActionDraft';
+import { PRCommitList } from './PRCommitList';
+import { defaultMergeMessage, prActionFormKey, prActionMutationKey, readPRActionDraft, type MergeMessageSource, type MergeMethod, type PendingPRAction, type PRActionAvailability } from './prActionDraft';
 
 type Draft = ReturnType<typeof readPRActionDraft>;
 type UpdateBranchConflict = { error: string; rebase?: Record<string, unknown>; rebaseBlocked?: string };
+type RebaseRefusal = { error: string; detail?: string };
 const titles = { merge: 'Merge pull request', approve: 'Approve pull request', 'update-branch': 'Update branch' } as const;
 const methods: SegmentedOption<MergeMethod>[] = [
   { id: 'rebase', label: 'Rebase', icon: UiGitMerge, title: 'Rebase and merge' },
@@ -38,7 +40,12 @@ function PRActionDialog({ initialDraft, modalProps, submit }: HostedModalProps) 
   const [draft, setDraft] = useState(() => readPRActionDraft(initialDraft));
   const [conflict, setConflict] = useState<UpdateBranchConflict | null>(null);
   const [rebaseHidden, setRebaseHidden] = useState(false);
+  const [rebaseRefusal, setRebaseRefusal] = useState<RebaseRefusal | null>(null);
+  // The provider's error belongs to the attempt that failed; picking another
+  // merge method starts a new attempt, so that error stops showing.
+  const [dismissedError, setDismissedError] = useState<ReactNode>();
   const availability = initialDraft.availability as PRActionAvailability | undefined;
+  const mergeSource = initialDraft.mergeSource as MergeMessageSource | undefined;
   const onChanged = initialDraft.onChanged as (() => void) | undefined;
   function subscribe(listener: () => void) {
     availability?.changes.addEventListener('change', listener);
@@ -67,6 +74,7 @@ function PRActionDialog({ initialDraft, modalProps, submit }: HostedModalProps) 
 
   function confirm() {
     if (busy || availability?.disabled || queryClient.isMutating({ mutationKey, exact: true }) > 0) return;
+    setDismissedError(undefined);
     void submit({
       draft,
       request: async () => {
@@ -77,6 +85,9 @@ function PRActionDialog({ initialDraft, modalProps, submit }: HostedModalProps) 
           const next = draft.pending.type === 'update-branch' ? updateBranchConflict(error) : null;
           setConflict(next);
           if (next) return { status: 'rejected', error: next.error };
+          const refusal = draft.pending.type === 'merge' ? rebaseNotAllowed(error) : null;
+          setRebaseRefusal(refusal);
+          if (refusal) return { status: 'rejected', error: refusal.error };
           if (error instanceof HttpError && error.status < 500) return { status: 'rejected', error: error.message };
           return { status: 'unknown', error: error instanceof Error ? error.message : 'Could not update pull request' };
         }
@@ -89,6 +100,35 @@ function PRActionDialog({ initialDraft, modalProps, submit }: HostedModalProps) 
     if (rebase.active) setRebaseHidden(true);
     else modalProps.onClose();
   }
+
+  function chooseMethod(method: MergeMethod) {
+    if (pending.type !== 'merge' || method === pending.method) return;
+    const message = mergeSource ? defaultMergeMessage(method, mergeSource) : { title: draft.commitTitle, body: draft.commitBody };
+    setDraft({ ...draft, pending: { ...pending, method }, commitTitle: message.title, commitBody: message.body });
+    setRebaseRefusal(null);
+    setDismissedError(modalProps.error);
+  }
+
+  const rebaseRefused = !!rebaseRefusal && pending.type === 'merge' && pending.method === 'rebase';
+  const error = conflict ? (
+    <div className="space-y-1">
+      <p>{conflict.error}</p>
+      <p className="text-muted-foreground">
+        {conflict.rebase
+          ? 'An agent can rebase the branch in a fresh worktree, resolve the conflicts, verify there are no merge commits, then force-push it.'
+          : `AI rebase unavailable: ${conflict.rebaseBlocked || 'the server did not say why'}`}
+      </p>
+    </div>
+  ) : rebaseRefused ? (
+    <div className="space-y-2">
+      <p>{rebaseRefusal.error}</p>
+      {rebaseRefusal.detail && <p className="text-xs text-muted-foreground">{rebaseRefusal.detail}</p>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" onClick={() => chooseMethod('squash')}><UiGitPr />Squash and merge instead</Button>
+        <Button size="sm" variant="outline" onClick={() => chooseMethod('merge')}><UiGitGraph />Create a merge commit instead</Button>
+      </div>
+    </div>
+  ) : modalProps.error === dismissedError ? undefined : modalProps.error;
 
   const rebaseIndicator = rebaseHidden && (
     <Button variant="outline" size="sm" className="h-7 shrink-0 gap-1 px-2 text-xs"
@@ -103,16 +143,7 @@ function PRActionDialog({ initialDraft, modalProps, submit }: HostedModalProps) 
         {...modalProps}
         onClose={close}
         minimized={modalProps.minimized || rebaseHidden}
-        error={conflict ? (
-          <div className="space-y-1">
-            <p>{conflict.error}</p>
-            <p className="text-muted-foreground">
-              {conflict.rebase
-                ? 'An agent can rebase the branch in a fresh worktree, resolve the conflicts, verify there are no merge commits, then force-push it.'
-                : `AI rebase unavailable: ${conflict.rebaseBlocked || 'the server did not say why'}`}
-            </p>
-          </div>
-        ) : modalProps.error}
+        error={error}
         size="lg"
         footer={
           <div className="flex justify-end gap-2">
@@ -122,7 +153,7 @@ function PRActionDialog({ initialDraft, modalProps, submit }: HostedModalProps) 
                 <UiSparkles />Rebase with AI
               </Button>
             ) : (
-              <Button onClick={confirm} disabled={busy || !!conflict}>{copy.label}</Button>
+              <Button onClick={confirm} disabled={busy || !!conflict || rebaseRefused}>{copy.label}</Button>
             )}
           </div>
         }
@@ -144,11 +175,30 @@ function PRActionDialog({ initialDraft, modalProps, submit }: HostedModalProps) 
           )}
           {pending.type === 'merge' && (
             <div className="space-y-2">
-              <SegmentedControl aria-label="Merge method" size="sm" value={pending.method} options={methods}
-                onChange={method => setDraft({ ...draft, pending: { ...pending, method } })} />
+              <SegmentedControl aria-label="Merge method" size="sm" value={pending.method} options={methods} onChange={chooseMethod} />
               {!draft.azure && (
                 <Switch checked={pending.auto} disabled={busy} onChange={auto => setDraft({ ...draft, pending: { ...pending, auto } })}
                   label={<span className="inline-flex items-center gap-1.5 text-sm"><UiRocket className="text-xs" />Auto-merge</span>} />
+              )}
+              {pending.method !== 'rebase' && (
+                <div className="space-y-1.5">
+                  <input className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm font-medium"
+                    value={draft.commitTitle} placeholder="Commit title" aria-label="Commit title" disabled={busy}
+                    onChange={event => setDraft({ ...draft, commitTitle: event.currentTarget.value })} />
+                  <textarea className="h-28 w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs"
+                    value={draft.commitBody} placeholder="Commit message" aria-label="Commit message" disabled={busy}
+                    onChange={event => setDraft({ ...draft, commitBody: event.currentTarget.value })} />
+                </div>
+              )}
+              {mergeSource && mergeSource.commits.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    {mergeSource.commits.length} {mergeSource.commits.length === 1 ? 'commit' : 'commits'} into {draft.base}
+                  </p>
+                  <div className="max-h-64 overflow-auto rounded-md border border-border">
+                    <PRCommitList commits={mergeSource.commits} repo={draft.repo} diffMaxHeightClassName="max-h-[320px]" />
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -172,15 +222,23 @@ function updateBranchConflict(error: unknown): UpdateBranchConflict | null {
   return body.conflict ? { error: body.error ?? error.message, rebase: body.rebase, rebaseBlocked: body.rebaseBlocked } : null;
 }
 
-function sendAction({ pending, repo, number, nodeId, headSha, url, comment }: Draft) {
+function rebaseNotAllowed(error: unknown): RebaseRefusal | null {
+  if (!(error instanceof HttpError) || error.status !== 409 || typeof error.body !== 'object' || error.body === null) return null;
+  const body = error.body as { error?: string; detail?: string; rebaseNotAllowed?: boolean };
+  return body.rebaseNotAllowed ? { error: body.error ?? error.message, detail: body.detail } : null;
+}
+
+function sendAction({ pending, repo, number, nodeId, headSha, url, comment, commitTitle, commitBody }: Draft) {
   const method = 'POST';
   switch (pending.type) {
     case 'approve':
       return mutationJSON({ url: '/api/prs/approve', method, body: { repo, number, nodeId, body: comment.trim() }, context: titles.approve });
     case 'update-branch':
       return mutationJSON({ url: '/api/prs/update-branch', method, body: { repo, number, nodeId, headSha: headSha || undefined }, context: 'Update pull request branch' });
-    case 'merge':
-      return mutationJSON({ url: '/api/prs/merge', method, body: { url, method: pending.method, auto: pending.auto, headSha: headSha || undefined }, context: titles.merge });
+    case 'merge': {
+      const message = pending.method === 'rebase' ? {} : { commitTitle: commitTitle.trim() || undefined, commitBody: commitBody.trim() || undefined };
+      return mutationJSON({ url: '/api/prs/merge', method, body: { url, method: pending.method, auto: pending.auto, headSha: headSha || undefined, ...message }, context: titles.merge });
+    }
   }
 }
 

@@ -36,14 +36,14 @@ var _ = Describe("dashboard commit prompts", func() {
 
 		server := &Server{}
 		started, checked := make(chan struct{}), make(chan struct{})
-		server.SetProjectCommitRunner(func(ctx context.Context, _ []string, _ io.Writer) error {
+		server.SetProjectCommitRunner(func(ctx context.Context, _ []string, _ io.Writer) (*commit.Result, error) {
 			close(started)
 			check := clickytask.StartTask("pre-commit check", func(commonscontext.Context, *clickytask.Task) (struct{}, error) {
 				close(checked)
 				return struct{}{}, nil
 			}, clickytask.WithContext(ctx))
 			_, err := check.GetResult()
-			return err
+			return nil, err
 		})
 		group := clickytask.StartGroup[cexec.ExecResult]("Commit worker test", clickytask.WithConcurrency(1))
 		DeferCleanup(group.Cancel)
@@ -55,6 +55,24 @@ var _ = Describe("dashboard commit prompts", func() {
 		Expect(checked).To(BeClosed())
 	})
 
+	It("puts the PR a commit run pushed to on its task details", func() {
+		server := &Server{}
+		pr := &commit.PushedPR{Number: 42, URL: "https://github.com/acme/widgets/pull/42", Branch: "feat/x", Created: true}
+		server.SetProjectCommitRunner(func(context.Context, []string, io.Writer) (*commit.Result, error) {
+			return &commit.Result{PR: pr}, nil
+		})
+		group := clickytask.StartGroup[cexec.ExecResult]("Commit PR test", clickytask.WithConcurrency(1))
+		DeferCleanup(group.Cancel)
+		task := server.runProjectCommit(group.Context(), GinkgoT().TempDir(), []string{"commit"}, group.Group)
+		_, err := task.GetResult()
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(clickytask.SnapshotByID(group.ID())).To(ContainElement(And(
+			WithTransform(func(s clickytask.TaskSnapshot) string { return s.ID }, Equal(task.ID())),
+			WithTransform(func(s clickytask.TaskSnapshot) any { return s.Details }, Equal(projectCommitRunDetails{PR: pr})),
+		)))
+	})
+
 	DescribeTable("handles a stale lock through the running task", func(action string) {
 		repo := createDiffRepository()
 		writeDiffFile(repo, "change.txt", "pending change\n")
@@ -64,14 +82,14 @@ var _ = Describe("dashboard commit prompts", func() {
 		Expect(os.Chtimes(lock, aged, aged)).To(Succeed())
 		server := &Server{}
 		finished := make(chan error, 1)
-		server.SetProjectCommitRunner(func(ctx context.Context, _ []string, _ io.Writer) error {
-			_, err := commit.Run(ctx, commit.Options{
+		server.SetProjectCommitRunner(func(ctx context.Context, _ []string, _ io.Writer) (*commit.Result, error) {
+			result, err := commit.Run(ctx, commit.Options{
 				WorkDir: repo, Files: []string{"change.txt"}, Message: "fix: example", DryRun: true,
 				LintFlag: "false", LintSecretsFlag: "false", TidyFlag: "false",
 				Config: verify.CommitConfig{Precommit: verify.PrecommitConfig{Mode: "prompt"}},
 			})
 			finished <- err
-			return err
+			return result, err
 		})
 		group := clickytask.StartGroup[cexec.ExecResult]("Commit prompt test", clickytask.WithConcurrency(1))
 		DeferCleanup(group.Cancel)

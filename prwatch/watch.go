@@ -344,7 +344,11 @@ func fetchRuns(opts WatchOptions, pr *model.PRInfo) (map[int64]*model.WorkflowRu
 		run, err := github.FetchRunJobs(opts.Options, runID, github.RunLogOptions{
 			FetchLogs: opts.Logs,
 			TailLines: opts.TailLogs,
+			Checks:    pr.StatusCheckRollup,
 		})
+		if err == nil && opts.WholePR && run.Stale != "" {
+			err = fmt.Errorf("only an earlier copy is available: %s", run.Stale)
+		}
 		if err != nil {
 			if opts.WholePR {
 				return nil, fmt.Errorf("fetch PR workflow %d: %w", runID, err)

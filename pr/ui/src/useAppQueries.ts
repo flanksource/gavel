@@ -13,8 +13,6 @@ const bootstrapStaleTime = 30_000;
 // out, so the last good response seeds the first render.
 export const PROJECTS_CACHE_KEY = 'gavel.pr-ui.cache.projects.v1';
 
-type SnapshotUpdater = (current: Snapshot) => Snapshot;
-
 export interface AppQueryState {
   config: SearchConfig;
   prsLoading: boolean;
@@ -24,7 +22,6 @@ export interface AppQueryState {
   projectsLoaded: boolean;
   projectError: string;
   processError: string;
-  updateSnapshot: (updater: SnapshotUpdater) => void;
   refreshProjects: () => Promise<void>;
   refreshProjectsAndProcesses: () => Promise<void>;
 }
@@ -144,9 +141,6 @@ export function useAppQueries({ enabled, prsEnabled = true, hostData, initialCon
   // project git queries wherever they are mounted.
   const gitStream = useGitStream({ enabled: hostEnabled });
 
-  const updateSnapshot = useCallback((updater: SnapshotUpdater) => {
-    queryClient.setQueryData<Snapshot>(queryKeys.prSnapshot(), current => updater(current ?? initialSnapshot));
-  }, [initialSnapshot, queryClient]);
   const refreshProjects = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.projects(), exact: true });
   }, [queryClient]);
@@ -167,7 +161,6 @@ export function useAppQueries({ enabled, prsEnabled = true, hostData, initialCon
     projectsLoaded: projectsQuery.data !== undefined || projectsQuery.failureCount > 0,
     projectError: configQuery.error ? errorMessage(configQuery.error) : projectFailure ? errorMessage(projectFailure) : '',
     processError: processStreamError || gitStream.error || (procQuery.error ? errorMessage(procQuery.error) : ''),
-    updateSnapshot,
     refreshProjects,
     refreshProjectsAndProcesses,
   };
@@ -234,9 +227,8 @@ function buildMergedSnapshot(current: Snapshot, incoming: Snapshot): Snapshot {
     },
     rateLimit: incoming.rateLimit ?? current.rateLimit,
     syncStatus: incoming.syncStatus ?? current.syncStatus,
-    gavelResults: incoming.gavelResults
-      ? { ...current.gavelResults, ...incoming.gavelResults }
-      : current.gavelResults,
+    // The server omits gavelResults once no PR has any.
+    gavelResults: incoming.gavelResults,
   };
 }
 

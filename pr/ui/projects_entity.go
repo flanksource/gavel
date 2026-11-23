@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
+	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/projects"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
@@ -135,6 +137,9 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out = slices.DeleteFunc(out, func(p projectInfo) bool { return workspaceSet(excluded).has(p.Dir) })
+		s.mu.RLock()
+		withRepoIcons(out, s.prs)
+		s.mu.RUnlock()
 		if wantsClicky(r) {
 			writeProjectsClicky(w, out)
 			return
@@ -154,6 +159,32 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusCreated, created)
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+type projectRepoIcon struct {
+	Repo        string `json:"repo"`
+	HomepageURL string `json:"homepageUrl"`
+}
+
+// withRepoIcons sets each project's RepoIcon from the homepages its tracked
+// PRs report. Only those homepages pass the favicon endpoint's knownHomepage
+// guard, so a project whose repos have no tracked PR keeps its letter avatar.
+func withRepoIcons(projects []projectInfo, prs github.PRSearchResults) {
+	homepages := make(map[string]string, len(prs))
+	for _, pr := range prs {
+		if pr.RepoHomepageURL != "" {
+			homepages[strings.ToLower(pr.Repo)] = pr.RepoHomepageURL
+		}
+	}
+	for i := range projects {
+		projects[i].RepoIcon = nil
+		for _, repo := range projects[i].Repos {
+			if homepage, ok := homepages[strings.ToLower(repo)]; ok {
+				projects[i].RepoIcon = &projectRepoIcon{Repo: repo, HomepageURL: homepage}
+				break
+			}
+		}
 	}
 }
 
