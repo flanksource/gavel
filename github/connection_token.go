@@ -23,7 +23,7 @@ func (o Options) connectionToken() (string, error) {
 	if FindConnection == nil {
 		return "", nil
 	}
-	target := git.RepoURL{Scheme: "https", Host: githubWebHost(), Provider: models.ConnectionTypeGithub, Owner: o.owner}
+	target := git.RepoURL{Scheme: "https", Host: WebHost(), Provider: models.ConnectionTypeGithub, Owner: o.owner}
 	described := "GitHub host " + target.Host
 	if o.owner != "" {
 		described = "GitHub organization " + o.owner
@@ -58,9 +58,9 @@ func (o Options) connectionRepo() string {
 	return repo
 }
 
-// githubWebHost is the host GitHub repositories live on: github.com for the public API, the
+// WebHost is the host GitHub repositories live on: github.com for the public API, the
 // API's own host for GitHub Enterprise.
-func githubWebHost() string {
+func WebHost() string {
 	api, err := url.Parse(githubAPIBase())
 	if err != nil || api.Host == "" || strings.EqualFold(api.Host, "api.github.com") {
 		return "github.com"

@@ -175,7 +175,8 @@ func (s *Server) handleFilterRemove(w http.ResponseWriter, r *http.Request) {
 type filterEdit func(*filters.Store, context.Context, tenant.Scope, string, string) (filters.Filter, error)
 
 // editFilter applies {"value": "..."} to the {name} filter. Hiding a local project also
-// stops the git tracker scanning its directory.
+// stops the git tracker scanning its directory; a hosted member's hidden repositories and owners
+// reach their PR streams.
 func (s *Server) editFilter(w http.ResponseWriter, r *http.Request, edit filterEdit) {
 	var body struct {
 		Value string `json:"value"`
@@ -200,6 +201,11 @@ func (s *Server) editFilter(w http.ResponseWriter, r *http.Request, edit filterE
 			writeJSONError(w, http.StatusInternalServerError, err)
 			return
 		}
+	}
+	if s.hosted && (name == filters.HiddenProjects || name == filters.HiddenRepoOwners) {
+		// The member's open PR streams leave out what they now hide.
+		s.hiddenReposEdits.Add(1)
+		s.notify()
 	}
 	writeJSON(w, filter)
 }

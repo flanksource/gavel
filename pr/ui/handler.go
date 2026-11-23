@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	captaincli "github.com/flanksource/captain/pkg/cli"
@@ -176,6 +177,9 @@ type Server struct {
 	catalogDB *gorm.DB
 	// connectionsChanged, when set, is told the organization's connections changed.
 	connectionsChanged func()
+	// hiddenReposEdits counts edits of members' hidden repositories and owners, so a PR stream
+	// re-reads what its member hides only after one.
+	hiddenReposEdits atomic.Uint64
 	// connectionClientOptions, when set, configures the provider client a hosted organization's
 	// connection is tested with; unset, it reaches only public addresses (Defensive).
 	connectionClientOptions *git.ClientOptions
@@ -1077,9 +1081,15 @@ func (s *Server) withSyncStatus(snap snapshot) snapshot {
 }
 
 func (s *Server) handleJSON(w http.ResponseWriter, r *http.Request) {
+	visibility, err := s.repoVisibility(r.Context(), tenant.FromContext(r.Context()))
+	if err != nil {
+		writeJSONError(w, http.StatusServiceUnavailable, err)
+		return
+	}
 	s.mu.RLock()
 	data := s.snapshotLocked()
 	s.mu.RUnlock()
+	data = visibility.visible(data)
 	data = s.withUnread(data)
 	data = s.withSyncStatus(data)
 	data = withViewer(data, r)
@@ -1100,14 +1110,25 @@ var prStreamInterval = 2 * time.Second
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	wake, unsubscribe := s.updated.Subscribe()
 	defer unsubscribe()
+	// The member's hidden repositories are read once, then again only after an edit of them.
+	var visibility repoVisibility
+	var readAfter uint64
+	read := false
 	err := sse.ServeSnapshot(w, r, sse.SnapshotOptions{
 		Interval: prStreamInterval,
 		Wake:     wake,
-		Load: func(context.Context) (any, error) {
+		Load: func(ctx context.Context) (any, error) {
+			if edits := s.hiddenReposEdits.Load(); !read || edits != readAfter {
+				hidden, err := s.repoVisibility(ctx, tenant.FromContext(r.Context()))
+				if err != nil {
+					return nil, err
+				}
+				visibility, readAfter, read = hidden, edits, true
+			}
 			s.mu.RLock()
 			data := s.snapshotLocked()
 			s.mu.RUnlock()
-			return withViewer(s.withSyncStatus(s.withUnread(data)), r), nil
+			return withViewer(s.withSyncStatus(s.withUnread(visibility.visible(data))), r), nil
 		},
 	})
 	if err != nil {
