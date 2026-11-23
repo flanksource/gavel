@@ -78,7 +78,7 @@ var errStepTimeout = errors.New("step timed out")
 // runKind runs the step under its own declared timeout; a step that did not
 // pass once that deadline fired is failed as timed out.
 func runKind(ctx context.Context, kind Kind, step *StepContext) FixtureResult {
-	timeout := step.Test.declaredTimeout()
+	timeout := step.Test.DeclaredTimeout()
 	if timeout == nil {
 		return runKindUntimed(ctx, kind, step)
 	}
@@ -100,9 +100,9 @@ func runKind(ctx context.Context, kind Kind, step *StepContext) FixtureResult {
 	return result
 }
 
-// declaredTimeout is the deadline a node declares for itself: a typed step's
+// DeclaredTimeout is the deadline a node declares for itself: a typed step's
 // `timeout:` (or the document default), a markdown fixture's `timeout`.
-func (fixture FixtureTest) declaredTimeout() *time.Duration {
+func (fixture FixtureTest) DeclaredTimeout() *time.Duration {
 	if fixture.Step != nil {
 		if timeout := fixture.Step.EffectiveTimeout(); timeout != nil {
 			d := timeout.Std()

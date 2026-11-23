@@ -162,6 +162,58 @@ var _ = Describe("a step's recorded evidence", func() {
 			Expect([]any{result.Metadata["description"], result.Metadata["status"]}).To(Equal([]any{"copying files", "2 of 3"}))
 			Expect(findings(result)).To(Equal([]string{string(task.StatusPASS) + " Cache: hit"}))
 			Expect(*result.Children[0].Results.Metadata[ViolationMetadataKey].(models.Violation).Code).To(Equal("Build"))
+			Expect(result.Log).To(Equal("::group::Build\ncompiling\n::description::copying files\n::status::2 of 3\n::notice title=Cache::hit\n::endgroup::\ndone"))
+		})
+
+		It("logs both streams in the order they were written, starting a command on a line of its own", func() {
+			useKind(fakeKind{name: "printer", execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
+				fmt.Fprintln(step.Stdout(), "one")
+				fmt.Fprintln(step.Stderr(), "two")
+				fmt.Fprint(step.Stdout(), "three")
+				fmt.Fprintln(step.Stderr(), "::status::four")
+				fmt.Fprint(step.Stderr(), "::stat")
+				return StepOutcome{Result: FixtureResult{Status: task.StatusPASS}}, nil
+			}})
+
+			result := runSteps(StepSpec{ID: "print", Kind: "printer"})[0]
+
+			Expect([]string{result.Stdout, result.Stderr, result.Log}).To(Equal([]string{"one\nthree", "two\n::stat", "one\ntwo\nthree\n::status::four\n::stat"}))
+		})
+
+		It("keeps no log where it would repeat the stdout, or is not the output the kind reported", func() {
+			Expect(printing(task.StatusPASS, "compiling\n", "done").Log).To(BeEmpty())
+
+			useKind(fakeKind{name: "printer", execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
+				fmt.Fprintln(step.Stdout(), "::status::working")
+				return StepOutcome{Result: FixtureResult{Status: task.StatusPASS, Stdout: "kind's own"}}, nil
+			}})
+			Expect(runSteps(StepSpec{ID: "print", Kind: "printer"})[0].Log).To(BeEmpty())
+		})
+
+		It("streams the log to the live progress node while the step runs", func() {
+			var mu sync.Mutex
+			var outputs []string
+			release := make(chan struct{})
+			useKind(fakeKind{name: "printer", execute: func(_ context.Context, step *StepContext) (StepOutcome, error) {
+				fmt.Fprint(step.Stdout(), "::group::Copy\n::status::1 of 2\n")
+				<-release
+				return StepOutcome{Result: FixtureResult{Status: task.StatusPASS}}, nil
+			}})
+			sink := func(_ context.Context, snapshot ExecutionSnapshot) error {
+				mu.Lock()
+				defer mu.Unlock()
+				outputs = append(outputs, snapshot.Root.Children[0].Output)
+				return nil
+			}
+			done := make(chan error)
+			workDir := GinkgoT().TempDir()
+			go func() {
+				_, _, err := RunNodes(WithProgressSink(context.Background(), sink), []*FixtureNode{stepNode(StepSpec{ID: "copy", Kind: "printer"})}, RunOptions{WorkDir: workDir})
+				done <- err
+			}()
+			Eventually(func() []string { mu.Lock(); defer mu.Unlock(); return outputs }).Should(ContainElement("::group::Copy\n::status::1 of 2\n"))
+			close(release)
+			Expect(<-done).To(Succeed())
 		})
 
 		It("fails a step that passed when it printed an ::error", func() {

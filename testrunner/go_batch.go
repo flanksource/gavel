@@ -21,6 +21,7 @@ import (
 	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
+	"github.com/flanksource/gavel/utils"
 )
 
 type goBatchPlan struct {
@@ -208,6 +209,7 @@ func (o *TestOrchestrator) runGoBatch(ctx commonsCtx.Context, t *task.Task, plan
 	}
 	process.WithTask(t)
 	if o.OutputTee != nil {
+		utils.AnnounceCommand(o.OutputTee, process.Cwd, append([]string{process.Cmd}, process.Args...))
 		process.Stream(o.OutputTee, o.OutputTee)
 	}
 	t.SetName(formatRunningCommand(process.Cmd, process.Args))

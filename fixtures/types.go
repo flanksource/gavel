@@ -627,10 +627,14 @@ type FixtureResult struct {
 	CELVars       map[string]any `json:"cel_vars,omitempty"`
 
 	// Execution metadata
-	Command  string                 `json:"command,omitempty" pretty:"label=Command,style=text-cyan-600,omitempty"`
-	CWD      string                 `json:"cwd,omitempty" pretty:"label=Working Dir,style=text-purple-500,omitempty"`
-	Stdout   string                 `json:"stdout,omitempty" pretty:"label=Stdout,omitempty"`
-	Stderr   string                 `json:"stderr,omitempty" pretty:"label=Stderr,omitempty"`
+	Command string `json:"command,omitempty" pretty:"label=Command,style=text-cyan-600,omitempty"`
+	CWD     string `json:"cwd,omitempty" pretty:"label=Working Dir,style=text-purple-500,omitempty"`
+	Stdout  string `json:"stdout,omitempty" pretty:"label=Stdout,omitempty"`
+	Stderr  string `json:"stderr,omitempty" pretty:"label=Stderr,omitempty"`
+	// Log is both streams verbatim in the order they were written, with the
+	// workflow commands Stdout and Stderr leave out, for a log viewer to read.
+	// Empty when it would be Stdout again.
+	Log      string                 `json:"log,omitempty" pretty:"hide"`
 	ExitCode int                    `json:"exit_code,omitempty" pretty:"label=Exit Code,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty" pretty:"label=Metadata,omitempty"`
 	Start    *time.Time             `json:"start,omitempty" pretty:"label=Start Time,omitempty"`

@@ -14,7 +14,9 @@ import (
 	deps "github.com/flanksource/deps"
 	"github.com/flanksource/gavel/lint/shims"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/linters/tsc"
 	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/gavel/workspace"
 )
 
@@ -105,6 +107,15 @@ func golangciInstalledPath(gitRoot string) string {
 }
 
 var installGolangciLint = deps.InstallWithContext
+
+func (inv linterInvocation) resolveExecutable(ctx context.Context, gitRoot string, cfg verify.GavelConfig, dryRun bool) (string, string, error) {
+	if adapter, ok := inv.linter.(*tsc.TSC); ok {
+		if engine := cfg.Lint.Linters[adapter.Name()].Engine; engine != "" {
+			inv.linter = &tsc.TSC{Engine: engine}
+		}
+	}
+	return resolveLinterExecutable(ctx, inv.linter, gitRoot, inv.projectRoot, linterHasDirectConfig(inv.projectRoot, inv.linter), dryRun)
+}
 
 func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot, projectRoot string, hasDirectConfig bool, dryRun bool) (string, string, error) {
 	if linters.IsInProcess(linter) {

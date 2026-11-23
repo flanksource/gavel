@@ -78,6 +78,9 @@ type workflowLine struct {
 	Err     error
 }
 
+// isCommand is whether the line was a workflow command, valid or not.
+func (l workflowLine) isCommand() bool { return l.Drop || l.Command != nil }
+
 // workflowFilter reads a stream's lines in order: `::stop-commands::token`
 // turns command parsing off until a `::token::` line turns it back on.
 type workflowFilter struct {

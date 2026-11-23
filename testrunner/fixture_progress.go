@@ -83,7 +83,7 @@ func collectFixtureResults(node *fixtures.FixtureNode, inheritedFile string, vis
 }
 
 func applyFixtureResult(test *parsers.Test, result parsers.Test) error {
-	test.Stdout, test.Stderr, test.Context = result.Stdout, result.Stderr, result.Context
+	test.Stdout, test.Stderr, test.Log, test.Context = result.Stdout, result.Stderr, result.Log, result.Context
 	test.Message, test.FixtureProfile = result.Message, result.FixtureProfile
 	test.SQLProfile = result.SQLProfile
 	// A progress leaf gains the children its step's result reported (a query
@@ -218,9 +218,12 @@ func liveResultKeys(snapshot fixtures.ExecutionSnapshot) map[string]bool {
 // same projection the run's end uses.
 func applyNodeResult(test *parsers.Test, node *fixtures.ExecutionNode) error {
 	if node.Result == nil {
-		test.Stdout = node.Output
+		output := node.Output
 		if node.OutputTruncated {
-			test.Stdout = "[earlier output truncated]\n" + node.Output
+			output = "[earlier output truncated]\n" + output
+		}
+		if test.Stdout = fixtures.StripWorkflowCommands(output); test.Stdout != output {
+			test.Log = output
 		}
 		return nil
 	}
@@ -296,13 +299,10 @@ func executionNodeToTest(node *fixtures.ExecutionNode) (parsers.Test, error) {
 			Description: node.Metadata["description"], Status: node.Metadata["status"],
 		},
 	}
-	phase := string(node.Kind)
+	phase, reported := string(node.Kind), false
 	for _, key := range []string{"status", "description"} {
 		if text, ok := node.Metadata[key].(string); ok && text != "" {
-			phase = text
-			if test.Message == "" {
-				test.Message = text
-			}
+			phase, reported = text, true
 			break
 		}
 	}
@@ -336,7 +336,7 @@ func executionNodeToTest(node *fixtures.ExecutionNode) (parsers.Test, error) {
 	} else if node.Kind != fixtures.ExecutionKindFile && node.Kind != fixtures.ExecutionKindSection && node.Kind != fixtures.ExecutionKindTable {
 		test.Fixture = &parsers.FixtureExecution{Key: node.Key, Kind: string(node.Kind), State: string(node.State), PIDs: node.PIDs}
 	}
-	if node.Total > 0 {
+	if node.Total > 0 || reported {
 		test.Progress = &parsers.TestProgress{Phase: phase, Done: node.Done, Total: node.Total}
 	}
 	return test, nil

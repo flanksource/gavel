@@ -56,7 +56,7 @@ var _ = Describe("fixture progress adapter", func() {
 		Expect(tests[1].Children[0].TaskID).To(Equal("tests"))
 	})
 
-	It("shows a running step's workflow status as its message and its findings as child rows", func() {
+	It("shows a running step's workflow status as its progress phase, not its message, and its findings as child rows", func() {
 		findings := []any{
 			map[string]any{"severity": "warning", "message": "slow", "source": "workflow", "rule": map[string]any{"method": "::warning"}},
 			map[string]any{"severity": "error", "message": "boom", "source": "workflow", "rule": map[string]any{"method": "Lint"}, "file": "a.go", "line": 3},
@@ -71,7 +71,8 @@ var _ = Describe("fixture progress adapter", func() {
 
 		test := projectTests(snapshot)[0]
 
-		Expect(test.Message).To(Equal("2 of 3"))
+		Expect(test.Message).To(BeEmpty())
+		Expect(test.Progress).To(Equal(&parsers.TestProgress{Phase: "2 of 3"}))
 		var rows []string
 		for _, child := range test.Children {
 			rows = append(rows, child.Name+" warned="+strconv.FormatBool(child.Warned)+" failed="+strconv.FormatBool(child.Failed))
@@ -309,7 +310,27 @@ steps:
 			}},
 		}}
 		Expect(projectTests(snapshot)[0].Stdout).To(Equal("batch 1: purging\n"))
+		Expect(projectTests(snapshot)[0].Log).To(BeEmpty())
 	})
+
+	DescribeTable("keeps a step's commands in its log and out of its stdout",
+		func(node fixtures.ExecutionNode, log string) {
+			node.Key, node.Name, node.Kind = "purge", "purge", fixtures.ExecutionKindCommand
+			snapshot := fixtures.ExecutionSnapshot{Root: &fixtures.ExecutionNode{
+				Key: "fixtures", Kind: fixtures.ExecutionKindRoot, State: fixtures.ExecutionRunning, Children: []*fixtures.ExecutionNode{&node},
+			}}
+			test := projectTests(snapshot)[0]
+			Expect(test.Log).To(Equal(log))
+			Expect(test.Stdout).To(HaveSuffix("::group::Rows\npurged\n"))
+			Expect(test.Stdout).NotTo(ContainSubstring("::status"))
+		},
+		Entry("while it runs", fixtures.ExecutionNode{State: fixtures.ExecutionRunning, Output: "::group::Rows\n::status::1 of 2\npurged\n"},
+			"::group::Rows\n::status::1 of 2\npurged\n"),
+		Entry("while it runs, with its start cut off", fixtures.ExecutionNode{State: fixtures.ExecutionRunning, OutputTruncated: true, Output: "::group::Rows\n::status::1 of 2\npurged\n"},
+			"[earlier output truncated]\n::group::Rows\n::status::1 of 2\npurged\n"),
+		Entry("once it finished", fixtures.ExecutionNode{State: fixtures.ExecutionPassed, Result: &fixtures.FixtureResult{Status: task.StatusPASS,
+			Stdout: "::group::Rows\npurged\n", Log: "::group::Rows\n::status::1 of 2\npurged\n"}}, "::group::Rows\n::status::1 of 2\npurged\n"),
+	)
 
 	It("carries a running query step's live record into its detail under query, as a finished step's", func() {
 		record := map[string]any{

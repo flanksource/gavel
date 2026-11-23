@@ -79,6 +79,7 @@ func mergeTestNode(existing, incoming parsers.Test) parsers.Test {
 	merged.Message = incoming.Message
 	merged.Stdout = incoming.Stdout
 	merged.Stderr = incoming.Stderr
+	merged.Log = incoming.Log
 	merged.Command = incoming.Command
 	merged.Summary = incoming.Summary
 

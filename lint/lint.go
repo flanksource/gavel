@@ -190,8 +190,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				logger.V(2).Infof("Skipping %s at %s: no requested file matches its includes", linter.Name(), inv.projectRoot)
 				continue
 			}
-			hasDirectConfig := linterHasDirectConfig(inv.projectRoot, linter)
-			executable, reason, err := resolveLinterExecutable(ctx, linter, groupGitRoot, inv.projectRoot, hasDirectConfig, false)
+			executable, reason, err := inv.resolveExecutable(ctx, groupGitRoot, projectCfg, false)
 			if err != nil {
 				allResults = append(allResults, &linters.LinterResult{Linter: linter.Name(), WorkDir: inv.projectRoot, Error: err.Error()})
 				anyScheduled = true
@@ -475,8 +474,7 @@ func dryRunGroup(opts Options) error {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, "no requested file matches its includes")
 				continue
 			}
-			hasDirectConfig := linterHasDirectConfig(inv.projectRoot, linter)
-			executable, reason, err := resolveLinterExecutable(opts.Context, linter, lintGitRoot(opts.WorkDir), inv.projectRoot, hasDirectConfig, true)
+			executable, reason, err := inv.resolveExecutable(opts.Context, lintGitRoot(opts.WorkDir), projectCfg, true)
 			if err != nil {
 				return err
 			}

@@ -24,18 +24,19 @@ import (
 // step showed is what its result keeps, even when Execute failed.
 //
 // Both streams are read for workflow commands (see workflow_commands.go): a
-// command line is applied and kept out of the output, everything else is kept
-// and streamed as it is written.
+// command line is applied and kept out of the output, everything else is kept.
+// log is both streams verbatim, commands included, in the order they were
+// written: what the live view streams, for its renderer to read the commands.
 type stepEvidence struct {
 	started  time.Time
 	live     io.Writer
 	task     *task.Task
 	progress func(done, total int) error
 
-	mu             sync.Mutex
-	stdout, stderr bytes.Buffer
-	details        map[string]any
-	command, cwd   string
+	mu                  sync.Mutex
+	stdout, stderr, log bytes.Buffer
+	details             map[string]any
+	command, cwd        string
 
 	lines    [2]evidenceLine
 	filter   workflowFilter
@@ -146,6 +147,10 @@ func (e *stepEvidence) fill(result FixtureResult) FixtureResult {
 			*field.target = field.value
 		}
 	}
+	// A kind that reported an output of its own did not report the log's.
+	if log := e.log.String(); result.Log == "" && result.Stdout == e.stdout.String() && log != result.Stdout {
+		result.Log = log
+	}
 	if len(e.details) > 0 && result.Metadata == nil {
 		result.Metadata = map[string]any{}
 	}
@@ -228,15 +233,15 @@ func (w evidenceStream) Write(p []byte) (int, error) {
 // back into the record.
 func (e *stepEvidence) consume(stderr bool, p []byte, final bool) {
 	e.mu.Lock()
-	kept, commands, found := e.scanLocked(stderr, p, final)
+	logged, commands, found := e.scanLocked(stderr, p, final)
 	var findings any
 	var err error
 	if found {
 		findings, err = PlainValue(e.findings)
 	}
 	e.mu.Unlock()
-	if len(kept) > 0 {
-		_, _ = e.live.Write(kept)
+	if len(logged) > 0 {
+		_, _ = e.live.Write(logged)
 	}
 	if err != nil {
 		e.fail(fmt.Errorf("publish workflow findings: %w", err))
@@ -250,16 +255,20 @@ func (e *stepEvidence) consume(stderr bool, p []byte, final bool) {
 
 // scanLocked appends p to the stream's line and reads off every complete
 // line: a line that cannot be a workflow command is kept as it arrives, one
-// that may be is held until its newline. kept is what it added to the stream,
+// that may be is held until its newline. logged is what it added to the log,
 // commands the ones to apply, found whether it recorded a finding.
-func (e *stepEvidence) scanLocked(stderr bool, p []byte, final bool) (kept []byte, commands []workflowCommand, found bool) {
+func (e *stepEvidence) scanLocked(stderr bool, p []byte, final bool) (logged []byte, commands []workflowCommand, found bool) {
 	line, buffer := &e.lines[0], &e.stdout
 	if stderr {
 		line, buffer = &e.lines[1], &e.stderr
 	}
+	record := func(b []byte) {
+		e.log.Write(b)
+		logged = append(logged, b...)
+	}
 	keep := func(b []byte) {
 		buffer.Write(b)
-		kept = append(kept, b...)
+		record(b)
 	}
 	line.pending = append(line.pending, p...)
 	for len(line.pending) > 0 {
@@ -277,17 +286,21 @@ func (e *stepEvidence) scanLocked(stderr bool, p []byte, final bool) (kept []byt
 		if newline < 0 && !final {
 			break
 		}
-		end := newline
-		if end < 0 {
-			end = len(line.pending)
+		end, next := newline, newline+1
+		if newline < 0 {
+			end, next = len(line.pending), len(line.pending)
 		}
 		parsed := e.filter.line(string(line.pending[:end]))
 		if !parsed.Drop {
-			keep([]byte(parsed.Text))
-			if newline >= 0 {
-				keep([]byte{'\n'})
-			}
+			buffer.WriteString(parsed.Text)
+			buffer.Write(line.pending[end:next])
 		}
+		// The other stream may have left the log mid-line, where a reader
+		// would not see a command.
+		if held := e.log.Bytes(); parsed.isCommand() && len(held) > 0 && held[len(held)-1] != '\n' {
+			record([]byte{'\n'})
+		}
+		record(line.pending[:next])
 		if parsed.Err != nil {
 			e.findings, found = append(e.findings, invalidWorkflowCommand(parsed.Err)), true
 		} else if parsed.Command != nil {
@@ -297,12 +310,9 @@ func (e *stepEvidence) scanLocked(stderr bool, p []byte, final bool) (kept []byt
 				commands = append(commands, *cmd)
 			}
 		}
-		line.pending = line.pending[end:]
-		if newline >= 0 {
-			line.pending = line.pending[1:]
-		}
+		line.pending = line.pending[next:]
 	}
-	return kept, commands, found
+	return logged, commands, found
 }
 
 // recordLocked records what a command changes in the record itself (the open

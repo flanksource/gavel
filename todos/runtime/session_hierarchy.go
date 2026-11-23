@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -19,7 +21,7 @@ func (p *Provider) todoRootSessionInput(issue native.CreateIssueInput) captaindb
 		ID:            issue.ID,
 		Source:        "gavel",
 		Provider:      "todos",
-		HostID:        captaindb.LocalHostID(),
+		HostID:        "local", // The TODO root can receive operations from any host.
 		Project:       p.workspace.RepoKey,
 		CWD:           p.workDir,
 		Title:         issue.Title,
@@ -28,6 +30,19 @@ func (p *Provider) todoRootSessionInput(issue native.CreateIssueInput) captaindb
 		Description:   "Gavel TODO " + issue.ID.String(),
 		Metadata:      todoSessionMetadata(issue.ID, ""),
 	}
+}
+
+func (p *Provider) todoRootSessionInputForIssue(ctx context.Context, issue *native.Issue) (captaindb.CreateSessionInput, error) {
+	root := p.todoRootSessionInput(native.CreateIssueInput{ID: issue.ID, Title: issue.Title, Body: issue.Body})
+	stored, err := p.captain.GetSession(ctx, issue.ID)
+	if errors.Is(err, captaindb.ErrSessionNotFound) {
+		return root, nil
+	}
+	if err != nil {
+		return captaindb.CreateSessionInput{}, fmt.Errorf("load Captain root session for TODO %s: %w", issue.ID, err)
+	}
+	root.HostID = stored.HostID
+	return root, nil
 }
 
 type todoOperationSessionOptions struct {
@@ -60,8 +75,11 @@ func (p *Provider) todoOperationSessionInput(issue *native.Issue, options todoOp
 // the TODO root, and one deterministic per-issue "plan supplied" session so
 // `todos create --plan` and every later `todos edit --plan` reuse a single row
 // instead of accumulating one per edit.
-func (p *Provider) suppliedPlanSessions(issue *native.Issue) (*captaindb.CreateSessionInput, *captaindb.CreateSessionInput) {
-	root := p.todoRootSessionInput(native.CreateIssueInput{ID: issue.ID, Title: issue.Title, Body: issue.Body})
+func (p *Provider) suppliedPlanSessions(ctx context.Context, issue *native.Issue) (*captaindb.CreateSessionInput, *captaindb.CreateSessionInput, error) {
+	root, err := p.todoRootSessionInputForIssue(ctx, issue)
+	if err != nil {
+		return nil, nil, err
+	}
 	session := p.todoOperationSessionInput(issue, todoOperationSessionOptions{
 		ID:        suppliedPlanSessionID(issue.ID),
 		Operation: string(native.StepPlan),
@@ -69,7 +87,7 @@ func (p *Provider) suppliedPlanSessions(issue *native.Issue) (*captaindb.CreateS
 		CWD:       p.workDir,
 		Prompt:    issue.Body,
 	})
-	return &root, &session
+	return &root, &session, nil
 }
 
 func suppliedPlanSessionID(issueID uuid.UUID) uuid.UUID {

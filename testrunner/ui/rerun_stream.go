@@ -39,11 +39,12 @@ func newRerunCommand(cwd string, argv []string) RerunCommand {
 // RerunOutputBuffer is a thread-safe buffer that captures process output
 // during a rerun and serves it to SSE clients.
 type RerunOutputBuffer struct {
-	mu      sync.Mutex
-	lines   []OutputLine
-	status  string // "running", "success", "failed", "canceled"
-	command string
-	updated sse.Notifier
+	mu       sync.Mutex
+	lines    []OutputLine
+	commands []RerunCommand
+	status   string // "running", "success", "failed", "canceled"
+	command  string
+	updated  sse.Notifier
 }
 
 // NewRerunOutputBuffer creates a buffer ready to capture rerun output.
@@ -71,6 +72,15 @@ func (b *RerunOutputBuffer) StderrWriter() *streamWriter {
 type streamWriter struct {
 	buf    *RerunOutputBuffer
 	stream string
+}
+
+// RecordCommand makes the writer a utils.CommandRecorder, keeping each command
+// the rerun runs into it.
+func (w *streamWriter) RecordCommand(cwd string, argv []string) {
+	w.buf.mu.Lock()
+	w.buf.commands = append(w.buf.commands, newRerunCommand(cwd, argv))
+	w.buf.mu.Unlock()
+	w.buf.notify()
 }
 
 func (w *streamWriter) Write(p []byte) (int, error) {
@@ -106,10 +116,13 @@ func (b *RerunOutputBuffer) Cancel() {
 	b.notify()
 }
 
+// rerunStreamSnapshot is one SSE frame: Lines are the output written since the
+// last frame, Commands every command the rerun has run so far.
 type rerunStreamSnapshot struct {
-	Lines   []OutputLine `json:"lines"`
-	Status  string       `json:"status"`
-	Command string       `json:"command"`
+	Lines    []OutputLine   `json:"lines"`
+	Commands []RerunCommand `json:"commands"`
+	Status   string         `json:"status"`
+	Command  string         `json:"command"`
 }
 
 func (b *RerunOutputBuffer) snapshot(cursor int) (rerunStreamSnapshot, int) {
@@ -120,9 +133,10 @@ func (b *RerunOutputBuffer) snapshot(cursor int) (rerunStreamSnapshot, int) {
 		lines = b.lines[cursor:]
 	}
 	return rerunStreamSnapshot{
-		Lines:   lines,
-		Status:  b.status,
-		Command: b.command,
+		Lines:    lines,
+		Commands: slices.Clone(b.commands),
+		Status:   b.status,
+		Command:  b.command,
 	}, len(b.lines)
 }
 

@@ -51,6 +51,9 @@ export interface Test {
   can_stop?: boolean;
   stdout?: string;
   stderr?: string;
+  // log is both streams verbatim in the order they were written, workflow
+  // commands included; unset when it would be stdout again.
+  log?: string;
   children?: Test[];
   summary?: TestSummary;
   attempts?: TestAttempt[];
@@ -140,6 +143,7 @@ export interface TestAttempt {
   message?: string;
   stdout?: string;
   stderr?: string;
+  log?: string;
   stack_trace?: string;
   cpu_percent?: number;
   rss?: number;

@@ -106,12 +106,15 @@ type Test struct {
 	// These wrappers still carry pass/fail/duration for the whole suite when a Ginkgo
 	// JSON report file is unavailable, but are deduped against real specs from the
 	// Ginkgo parser at merge time in runner.go.
-	IsGinkgoBootstrap bool         `json:"is_ginkgo_bootstrap,omitempty"`
-	Stdout            string       `json:"stdout,omitempty"`
-	Stderr            string       `json:"stderr,omitempty"`
-	Children          Tests        `json:"children,omitempty"`
-	Summary           *TestSummary `json:"summary,omitempty"`
-	Context           any          `json:"context,omitempty"`
+	IsGinkgoBootstrap bool   `json:"is_ginkgo_bootstrap,omitempty"`
+	Stdout            string `json:"stdout,omitempty"`
+	Stderr            string `json:"stderr,omitempty"`
+	// Log is a fixture step's stdout and stderr verbatim in the order they were
+	// written, workflow commands included; empty when it would be Stdout again.
+	Log      string       `json:"log,omitempty"`
+	Children Tests        `json:"children,omitempty"`
+	Summary  *TestSummary `json:"summary,omitempty"`
+	Context  any          `json:"context,omitempty"`
 	// Detail is provider-owned structured detail for a test. Providers should
 	// assign a JSON-marshallable value here; values may also implement api.Pretty
 	// for rich terminal/clicky rendering.
@@ -215,6 +218,7 @@ type TestAttempt struct {
 	Message     string    `json:"message,omitempty"`
 	Stdout      string    `json:"stdout,omitempty"`
 	Stderr      string    `json:"stderr,omitempty"`
+	Log         string    `json:"log,omitempty"`
 	StackTrace  string    `json:"stack_trace,omitempty"`
 	CPUPercent  float64   `json:"cpu_percent,omitempty"`
 	RSS         uint64    `json:"rss,omitempty"`
@@ -829,6 +833,7 @@ func (tr Test) Filter(filter TestFilter) Test {
 		TimedOut:          tr.TimedOut,
 		Stdout:            tr.Stdout,
 		Stderr:            tr.Stderr,
+		Log:               tr.Log,
 		Framework:         tr.Framework,
 		Context:           tr.Context,
 		Detail:            tr.Detail,

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/utils"
 )
 
 func newTestServer(t *testing.T) (*testui.Server, http.Handler) {
@@ -123,6 +125,43 @@ func TestRerunBadJSON(t *testing.T) {
 	resp := doRequest(t, handler, http.MethodPost, "/api/rerun", strings.NewReader(`not json`))
 	if resp.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.Code)
+	}
+}
+
+func TestRerunStreamCarriesTheCommandsRun(t *testing.T) {
+	srv, handler := newTestServer(t)
+	argv := []string{"go", "test", "-run", "^TestX$", "./pkg/foo"}
+	srv.SetRerunFunc(func(_ testui.RerunRequest, output *testui.RerunOutputBuffer) error {
+		utils.AnnounceCommand(output.StdoutWriter(), "/my repo", argv)
+		_, err := output.StdoutWriter().Write([]byte("ok\n"))
+		return err
+	})
+	body, _ := json.Marshal(testui.RerunRequest{PackagePaths: []string{"./pkg/foo"}, TestName: "TestX", Framework: "go"})
+	if resp := doRequest(t, handler, http.MethodPost, "/api/rerun", bytes.NewReader(body)); resp.Code != http.StatusAccepted {
+		t.Fatalf("rerun status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+
+	stream := doRequest(t, handler, http.MethodGet, "/api/rerun/stream", nil)
+	first, _, _ := strings.Cut(strings.TrimPrefix(stream.Body.String(), "data: "), "\n\n")
+	var frame struct {
+		Commands []testui.RerunCommand `json:"commands"`
+		Lines    []testui.OutputLine   `json:"lines"`
+		Status   string                `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(first), &frame); err != nil {
+		t.Fatalf("decode first frame %q: %v", first, err)
+	}
+	want := []testui.RerunCommand{{
+		Cwd: "/my repo", Argv: argv,
+		Line:  "go test -run '^TestX$' ./pkg/foo",
+		Shell: "cd '/my repo' && go test -run '^TestX$' ./pkg/foo",
+	}}
+	if !reflect.DeepEqual(frame.Commands, want) {
+		t.Errorf("commands = %+v, want %+v", frame.Commands, want)
+	}
+	wantLines := []testui.OutputLine{{Text: "▶ go test -run '^TestX$' ./pkg/foo\n", Stream: "stdout"}, {Text: "ok\n", Stream: "stdout"}}
+	if frame.Status != "success" || !reflect.DeepEqual(frame.Lines, wantLines) {
+		t.Errorf("frame = %+v, want status success and lines %+v", frame, wantLines)
 	}
 }
 

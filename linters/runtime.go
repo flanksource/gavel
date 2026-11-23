@@ -61,7 +61,7 @@ func (o RunOptions) CommandContext(ctx context.Context, name, binary string, arg
 	if !o.runtimeResolved {
 		args = append(args, resolved.ExtraArgs[:len(resolved.ExtraArgs)-len(o.ExtraArgs)]...)
 	}
-	if o.Executable != "" && name != "tsc" {
+	if o.Executable != "" {
 		binary = o.Executable
 	}
 	command := processruntime.NewCommand(ctx, resolved.Runtime, binary, args...)

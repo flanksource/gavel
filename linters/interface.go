@@ -624,9 +624,14 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 		task.SetDescription("")
 	}
 
-	if opts.OutputTee != nil {
-		fmt.Fprintf(opts.OutputTee, "▶ %s\n", label)
+	argv := append([]string{cmd}, args...)
+	if strings.TrimSpace(cmd) == "" {
+		argv = args
 	}
+	if len(argv) == 0 {
+		argv = []string{linter.Name()}
+	}
+	utils.AnnounceCommand(opts.OutputTee, opts.WorkDir, argv)
 
 	start := time.Now()
 	result, err := runForResult(commonsContext.NewContext(ctx), task, linter)

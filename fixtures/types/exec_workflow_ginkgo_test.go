@@ -61,6 +61,7 @@ steps:
 		Expect(result.Error).To(Equal("1 warning finding(s)"))
 		Expect(result.CELResult).To(BeTrue())
 		Expect(result.Stdout).To(Equal("::group::Compile\nversion=1.2\n::endgroup::\n"))
+		Expect(result.Log).To(Equal("::group::Compile\n::warning title=Deprecated::flag -x\n::progress::1/1\nversion=1.2\n::endgroup::\n"))
 		Expect(children(result)).To(Equal([]string{string(task.StatusWarning) + " Deprecated: flag -x"}))
 		Expect(result.Metadata["exports"]).To(HaveKey("VERSION"))
 	})

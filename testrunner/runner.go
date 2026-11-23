@@ -1202,6 +1202,7 @@ func (o *TestOrchestrator) runPackageTest(
 
 	testRun.Process.SucceedOnNonZero = true
 	if o.OutputTee != nil {
+		utils.AnnounceCommand(o.OutputTee, testRun.Process.Cwd, append([]string{testRun.Process.Cmd}, testRun.Process.Args...))
 		testRun.Process.Stream(o.OutputTee, o.OutputTee)
 	}
 	// Tap stdout into a streaming parser so the UI reflects per-test progress
@@ -1572,7 +1573,7 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 //	  cwd: /working/dir
 func PrintDryRunCommand(label, title, cmd string, args []string, cwd string) {
 	logger.Infof("[%s] %s", label, title)
-	logger.Infof("  $ %s", shellJoin(append([]string{cmd}, args...)))
+	logger.Infof("  $ %s", utils.ShellJoin(append([]string{cmd}, args...)))
 	if cwd != "" {
 		logger.Infof("  cwd: %s", cwd)
 	}
@@ -1582,24 +1583,6 @@ func PrintDryRunCommand(label, title, cmd string, args []string, cwd string) {
 // PrintDryRunSkipped renders a "would be skipped" line in dry-run output.
 func PrintDryRunSkipped(label, title, reason string) {
 	logger.Infof("[%s] %s  (skipped: %s)", label, title, reason)
-}
-
-func shellJoin(tokens []string) string {
-	parts := make([]string, 0, len(tokens))
-	for _, t := range tokens {
-		parts = append(parts, shellQuote(t))
-	}
-	return strings.Join(parts, " ")
-}
-
-func shellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	if !strings.ContainsAny(s, " \t\n\"'\\$`*?[]{}()&;|<>#~!") {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Runner is an alias for TestOrchestrator for backwards compatibility during migration.
@@ -1802,6 +1785,7 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 			Duration:  r.Duration,
 			Stdout:    r.Stdout,
 			Stderr:    r.Stderr,
+			Log:       r.Log,
 			Failed:    r.Status == task.StatusFAIL || r.Status == task.StatusFailed || r.Status == task.StatusERR,
 			Passed:    r.Status == task.StatusPASS || r.Status == task.StatusSuccess,
 			Warned:    r.Status == task.StatusWarning,

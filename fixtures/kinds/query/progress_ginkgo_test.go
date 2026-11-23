@@ -54,6 +54,7 @@ var _ = Describe("database progress examples", func() {
 		Expect(progress).To(ContainElement(1))
 		Expect(statuses).To(ContainElement("Completed batch 1 of 5"))
 		Expect(results[1].Stdout).To(And(ContainSubstring("Completed batch 5 of 5"), Not(ContainSubstring("::progress"))))
+		Expect(results[1].Log).To(And(ContainSubstring("::progress::5/5"), ContainSubstring("::status::Completed batch 1 of 5")))
 		Expect(results[1].Metadata).To(HaveKeyWithValue("description", "PostgreSQL batches complete"))
 	})
 })
