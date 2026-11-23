@@ -60,6 +60,7 @@ func TestAHostedOrgsConnectionsPageKeepsOnlyItsGitConnections(t *testing.T) {
 	assert.Contains(t, schema, `"azure_devops"`)
 	assert.Contains(t, schema, `"github"`)
 	assert.NotContains(t, schema, `"postgres"`, "the form offers only git connections")
+	assert.NotContains(t, schema, "k8s-kubeconfig-selector", "a hosted connection's values are literal, so it reads none from a cluster")
 
 	acme := map[string]any{"name": "acme", "type": "github", "password": "gh_hosted", "properties": map[string]any{"organization": "acme"}}
 	status, body := connectionsPageCall(t, base, http.MethodPost, "/api/catalog/connection", member, "org:member", acme, nil)
