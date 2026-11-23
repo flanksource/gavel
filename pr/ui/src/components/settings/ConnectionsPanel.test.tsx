@@ -1,9 +1,9 @@
 // Tests that the connections panel reads its form schema and dashboard from the server's
-// connection catalog, and gives its YAML and JSON editors Monaco's workers.
+// connection catalog, gives its YAML and JSON editors Monaco's workers, and stacks its legend.
 import { render, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ConnectionsPanel } from './ConnectionsPanel';
+import { ConnectionsPanel, LEGEND_SELECTOR } from './ConnectionsPanel';
 
 vi.mock('monaco-editor/esm/vs/editor/editor.worker?worker', () => ({ default: class EditorWorker {} }));
 vi.mock('monaco-editor/esm/vs/language/json/json.worker?worker', () => ({ default: class JsonWorker {} }));
@@ -53,5 +53,27 @@ describe('ConnectionsPanel', () => {
     expect(worker('yaml')).toBe('YamlWorker');
     expect(worker('json')).toBe('JsonWorker');
     expect(worker('editorWorkerService')).toBe('EditorWorker');
+  });
+
+  it('stacks the health legend one state per line', async () => {
+    const dashboard = {
+      connections: [{ id: 'c1', name: 'gavel', namespace: '', type: 'github', secretCount: 0, inlineCredential: true,
+        insecureTLS: false, profileCount: 0, updatedAt: '2026-11-23T00:00:00Z' }],
+      generatedAt: '2026-11-23T00:00:00Z',
+    };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input);
+      return new Response(JSON.stringify(url.includes('/connections/dashboard') ? dashboard : { connections: [] }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }));
+    const { container } = renderPanel();
+
+    await waitFor(() => expect(container.textContent).toContain('check did not complete'));
+    const panel = container.querySelector('[data-connections-panel]');
+    const matched = panel?.querySelectorAll(LEGEND_SELECTOR) ?? [];
+    expect(matched).toHaveLength(1);
+    expect(matched[0]?.textContent).toContain('not checked');
+    expect(panel?.className).toContain(`[&_${LEGEND_SELECTOR}]:flex-col`);
   });
 });
