@@ -4,7 +4,7 @@ import type { Comment, CommentMentionable } from "@flanksource/clicky-ui/comment
 import { UiRobotAi } from "@flanksource/clicky-ui/icons";
 import { request } from "./api";
 
-/** GET /api/v1/comments/agent-sessions: a live Claude or Codex session working in the file's project. */
+/** GET /api/v1/comments/agent-sessions: an available delivery destination for the file's project. */
 export type AgentSession = {
   id: string;
   source: string;
@@ -32,7 +32,7 @@ export type PageAgentHandOff = { label: string; send: () => Promise<void> };
 export function sendToItems(
   comment: Comment,
   sessions: readonly AgentSession[],
-  { send, startNew, pageAgent }: { send: (sessionId: string) => Promise<void>; startNew: () => void; pageAgent?: PageAgentHandOff },
+  { send, startNew, chooseAmp, pageAgent }: { send: (sessionId: string) => Promise<void>; startNew: () => void; chooseAmp?: () => void; pageAgent?: PageAgentHandOff },
 ): DropdownMenuItem[] {
   if (comment.parentId) return [];
   const run = comment.agentRun;
@@ -60,6 +60,7 @@ export function sendToItems(
       onSelect: () => void send(session.id),
     };
   }));
+  if (chooseAmp) items.push({ label: "Send to Amp thread…", icon: UiRobotAi, group: "Agent sessions", onSelect: chooseAmp });
   items.push({
     label: "Run new agent session…",
     icon: UiRobotAi,

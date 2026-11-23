@@ -4,6 +4,7 @@ import type { Comment, CommentAgentRun, CommentAuthor, CommentCreateInput, Comme
 import { Button, Modal } from "@flanksource/clicky-ui/components";
 import { Badge } from "@flanksource/clicky-ui/data";
 import type { FileReviewComments } from "@flanksource/clicky-ui/file-findings";
+import { randomUUID } from "@flanksource/clicky-ui/utils";
 import type { Autosave } from "./autosave";
 import { ApiError, request } from "./api";
 import { sendToItems, useAgentSessions, type AgentSession, type PageAgentHandOff } from "./agent-sessions";
@@ -42,6 +43,7 @@ export type FileCommentsState = {
   comments?: FileReviewComments;
   missingProject?: MissingProject;
   createProject: (project: ProjectInput) => Promise<void>;
+  ampThread?: { send: (sessionId: string) => Promise<void>; close: () => void };
   /** The thread "Run new agent session…" was chosen for, while its dialog is open. */
   newSession?: {
     thread: string;
@@ -152,6 +154,7 @@ export function useFileComments({
   const [listing, setListing] = useState<Listing>(EMPTY_LISTING);
   const [missingProject, setMissingProject] = useState<MissingProject | undefined>(undefined);
   const [newSessionFor, setNewSessionFor] = useState<Comment | undefined>(undefined);
+  const [ampThreadFor, setAmpThreadFor] = useState<{ fileId: string; commentId: string }>();
   const generation = useRef(0);
   const pending = useRef<{ key: string; requestId: string; created?: NativeComment } | undefined>(undefined);
 
@@ -198,7 +201,7 @@ export function useFileComments({
   const deliver = async (commentId: string, target: { kind: "session"; sessionId: string } | RunTarget) => {
     const root = listing.comments.find((row) => row.id === commentId);
     if (!root) throw new Error("Comment no longer exists; refresh comments");
-    await request(`/api/v1/comments/${commentId}/deliver`, { expectedVersion: root.version, requestId: crypto.randomUUID(), target });
+    await request(`/api/v1/comments/${commentId}/deliver`, { expectedVersion: root.version, requestId: randomUUID(), target });
   };
   // A failed hand-off is recorded on the thread (agentRun.state "error") as well as reported.
   const send = async (commentId: string, sessionId: string) => {
@@ -266,7 +269,7 @@ export function useFileComments({
     if (!listing.scope) throw new Error("Comments are still loading; try again");
     const selector = selectorOf(input.anchor, view, { quote: input.quote, cell: input.cell });
     const key = JSON.stringify({ selector, body: input.body });
-    if (pending.current?.key !== key) pending.current = { key, requestId: crypto.randomUUID() };
+    if (pending.current?.key !== key) pending.current = { key, requestId: randomUUID() };
     const attempt = pending.current;
     attempt.created ??= await request<NativeComment>("/api/v1/comments", {
       target: { uri: listing.target, scopeUri: listing.scope, kind: selector.kind, revision: queue.state().revision, selector },
@@ -284,7 +287,17 @@ export function useFileComments({
   };
 
   const pageAgent = page.agent && { agent: page.agent, choice: page.choice, sessions, choose: page.choose, refresh: page.refresh };
-  return { createProject, ...(newSession ? { newSession } : {}), ...(pageAgent ? { pageAgent } : {}), comments: {
+  const ampThread = ampThreadFor?.fileId === fileId ? {
+    close: () => setAmpThreadFor(undefined),
+    send: async (sessionId: string) => {
+      try {
+        await deliver(ampThreadFor.commentId, { kind: "session", sessionId });
+      } finally {
+        await refresh();
+      }
+    },
+  } : undefined;
+  return { createProject, ...(newSession ? { newSession } : {}), ...(ampThread ? { ampThread } : {}), ...(pageAgent ? { pageAgent } : {}), comments: {
     items,
     anchoring: "patch",
     targets: { element: true, document: true, screenshot: true },
@@ -297,6 +310,7 @@ export function useFileComments({
       return sendToItems(comment, sessions, {
         send: (sessionId) => send(comment.id, sessionId),
         startNew: () => setNewSessionFor(comment),
+        chooseAmp: () => setAmpThreadFor({ fileId, commentId: comment.id }),
         ...(handOff ? { pageAgent: handOff } : {}),
       });
     },
@@ -315,7 +329,9 @@ export function useFileComments({
             </a>
           )}
           {run && <AgentRunChip run={run} />}
-          {run?.sessionId && run.state !== "error" && <SessionPreview sessionId={run.sessionId} />}
+          {run?.sessionId && (run.target?.channel === "amp-http"
+            ? <a href={`https://ampcode.com/threads/${encodeURIComponent(run.sessionId)}`} target="_blank" rel="noreferrer" className="text-xs underline">Open in Amp</a>
+            : run.state !== "error" && <SessionPreview sessionId={run.sessionId} />)}
         </div>
       );
     },

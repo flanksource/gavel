@@ -20,17 +20,12 @@ function describeError(cause: unknown): string {
 }
 
 /** `run` starts a session for a thread; `configure` only saves the runtime new sessions use. */
-export type RunAgentDialogMode = "run" | "configure" | "create" | "assign" | "assign-all";
+export type RunAgentDialogMode = "run" | "configure" | "assign" | "assign-all";
 
 const COPY: Record<
   RunAgentDialogMode,
   { title: string; submit: string; busy: string }
 > = {
-  create: {
-    title: "New agent session",
-    submit: "Create session",
-    busy: "Creating…",
-  },
   run: {
     title: "Run agent",
     submit: "Start session and run",
@@ -57,8 +52,6 @@ function intro(
   mode: RunAgentDialogMode,
   grouping: AgentSessionGrouping,
 ): string {
-  if (mode === "create")
-    return "Create a managed Captain session and use it for this page's comments. Existing comments are not sent.";
   if (mode === "configure") {
     return "Every new agent session starts with this runtime. Sessions already running keep theirs.";
   }

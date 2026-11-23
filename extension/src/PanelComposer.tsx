@@ -6,12 +6,13 @@ export type PanelComposerProps = {
   config: CommentConfig;
   /** Posts a whole-page comment; a rejection keeps the draft in the composer and shows the error there. */
   onPost: (input: CommentCreateInput) => Promise<void>;
+  onCancel?: () => void;
   /** Starts an element comment, drafted beside the element the user picks. */
   onPick: (options: { screenshot: boolean }) => void;
 };
 
 /** The panel's fixed footer: a whole-page composer, and the way into commenting on one element. */
-export function PanelComposer({ config, onPost, onPick }: PanelComposerProps) {
+export function PanelComposer({ config, onPost, onPick, onCancel }: PanelComposerProps) {
   return (
     <footer data-testid="panel-composer" className="shrink-0 space-y-1.5 border-t border-border bg-background p-2">
       <div className="flex items-center gap-1">
@@ -30,6 +31,7 @@ export function PanelComposer({ config, onPost, onPick }: PanelComposerProps) {
         placeholder="Comment on this page…"
         createActions={[{ id: "plain", label: "Post comment" }]}
         onCreate={input => onPost(input)}
+        {...(onCancel ? { onCancel } : {})}
       />
     </footer>
   );

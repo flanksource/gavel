@@ -21,6 +21,17 @@ describe("agentOf", () => {
 });
 
 describe("sendToItems", () => {
+  it("offers a discovered Amp thread and a paste action for a thread outside the picker", () => {
+    const send = vi.fn(async (_sessionId: string) => {});
+    const chooseAmp = vi.fn();
+    const session = { id: "T-review", source: "amp", title: "Review spacing", inCmux: false };
+    const [listed, manual] = sendToItems(root(), [session], { ...noop, send, chooseAmp });
+    expect([listed?.label, manual?.label]).toEqual(["Send to Review spacing", "Send to Amp thread…"]);
+    listed?.onSelect();
+    manual?.onSelect();
+    expect(send).toHaveBeenCalledWith(session.id);
+    expect(chooseAmp).toHaveBeenCalledOnce();
+  });
   it("offers every live session and a new one, disabling those while a session works the thread", () => {
     const items = sendToItems(root({ sessionId: "s-1", requestedAt: "2026-11-08T10:01:00Z", state: "sent" }), [fixer, reviewer], noop);
     expect(items.map((item) => [item.label, Boolean(item.disabled)])).toEqual([

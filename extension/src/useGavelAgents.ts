@@ -3,7 +3,8 @@ import type { Comment } from "@flanksource/clicky-ui";
 import { ownLayerOf } from "@flanksource/clicky-ui/comments/gavel";
 import type { CommentAgentPatch } from "../comments/gavel-delivery";
 import type { RuntimeCatalog } from "../agents/runtime-families";
-import { commentAgentFor, fetchRuntimeCatalog, pageTargetUri, type AgentSession, type CommentAgentSettings, type CommentEdits, type GavelClient, type PageRef, type RunTarget } from "./gavel-client";
+import { pageTargetUri, type AgentSession, type CommentAgentSettings, type CommentEdits, type GavelClient, type PageRef } from "./gavel-client";
+import { fetchRuntimeCatalog } from "./runtime-catalog";
 
 const SESSION_POLL_MS = 5000;
 
@@ -102,9 +103,9 @@ export function useRuntimeCatalog(server: string): { catalog: RuntimeCatalog | u
   return { catalog, error };
 }
 
-/** Reads Gavel's effective rule and patches only the settings the user changes. */
-export function useAutoRun(options: { client: GavelClient; page: PageRef | undefined; run: RunTarget | undefined }) {
-  const { client, page, run } = options;
+/** Reads the page's effective comment agent rule and patches only the settings the user changes. */
+export function useCommentAgent(options: { client: GavelClient; page: PageRef | undefined }) {
+  const { client, page } = options;
   const prefix = page ? pageTargetUri(client.scope, page) : undefined;
   const [loaded, setLoaded] = useState<{ settings: CommentAgentSettings; prefix: string }>();
   const [error, setError] = useState<string | null>(null);
@@ -149,20 +150,11 @@ export function useAutoRun(options: { client: GavelClient; page: PageRef | undef
     return writes.current;
   };
 
-  const set = (on: boolean) => {
-    if (!on || !run) return save({ enabled: on });
-    const existing = agent?.agent ?? {};
-    const fields = Object.entries(commentAgentFor(run)).filter(([field]) => field === "enabled" || existing[field as keyof typeof existing] === undefined);
-    return save(Object.fromEntries(fields));
-  };
-
   return {
     agent,
-    enabled: agent?.agent.enabled === true,
     edits: agent?.agent.edits ?? "direct",
     ready: current !== undefined,
     error,
-    set,
     setEdits: (edits: CommentEdits) => save({ edits }),
   };
 }

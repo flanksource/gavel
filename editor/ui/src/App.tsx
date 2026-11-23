@@ -55,6 +55,7 @@ import { commentCountsAt, markTargetRead, useCommentSummary } from "./comment-su
 import { RecentComments } from "./RecentComments";
 import { useFileComments } from "./file-comments";
 import { CreateProjectDialog } from "./CreateProjectDialog";
+import { AmpThreadDialog } from "./AmpThreadDialog";
 import { CurrentUser } from "./CurrentUser";
 import { NewAgentSessionDialog } from "./NewAgentSessionDialog";
 import { PageAgentControl } from "./PageAgentControl";
@@ -250,7 +251,7 @@ export function App() {
   const ExtensionForm = useMemo(() => (active ? previewExtensionForm(active.id) : undefined), [active?.id]);
   const activeRef = active ? { file: relativePath(active) } : null;
   const draft = active ? queues.current.get(active.id)?.state() : undefined;
-  const { comments, missingProject, createProject, newSession, pageAgent } = useFileComments({
+  const { comments, missingProject, createProject, newSession, ampThread, pageAgent } = useFileComments({
     fileId: active?.kind === "document" ? active.id : null,
     queue: active ? queues.current.get(active.id) : undefined,
     view: route.view,
@@ -977,6 +978,7 @@ export function App() {
           onClose={newSession.cancel}
         />
       )}
+      {ampThread && <AmpThreadDialog {...ampThread} />}
     </AppShell>
   );
 }

@@ -4,7 +4,7 @@ import { AgentIdentity } from "@flanksource/clicky-ui/chat";
 import { UiExternalLink } from "@flanksource/clicky-ui/icons";
 import type { AgentSession } from "./gavel-client";
 import { DeliveryTargetLine, type DeliveryPreviewState } from "./DeliveryPreview";
-import { captainSessionUrl, sessionDashboardUrl } from "./session-urls";
+import { ampThreadUrl, captainSessionUrl, sessionDashboardUrl } from "./session-urls";
 import styles from "./GavelPanel.module.css";
 
 export type SessionTabProps = {
@@ -35,6 +35,13 @@ export function SessionTab({ server, sessionId, targetState = {} }: SessionTabPr
         <p className="text-sm text-muted-foreground">Choose an existing session in Settings to follow it here.</p>
       </div>
     );
+  }
+  const ampURL = ampThreadUrl(sessionId);
+  if (ampURL) {
+    return <div className="flex flex-col items-start gap-3 p-3">
+      <DeliveryTargetLine state={targetState} />
+      <Button asChild variant="outline" size="sm"><a href={ampURL} target="_blank" rel="noreferrer">Open in Amp</a></Button>
+    </div>;
   }
   return (
     <SessionInspector

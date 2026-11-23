@@ -18,6 +18,30 @@ function sessions(overrides: Partial<NonNullable<AgentPickerProps["sessions"]>> 
   return { items: [FIRST, SECOND], state: "ready", onSelect: vi.fn(), selectLabel: (session) => `Use session ${session.id}`, ...overrides };
 }
 
+describe("AgentPicker settings layout", () => {
+  it("shows the runtime bar for the model without a toggle when runtime.bar is always", () => {
+    render(<AgentPicker runtime={{ value: RUNTIME, bar: "always", onChange: vi.fn(), catalog: CATALOG }} />);
+    expect({ bar: screen.queryByLabelText("Agent runtime") !== null, toggle: screen.queryByRole("button", { name: "Choose model" }) }).toEqual({ bar: true, toggle: null });
+  });
+
+  it("offers the sessions only through a Run on dropdown, named for the selected one, when sessions.display is menu", () => {
+    const list = sessions({ display: "menu", selectedId: SECOND.id, onNew: vi.fn() });
+    render(<AgentPicker sessions={list} />);
+    expect(screen.queryByRole("button", { name: "Use session session-a" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Run on Fix layout" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Review changes/ }));
+    expect(list.onSelect).toHaveBeenCalledWith(FIRST);
+  });
+
+  it("names a new session on the Run on dropdown and offers it there when none is selected", () => {
+    const list = sessions({ display: "menu", selectedId: undefined, onNew: vi.fn() });
+    render(<AgentPicker sessions={list} />);
+    fireEvent.click(screen.getByRole("button", { name: "Run on New session" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /New session/ }));
+    expect(list.onNew).toHaveBeenCalledOnce();
+  });
+});
+
 describe("AgentPicker sessions", () => {
   it("lists each session with its folder and status and reports the one clicked", () => {
     const list = sessions();
@@ -134,15 +158,6 @@ describe("AgentPicker settings", () => {
     expect(screen.getByRole("radio", { name: "Shared" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("radio", { name: "Per page" }));
     expect(onChange).toHaveBeenCalledWith("page");
-  });
-
-  it("reports the auto-run switch and explains when it is unavailable", () => {
-    const onChange = vi.fn();
-    const { rerender } = render(<AgentPicker autoRun={{ checked: false, onChange }} />);
-    fireEvent.click(screen.getByRole("switch", { name: "Auto-run new comments on this page" }));
-    expect(onChange).toHaveBeenCalledWith(true);
-    rerender(<AgentPicker autoRun={{ checked: false, onChange, disabled: true, title: "Open a page to set its auto-run" }} />);
-    expect(screen.getByRole("switch", { name: "Auto-run new comments on this page" }).hasAttribute("disabled")).toBe(true);
   });
 
   it("reports whether the agent edits directly or proposes patches, and disables the choice when unavailable", () => {

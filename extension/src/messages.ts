@@ -1,4 +1,5 @@
 import type { UploadedAttachment } from "../comments/gavel-todo";
+import type { CommentSubmission } from "./comment-sync";
 import type { Capture } from "./todos/model";
 import type { TodoRun } from "./todos/runtime";
 
@@ -28,6 +29,9 @@ export type BackgroundRequest =
   | { type: "todo-run-choice"; server: string; dir: string; run: TodoRun | null }
   | { type: "todo-capture"; server: string; capture: Capture }
   | { type: "todo-sync"; server: string; retryId?: string }
+  | { type: "comment-capture"; draft: CommentSubmission }
+  | { type: "comment-queue"; pageUrl: string }
+  | { type: "comment-retry"; pageUrl: string; id: string }
   /** Show the grabber on `tabId` with that tab's effective settings. */
   | { type: "activate"; tabId: number }
   /** Close the grabber on `tabId` and forget its activation. */
@@ -39,7 +43,9 @@ export type BackgroundRequest =
   /** Upload a PNG data URL to the sender tab's gavel server as a todo attachment. */
   | { type: "upload-attachment"; dataUrl: string; name: string }
   /** The settings the sender tab's grabber was activated with. */
-  | { type: "activation" };
+  | { type: "activation" }
+  /** The panel started or chose the extension-wide global session; the background stores it in the global defaults. `null` clears it. */
+  | { type: "global-session"; session: string | null };
 
 export type BackgroundResponse<T> = { ok: true; value: T } | { ok: false; error: string };
 

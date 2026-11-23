@@ -11,13 +11,13 @@ export function AgentRunActions({ state, status, busy, onRetry, onRetryFresh }: 
   status?: string;
   busy: boolean;
   onRetry: () => void;
-  onRetryFresh: () => void;
+  onRetryFresh?: () => void;
 }) {
   if (state !== "error" || (status !== undefined && FINAL_STATUSES.has(status))) return null;
   return (
     <div className="mt-1 flex flex-wrap gap-2 px-1">
       <Button size="sm" variant="outline" disabled={busy} onClick={onRetry}>Retry</Button>
-      <Button size="sm" variant="outline" disabled={busy} onClick={onRetryFresh}>Retry in a new session</Button>
+      {onRetryFresh && <Button size="sm" variant="outline" disabled={busy} onClick={onRetryFresh}>Retry in a new session</Button>}
     </div>
   );
 }

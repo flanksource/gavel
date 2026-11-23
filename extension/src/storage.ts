@@ -19,6 +19,13 @@ export async function writeGlobalDefaults(defaults: GlobalDefaults): Promise<Glo
   return checked;
 }
 
+/** Stores the global session (`null` clears it) and leaves the other defaults as they are. */
+export async function writeGlobalSession(session: string | null): Promise<GlobalDefaults> {
+  if (session === "") throw new Error("The global session must be a non-empty string");
+  const { session: _previous, ...defaults } = await readGlobalDefaults();
+  return writeGlobalDefaults(session === null ? defaults : { ...defaults, session });
+}
+
 /** Forgets the stored global defaults, e.g. a corrupt or outdated entry; the next read seeds them again. */
 export async function discardGlobalDefaults(): Promise<void> {
   await chrome.storage.local.remove(GLOBAL_KEY);

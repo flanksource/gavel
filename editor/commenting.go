@@ -158,7 +158,7 @@ func (s *Server) OpenComments(ctx context.Context) (*comments.Service, error) {
 	if s.Agents == nil {
 		return nil, fmt.Errorf("editor comments need an agents bridge")
 	}
-	delivery, err := agents.Delivery(agents.Options{Bridge: s.Agents, Groups: store, Workdir: ui.CommentWorkdir})
+	delivery, err := agents.Delivery(agents.Options{Bridge: s.Agents, Groups: store, Workdir: ui.CommentWorkdir, Amp: agents.AmpFromEnvironment(), Repositories: ui.CommentRepositories})
 	if err != nil {
 		return nil, err
 	}

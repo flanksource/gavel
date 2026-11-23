@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Badge, Button, SegmentedControl, Switch } from "@flanksource/clicky-ui";
+import { Badge, Button, DropdownMenu, SegmentedControl, type DropdownMenuItem } from "@flanksource/clicky-ui";
 import { SpecRuntimeBar } from "@flanksource/clicky-ui/ai";
 import { AgentIdentity } from "@flanksource/clicky-ui/chat";
 
@@ -43,9 +43,10 @@ export type AgentPickerProps = {
     /** Offers a button that unsets the runtime while one is set. */
     onClear?: (() => void) | undefined;
     clearLabel?: string | undefined;
+    /** `always` shows the inline runtime bar as the model picker, with no button to expand it. */
+    bar?: "toggle" | "always" | undefined;
   } | undefined;
-  autoRun?: { checked: boolean; onChange: (enabled: boolean) => void; disabled?: boolean; title?: string; label?: string } | undefined;
-  /** How the auto-run agent changes the project: it edits files itself, or answers with a patch a human accepts. */
+  /** How the page's agent changes the project: it edits files itself, or answers with a patch a human accepts. */
   edits?: { value: CommentEdits; onChange: (edits: CommentEdits) => void; disabled?: boolean; title?: string } | undefined;
   /** Omitted where only the settings are edited. */
   sessions?: {
@@ -59,6 +60,8 @@ export type AgentPickerProps = {
     /** Offers a "New session" choice; choosing it shows the runtime bar. */
     onNew?: () => void;
     newLabel?: string;
+    /** `menu` offers the sessions (and New session) only through one "Run on" dropdown button instead of listing them. */
+    display?: "list" | "menu" | undefined;
     onAll?: () => void;
     /** Page-level "assign every open thread": to a listed session, or to a new one. */
     assignAll?: {
@@ -70,7 +73,7 @@ export type AgentPickerProps = {
   } | undefined;
 };
 
-function InlineRuntimeBar({ runtime, catalog, onChange }: { runtime: AgentSessionRuntime | undefined; catalog: RuntimeCatalog | undefined; onChange: (runtime: AgentSessionRuntime) => void }) {
+export function InlineRuntimeBar({ runtime, catalog, onChange }: { runtime: AgentSessionRuntime | undefined; catalog: RuntimeCatalog | undefined; onChange: (runtime: AgentSessionRuntime) => void }) {
   if (!catalog) return <p role="status" className="text-muted-foreground">Loading models…</p>;
   return (
     // Permissions, workspace and commit settings come from the session prompt, so only the model row is offered.
@@ -121,6 +124,42 @@ function SessionRow({ session, label, pressed, onSelect, assignAll }: { session:
   );
 }
 
+/** One "Run on" row: a dropdown button naming the chosen session (or a new one) that lists New session and the live sessions. */
+function SessionMenu({ sessions, newSelected }: { sessions: NonNullable<AgentPickerProps["sessions"]>; newSelected: boolean }) {
+  const selected = sessions.items.find((session) => session.id === sessions.selectedId);
+  const newLabel = sessions.newLabel ?? "New session";
+  const current = selected?.title ?? (newSelected ? newLabel : sessions.selectedId ? `Session ${sessions.selectedId.slice(-6)}` : "Choose a session");
+  const items: DropdownMenuItem[] = [
+    ...(sessions.onNew ? [{ label: <span className="flex items-center gap-2">{newLabel}<span className="text-muted-foreground">runs the model above</span></span>, onSelect: sessions.onNew }] : []),
+    ...sessions.items.map((session): DropdownMenuItem => ({
+      label: <span className="flex min-w-0 items-center gap-2">
+        <span className="min-w-0 truncate">{session.title}</span>
+        <AgentIdentity {...(session.model ? { model: session.model } : { provider: session.source })} identityId={session.id} />
+        <span className="text-muted-foreground">{session.resumable ? "resumes" : (session.status ?? "running")}</span>
+      </span>,
+      title: `${session.title}\n${session.cwd ?? ""}\n${session.id}`,
+      group: "Active sessions",
+      onSelect: () => sessions.onSelect(session),
+    })),
+  ];
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <span>Run on</span>
+      <DropdownMenu
+        label={<><span className="sr-only">Run on </span><span className="max-w-48 truncate">{current}</span></>}
+        title={`Run on ${current}`}
+        menuLabel="Run on session"
+        size="sm"
+        variant="outline"
+        align="right"
+        items={items}
+        {...(sessions.state === "loading" ? { footer: <span role="status" className="text-xs text-muted-foreground">Loading active sessions…</span> } : {})}
+        {...(sessions.state === "ready" && sessions.items.length === 0 ? { footer: <span className="text-xs text-muted-foreground">No active sessions.</span> } : {})}
+      />
+    </div>
+  );
+}
+
 /**
  * The body of an agent menu: how sessions are grouped, the runtime new sessions
  * start with, auto-run, and the live sessions to deliver to. Data-agnostic: the
@@ -128,11 +167,12 @@ function SessionRow({ session, label, pressed, onSelect, assignAll }: { session:
  * feed it their own sources and decide what choosing something does.
  */
 export function AgentPicker(props: AgentPickerProps) {
-  const { heading, busy = false, notice, error, grouping, runtime, autoRun, edits, sessions } = props;
+  const { heading, busy = false, notice, error, grouping, runtime, edits, sessions } = props;
   const [expanded, setExpanded] = useState(false);
   const inline = runtime !== undefined && runtime.onChoose === undefined;
+  const barAlways = inline && runtime.bar === "always";
   const newSelected = sessions?.onNew !== undefined && sessions.selectedId === undefined;
-  const showBar = inline && (expanded || newSelected);
+  const showBar = inline && (barAlways || expanded || newSelected);
   return (
     <div className="space-y-3 p-3 text-xs">
       {heading && <h2 className="font-semibold">{heading}</h2>}
@@ -161,16 +201,18 @@ export function AgentPicker(props: AgentPickerProps) {
                   {runtime.clearLabel ?? "Clear"}
                 </Button>
               )}
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                aria-label={runtime.ariaLabel ?? "Choose model"}
-                {...(inline ? { "aria-expanded": showBar } : {})}
-                onClick={runtime.onChoose ?? (() => setExpanded((open) => !open))}
-              >
-                {runtime.value ? <RuntimeIdentity runtime={runtime.value} /> : (runtime.emptyLabel ?? "Choose model…")}
-              </Button>
+              {barAlways ? (!runtime.value && <span className="text-muted-foreground">{runtime.emptyLabel ?? "No model set"}</span>) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  aria-label={runtime.ariaLabel ?? "Choose model"}
+                  {...(inline ? { "aria-expanded": showBar } : {})}
+                  onClick={runtime.onChoose ?? (() => setExpanded((open) => !open))}
+                >
+                  {runtime.value ? <RuntimeIdentity runtime={runtime.value} /> : (runtime.emptyLabel ?? "Choose model…")}
+                </Button>
+              )}
             </div>
           </div>
           {showBar && (
@@ -181,15 +223,6 @@ export function AgentPicker(props: AgentPickerProps) {
             />
           )}
         </>
-      )}
-      {autoRun && (
-        <Switch
-          label={autoRun.label ?? "Auto-run new comments on this page"}
-          checked={autoRun.checked}
-          disabled={busy || autoRun.disabled === true}
-          {...(autoRun.title ? { title: autoRun.title } : {})}
-          onChange={autoRun.onChange}
-        />
       )}
       {edits && (
         <div className="flex flex-wrap items-center justify-between gap-2" {...(edits.title ? { title: edits.title } : {})}>
@@ -212,7 +245,8 @@ export function AgentPicker(props: AgentPickerProps) {
           {error}
         </p>
       )}
-      {sessions && (
+      {sessions?.display === "menu" && <SessionMenu sessions={sessions} newSelected={newSelected} />}
+      {sessions && sessions.display !== "menu" && (
         <>
           <hr className="border-border" />
           <h2 className="font-semibold">Active sessions</h2>

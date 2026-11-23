@@ -32,3 +32,13 @@ it("previews the draft mention and restores the page target when the mention is 
   rerender(<DraftDeliveryPreview {...props} body="Check the header" />);
   expect(screen.getByText("Page session")).toBeTruthy();
 });
+
+it("previews the explicit Amp destination ahead of a remembered session and a mention", async () => {
+  const page = { url: "https://example.test/docs", title: "Docs" };
+  const session = { id: "T-review", source: "amp", title: "Amp review", inCmux: false };
+  const previewDelivery = vi.fn().mockResolvedValue({ session });
+  render(<DraftDeliveryPreview client={{ previewDelivery } as unknown as GavelClient} page={page} sessionId="remembered"
+    revision={undefined} defaultState={{}} body="@claude check this" explicitSessionId={session.id} />);
+  expect(await screen.findByText(session.title)).toBeTruthy();
+  expect(previewDelivery).toHaveBeenCalledWith({ page, body: "@claude check this", deliver: { kind: "session", sessionId: session.id } });
+});

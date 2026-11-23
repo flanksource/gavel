@@ -8,7 +8,7 @@ it("frames the extension's bundled gavel panel directly, naming the bridge sessi
   const result = bookmarkletFrame({
     documentUrl: "https://example.com/docs?a=1",
     session: "bridge-1",
-    panel: { url: `${extension}/panel.html`, todoRelay: `${extension}/todo-relay.html`, server: "http://localhost:9092", project: "my site", runtime, grouping: "shared", agentSession: "agent-7" },
+    panel: { url: `${extension}/panel.html`, todoRelay: `${extension}/todo-relay.html`, server: "http://localhost:9092", project: "my site", runtime, grouping: "shared", agentSession: "global-1", sessionTarget: "global", pageSession: "agent-7", globalSession: "global-1" },
   });
   expect(result.origin).toBe(extension);
   const url = new URL(result.src);
@@ -18,7 +18,10 @@ it("frames the extension's bundled gavel panel directly, naming the bridge sessi
     project: "my site",
     runtime: JSON.stringify(runtime),
     grouping: "shared",
-    session: "agent-7",
+    session: "global-1",
+    sessionTarget: "global",
+    pageSession: "agent-7",
+    globalSession: "global-1",
     parentOrigin: "https://example.com",
     bridgeSession: "bridge-1",
   });

@@ -113,6 +113,36 @@ it("sizes the hover popover from the stored size and shows its grip only while h
   ui.close();
 });
 
+it("covers the viewport while a floating comment menu is open and keeps the card at its page position", async () => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+  const target = document.createElement("section");
+  target.id = "lifecycle";
+  document.body.append(target);
+  vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ left: 100, top: 50, bottom: 90 } as DOMRect);
+  const onDraftBox = vi.fn();
+  const ui = mount({ onDraftBox });
+  const frameBox = () => ({ left: ui.frame.style.left, top: ui.frame.style.top, width: ui.frame.style.width, height: ui.frame.style.height, overlay: ui.root.hasAttribute("data-overlay") });
+  ui.draft(true, "#lifecycle");
+  ui.draftSize(300, false);
+  await nextFrame();
+  const card = { left: "100px", top: "96px", width: "320px", height: "300px", overlay: false };
+  expect(frameBox()).toEqual(card);
+
+  ui.draftSize(300, true);
+  await nextFrame();
+  expect({ frame: frameBox(), box: onDraftBox.mock.calls }).toEqual({
+    frame: { left: "0px", top: "0px", width: "100vw", height: "100vh", overlay: true },
+    box: [[{ left: 100, top: 96, width: 320 }]],
+  });
+
+  ui.draftSize(300, false);
+  await nextFrame();
+  expect(frameBox()).toEqual(card);
+  ui.close();
+  target.remove();
+});
+
 it("leaves Command+K available to the host document", () => {
   const ui = mount();
   const event = new KeyboardEvent("keydown", {

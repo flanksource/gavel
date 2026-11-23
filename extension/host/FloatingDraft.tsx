@@ -1,12 +1,23 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, useCommentContext } from "@flanksource/clicky-ui";
-import { CommentDraftCard } from "@flanksource/clicky-ui/comments";
+import { CommentDraftCard, type CommentConfig } from "@flanksource/clicky-ui/comments";
+import type { DraftBox } from "./bridge-parse";
 import type { Selection } from "./model";
 import { sendToHost } from "./useHostBridge";
 
-export function FloatingDraft({ selection }: { selection: Selection }) {
+/**
+ * The comment card inside the draft frame. While one of its menus is open the
+ * host widens the frame to the whole viewport (so the menu is not clipped to
+ * the card) and reports `box`, the card's page position, to keep it in place.
+ */
+export function FloatingDraft({ selection, config, onDiscard, box }: { selection: Selection; config: CommentConfig; onDiscard: () => void; box?: DraftBox | undefined }) {
   const ctx = useCommentContext();
   const ref = useRef<HTMLDivElement>(null);
+  const [overlay, setOverlay] = useState(false);
+  useEffect(() => {
+    document.body.toggleAttribute("data-floating-draft", true);
+    return () => document.body.removeAttribute("data-floating-draft");
+  }, []);
   useEffect(() => {
     const content = ref.current;
     if (!content) return;
@@ -14,13 +25,9 @@ export function FloatingDraft({ selection }: { selection: Selection }) {
     const measure = () => {
       cancelAnimationFrame(pending);
       pending = requestAnimationFrame(() => {
-        const height = content.getBoundingClientRect().height + 16;
-        sendToHost({
-          type: "draft-size",
-          height: document.querySelector("[data-floating-ui-portal]")
-            ? Math.max(height, 480)
-            : height,
-        });
+        const open = !!document.querySelector("[data-floating-ui-portal]");
+        setOverlay(open);
+        sendToHost({ type: "draft-size", height: content.getBoundingClientRect().height + 16, overlay: open });
       });
     };
     const observer = new ResizeObserver(measure);
@@ -40,6 +47,7 @@ export function FloatingDraft({ selection }: { selection: Selection }) {
       role="dialog"
       aria-label={`New comment on ${selection.label}`}
       className="rounded-lg border border-primary/50 bg-card text-foreground"
+      style={overlay && box ? { position: "fixed", left: box.left, top: box.top, width: box.width } : undefined}
     >
       <div className="flex justify-end">
         <Button
@@ -54,8 +62,11 @@ export function FloatingDraft({ selection }: { selection: Selection }) {
         key={selection.anchor}
         label={selection.label}
         anchor={selection.anchor}
-        config={ctx.config}
-        onDiscard={() => sendToHost({ type: "draft", active: false })}
+        config={config}
+        onDiscard={() => {
+          onDiscard();
+          sendToHost({ type: "draft", active: false });
+        }}
         createActions={[
           {
             id: "plain",

@@ -1,10 +1,7 @@
-import type { RuntimeCatalogFamily } from "@flanksource/clicky-ui/ai";
-import type { ChatModel } from "@flanksource/clicky-ui/chat";
 import type { GitDiffPayload } from "@flanksource/clicky-ui/data";
 import type { CommentMentionable } from "@flanksource/clicky-ui/comments";
 import type { AgentSessionGrouping, AgentSessionRuntime } from "../contracts/agent-session-store";
 import type { StoredComment } from "../contracts/comments-store";
-import { agentRuntimeFamilies, type RuntimeCatalog } from "../agents/runtime-families";
 import { externalUrl, type Selection } from "../host/model";
 import {
   bodyFor,
@@ -76,23 +73,6 @@ export function pageTargetUri(scope: string, page: PageRef): string {
   return `${scope}/pages/${encodeURIComponent(pageKey(page.url))}`;
 }
 
-/**
- * The enabled settings agent for a run target. Settings describe a run, never a
- * live session, so only the run's prompt, options and group are carried.
- */
-export function commentAgentFor(run: RunTarget): CommentAgent {
-  const { runOptions } = run;
-  return {
-    enabled: true,
-    prompt: run.prompt,
-    ...(runOptions?.presets ? { presets: runOptions.presets } : {}),
-    ...(runOptions?.spec ? { spec: runOptions.spec } : {}),
-    ...(runOptions?.variables ? { variables: runOptions.variables } : {}),
-    ...(runOptions?.instructions ? { instructions: runOptions.instructions } : {}),
-    ...(run.groupKey ? { group: run.groupKey } : {}),
-  };
-}
-
 export function domSelector(selection: Selection): DomSelector {
   return {
     kind: "dom",
@@ -112,10 +92,11 @@ export function pageTarget(options: { scope: string; page: PageRef; selector?: D
   };
 }
 
-export function dataUrlBytes(dataUrl: string): Uint8Array<ArrayBuffer> {
+export function screenshotBase64(dataUrl: string): string {
   if (!dataUrl.startsWith(PNG_PREFIX)) throw new Error("Screenshots must be PNG data URLs");
-  const binary = atob(dataUrl.slice(PNG_PREFIX.length));
-  return Uint8Array.from(binary, char => char.charCodeAt(0));
+  const data = dataUrl.slice(PNG_PREFIX.length);
+  if (!data || data.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new Error("Screenshot contains invalid base64 data");
+  return data;
 }
 
 /** Incremental server-sent events parser; `push` accepts arbitrary chunk boundaries. */
@@ -159,7 +140,7 @@ async function failure(response: Response, url: URL, method: string): Promise<Ga
   return new GavelError(response.status, `${message || `HTTP ${response.status}`} (${method} ${url.pathname}, HTTP ${response.status})`);
 }
 
-async function getJson(options: { server: string; path: string; fetch?: typeof fetch }): Promise<{ url: URL; body: unknown }> {
+export async function getGavelJson(options: { server: string; path: string; fetch?: typeof fetch }): Promise<{ url: URL; body: unknown }> {
   const url = new URL(options.path, options.server);
   const response = await (options.fetch ?? fetch)(url);
   if (!response.ok) throw await failure(response, url, "GET");
@@ -168,21 +149,10 @@ async function getJson(options: { server: string; path: string; fetch?: typeof f
 
 /** The dashboard's project names, for choosing the scope comments are filed under. */
 export async function listProjects(options: { server: string; fetch?: typeof fetch }): Promise<string[]> {
-  const { url, body: projects } = await getJson({ ...options, path: "/api/projects" });
+  const { url, body: projects } = await getGavelJson({ ...options, path: "/api/projects" });
   if (!Array.isArray(projects) || !projects.every((entry: unknown) => !!entry && typeof entry === "object" && typeof (entry as { name?: unknown }).name === "string"))
     throw new Error(`Gavel returned an invalid project list from ${url.href}`);
   return projects.map((entry: { name: string }) => entry.name);
-}
-
-/** The model catalog and the available agent runtimes the dashboard's chat API offers, for choosing a new session's runtime. */
-export async function fetchRuntimeCatalog(options: { server: string; fetch?: typeof fetch }): Promise<RuntimeCatalog> {
-  const [{ body: models }, { body: runtimes }] = await Promise.all([getJson({ ...options, path: "/api/chat/models" }), getJson({ ...options, path: "/api/chat/runtimes" })]);
-  if (!Array.isArray(models) || models.length === 0) throw new Error("Gavel's AI model catalog is empty or invalid");
-  if (!Array.isArray(runtimes) || runtimes.length === 0 || runtimes.some((family: unknown) => !Array.isArray((family as { modes?: unknown } | null)?.modes) || (family as { modes: unknown[] }).modes.length === 0))
-    throw new Error("Gavel's AI runtime catalog is empty or invalid");
-  const families = agentRuntimeFamilies(runtimes as RuntimeCatalogFamily[]);
-  if (families.length === 0) throw new Error("Gavel reports no available agent runtime");
-  return { models: models as ChatModel[], families };
 }
 
 export class GavelClient {
@@ -258,18 +228,18 @@ export class GavelClient {
     }
   }
 
-  /** Creates a thread root. A captured screenshot is uploaded as an attachment; if that fails the incomplete thread is removed. */
+  /** Creates a thread root and its screenshot atomically using the draft ID as the request ID. */
   async create(options: { page: PageRef; comment: StoredComment; selection?: Selection; deliver?: DeliverTarget; delivery?: CreateDeliveryChoice }): Promise<StoredComment> {
     const { page, selection } = options;
     let comment = options.comment;
-    let screenshot: Uint8Array<ArrayBuffer> | undefined;
+    let screenshot: string | undefined;
     if (selection) {
       const { screenshot: capture, ...element } = selection.element;
       comment = { ...comment, element: { ...element, ...(capture?.status === "unavailable" ? { screenshot: { status: "unavailable" as const, reason: capture.reason } } : {}) } };
-      if (capture?.status === "captured") screenshot = dataUrlBytes(capture.dataUrl);
+      if (capture?.status === "captured") screenshot = screenshotBase64(capture.dataUrl);
     }
     const content: Content = { ...contentFor(pageKey(page.url), comment), page };
-    let created = await this.post<NativeComment>("", {
+    const created = await this.post<NativeComment>("", {
       target: pageTarget({ scope: this.scope, page, ...(selection ? { selector: domSelector(selection) } : {}) }),
       bodyMarkdown: bodyFor(comment),
       workflowId: "human-review",
@@ -277,19 +247,8 @@ export class GavelClient {
       content,
       ...(options.deliver ? { deliver: options.deliver } : {}),
       ...(options.delivery ? { delivery: options.delivery } : {}),
+      ...(screenshot ? { attachments: [{ filename: "screenshot.png", contentType: "image/png", data: screenshot }] } : {}),
     });
-    if (screenshot) {
-      try {
-        created = await this.json<NativeComment>(this.url(`/${created.id}/attachments`, { name: "screenshot.png", expectedVersion: String(created.version) }), { method: "POST", headers: { "Content-Type": "image/png" }, body: screenshot });
-      } catch (cause) {
-        try {
-          await this.batch([{ id: created.id, expectedVersion: created.version, action: "delete" }]);
-        } catch (cleanup) {
-          throw new AggregateError([cause, cleanup], "Screenshot upload failed and the incomplete comment could not be removed");
-        }
-        throw cause;
-      }
-    }
     return project(created, { attachmentUrl: this.attachmentUrl })[0]!;
   }
 
@@ -342,17 +301,41 @@ export class GavelClient {
     return sessions;
   }
 
+  /**
+   * Starts a new managed session without a comment. Gavel names it `<prefix>-<6 chars>`,
+   * so the prefix is required, and answers once the session id is known.
+   */
+  async startSession(options: { page: PageRef; prefix: string; runtime?: AgentSessionRuntime; edits?: CommentEdits }): Promise<GavelAgentSession> {
+    const { page, prefix, runtime, edits } = options;
+    if (prefix.trim() === "") throw new Error("A session needs a name prefix");
+    const session = await this.post<GavelAgentSession>("/agent-sessions", {
+      scope: this.scope,
+      target: pageTargetUri(this.scope, page),
+      prefix: prefix.trim(),
+      prompt: DEFAULT_RUN_PROMPT,
+      ...(runtime ? { runOptions: { spec: runtime.spec, ...(runtime.presets ? { presets: runtime.presets } : {}) } } : {}),
+      ...(edits ? { edits } : {}),
+    });
+    const valid = !!session && typeof session === "object" && !Array.isArray(session)
+      && [session.id, session.title].every(field => typeof field === "string" && field !== "")
+      // An ended managed session has no source: captain reports only its id and model when it starts.
+      && typeof session.source === "string" && typeof session.inCmux === "boolean";
+    if (!valid) throw new Error(`Gavel returned an invalid started session: ${JSON.stringify(session)}`);
+    return session;
+  }
+
   async mentionables(page: PageRef): Promise<CommentMentionable[]> {
     const items = await this.json<CommentMentionable[]>(this.url("/mentionables", { scope: this.scope, target: pageTargetUri(this.scope, page) }));
     if (!Array.isArray(items)) throw new Error("Gavel returned an invalid mentionables list");
     return items;
   }
 
-  async previewDelivery(options: { page: PageRef; body?: string; delivery?: CreateDeliveryChoice }): Promise<CreateDeliveryPreview> {
-    const { page, body, delivery } = options;
+  async previewDelivery(options: { page: PageRef; body?: string; deliver?: DeliverTarget; delivery?: CreateDeliveryChoice }): Promise<CreateDeliveryPreview> {
+    const { page, body, deliver, delivery } = options;
     const preview = await this.post<CreateDeliveryPreview>("/delivery/preview", {
       target: pageTarget({ scope: this.scope, page }),
       ...(body ? { bodyMarkdown: body } : {}),
+      ...(deliver ? { deliver } : {}),
       ...(delivery ? { delivery } : {}),
     });
     if (!preview || typeof preview !== "object" || Array.isArray(preview))

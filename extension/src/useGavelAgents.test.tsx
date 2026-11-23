@@ -2,11 +2,10 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Comment } from "@flanksource/clicky-ui";
 import type { CommentAgent, CommentAgentSettings } from "../comments/gavel-delivery";
-import type { DeliverTarget, GavelClient } from "./gavel-client";
-import { useAdoptRunSession, useAgentSessions, useAutoRun } from "./useGavelAgents";
+import type { GavelClient } from "./gavel-client";
+import { useAdoptRunSession, useAgentSessions, useCommentAgent } from "./useGavelAgents";
 
 const page = { url: "https://example.com/docs", title: "Docs" };
-const run: Extract<DeliverTarget, { kind: "run" }> = { kind: "run", prompt: "editor-comments", groupKey: "g-1" };
 const project = { kind: "project" } as const;
 
 function resolved(agent: CommentAgent): CommentAgentSettings {
@@ -24,100 +23,65 @@ function fakeClient(options: { initial: CommentAgent; saves?: CommentAgent[] }) 
   return { client: client as unknown as GavelClient, calls: client };
 }
 
-async function loaded(client: GavelClient, target: Extract<DeliverTarget, { kind: "run" }> = run) {
-  const hook = renderHook((props: { run: typeof target }) => useAutoRun({ client, page, run: props.run }), { initialProps: { run: target } });
+async function loaded(client: GavelClient) {
+  const hook = renderHook(() => useCommentAgent({ client, page }));
   await waitFor(() => expect(hook.result.current.ready).toBe(true));
   return hook;
 }
 
-it("reads whether the page's resolved comment agent is enabled", async () => {
-  const { client, calls } = fakeClient({ initial: { enabled: true, prompt: "editor-comments" } });
-  const { result } = await loaded(client);
-  expect(result.current.enabled).toBe(true);
-  expect(calls.commentAgent).toHaveBeenCalledWith(page);
-});
+describe("useCommentAgent", () => {
+  it("reads the page's resolved comment agent without writing a rule", async () => {
+    const { client, calls } = fakeClient({ initial: { enabled: true, prompt: "editor-comments" } });
+    const { result } = await loaded(client);
+    expect(result.current.agent?.agent).toEqual({ enabled: true, prompt: "editor-comments" });
+    expect(calls.commentAgent).toHaveBeenCalledWith(page);
+    expect(calls.saveCommentAgent).not.toHaveBeenCalled();
+  });
 
-it("loads an unconfigured page without writing an enabled rule", async () => {
-  const { client, calls } = fakeClient({ initial: {} });
-  const { result } = await loaded(client);
-  expect(result.current.enabled).toBe(false);
-  expect(calls.saveCommentAgent).not.toHaveBeenCalled();
-});
+  it("reads how the page's agent edits and defaults to direct edits", async () => {
+    const proposing = await loaded(fakeClient({ initial: { edits: "propose" } }).client);
+    expect(proposing.result.current.edits).toBe("propose");
+    const unset = await loaded(fakeClient({ initial: {} }).client);
+    expect(unset.result.current.edits).toBe("direct");
+  });
 
-it("turns auto-run on by saving a run-derived agent as the project page entry", async () => {
-  const { client, calls } = fakeClient({ initial: { enabled: false }, saves: [{ enabled: true, prompt: "editor-comments", group: "g-1" }] });
-  const { result } = await loaded(client);
-  expect(result.current.enabled).toBe(false);
-  await act(() => result.current.set(true));
-  expect(calls.saveCommentAgent).toHaveBeenCalledWith({ page, layer: project, agent: { enabled: true, prompt: "editor-comments", group: "g-1" } });
-  expect(result.current.enabled).toBe(true);
-});
+  it("patches only the edits policy, as the project page entry", async () => {
+    const { client, calls } = fakeClient({ initial: { enabled: false }, saves: [{ enabled: false, edits: "propose" }] });
+    const { result } = await loaded(client);
+    await act(() => result.current.setEdits("propose"));
+    expect(calls.saveCommentAgent).toHaveBeenCalledWith({ page, layer: project, agent: { edits: "propose" } });
+    expect(result.current.edits).toBe("propose");
+  });
 
-it("persists an explicit opt-out without removing the page's agent settings", async () => {
-  const { client, calls } = fakeClient({ initial: { enabled: true, edits: "propose" }, saves: [{ enabled: false, edits: "propose" }] });
-  const { result } = await loaded(client);
-  await act(() => result.current.set(false));
-  expect(calls.saveCommentAgent.mock.calls).toEqual([[{ page, layer: project, agent: { enabled: false } }]]);
-  expect(result.current.enabled).toBe(false);
-});
+  it("reports a failed save and keeps the previous state", async () => {
+    const { client, calls } = fakeClient({ initial: {} });
+    calls.saveCommentAgent.mockRejectedValueOnce(new Error("403 only humans can change comment agents"));
+    const { result } = await loaded(client);
+    await act(() => result.current.setEdits("propose"));
+    expect([result.current.edits, result.current.error]).toEqual(["direct", "403 only humans can change comment agents"]);
+  });
 
-it("keeps a saved opt-out off when the panel is reopened", async () => {
-  const { client, calls } = fakeClient({ initial: { enabled: false } });
-  const { result } = await loaded(client);
-  expect(calls.saveCommentAgent).not.toHaveBeenCalled();
-  expect(result.current.enabled).toBe(false);
-});
+  it("reports a failed settings read without initializing a rule", async () => {
+    const { client, calls } = fakeClient({ initial: {} });
+    calls.commentAgent.mockRejectedValueOnce(new Error("Cannot read page agent"));
+    const { result } = renderHook(() => useCommentAgent({ client, page }));
+    await waitFor(() => expect(result.current.error).toBe("Cannot read page agent"));
+    expect(result.current.ready).toBe(false);
+    expect(calls.saveCommentAgent).not.toHaveBeenCalled();
+  });
 
-it("preserves inherited prompt and group settings when enabling auto-run", async () => {
-  const { client, calls } = fakeClient({ initial: { prompt: "triage", group: "global", edits: "propose" } });
-  const { result } = await loaded(client);
-  await act(() => result.current.set(true));
-  expect(calls.saveCommentAgent).toHaveBeenCalledWith({ page, layer: project, agent: { enabled: true } });
-});
-
-it("reads how the page's agent edits and defaults to direct edits", async () => {
-  const proposing = await loaded(fakeClient({ initial: { enabled: true, edits: "propose" } }).client);
-  expect(proposing.result.current.edits).toBe("propose");
-  const unset = await loaded(fakeClient({ initial: { enabled: true } }).client);
-  expect(unset.result.current.edits).toBe("direct");
-});
-
-it("patches edits independently of auto-run", async () => {
-  const { client, calls } = fakeClient({ initial: { enabled: false }, saves: [{ enabled: false, edits: "propose" }] });
-  const { result } = await loaded(client);
-  await act(() => result.current.setEdits("propose"));
-  expect(calls.saveCommentAgent).toHaveBeenCalledWith({ page, layer: project, agent: { edits: "propose" } });
-  expect([result.current.enabled, result.current.edits]).toEqual([false, "propose"]);
-});
-
-it("reports a failed save and keeps the previous state", async () => {
-  const { client, calls } = fakeClient({ initial: { enabled: false } });
-  calls.saveCommentAgent.mockRejectedValueOnce(new Error("403 only humans can change comment agents"));
-  const { result } = await loaded(client);
-  await act(() => result.current.set(true));
-  expect([result.current.enabled, result.current.error]).toEqual([false, "403 only humans can change comment agents"]);
-});
-
-it("reports a failed settings read without initializing a rule", async () => {
-  const { client, calls } = fakeClient({ initial: {} });
-  calls.commentAgent.mockRejectedValueOnce(new Error("Cannot read page agent"));
-  const { result } = renderHook(() => useAutoRun({ client, page, run }));
-  await waitFor(() => expect(result.current.error).toBe("Cannot read page agent"));
-  expect([result.current.enabled, result.current.ready]).toEqual([false, false]);
-  expect(calls.saveCommentAgent).not.toHaveBeenCalled();
-});
-
-it("serializes saves so an older enable cannot overwrite a later opt-out", async () => {
-  const { client, calls } = fakeClient({ initial: { enabled: false }, saves: [{ enabled: false }] });
-  let finishEnable!: (settings: CommentAgentSettings) => void;
-  calls.saveCommentAgent.mockImplementationOnce(() => new Promise(resolve => { finishEnable = resolve; }));
-  const { result } = await loaded(client);
-  let enable!: Promise<void>;
-  let disable!: Promise<void>;
-  act(() => { enable = result.current.set(true); disable = result.current.set(false); });
-  await waitFor(() => expect(calls.saveCommentAgent).toHaveBeenCalledTimes(1));
-  await act(async () => { finishEnable(resolved({ enabled: true })); await Promise.all([enable, disable]); });
-  expect([result.current.enabled, calls.saveCommentAgent.mock.calls.map(call => call[0]?.agent)]).toEqual([false, [{ enabled: true, prompt: "editor-comments", group: "g-1" }, { enabled: false }]]);
+  it("serializes saves so an older change cannot overwrite a later one", async () => {
+    const { client, calls } = fakeClient({ initial: {}, saves: [{ edits: "direct" }] });
+    let finishFirst!: (settings: CommentAgentSettings) => void;
+    calls.saveCommentAgent.mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }));
+    const { result } = await loaded(client);
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => { first = result.current.setEdits("propose"); second = result.current.setEdits("direct"); });
+    await waitFor(() => expect(calls.saveCommentAgent).toHaveBeenCalledTimes(1));
+    await act(async () => { finishFirst(resolved({ edits: "propose" })); await Promise.all([first, second]); });
+    expect([result.current.edits, calls.saveCommentAgent.mock.calls.map(call => call[0]?.agent)]).toEqual(["direct", [{ edits: "propose" }, { edits: "direct" }]]);
+  });
 });
 
 describe("useAgentSessions", () => {

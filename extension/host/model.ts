@@ -1,5 +1,6 @@
 import type { CommentElementCaptureContext } from "../contracts/comments-model";
 import type { AgentPin } from "@flanksource/page-runtime/schema";
+import type { SessionTarget } from "./site-settings";
 
 export const BRIDGE = "gavel-extension-v1";
 
@@ -54,6 +55,8 @@ export type HostMessage =
   | { type: "state"; state: HostState }
   | { type: "anchors"; anchors: AnchorState[] }
   | { type: "focus"; anchor: string }
+  /** Where the floating comment card sits on the page while its frame covers the viewport for an open menu. */
+  | { type: "draft-box"; left: number; top: number; width: number }
   | { type: "settings-result"; requestId: string; error?: string }
   | { type: "error"; error: string };
 export type PanelMessage =
@@ -62,7 +65,8 @@ export type PanelMessage =
   | { type: "fab-position"; x: number; y: number }
   | { type: "minimize" }
   | { type: "draft"; active: boolean; posted?: boolean; anchor?: string }
-  | { type: "draft-size"; height: number }
+  /** `overlay` asks the host to cover the viewport so an open menu is not clipped to the card. */
+  | { type: "draft-size"; height: number; overlay: boolean }
   /** `mode` and `hover` restore the panel's remembered presentation; a panel without them opens as a hover popover. */
   | { type: "ready"; width: number; mode?: PanelMode; hover?: { width: number; height: number } }
   /** The user switched an open panel between the side rail and the hover popover. */
@@ -71,8 +75,8 @@ export type PanelMessage =
   | { type: "close" }
   | { type: "pick"; screenshot?: boolean }
   | { type: "page" }
-  /** The panel changed this site's agent session; the host persists it in the page's grabber settings. `null` clears it. */
-  | { type: "settings"; requestId: string; session: string | null }
+  /** The panel changed this site's agent session and/or default target; the host persists them in the page's grabber settings. A `session` of `null` clears it. */
+  | { type: "settings"; requestId: string; session?: string | null; target?: SessionTarget }
   | {
       type: "scroll";
       anchor: string;

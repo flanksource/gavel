@@ -63,3 +63,12 @@ export function parseFabPosition(message: Record<string, unknown>): { x: number;
   if (typeof x !== "number" || !Number.isFinite(x) || typeof y !== "number" || !Number.isFinite(y)) throw new Error("Invalid FAB position");
   return { x, y };
 }
+
+export type DraftBox = { left: number; top: number; width: number };
+
+export function parseDraftBox(message: Record<string, unknown>): DraftBox {
+  const { left, top, width } = message;
+  if (![left, top, width].every(value => typeof value === "number" && Number.isFinite(value)) || (width as number) <= 0)
+    throw new Error("Invalid floating comment box");
+  return { left: left as number, top: top as number, width: width as number };
+}

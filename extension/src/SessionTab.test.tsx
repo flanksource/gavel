@@ -14,6 +14,12 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("SessionTab", () => {
+  it("links to the Amp conversation without requesting a transcript", () => {
+    fetchMock.mockClear();
+    render(<SessionTab server={SERVER} sessionId="T-review-orb" />);
+    expect(screen.getByRole("link", { name: "Open in Amp" }).getAttribute("href")).toBe("https://ampcode.com/threads/T-review-orb");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it("embeds the delivery session's transcript from gavel and links to its dashboard page", async () => {
     render(<SessionTab server={SERVER} sessionId="s-1" />);
     await waitFor(() => expect(fetchMock.mock.calls.map(call => new URL(String(call[0])).pathname)).toContain("/api/captain/sessions/s-1"));

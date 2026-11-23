@@ -3,18 +3,16 @@ import {
   DEFAULT_COMMENT_STATUSES,
   type CommentAuthor,
   type CommentConfig,
-  type CommentCreateInput,
   type CommentReplyInput,
 } from "@flanksource/clicky-ui/comments";
 import type { GitDiffPayload } from "@flanksource/clicky-ui/data";
 import type { StoredComment } from "../contracts/comments-store";
 import { commentActor, localUser, type Action } from "../comments/gavel-projection";
-import type { Selection } from "../host/model";
 import type { DeliverTarget, GavelClient, PageRef } from "./gavel-client";
-import type { CreateDeliveryChoice } from "../comments/gavel-delivery";
 
 export const GAVEL_COMMENT_CONFIG: CommentConfig = {
   statuses: DEFAULT_COMMENT_STATUSES,
+  canEditThread: root => root.status !== "closed",
   // Agents are not listed: assigning a thread to one delivers it, which the panel's own Assign… entries do.
   assignees: [{ id: "you", name: localUser.name, kind: "user" }],
 };
@@ -50,9 +48,10 @@ export type GavelComments = {
   loading: boolean;
   /** A broken backend or event stream must never look like "no comments". */
   error: string | null;
-  /** Creates a thread root and returns the ID Gavel assigned it. */
-  create: (input: CommentCreateInput, selection: Selection, delivery?: CreateDeliveryChoice) => Promise<string>;
+  refresh: () => Promise<void>;
   reply: (input: CommentReplyInput) => Promise<void>;
+  edit: (id: string, body: string) => Promise<void>;
+  editReply: (rootId: string, messageId: string, body: string) => Promise<void>;
   updateStatus: (id: string, status: string) => Promise<void>;
   acknowledge: (id: string) => Promise<void>;
   assign: (id: string, assignee: CommentAuthor | null) => Promise<void>;
@@ -176,20 +175,7 @@ export function useGavelComments(options: { client: GavelClient; page: PageRef |
     comments: stored,
     loading,
     error: error ?? streamError,
-    create: async (input, selection, delivery) => {
-      const comment: StoredComment = {
-        id: crypto.randomUUID(),
-        body: input.body,
-        createdAt: new Date().toISOString(),
-        author: localUser,
-        anchor: input.anchor ?? null,
-        ...(input.rating ? { rating: input.rating } : {}),
-        ...(input.assignee ? { assignee: input.assignee } : {}),
-      };
-      const created = await client.create({ page: requirePage(), comment, selection, ...(delivery ? { delivery } : {}) });
-      await refresh();
-      return created.id;
-    },
+    refresh,
     reply: async input => {
       const parent = latest.current.find(entry => entry.id === input.parentId);
       if (!parent) throw new Error(`Comment ${input.parentId} is not loaded; refresh and try again`);
@@ -197,6 +183,8 @@ export function useGavelComments(options: { client: GavelClient; page: PageRef |
       const thread = root(rootId);
       await mutate(() => client.reply({ page: requirePage(), root: rootId, version: thread.version!, body: input.body }));
     },
+    edit: async (id, body) => act(id, "edit", { bodyMarkdown: body }),
+    editReply: async (rootId, messageId, body) => act(rootId, "edit-reply", { messageId, bodyMarkdown: body }),
     updateStatus: (id, status) => {
       if (status === "resolved") return act(id, "resolve");
       if (status === "open") return act(id, "reopen");

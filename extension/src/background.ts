@@ -1,11 +1,25 @@
 import type { UploadedAttachment } from "../comments/gavel-todo";
 import { uploadAttachment } from "./attachment-upload";
+import { createCaptureBadge } from "./capture-badge";
+import { CommentSync } from "./comment-sync";
 import { CLOSED_EVENT, type BackgroundRequest, type BackgroundResponse } from "./messages";
 import { effectiveSettings, hostLaunch, type Activation, type HostLaunch } from "./settings";
-import { readGlobalDefaults, readSiteSettings } from "./storage";
-import { startTodoSync, todoRequest, warmTodoCatalog } from "./todos/background";
+import { readGlobalDefaults, readSiteSettings, writeGlobalSession } from "./storage";
+import { todoRequest, warmTodoCatalog } from "./todos/background";
+import { TodoStore } from "./todos/store";
+import { TodoSync } from "./todos/sync";
 
-startTodoSync();
+const CAPTURE_SYNC_ALARM = "gavel-todo-sync";
+const captureStore = new TodoStore(indexedDB, () => { void updateBadge(); });
+const refreshBadge = createCaptureBadge({ store: captureStore, tabs: badgeTabs });
+const updateBadge = () => refreshBadge().catch(cause => console.error("Gavel toolbar update failed", cause));
+const commentSync = new CommentSync({ store: captureStore });
+const todos = new TodoSync({ store: captureStore });
+const syncComments = () => commentSync.sync().catch(cause => console.error("Comment sync failed", cause));
+function syncCaptures() {
+  void todos.sync().catch(cause => console.error("Todo sync failed", cause));
+  void syncComments();
+}
 
 // The tabs where the grabber is showing, with the settings it was opened with.
 // The relay and panel frames in them may only act for these settings, and only
@@ -14,6 +28,7 @@ startTodoSync();
 // tab removes the record.
 const ACTIVATIONS_KEY = "activations";
 type Activations = Record<string, Activation>;
+const activationErrorKey = (tabId: number) => `activation-error:${tabId}`;
 
 async function activations(): Promise<Activations> {
   const stored = (await chrome.storage.session.get(ACTIVATIONS_KEY))[ACTIVATIONS_KEY];
@@ -24,10 +39,21 @@ async function activations(): Promise<Activations> {
 
 async function setActive(tabId: number, activation: Activation | null) {
   const { [String(tabId)]: _previous, ...others } = await activations();
-  await chrome.storage.session.set({ [ACTIVATIONS_KEY]: activation ? { ...others, [String(tabId)]: activation } : others });
-  await chrome.action.setBadgeText({ tabId, text: activation ? "on" : "" });
-  await chrome.action.setBadgeBackgroundColor({ tabId, color: "#2563eb" });
-  await chrome.action.setTitle({ tabId, title: activation ? "Gavel: active on this tab" : "Gavel" });
+  await Promise.all([
+    chrome.storage.session.set({ [ACTIVATIONS_KEY]: activation ? { ...others, [String(tabId)]: activation } : others }),
+    chrome.storage.session.remove(activationErrorKey(tabId)),
+  ]);
+  await updateBadge();
+}
+
+async function badgeTabs() {
+  const [tabs, active] = await Promise.all([chrome.tabs.query({}), activations()]);
+  const ids = tabs.flatMap(tab => tab.id === undefined ? [] : [tab.id]);
+  const errors = await chrome.storage.session.get(ids.map(activationErrorKey));
+  return ids.map(id => {
+    const error = errors[activationErrorKey(id)];
+    return { id, active: String(id) in active, ...(typeof error === "string" ? { error } : {}) };
+  });
 }
 
 // A popup switch and the early script's signal can both ask for the same tab
@@ -44,7 +70,7 @@ function activate(tabId: number): Promise<void> {
 
 async function install(tabId: number) {
   const settings = effectiveSettings(await readGlobalDefaults(), await readSiteSettings(tabId));
-  warmTodoCatalog(settings.server);
+  warmTodoCatalog(settings.server, todos);
   const launch = hostLaunch(settings, { panel: chrome.runtime.getURL("panel.html"), todoRelay: chrome.runtime.getURL("todo-relay.html") });
   const target = { tabId };
   // The bridge is also a static content script; this covers tabs that were open before the extension loaded, and is a no-op where it already runs.
@@ -109,13 +135,15 @@ async function uploadForTab(sender: chrome.runtime.MessageSender, request: { dat
 async function report(tabId: number, cause: unknown) {
   const message = cause instanceof Error ? cause.message : String(cause);
   console.error(`Gavel failed on tab ${tabId}:`, cause);
-  await chrome.action.setBadgeText({ tabId, text: "!" });
-  await chrome.action.setBadgeBackgroundColor({ tabId, color: "#dc2626" });
-  await chrome.action.setTitle({ tabId, title: `Gavel: ${message}` });
+  await chrome.storage.session.set({ [activationErrorKey(tabId)]: message });
+  await updateBadge();
 }
 
 chrome.tabs.onRemoved.addListener(tabId => {
-  void activations().then(({ [String(tabId)]: _closed, ...others }) => chrome.storage.session.set({ [ACTIVATIONS_KEY]: others }));
+  void Promise.all([
+    activations().then(({ [String(tabId)]: _closed, ...others }) => chrome.storage.session.set({ [ACTIVATIONS_KEY]: others })),
+    chrome.storage.session.remove(activationErrorKey(tabId)),
+  ]).catch(cause => console.error("Could not clear Gavel's tab state", cause));
 });
 
 function answer<T>(sendResponse: (response: BackgroundResponse<T>) => void, work: Promise<T>) {
@@ -126,9 +154,41 @@ function answer<T>(sendResponse: (response: BackgroundResponse<T>) => void, work
   return true;
 }
 
+async function handleComment(request: Extract<BackgroundRequest, { type: `comment-${string}` }>, sender: chrome.runtime.MessageSender) {
+  const tabId = sender.tab?.id;
+  if (tabId === undefined || sender.url?.split("?")[0] !== chrome.runtime.getURL("panel.html"))
+    throw new Error("Comment storage is only available to an active Gavel panel");
+  const activation = (await activations())[String(tabId)];
+  if (!activation?.project) throw new Error("The Gavel panel has no active project");
+  const destination = { server: activation.server, project: activation.project };
+  if (request.type === "comment-queue") return commentSync.list(destination, request.pageUrl);
+  if (request.type === "comment-capture") {
+    const id = await commentSync.capture(destination, request.draft);
+    void syncComments();
+    return id;
+  }
+  await commentSync.retry(destination, request.pageUrl, request.id);
+  void syncComments();
+}
+
+/** The panel of a tab where the grabber is active may start or choose the extension-wide global session; nothing else may change it. */
+async function handleGlobalSession(request: Extract<BackgroundRequest, { type: "global-session" }>, sender: chrome.runtime.MessageSender) {
+  const tabId = sender.tab?.id;
+  if (tabId === undefined || sender.url?.split("?")[0] !== chrome.runtime.getURL("panel.html"))
+    throw new Error("The global session can only be changed from an active Gavel panel");
+  if (!(String(tabId) in (await activations()))) throw new Error("The grabber is not active on this tab");
+  const { session } = request;
+  if (session !== null && (typeof session !== "string" || session === "")) throw new Error(`The global session must be a non-empty string or null, got ${JSON.stringify(session)}`);
+  await writeGlobalSession(session);
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  const todo = todoRequest(message as BackgroundRequest, sender);
+  const backgroundRequest = message as BackgroundRequest | null;
+  const todo = todoRequest({ request: message as BackgroundRequest, sender, todos });
   if (todo) return answer(sendResponse, todo);
+  if (backgroundRequest?.type === "comment-capture" || backgroundRequest?.type === "comment-queue" || backgroundRequest?.type === "comment-retry")
+    return answer(sendResponse, handleComment(backgroundRequest, sender));
+  if (backgroundRequest?.type === "global-session") return answer(sendResponse, handleGlobalSession(backgroundRequest, sender));
   const request = message as { type?: BackgroundRequest["type"] | typeof CLOSED_EVENT; tabId?: unknown } | null;
   const senderTab = sender.tab?.id;
   if (request?.type === CLOSED_EVENT) {
@@ -153,3 +213,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   console.error("Grabber background received an unknown message", message);
 });
+
+chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === CAPTURE_SYNC_ALARM) syncCaptures(); });
+void chrome.alarms.create(CAPTURE_SYNC_ALARM, { periodInMinutes: 1 });
+void updateBadge();
+syncCaptures();

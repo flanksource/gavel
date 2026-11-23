@@ -1,4 +1,4 @@
-import { startPageAgent, validateHostMessage } from "@flanksource/page-runtime/frame/agent";
+import { elementRect, startPageAgent, validateHostMessage } from "@flanksource/page-runtime/frame/agent";
 import type { AgentFrameMessage, AgentSelection } from "@flanksource/page-runtime/schema";
 import type { ContextMenuActionContext } from "@flanksource/clicky-ui/react-grab";
 import type { CommentScreenshotCapture } from "../contracts/comments-model";
@@ -15,10 +15,10 @@ import { acquireGrab } from "./host-grab";
 import { closeTodoModal, openTodoModal } from "./host-todo-modal";
 import { sidebarWidth } from "./host-resize";
 import { bookmarkletFrame, type GavelPanelFrame } from "./origin";
-import { SITE_SETTINGS_KEY, withSiteSession } from "./site-settings";
+import { SITE_SETTINGS_KEY, parseSessionTarget, withSiteSession, withSiteTarget } from "./site-settings";
 
 declare global {
-  interface Window { __GAVEL_GRABBER__?: { focus: () => void; close: () => void } }
+  interface Window { __GAVEL_GRABBER__?: { focus: () => void; close: () => void; reconfigure: (panel: GavelPanelFrame) => void } }
 }
 
 type Capture = (target: Element | ScreenshotTarget) => Promise<CommentScreenshotCapture>;
@@ -31,7 +31,12 @@ export type HostOptions = {
 };
 
 export function installBookmarklet(options: HostOptions) {
-  if (window.__GAVEL_GRABBER__) { window.__GAVEL_GRABBER__.focus(); return; }
+  if (window.__GAVEL_GRABBER__) {
+    // Activating an open grabber again (the popup changed its session) reloads the panel only if its settings changed.
+    window.__GAVEL_GRABBER__.reconfigure(options.gavel);
+    window.__GAVEL_GRABBER__.focus();
+    return;
+  }
   if (!["http:", "https:", "file:"].includes(location.protocol)) throw new Error("The shared page agent requires an HTTP(S) or file document");
   const session = crypto.randomUUID();
   const { src: frameSrc, origin } = bookmarkletFrame({ documentUrl: location.href, session, panel: options.gavel });
@@ -52,6 +57,11 @@ export function installBookmarklet(options: HostOptions) {
     onPosition: position => send({ type: "fab-position", ...position }),
     onOpenChange: open => sidebarChanged(open),
     onHoverSize: size => send({ type: "hover-size", ...size }),
+    onDraftBox: box => send({ type: "draft-box", ...box }),
+    viewportRect: element => {
+      const rect = elementRect(element, document.body);
+      return { ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height };
+    },
   });
 
   const takeScreenshot = (target: Element | ScreenshotTarget) => withOverlaysHidden({ overlays: [ui.root], work: () => options.capture(target) });
@@ -97,7 +107,7 @@ export function installBookmarklet(options: HostOptions) {
   };
   const registerSidebarButton = (open: boolean) => owned.grab.registerPlugin(sidebarButtonPlugin({ icon: open ? GAVEL_FILLED_SVG : GAVEL_SVG, open, toggle: toggleSidebar }));
   sidebarChanged = registerSidebarButton;
-  const start = () => startPageAgent({ root: document.body, page: location.href, sourceContext: { mode: "external-document", url: location.href }, send: receive, error, picker: owned.grab });
+  const start = () => startPageAgent({ root: document.body, page: location.href, sourceContext: { mode: "external-document", url: location.href }, send: receive, error, picker: owned.grab, onFrameLayout: ui.reposition });
   let agent: ReturnType<typeof startPageAgent>;
   try {
     const gavel = gavelTodoActions({ grab: owned.grab, server: options.gavel.server, todoRelay: options.gavel.todoRelay, capture: takeScreenshot, upload: options.upload, openModal: openTodoModal });
@@ -143,16 +153,22 @@ export function installBookmarklet(options: HostOptions) {
           ui.draft(message["active"], typeof message["anchor"] === "string" ? message["anchor"] : undefined); break;
         case "draft-size":
           if (typeof message["height"] !== "number" || !Number.isFinite(message["height"]) || message["height"] <= 0) throw new Error("Invalid floating comment height");
-          ui.draftSize(message["height"]); break;
+          if (typeof message["overlay"] !== "boolean") throw new Error("Invalid floating comment overlay");
+          ui.draftSize(message["height"], message["overlay"]); break;
         case "pick": screenshotRequested = message["screenshot"] === true; ui.frame.hidden = true; agent.receive({ type: "mode", mode: "comment" }); break;
         case "page": agent.receive({ type: "page" }); break;
         case "settings": {
           const requestId = message["requestId"];
           if (typeof requestId !== "string" || !requestId) throw new Error("Missing settings request ID");
-          const agentSession = message["session"];
           try {
-            if (agentSession !== null && (typeof agentSession !== "string" || agentSession === "")) throw new Error("Invalid grabber agent session");
-            const stored = withSiteSession(localStorage.getItem(SITE_SETTINGS_KEY), agentSession);
+            if (!("session" in message) && !("target" in message)) throw new Error("A settings change must name a session or a target");
+            let stored = localStorage.getItem(SITE_SETTINGS_KEY);
+            if ("session" in message) {
+              const agentSession = message["session"];
+              if (agentSession !== null && (typeof agentSession !== "string" || agentSession === "")) throw new Error("Invalid grabber agent session");
+              stored = withSiteSession(stored, agentSession);
+            }
+            if ("target" in message) stored = withSiteTarget(stored, parseSessionTarget(message["target"], "Grabber settings"));
             if (stored === null) localStorage.removeItem(SITE_SETTINGS_KEY);
             else localStorage.setItem(SITE_SETTINGS_KEY, stored);
             send({ type: "settings-result", requestId });
@@ -188,6 +204,16 @@ export function installBookmarklet(options: HostOptions) {
     closed = true; version++; clearTimeout(startup); clearInterval(navigation); window.removeEventListener("message", onMessage); agent.dispose(); releaseGrab(); ui.close(); delete window.__GAVEL_GRABBER__;
     options.onClose?.();
   }
-  window.__GAVEL_GRABBER__ = { focus() { agent.receive({ type: "mode", mode: "off" }); ui.open(); ui.frame.focus(); }, close };
+  window.__GAVEL_GRABBER__ = {
+    focus() { agent.receive({ type: "mode", mode: "off" }); ui.open(); ui.frame.focus(); },
+    reconfigure(panel) {
+      const next = bookmarkletFrame({ documentUrl: location.href, session, panel });
+      if (next.origin !== origin) throw new Error(`The grabber panel cannot move from ${origin} to ${next.origin}`);
+      if (next.src === ui.frame.src) return;
+      ready = false;
+      ui.frame.src = next.src;
+    },
+    close,
+  };
 }
 

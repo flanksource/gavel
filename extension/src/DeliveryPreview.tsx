@@ -31,25 +31,26 @@ export function useDeliveryPreview(options: {
   revision: unknown;
   body?: string;
   mentionId?: string;
+  explicitSessionId?: string;
   signal?: unknown;
 }): DeliveryPreviewState {
-  const { client, page, sessionId, revision, body, mentionId, signal } = options;
+  const { client, page, sessionId, revision, body, mentionId, explicitSessionId, signal } = options;
   const url = page?.url;
   const title = page?.title;
   const [state, setState] = useState<DeliveryPreviewState & { key: string }>();
-  const key = JSON.stringify([url, sessionId, body, mentionId, revision]);
+  const key = JSON.stringify([url, sessionId, body, mentionId, explicitSessionId, revision]);
   useEffect(() => {
     if (!url || title === undefined) return;
     let current = true;
     const timer = window.setTimeout(() => {
       const delivery: CreateDeliveryChoice = { ...(sessionId ? { defaultSessionId: sessionId } : {}), ...(mentionId ? { mentionId } : {}) };
-      client.previewDelivery({ page: { url, title }, delivery, ...(body ? { body } : {}) }).then(
+      client.previewDelivery({ page: { url, title }, ...(explicitSessionId ? { deliver: { kind: "session", sessionId: explicitSessionId } } : { delivery }), ...(body ? { body } : {}) }).then(
         preview => { if (current) setState({ key, preview }); },
         (cause: unknown) => { if (current) setState({ key, error: cause instanceof Error ? cause.message : String(cause) }); },
       );
     }, body ? 250 : 0);
     return () => { current = false; window.clearTimeout(timer); };
-  }, [client, key, url, title, sessionId, body, mentionId, signal]);
+  }, [client, key, url, title, sessionId, body, mentionId, explicitSessionId, signal]);
   return state?.key === key ? state : {};
 }
 
@@ -65,13 +66,14 @@ export function deliveryLabel(state: DeliveryPreviewState): string {
   return `New session · ${typeof model === "string" ? model : target.prompt}`;
 }
 
-export function DeliveryTargetLine({ state }: { state: DeliveryPreviewState }) {
+// compact keeps the line to one row that truncates, for a host row it shares with other controls (the comment box's send row).
+export function DeliveryTargetLine({ state, compact = false }: { state: DeliveryPreviewState; compact?: boolean }) {
   const { preview, error } = state;
   const session = preview?.session;
   const source = preview?.route?.source;
-  const rule = source && source !== "session" && source !== "remembered-session" && !source.startsWith("mention:") ? source : undefined;
+  const rule = source && source !== "session" && source !== "remembered-session" && source !== "deliver" && !source.startsWith("mention:") ? source : undefined;
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] leading-4 text-muted-foreground" aria-live="polite">
+    <div className={`flex items-center gap-x-1.5 text-[11px] leading-4 text-muted-foreground ${compact ? "min-w-0 flex-nowrap overflow-hidden whitespace-nowrap" : "mt-1 flex-wrap"}`} aria-live="polite">
       {error ? <span role="alert">{error}</span> : session ? (
         <>
           <AgentIdentity label={session.title} {...(session.source ? { provider: session.source } : {})} {...(session.model ? { model: session.model } : {})} />
@@ -84,21 +86,24 @@ export function DeliveryTargetLine({ state }: { state: DeliveryPreviewState }) {
   );
 }
 
-export function DraftDeliveryPreview({ body, mentionId, defaultState, ...options }: {
+export function DraftDeliveryPreview({ body, mentionId, explicitSessionId, defaultState, compact, ...options }: {
+  compact?: boolean;
   client: GavelClient;
   page: PageRef | undefined;
   sessionId: string | undefined;
   revision: unknown;
   body: string;
   mentionId?: string;
+  explicitSessionId?: string;
   defaultState: DeliveryPreviewState;
 }) {
-  const override = mentionId !== undefined || body.includes("@");
+  const override = explicitSessionId !== undefined || mentionId !== undefined || body.includes("@");
   const draft = useDeliveryPreview({
     ...options,
     page: override ? options.page : undefined,
     ...(override ? { body } : {}),
     ...(mentionId ? { mentionId } : {}),
+    ...(explicitSessionId ? { explicitSessionId } : {}),
   });
-  return <DeliveryTargetLine state={override ? draft : defaultState} />;
+  return <DeliveryTargetLine state={override ? draft : defaultState} {...(compact ? { compact } : {})} />;
 }

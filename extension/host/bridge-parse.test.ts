@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { parseAnchors, parseFabPosition, parseHostState, parsePresentation, parseSelection, validateParentOrigin } from "./bridge-parse";
+import { parseAnchors, parseDraftBox, parseFabPosition, parseHostState, parsePresentation, parseSelection, validateParentOrigin } from "./bridge-parse";
 
 const element = { source: "https://example.com/", html: "<h1>Hi</h1>", pageUrl: "https://example.com/a" };
 
@@ -38,6 +38,9 @@ it("validates anchors, presentation, FAB position and the parent origin", () => 
   expect(() => parsePresentation("huge")).toThrow(/Invalid presentation/);
   expect(parseFabPosition({ x: 1, y: 2 })).toEqual({ x: 1, y: 2 });
   expect(() => parseFabPosition({ x: Number.NaN, y: 2 })).toThrow(/Invalid FAB position/);
+  expect(parseDraftBox({ type: "draft-box", left: 8, top: 40, width: 320 })).toEqual({ left: 8, top: 40, width: 320 });
+  expect(() => parseDraftBox({ left: 8, top: "40", width: 320 })).toThrow(/Invalid floating comment box/);
+  expect(() => parseDraftBox({ left: 8, top: 40, width: 0 })).toThrow(/Invalid floating comment box/);
   expect(() => validateParentOrigin("https://example.com")).not.toThrow();
   expect(() => validateParentOrigin("null")).not.toThrow();
   expect(() => validateParentOrigin("https://example.com/path")).toThrow(/Invalid parent origin/);

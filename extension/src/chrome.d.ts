@@ -12,7 +12,7 @@ declare namespace chrome {
     };
   }
   namespace tabs {
-    type Tab = { id?: number; windowId?: number; url?: string; active?: boolean };
+    type Tab = { id?: number; windowId?: number; url?: string; title?: string; active?: boolean };
     function query(query: { active?: boolean; currentWindow?: boolean }): Promise<Tab[]>;
     function create(options: { url: string }): Promise<Tab>;
     /** A data URL of the visible area of the window's active tab; needs the host permission for that tab's origin. */
@@ -24,9 +24,9 @@ declare namespace chrome {
     const onAlarm: Listener<[alarm: { name: string }]>;
   }
   namespace action {
-    function setBadgeText(details: { tabId: number; text: string }): Promise<void>;
-    function setBadgeBackgroundColor(details: { tabId: number; color: string }): Promise<void>;
-    function setTitle(details: { tabId: number; title: string }): Promise<void>;
+    function setBadgeText(details: { tabId?: number; text: string }): Promise<void>;
+    function setBadgeBackgroundColor(details: { tabId?: number; color: string }): Promise<void>;
+    function setTitle(details: { tabId?: number; title: string }): Promise<void>;
   }
   namespace scripting {
     type Target = { tabId: number };
@@ -38,7 +38,7 @@ declare namespace chrome {
     function request(permissions: { origins: string[] }): Promise<boolean>;
   }
   namespace storage {
-    type Area = { get(key: string): Promise<Record<string, unknown>>; set(items: Record<string, unknown>): Promise<void>; remove(key: string): Promise<void> };
+    type Area = { get(keys: string | string[]): Promise<Record<string, unknown>>; set(items: Record<string, unknown>): Promise<void>; remove(key: string): Promise<void> };
     const local: Area;
     const session: Area;
   }

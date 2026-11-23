@@ -15,9 +15,12 @@ export type MountHostOptions = {
   onOpenChange?: (open: boolean) => void;
   /** The user resized the hover popover. */
   onHoverSize?: (size: HoverSize) => void;
+  /** The floating comment card moved while its frame covers the viewport. */
+  onDraftBox?: (box: { left: number; top: number; width: number }) => void;
+  viewportRect?: (element: Element) => Pick<DOMRect, "left" | "top" | "width" | "height" | "bottom" | "right">;
 };
 
-export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition = () => {}, onOpenChange = () => {}, onHoverSize = () => {} }: MountHostOptions) {
+export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition = () => {}, onOpenChange = () => {}, onHoverSize = () => {}, onDraftBox = () => {}, viewportRect = element => element.getBoundingClientRect() }: MountHostOptions) {
   const root = document.createElement("div");
   root.id = "gavel-grabber";
   root.setAttribute("data-react-grab-ignore", "");
@@ -38,6 +41,7 @@ export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition
     :host(:not([data-mode=rail])) .resize { display: none; }
     :host([data-mode=compact]) iframe { inset: auto; border-radius: 10px; }
     :host([data-mode=draft]) iframe { inset: auto; border-radius: 10px; }
+    :host([data-mode=draft][data-overlay]) iframe { background: transparent; box-shadow: none; border-radius: 0; }
     .pin { position: absolute; pointer-events: auto; min-width: 22px; height: 22px; padding: 0 4px; border: 1px solid #fff; border-radius: 12px; color: white; background: #2563eb; font: 600 12px system-ui; cursor: pointer; transform: translate(-50%, -50%); }
     .highlight { position: absolute; border: 2px solid #2563eb; background: #2563eb18; box-sizing: border-box; pointer-events: none; }
     .error { position: absolute; top: 12px; left: 12px; max-width: 480px; padding: 12px; background: #fff; color: #991b1b; border: 1px solid currentColor; font: 14px system-ui; pointer-events: auto; }
@@ -68,7 +72,9 @@ export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition
   let previousMinimized = false;
   let draftAnchor: string | null = null;
   let draftHeight = 260;
-  let draftBox = { left: 8, top: 8, bottom: 8 };
+  let draftOverlay = false;
+  let draftBox = "";
+  let draftAnchorBox = { left: 8, top: 8, bottom: 8 };
   let dialogOpen = false;
   const movement = mountFabMovement(fab, position => { onPosition(position); schedule(); });
   let previousMode: Presentation = "compact";
@@ -83,6 +89,7 @@ export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition
   let lastState = "";
   let pending = 0;
   let onAnchors: (state: AnchorState[]) => void = () => {};
+  const resolveTarget = (anchor: string) => resolveAnchor(document.body, anchor, { frames: true });
 
   function recompute() {
     pending = 0;
@@ -95,17 +102,25 @@ export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition
       Object.assign(frame.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
       Object.assign(hover.handle.style, { left: `${left - 5}px`, top: `${top - 5}px` });
     }
+    const overlaid = mode === "draft" && draftOverlay && !dialogOpen;
+    root.toggleAttribute("data-overlay", overlaid);
+    if (!overlaid) draftBox = "";
     if (mode === "draft" && !dialogOpen) {
-      const target = draftAnchor ? resolveAnchor(document.body, draftAnchor) : null;
-      if (target) draftBox = target.getBoundingClientRect();
-      const position = draftPosition(draftBox, { width: window.innerWidth, height: window.innerHeight }, draftHeight);
-      for (const [key, value] of Object.entries(position)) frame.style.setProperty(key, `${value}px`);
+      const target = draftAnchor ? resolveTarget(draftAnchor) : null;
+      if (target) draftAnchorBox = viewportRect(target);
+      const position = draftPosition(draftAnchorBox, { width: window.innerWidth, height: window.innerHeight }, draftHeight);
+      if (overlaid) {
+        // The frame covers the viewport so the card's menus can extend past it; the card stays where it was.
+        Object.assign(frame.style, { left: "0px", top: "0px", width: "100vw", height: "100vh" });
+        const box = { left: position.left, top: position.top, width: position.width };
+        if (JSON.stringify(box) !== draftBox) { draftBox = JSON.stringify(box); onDraftBox(box); }
+      } else for (const [key, value] of Object.entries(position)) frame.style.setProperty(key, `${value}px`);
     }
     pins.replaceChildren();
     const states = anchors.map((anchor, index): AnchorState => {
-      const element = resolveAnchor(document.body, anchor);
+      const element = resolveTarget(anchor);
       if (!element) return { anchor, available: false, label: anchor };
-      const box = element.getBoundingClientRect();
+      const box = viewportRect(element);
       const pin = document.createElement("button");
       pin.className = "pin";
       pin.textContent = String(index + 1);
@@ -121,10 +136,10 @@ export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition
         label: describeElement(element),
       };
     });
-    const element = selected ? resolveAnchor(document.body, selected) : null;
+    const element = selected ? resolveTarget(selected) : null;
     highlight.hidden = !element;
     if (element) {
-      const box = element.getBoundingClientRect();
+      const box = viewportRect(element);
       Object.assign(highlight.style, {
         left: `${box.left}px`,
         top: `${box.top}px`,
@@ -167,6 +182,7 @@ export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition
   }
   const resume = () => { frame.hidden = minimized; fab.hidden = !minimized; schedule(); };
   function closeDraft() {
+    draftOverlay = false;
     if (previousMode === "rail") railLayout();
     else { mode = "compact"; root.setAttribute("data-mode", mode); onPresentation(mode); schedule(); }
     if (!previousMinimized) restore();
@@ -177,6 +193,7 @@ export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition
   return {
     root,
     frame,
+    reposition: schedule,
     restore,
     showRail,
     /** Opens the panel in the mode it was last shown in. */
@@ -224,7 +241,7 @@ export function mountHost({ frameUrl, focus, onWidth, onPresentation, onPosition
         schedule();
       } else closeDraft();
     },
-    draftSize(height: number) { draftHeight = height; schedule(); },
+    draftSize(height: number, overlay: boolean) { draftHeight = height; draftOverlay = overlay; schedule(); },
     layout(width: number, detail: boolean) {
       preferredWidth = width;
       maximized = detail;

@@ -63,6 +63,22 @@ it("replies on the thread root and deletes a reply through its root", async () =
   expect(calls.act).toHaveBeenLastCalledWith({ id: "c-1", version: 4, action: "delete" });
 });
 
+it("edits a root and a reply at the root's version, reloading after each edit", async () => {
+  const { client, calls } = fakeClient();
+  const { result } = await loaded(client);
+  const body = "Check the heading size";
+  const replyBody = "Heading size updated";
+
+  await act(() => result.current.edit(root.id, body));
+  await act(() => result.current.editReply(root.id, reply.id, replyBody));
+
+  expect(calls.act.mock.calls).toEqual([
+    [{ id: root.id, version: root.version, action: "edit", bodyMarkdown: body }],
+    [{ id: root.id, version: root.version, action: "edit-reply", messageId: reply.id, bodyMarkdown: replyBody }],
+  ]);
+  expect(calls.list).toHaveBeenCalledTimes(3);
+});
+
 it("decides a proposed patch through the thread root at the version it last saw, then refreshes", async () => {
   const { client, calls } = fakeClient();
   const { result } = await loaded(client);

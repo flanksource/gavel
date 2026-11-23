@@ -1,19 +1,18 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { NativeComment } from "../comments/gavel-projection";
 import { freshTarget } from "./agent-retry";
 import {
   GavelClient,
-  commentAgentFor,
   GavelError,
-  dataUrlBytes,
+  screenshotBase64,
   domSelector,
-  fetchRuntimeCatalog,
   listProjects,
   pageKey,
   pageTarget,
   parseSse,
   projectScope,
 } from "./gavel-client";
+import { fetchRuntimeCatalog } from "./runtime-catalog";
 
 const server = "http://localhost:9092";
 const page = { url: "https://example.com/docs?b=2&a=1#intro", title: "Docs" };
@@ -100,26 +99,34 @@ it("creates a human-review comment on the page target, carrying page, selector a
   } });
 });
 
-it("uploads a captured screenshot as an attachment at the created version and strips it from the stored element", async () => {
+it("creates the comment and screenshot in one idempotent request", async () => {
   const png = "data:image/png;base64,iVBORw0KGgo=";
-  const { calls, client } = fakeDashboard(json(native({ version: 1 })), json(native({ version: 2, attachments: [{ id: "a-9", name: "screenshot.png" }] })));
+  const { calls, client } = fakeDashboard(json(native({ version: 2, attachments: [{ id: "a-9", name: "screenshot.png" }] })));
   const element = { source: "s", html: "<h1/>", pageUrl: page.url, screenshot: { status: "captured" as const, dataUrl: png } };
   await client.create({ page, comment: { id: "req-2", body: "Look", createdAt: "t", author: null, anchor: "#hero" }, selection: { anchor: "#hero", label: "Hero", element } });
-  expect(JSON.stringify(calls[0]?.body)).not.toContain("iVBOR");
-  expect(calls[1]?.method).toBe("POST");
-  expect(calls[1]?.url.pathname).toBe("/api/v1/comments/c-1/attachments");
-  expect(Object.fromEntries(calls[1]?.url.searchParams ?? [])).toEqual({ name: "screenshot.png", expectedVersion: "1" });
-  expect(calls[1]?.headers["content-type"]).toBe("image/png");
-  const upload = calls[1]?.body as Uint8Array;
-  expect([...upload]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.body).toMatchObject({ requestId: "req-2", attachments: [{ filename: "screenshot.png", contentType: "image/png", data: "iVBORw0KGgo=" }] });
+  expect(JSON.stringify(calls[0]?.body)).not.toContain(png);
 });
 
-it("removes the incomplete comment when the screenshot upload fails and reports the upload error", async () => {
-  const { calls, client } = fakeDashboard(json(native({ version: 1 })), json({ error: "attachment too large" }, 413), json([native({ version: 2 })]));
+it("round-trips the framed anchor through the outer page's comment target", async () => {
+  const frameUrl = "https://example.com/iframe.html?id=git-gitpickers--docs";
+  const anchor = 'iframe:{"frames":[{"selector":"#preview","url":"' + frameUrl + '"}],"anchor":"#repository"}';
+  const element = { source: page.url, pageUrl: page.url, html: "<button>Repository</button>", locators: [{ kind: "css" as const, selector: "#repository" }] };
+  const { calls, client } = fakeDashboard(call => json(native(call.body as Partial<NativeComment>)), json({
+    data: [native({ content: { page, playground: { page: pageKey(page.url), anchor, element } } })],
+  }));
+  const created = await client.create({ page, comment: { id: "framed-comment", anchor, body: "Check this picker", createdAt: "2026-11-01T10:00:00Z", author: null }, selection: { anchor, label: "Repository", element } });
+  const [listed] = await client.list(page);
+  expect(calls[0]?.body).toMatchObject({ target: { uri: targetUri, selector: { anchor, locators: element.locators } }, content: { page, playground: { anchor, element } } });
+  expect([created, listed]).toEqual([expect.objectContaining({ anchor, element }), expect.objectContaining({ anchor, element })]);
+});
+
+it("surfaces a rejected screenshot from the atomic create", async () => {
+  const { calls, client } = fakeDashboard(json({ error: "attachment too large" }, 413));
   const element = { source: "s", html: "<h1/>", pageUrl: page.url, screenshot: { status: "captured" as const, dataUrl: "data:image/png;base64,iVBORw0KGgo=" } };
   await expect(client.create({ page, comment: { id: "req-3", body: "x", createdAt: "t", author: null, anchor: "#hero" }, selection: { anchor: "#hero", label: "Hero", element } })).rejects.toThrow(/attachment too large/);
-  expect(calls[2]?.url.pathname).toBe("/api/v1/comments/batch");
-  expect(calls[2]?.body).toEqual([{ id: "c-1", expectedVersion: 1, action: "delete" }]);
+  expect(calls).toHaveLength(1);
 });
 
 it("sends lifecycle actions with the expected version and reports gavel's refusal with the endpoint", async () => {
@@ -196,6 +203,59 @@ it("lists the scope's agent sessions, live and ended managed ones", async () => 
   expect(calls[0]?.url.searchParams.get("scope")).toBe(scope);
 });
 
+describe("starting a named session without a comment", () => {
+  const started = { id: "s-9", source: "claude", title: "gavel-localhost:9092-a1b2c3", inCmux: false, managed: true };
+
+  it("posts the page's target, the prefix, the default prompt and the chosen runtime and edits, and returns the session", async () => {
+    const { calls, client } = fakeDashboard(json(started, 201));
+    expect(await client.startSession({ page, prefix: " gavel-localhost:9092 ", runtime: codex, edits: "propose" })).toEqual(started);
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url.pathname).toBe("/api/v1/comments/agent-sessions");
+    expect(calls[0]?.body).toEqual({
+      scope, target: targetUri, prefix: "gavel-localhost:9092", prompt: "editor-comments",
+      runOptions: { spec: { model: "codex-example", effort: "high" }, presets: ["fast"] }, edits: "propose",
+    });
+  });
+
+  it("leaves out the runtime and edits it was not given, so gavel uses its defaults", async () => {
+    const { calls, client } = fakeDashboard(json(started, 201));
+    await client.startSession({ page, prefix: "gavel-global" });
+    expect(calls[0]?.body).toEqual({ scope, target: targetUri, prefix: "gavel-global", prompt: "editor-comments" });
+  });
+
+  it("refuses an empty prefix without calling gavel", async () => {
+    const { calls, client } = fakeDashboard();
+    await expect(client.startSession({ page, prefix: "  " })).rejects.toThrow(/name prefix/);
+    expect(calls).toEqual([]);
+  });
+
+  it("reports gavel's rejection with its status", async () => {
+    const { client } = fakeDashboard(json({ error: "prefix is required" }, 400));
+    const failed = client.startSession({ page, prefix: "x" });
+    await expect(failed).rejects.toBeInstanceOf(GavelError);
+    await expect(failed).rejects.toThrow(/prefix is required.*HTTP 400/);
+  });
+
+  it("accepts a session that ended before gavel learned its source, as gavel lists ended managed sessions", async () => {
+    // Captain reports a session's id and model when it starts, but not its source.
+    const ended = { id: "s-9", source: "", title: "gavel-localhost:9092-a1b2c3", model: "claude-example", status: "ended", inCmux: false, managed: true, resumable: true };
+    const { client } = fakeDashboard(json(ended, 201));
+    expect(await client.startSession({ page, prefix: "gavel-localhost:9092" })).toEqual(ended);
+  });
+
+  it.each([
+    { name: "a session without an id", body: { source: "claude", title: "t", inCmux: false } },
+    { name: "a session without a title", body: { id: "s-1", source: "claude", inCmux: false } },
+    { name: "a session whose source is not a string", body: { id: "s-1", title: "t", source: null, inCmux: false } },
+    { name: "a session without inCmux", body: { id: "s-1", source: "claude", title: "t" } },
+    { name: "a list instead of a session", body: [started] },
+    { name: "null", body: null },
+  ])("refuses $name", async ({ body }) => {
+    const { client } = fakeDashboard(json(body, 201));
+    await expect(client.startSession({ page, prefix: "x" })).rejects.toThrow(/invalid started session/);
+  });
+});
+
 it("delivers several threads to one target in one request and projects the updated threads", async () => {
   const sent = (id: string) => native({ id, version: 2, content: { playground: { page: pageKey(page.url) }, page, agentRun: { sessionId: "s-1", requestedAt: "2026-11-01T10:02:00Z", state: "sent" } } });
   const { calls, client } = fakeDashboard(json([sent("c-1"), sent("c-2")]));
@@ -223,7 +283,7 @@ it("reads and saves the page's comment agent through gavel's settings, never nam
   const resolved = { settings: { positions: [], layers: [], provenance: {} }, agent: { agent: { enabled: true, prompt: "editor-comments" }, provenance: {}, found: true } };
   const { calls, client } = fakeDashboard(json(resolved), json(resolved), json(resolved));
   expect(await client.commentAgent(page)).toEqual(resolved);
-  const agent = commentAgentFor(client.runTarget({ page, runtime: codex, prompt: "web-page-comments" }));
+  const agent = { enabled: true, prompt: "web-page-comments", presets: ["fast"], spec: { model: "codex-example", effort: "high" }, group: targetUri };
   expect(await client.saveCommentAgent({ page, layer: { kind: "project" }, agent })).toEqual(resolved);
   await client.saveCommentAgent({ page, layer: { kind: "project" }, agent: null });
   expect(`${calls[0]?.url.pathname}?${calls[0]?.url.searchParams.toString()}`).toBe(`/api/v1/comments/agent?${new URLSearchParams({ scope, uri: targetUri }).toString()}`);
@@ -239,11 +299,6 @@ it("reads and saves the page's comment agent through gavel's settings, never nam
   expect(calls[1]?.url.pathname).toBe("/api/v1/comments/agent");
   expect(JSON.stringify(calls[1]?.body)).not.toContain("sessionId");
   expect(calls[2]?.body).toEqual({ target: { scopeUri: scope, uri: targetUri }, layer: { kind: "project" }, page: true, agent: null });
-});
-
-it("derives the settings agent from a run target, carrying only what the run sets", () => {
-  expect(commentAgentFor({ kind: "run", prompt: "p" })).toEqual({ enabled: true, prompt: "p" });
-  expect(commentAgentFor({ kind: "run", prompt: "p", groupKey: "g", runOptions: { instructions: "be brief", variables: { a: 1 } } })).toEqual({ enabled: true, prompt: "p", group: "g", instructions: "be brief", variables: { a: 1 } });
 });
 
 it("reports a gavel host without comment agent settings with the endpoint", async () => {
@@ -274,9 +329,10 @@ it("streams events for the project scope from a cursor", async () => {
   expect(calls[0]?.url.pathname).toBe("/api/v1/comments/events");
 });
 
-it("decodes PNG data URLs and refuses anything else", () => {
-  expect([...dataUrlBytes("data:image/png;base64,iVBORw0KGgo=")]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  expect(() => dataUrlBytes("data:image/jpeg;base64,AAAA")).toThrow(/PNG/);
+it("accepts the base64 payload of PNG data URLs", () => {
+  expect(screenshotBase64("data:image/png;base64,iVBORw0KGgo=")).toBe("iVBORw0KGgo=");
+  expect(() => screenshotBase64("data:image/jpeg;base64,AAAA")).toThrow(/PNG/);
+  expect(() => screenshotBase64("data:image/png;base64,????")).toThrow(/base64/);
 });
 
 it("lists the dashboard's projects by name", async () => {
