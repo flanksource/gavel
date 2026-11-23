@@ -24,6 +24,7 @@
     "ai": "catalog:",
     "marked": "^15.0.12",
     "monaco-editor": "catalog:",
+    "monaco-yaml": "catalog:",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "streamdown": "catalog:",

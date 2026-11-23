@@ -1,8 +1,12 @@
+// Tests the embedded UI's assets are served where the page and bundle load them: the home-screen
+// icons and manifest, and the Monaco workers the bundle starts under /_assets/.
 package ui
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -59,5 +63,32 @@ func TestPageHTMLHomeScreenTags(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("pageHTML missing %q", want)
 		}
+	}
+}
+
+// The bundle starts its Monaco workers (the editor's, JSON's and YAML's) from URLs Vite builds
+// from its base; each must be served there, as JavaScript, or the YAML tab has no editor.
+func TestTheBundlesMonacoWorkersAreServedWhereItLoadsThem(t *testing.T) {
+	entry, err := fs.ReadFile(distFS, "dist/prui.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workers := regexp.MustCompile(`new Worker\("([^"]+)"`).FindAllStringSubmatch(string(entry), -1)
+	if len(workers) != 3 {
+		t.Fatalf("got %d workers in prui.js, want the editor's, JSON's and YAML's", len(workers))
+	}
+	s := NewServer(gavelctx.New(t.Context()), 0, github.Options{}, SearchConfig{})
+	for _, worker := range workers {
+		url := worker[1]
+		t.Run(url, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status: got %d want 200", rec.Code)
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+				t.Fatalf("content-type: got %q want javascript", ct)
+			}
+		})
 	}
 }

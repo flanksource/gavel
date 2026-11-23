@@ -51,6 +51,9 @@ catalogs:
     monaco-editor:
       specifier: 0.48.0
       version: 0.48.0
+    monaco-yaml:
+      specifier: 5.1.1
+      version: 5.1.1
     oxlint:
       specifier: ^1.71.0
       version: 1.71.0
@@ -126,6 +129,9 @@ importers:
       monaco-editor:
         specifier: 'catalog:'
         version: 0.48.0
+      monaco-yaml:
+        specifier: 'catalog:'
+        version: 5.1.1(monaco-editor@0.48.0)
       react:
         specifier: ^19.2.7
         version: 19.2.7

@@ -32,6 +32,9 @@ export default defineConfig(({ command }) => {
   const clicky = localClicky(resolve(here, '../..'), 'pr/ui');
 
   return {
+    // The Go server serves the built bundle under /_assets/ (handler.go assetsHandler), so a
+    // URL the bundle builds for an emitted file, such as a Monaco worker, starts there.
+    ...(command === 'build' ? { base: '/_assets/' } : {}),
     plugins: [react(), tailwindcss()],
     resolve: {
       dedupe: ['react', 'react-dom', '@tanstack/react-query', '@flanksource/clicky-ui'],
