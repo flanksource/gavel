@@ -56,21 +56,17 @@ func (s *Server) connectionPRAt(url string) (github.PRListItem, bool) {
 	return github.PRListItem{}, false
 }
 
-// autoMergeRefusals say why the dashboard offers no auto-merge for each connection provider's pull
+// autoMergeRefusals say why the dashboard offers no auto-merge for a connection provider's pull
 // requests.
 var autoMergeRefusals = map[string]string{
-	types.PRProviderAzure:  "auto-merge isn't offered for Azure DevOps pull requests: completing one waits on its policies already",
 	types.PRProviderGitLab: "auto-merge isn't offered for GitLab pull requests from the dashboard",
 }
 
 // mergeConnectionPR completes pr, the head that was reviewed, through its remote with the method
-// asked. There is no auto-merge: Azure DevOps queues completion behind the base's policies itself.
+// asked; auto-merge has the provider complete it once the base's policies pass (Azure DevOps
+// auto-complete).
 func (s *Server) mergeConnectionPR(w http.ResponseWriter, r *http.Request, pr github.PRListItem, input model.MergeInput) {
-	if input.Auto {
-		refusal, ok := autoMergeRefusals[pr.Provider]
-		if !ok {
-			refusal = fmt.Sprintf("auto-merge isn't offered for %s pull requests", pr.Provider)
-		}
+	if refusal, refused := autoMergeRefusals[pr.Provider]; input.Auto && refused {
 		writeJSONError(w, http.StatusBadRequest, errors.New(refusal))
 		return
 	}
@@ -80,12 +76,18 @@ func (s *Server) mergeConnectionPR(w http.ResponseWriter, r *http.Request, pr gi
 	}
 	remote, err := s.prRemote(r.Context(), pr)
 	if err == nil {
-		merger, ok := remote.Provider.(git.PullRequestMerger)
-		if !ok {
+		options := git.MergePullRequestOptions{Method: git.MergeMethod(input.Method), HeadSHA: input.HeadSHA}
+		merger, canMerge := remote.Provider.(git.PullRequestMerger)
+		autoMerger, canAutoMerge := remote.Provider.(git.PullRequestAutoMerger)
+		switch {
+		case input.Auto && !canAutoMerge:
+			err = fmt.Errorf("auto-merge isn't offered for %s pull requests", pr.Provider)
+		case input.Auto:
+			err = autoMerger.AutoMergePullRequest(r.Context(), remote.URL, pr.Number, options)
+		case !canMerge:
 			err = fmt.Errorf("%s pull requests can't be merged from the dashboard", pr.Provider)
-		} else {
-			err = merger.MergePullRequest(r.Context(), remote.URL, pr.Number,
-				git.MergePullRequestOptions{Method: git.MergeMethod(input.Method), HeadSHA: input.HeadSHA})
+		default:
+			err = merger.MergePullRequest(r.Context(), remote.URL, pr.Number, options)
 		}
 	}
 	if err != nil {

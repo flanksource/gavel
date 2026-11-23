@@ -170,14 +170,25 @@ func TestTheDashboardServesAnAzurePullRequestsDetailThroughItsRemote(t *testing.
 }
 
 func TestTheDashboardMergesAnAzurePullRequestThroughItsRemote(t *testing.T) {
+	const me = "8f1c2a8e-6b2d-4c1f-9a77-2f6f0b8d5e11"
 	var completion map[string]any
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch || r.URL.Path != "/acme/Platform/_apis/git/repositories/rules/pullrequests/9" {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/acme/_apis/connectionData":
+			_, _ = w.Write([]byte(`{"authenticatedUser":{"id":"` + me + `"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/acme/Platform/_apis/git/repositories/rules/pullrequests/9":
+			_, _ = w.Write([]byte(`{"pullRequestId":9,"status":"active","lastMergeSourceCommit":{"commitId":"` + azureHead + `"}}`))
+		case r.Method == http.MethodPatch && r.URL.Path == "/acme/Platform/_apis/git/repositories/rules/pullrequests/9":
+			completion = nil
+			_ = json.NewDecoder(r.Body).Decode(&completion)
+			if _, auto := completion["autoCompleteSetBy"]; auto {
+				_, _ = w.Write([]byte(`{"pullRequestId":9,"status":"active","autoCompleteSetBy":{"id":"` + me + `"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"pullRequestId":9,"status":"completed"}`))
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		_ = json.NewDecoder(r.Body).Decode(&completion)
-		_, _ = w.Write([]byte(`{"pullRequestId":9,"status":"completed"}`))
 	}))
 	t.Cleanup(server.Close)
 	s := NewServer(gavelctx.New(t.Context()), 0, github.Options{}, SearchConfig{})
@@ -196,8 +207,10 @@ func TestTheDashboardMergesAnAzurePullRequestThroughItsRemote(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	s.handlePRMerge(recorder, httptest.NewRequest(http.MethodPost, "/api/prs/merge",
 		strings.NewReader(`{"url":"`+prURL+`","method":"squash","auto":true,"headSha":"`+azureHead+`"}`)))
-	assert.Equal(t, http.StatusBadRequest, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), "auto-merge isn't offered for Azure DevOps pull requests")
+	require.Equal(t, http.StatusOK, recorder.Code, "auto-merge sets auto-complete: %s", recorder.Body.String())
+	assert.Equal(t, map[string]any{"id": me}, completion["autoCompleteSetBy"], "as the connection's identity")
+	assert.Equal(t, "squash", completion["completionOptions"].(map[string]any)["mergeStrategy"])
+	assert.NotContains(t, completion, "status", "auto-complete leaves the pull request active until its policies pass")
 }
 
 func TestTheDashboardApprovesAnAzurePullRequestAsItsConnection(t *testing.T) {

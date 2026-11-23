@@ -1,3 +1,5 @@
+// A pull request's actions: approve, merge with a strategy, auto-merge (GitHub auto-merge or Azure
+// DevOps auto-complete), update-branch and AI rebase, each confirmed in a dialog first.
 import { useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { SessionTail } from '@flanksource/clicky-ui/ai';
@@ -91,10 +93,12 @@ export function PRActions({
   const submittingRef = useRef(false);
 
   const info = detail?.pr;
-  // A pull request a git connection brings (Azure DevOps, GitLab) has no GitHub node ID, auto-merge
-  // or update-branch; GitLab rebases in a request of its own, so it merges with a merge commit.
+  // A pull request a git connection brings (Azure DevOps, GitLab) has no GitHub node ID or
+  // update-branch; Azure DevOps auto-merges through auto-complete, GitLab not at all. GitLab
+  // rebases in a request of its own, so it merges with a merge commit.
   const connection = !!info?.provider && info.provider !== 'github';
   const gitlab = info?.provider === 'gitlab';
+  const azure = info?.provider === 'azuredevops';
   const defaultMethod = gitlab ? 'merge' : 'rebase';
   const nodeId = info?.nodeId;
   const state = (info?.state || pr.state || '').toUpperCase();
@@ -156,12 +160,12 @@ export function PRActions({
       label: menuLabel(UiGitGraph, 'Create a merge commit'),
       onSelect: () => open({ type: 'merge', method: 'merge' }),
     },
-    ...(!connection ? [{
+    ...(!connection || azure ? [{
       label: menuLabel(UiRocket, 'Enable auto-merge (rebase)'),
-      title: 'Merge automatically once all required checks pass',
+      title: azure ? 'Complete automatically once its branch policies pass' : 'Merge automatically once all required checks pass',
       onSelect: () => open({ type: 'automerge', method: 'rebase' }),
-    },
-    {
+    }] : []),
+    ...(!connection ? [{
       label: menuLabel(UiSync, 'Update branch'),
       title: `Rebase this PR's branch onto ${base} to bring it up to date`,
       onSelect: () => open({ type: 'update-branch' }),
@@ -232,7 +236,7 @@ export function PRActions({
     actionMutation.mutate({ pending, comment: comment.trim() });
   }
 
-  const copy = modalCopy(pending, pr, base);
+  const copy = modalCopy(pending, pr, base, azure);
 
   // Nothing to render for a merged/closed PR with no extra actions.
   if (menuItems.length === 0) return null;
@@ -440,7 +444,7 @@ function submitAction(pr: PRItem, nodeId: string | undefined, headSha: string | 
   });
 }
 
-function modalCopy(pending: Pending | null, pr: PRItem, base: string): { title: string; confirmLabel: string; description: string } {
+function modalCopy(pending: Pending | null, pr: PRItem, base: string, azure: boolean): { title: string; confirmLabel: string; description: string } {
   const ref = `${pr.repo}#${pr.number}`;
   if (!pending) return { title: '', confirmLabel: '', description: '' };
   switch (pending.type) {
@@ -454,7 +458,9 @@ function modalCopy(pending: Pending | null, pr: PRItem, base: string): { title: 
       return {
         title: 'Enable auto-merge',
         confirmLabel: 'Enable auto-merge',
-        description: `Auto-merge ${ref} into ${base} with a ${pending.method} merge once all required checks pass.`,
+        description: azure
+          ? `Auto-complete ${ref} into ${base} with a ${pending.method} merge once its branch policies pass.`
+          : `Auto-merge ${ref} into ${base} with a ${pending.method} merge once all required checks pass.`,
       };
     case 'approve':
       return {

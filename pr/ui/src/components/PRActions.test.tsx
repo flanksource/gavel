@@ -103,7 +103,7 @@ describe('PRActions responsive collapse', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderActions({ pr: makePR({ number: 27, repo: 'acme/product/service', url }), detail: { pr: { provider: 'azuredevops', state: 'OPEN', headRefOid: 'reviewed-head' } } as PRDetail });
     expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Enable auto-merge (rebase)' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Enable auto-merge (rebase)' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Update branch' })).toBeNull();
     expect((screen.getByRole('button', { name: 'Merge' }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
@@ -112,6 +112,20 @@ describe('PRActions responsive collapse', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/prs/merge', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, method: 'rebase', auto: false, headSha: 'reviewed-head' }),
+    }));
+  });
+
+  it("enables an Azure pull request's auto-complete once its branch policies pass", async () => {
+    const url = 'https://dev.azure.com/acme/product/_git/service/pullrequest/27';
+    const fetchMock = vi.fn(async () => new Response('{"status":"ok"}'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderActions({ pr: makePR({ number: 27, repo: 'acme/product/service', url, provider: 'azure' }), detail: { pr: { provider: 'azuredevops', state: 'OPEN', headRefOid: 'reviewed-head' } } as PRDetail });
+    fireEvent.click(screen.getByRole('button', { name: 'Enable auto-merge (rebase)' }));
+    expect(screen.getByText(/once its branch policies pass/)).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Enable auto-merge' }).at(-1)!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/prs/merge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, method: 'rebase', auto: true, headSha: 'reviewed-head' }),
     }));
   });
 
