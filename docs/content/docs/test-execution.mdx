@@ -81,6 +81,19 @@ gavel test --pr 12
 
 A test baseline marks matching existing failures as baseline passes so only new failures remain actionable. Use `--failed <snapshot>` without baseline suppression when checking whether a known failure has been repaired. Preserve a snapshot before running another command if you need a stable comparison, since the latest-run pointer changes as runs finish. See [Reporting](/docs/reporting).
 
+## Local results cache
+
+Gavel automatically writes finished test and lint snapshots of at least `64KB` as `.json.zst`. Set `gavel.compress.threshold` to another byte size, or set `gavel.compress.default` to `gzip` for `.json.gz` or `none` for plain JSON. History, `--failed`, `--baseline`, and `gavel ui serve` read all three formats.
+
+```bash
+gavel cache
+gavel cache compress
+gavel cache compress -P gavel.compress.default=gzip -P gavel.compress.threshold=128KB
+gavel cache cleanup --age 30d --age 10MB:10d
+```
+
+`gavel cache` shows the workspace's `.gavel` location and total file size. `compress` applies the configured format and threshold to existing plain JSON snapshots and preserves their modification times. The cleanup example removes settled snapshots older than 30 days or files at least 10 MB on disk that are older than 10 days. Cleanup keeps in-flight snapshots and results referenced by `last.json` or a branch pointer.
+
 ## Parallelism and deadlines
 
 `--concurrency` controls concurrent non-Go test commands. Go and Ginkgo packages share one `go test` command by default; Ginkgo `--nodes > 1` is unsupported. Bound the entire run and individual invocations separately:

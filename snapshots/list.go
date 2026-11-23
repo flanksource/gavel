@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,15 +70,20 @@ func LastRun(workDir string) (*RunInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", Location(workDir, PointerLast+".json"), err)
 	}
-	snap, err := loadRun(store, workDir, key)
+	name, data, err := readSnapshot(store, key)
+	if err != nil {
+		return nil, err
+	}
+	location := Location(workDir, name)
+	snap, err := decodeSnapshot(data, location)
 	if err != nil {
 		return nil, err
 	}
 	var modTime time.Time
-	if objects, err := store.List(context.Background(), key); err == nil && len(objects) > 0 {
+	if objects, err := store.List(context.Background(), name); err == nil && len(objects) > 0 {
 		modTime = objects[0].ModTime
 	}
-	info := runInfo(*snap, PointerLast+".json", Location(workDir, key), runStartTime(*snap, PointerLast+".json", modTime))
+	info := runInfo(*snap, PointerLast+".json", location, runStartTime(*snap, PointerLast+".json", modTime))
 	return &info, nil
 }
 
@@ -121,7 +125,7 @@ func ListRuns(workDir string, opts ListRunsOptions) ([]RunInfo, error) {
 		if opts.Limit > 0 && len(runs) >= opts.Limit {
 			break
 		}
-		if opts.Before != "" && strings.TrimSuffix(object.Key, ".json") >= opts.Before {
+		if opts.Before != "" && SnapshotStem(object.Key) >= opts.Before {
 			continue
 		}
 		// Decide the cutoff from the listing before reading the snapshot. A run
@@ -195,11 +199,19 @@ func runObjects(store blob.Store) ([]blob.Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	var runs []blob.Object
+	byID := make(map[string]blob.Object)
 	for _, object := range objects {
-		if strings.Contains(object.Key, "/") || !strings.HasSuffix(object.Key, ".json") {
+		id := SnapshotStem(object.Key)
+		if !validRunID(id) {
 			continue
 		}
+		existing, ok := byID[id]
+		if !ok || object.ModTime.After(existing.ModTime) || object.ModTime.Equal(existing.ModTime) && object.Key > existing.Key {
+			byID[id] = object
+		}
+	}
+	runs := make([]blob.Object, 0, len(byID))
+	for _, object := range byID {
 		runs = append(runs, object)
 	}
 	sort.Slice(runs, func(i, j int) bool {
@@ -215,7 +227,7 @@ func runObjects(store blob.Store) ([]blob.Object, error) {
 
 func newerRun(a, b RunInfo) bool {
 	if a.Started.Equal(b.Started) {
-		return a.Path > b.Path
+		return SnapshotStem(a.Path) > SnapshotStem(b.Path)
 	}
 	return a.Started.After(b.Started)
 }
@@ -278,7 +290,7 @@ func LatestRuns(workDir string) ([]string, error) {
 }
 
 func runFilenameOrder(path string) (string, int) {
-	stem := strings.TrimSuffix(path, ".json")
+	stem := SnapshotStem(path)
 	separator := strings.LastIndexByte(stem, '-')
 	sequence, err := strconv.Atoi(stem[separator+1:])
 	if err != nil {
@@ -291,7 +303,7 @@ func runFilenameOrder(path string) (string, int) {
 // decoding into empty element types so the test tree and violations are
 // skipped rather than materialised.
 func runContents(store blob.Store, workDir, key string) (hasTests, hasLint bool, err error) {
-	data, err := readKey(store, key)
+	_, data, err := readSnapshot(store, key)
 	if err != nil {
 		return false, false, fmt.Errorf("read run snapshot %s: %w", Location(workDir, key), err)
 	}
@@ -320,36 +332,32 @@ func LoadRun(workDir, runID string) (*testui.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read run snapshot %s: %w", runID, err)
 	}
-	var snap testui.Snapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("decode run snapshot %s: %w", runID, err)
-	}
-	return &snap, nil
+	return decodeSnapshot(data, runID)
 }
 
 // LoadRunFile decodes the run snapshot at path, a local file such as the
 // Location SavePerRun returns for a workspace without blob storage; a
 // blob-backed run is read with LoadRun.
 func LoadRunFile(path string) (*testui.Snapshot, error) {
-	data, err := os.ReadFile(path)
+	data, err := ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read run snapshot %s: %w", path, err)
 	}
-	var snap testui.Snapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("decode run snapshot %s: %w", path, err)
-	}
-	return &snap, nil
+	return decodeSnapshot(data, path)
 }
 
 func loadRun(store blob.Store, workDir, key string) (*testui.Snapshot, error) {
-	data, err := readKey(store, key)
+	name, data, err := readSnapshot(store, key)
 	if err != nil {
 		return nil, fmt.Errorf("read run snapshot %s: %w", Location(workDir, key), err)
 	}
+	return decodeSnapshot(data, Location(workDir, name))
+}
+
+func decodeSnapshot(data []byte, location string) (*testui.Snapshot, error) {
 	var snap testui.Snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("decode run snapshot %s: %w", Location(workDir, key), err)
+		return nil, fmt.Errorf("decode run snapshot %s: %w", location, err)
 	}
 	return &snap, nil
 }
@@ -360,7 +368,7 @@ func runInfo(snap testui.Snapshot, name, path string, started time.Time) RunInfo
 	sum := leafSum(snap.Tests)
 
 	info := RunInfo{
-		RunID:   strings.TrimSuffix(name, ".json"),
+		RunID:   SnapshotStem(name),
 		Path:    path,
 		Started: started,
 		Passed:  sum.Passed,
@@ -430,7 +438,7 @@ func runStartTime(snap testui.Snapshot, name string, modTime time.Time) time.Tim
 	if snap.Metadata != nil && !snap.Metadata.Started.IsZero() {
 		return snap.Metadata.Started.UTC()
 	}
-	stem := strings.TrimSuffix(strings.TrimPrefix(name, PerRunPrefix), ".json")
+	stem := strings.TrimPrefix(SnapshotStem(name), PerRunPrefix)
 	if ts, err := time.Parse(PerRunTimestampLayout, stem); err == nil {
 		return ts.UTC()
 	}

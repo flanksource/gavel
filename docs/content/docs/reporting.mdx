@@ -45,17 +45,18 @@ The [Verification](/docs/verification) contract has its own exit semantics: an e
 
 ## Saved run history
 
-Completed runs save snapshots under `.gavel/run-*.json`. `.gavel/last.json` is a pointer with `path`, `sha`, and `uncommitted` metadata; follow `path` before parsing results:
+Completed runs save plain JSON, gzip, or Zstandard snapshots under `.gavel`. Follow the `path` in `.gavel/last.json` to inspect or copy the latest result. Preserve the file extension when copying a snapshot.
 
 ```bash
 GAVEL_SNAPSHOT="$(jq -r '.path' .gavel/last.json)"
-jq '.tests[] | select(.failed) | .name' "$GAVEL_SNAPSHOT"
-cp "$GAVEL_SNAPSHOT" .tmp/previous.json
+gavel summary --input "$GAVEL_SNAPSHOT"
+mkdir -p .tmp
+cp "$GAVEL_SNAPSHOT" ".tmp/$(basename "$GAVEL_SNAPSHOT")"
 gavel test history
 gavel test --failed
 ```
 
-`test history` aggregates execution count, pass rate, durations, and last pass/fail times. Bare `--failed` follows the latest pointer automatically. Explicit `--failed <file>` and `--baseline <file>` expect snapshot objects; resolve a pointer first. The copied `.tmp/previous.json` is suitable for subsequent test or lint selection according to the evidence it contains. A standalone lint JSON array is useful for analysis but cannot replace this snapshot.
+`test history` aggregates execution count, pass rate, durations, and last pass/fail times. Bare `--failed` follows the latest pointer automatically. Pass the copied snapshot to `--failed <file>` or `--baseline <file>` for future test or lint selection. See [Local results cache](/docs/test-execution#local-results-cache) for compression and cleanup settings.
 
 ## Control terminal detail
 

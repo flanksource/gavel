@@ -1,12 +1,11 @@
 package baseline
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -27,15 +26,11 @@ type ViolationKey struct {
 }
 
 func LoadSnapshot(path string) (*testui.Snapshot, error) {
-	data, err := os.ReadFile(path)
+	snapshot, err := snapshots.LoadRunFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading baseline %s: %w", path, err)
+		return nil, fmt.Errorf("load baseline: %w", err)
 	}
-	var snapshot testui.Snapshot
-	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return nil, fmt.Errorf("parsing baseline %s: %w", path, err)
-	}
-	return &snapshot, nil
+	return snapshot, nil
 }
 
 func ExtractFailedTestKeys(tests []parsers.Test) map[TestKey]bool {

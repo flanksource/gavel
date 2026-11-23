@@ -2,7 +2,6 @@ package types
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -56,7 +55,7 @@ func saveRunArtifact(opts runArtifactOptions) (*fixtures.RunArtifact, error) {
 
 	sum := parsers.Tests(opts.Tests).Sum()
 	artifact := &fixtures.RunArtifact{
-		RunID:   strings.TrimSuffix(filepath.Base(path), ".json"),
+		RunID:   snap.Metadata.SavedRun,
 		Path:    path,
 		Kind:    opts.Kind,
 		Total:   sum.Total,

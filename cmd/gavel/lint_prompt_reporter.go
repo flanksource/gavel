@@ -39,7 +39,6 @@ type promptLintReporter struct {
 	options    promptLintReportOptions
 	exclusions linters.RuleExclusions
 	snapshot   testui.Snapshot
-	path       string
 	seen       map[promptFindingKey]bool
 	errors     map[string]string
 	err        error
@@ -64,8 +63,7 @@ func newPromptLintReporter(options promptLintReportOptions) (*promptLintReporter
 			Lint:     []*linters.LinterResult{},
 		},
 	}
-	reporter.path, err = snapshots.SavePerRun(options.Options.Dirs.StateRoot, &reporter.snapshot, reporter.snapshot.Metadata.Started, "")
-	if err != nil {
+	if _, err := snapshots.SavePerRun(options.Options.Dirs.StateRoot, &reporter.snapshot, reporter.snapshot.Metadata.Started, ""); err != nil {
 		return nil, fmt.Errorf("create prompt lint snapshot: %w", err)
 	}
 	return reporter, nil
@@ -102,7 +100,7 @@ func (r *promptLintReporter) UpsertLintResult(result *linters.LinterResult) {
 		}
 		r.snapshot.Lint[index] = result
 	}
-	err = snapshots.WriteSnapshot(r.path, &r.snapshot)
+	err = snapshots.UpdatePerRun(r.options.Options.Dirs.StateRoot, &r.snapshot)
 	if err == nil && r.options.Publisher != nil {
 		r.options.Publisher.UpsertLintResult(result)
 	}
@@ -124,7 +122,7 @@ func (r *promptLintReporter) RemoveLintResult(linter, workDir string) {
 	r.snapshot.Lint = slices.DeleteFunc(r.snapshot.Lint, func(result *linters.LinterResult) bool {
 		return result.Linter == linter && result.WorkDir == workDir
 	})
-	if err := snapshots.WriteSnapshot(r.path, &r.snapshot); err != nil {
+	if err := snapshots.UpdatePerRun(r.options.Options.Dirs.StateRoot, &r.snapshot); err != nil {
 		r.err = fmt.Errorf("remove prompt lint result: %w", err)
 		r.options.Cancel(r.err)
 		return
@@ -242,7 +240,7 @@ func (r *promptLintReporter) Finish(results []*linters.LinterResult, runErr erro
 	if cause := errors.Join(runErr, r.err); cause != nil {
 		r.snapshot.Error = cause.Error()
 	}
-	writeErr := snapshots.WriteSnapshot(r.path, &r.snapshot)
+	writeErr := snapshots.UpdatePerRun(r.options.Options.Dirs.StateRoot, &r.snapshot)
 	if writeErr == nil && r.snapshot.Git != nil && r.snapshot.Git.SHA != "" {
 		_, writeErr = snapshots.Save(r.options.Options.Dirs.StateRoot, &r.snapshot)
 	}

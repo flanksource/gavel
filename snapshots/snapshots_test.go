@@ -169,7 +169,7 @@ func TestPointerRoundTripJSON(t *testing.T) {
 	assert.NotEmpty(t, p.Path)
 }
 
-func initRepo(t *testing.T) string {
+func initRepo(t testing.TB) string {
 	t.Helper()
 	dir := t.TempDir()
 	run := func(args ...string) {

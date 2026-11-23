@@ -207,7 +207,7 @@ func pointerRunID(pointer *snapshots.Pointer) string {
 	if pointer == nil || strings.TrimSpace(pointer.Path) == "" {
 		return ""
 	}
-	stem := strings.TrimSuffix(filepath.Base(pointer.Path), ".json")
+	stem := snapshots.SnapshotStem(filepath.Base(pointer.Path))
 	if stem == "" || stem == snapshots.PointerLast {
 		return ""
 	}

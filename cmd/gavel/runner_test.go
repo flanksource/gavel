@@ -3,6 +3,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -108,6 +109,13 @@ func TestRunnerExecRunsTheJobAndPostsItsResults(t *testing.T) {
 		ran = append([]string{name}, args...)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".gavel"), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel", "run-2026-10-15T09-00-00Z.json"), []byte(`{"tests":[]}`), 0o644))
+		file, err := os.Create(filepath.Join(dir, ".gavel", "run-2026-10-15T09-01-00Z.json.gz"))
+		require.NoError(t, err)
+		compressed := gzip.NewWriter(file)
+		_, err = io.WriteString(compressed, `{"lint":[]}`)
+		require.NoError(t, err)
+		require.NoError(t, compressed.Close())
+		require.NoError(t, file.Close())
 		return 1, nil
 	}
 	code, err := runnerExec(context.Background(), runnerOptions{Run: run.String(), Workspace: workspace, Getenv: runnerEnv(server.URL, "run-token", run), Command: command, Output: io.Discard})
@@ -115,7 +123,7 @@ func TestRunnerExecRunsTheJobAndPostsItsResults(t *testing.T) {
 	assert.Equal(t, 1, code, "the job's exit code")
 	gavel, _ := os.Executable()
 	assert.Equal(t, []string{gavel, "test", "--work-dir", filepath.Join(workspace, "src"), "./..."}, ran)
-	assert.Equal(t, []string{`{"tests":[]}`}, api.results)
+	assert.Equal(t, []string{`{"tests":[]}`, `{"lint":[]}`}, api.results)
 }
 
 // sourceCheckout is a checkout, on a branch of its own, of the first of two commits of README.md,

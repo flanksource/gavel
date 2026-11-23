@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/snapshots"
@@ -27,6 +28,7 @@ var _ = Describe("Prompt lint reporter", func() {
 	var ctx context.Context
 	var cancel context.CancelCauseFunc
 	var reporter *promptLintReporter
+	var path string
 	var finding models.Violation
 
 	BeforeEach(func() {
@@ -40,13 +42,14 @@ var _ = Describe("Prompt lint reporter", func() {
 			Writer:  &output, Cancel: cancel,
 		})
 		Expect(err).NotTo(HaveOccurred())
+		path = filepath.Join(root, snapshots.Dir, reporter.snapshot.Metadata.SavedRun+".json")
 		finding = models.Violation{File: filepath.Join(root, "proposal.md"), Line: 1, Source: "prompt", Message: models.StringPtr("Explain the decision"), Severity: models.SeverityError}
 	})
 
 	It("saves each batch immediately and prints only new findings", func() {
 		result := &linters.LinterResult{Linter: "review", WorkDir: root, Status: linters.LinterStatusRunning, Violations: []models.Violation{finding, finding}}
 		reporter.UpsertLintResult(result)
-		live, err := snapshots.LoadRunFile(reporter.path)
+		live, err := snapshots.LoadRunFile(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(live.Status.Running).To(BeTrue())
 		Expect(live.Lint[0].Violations).To(HaveLen(1))
@@ -62,17 +65,32 @@ var _ = Describe("Prompt lint reporter", func() {
 		Expect(strings.Count(output.String(), *finalOnly.Message)).To(Equal(1))
 		paths, err := filepath.Glob(filepath.Join(root, ".gavel", "run-*.json"))
 		Expect(err).NotTo(HaveOccurred())
-		Expect(paths).To(Equal([]string{reporter.path}))
+		Expect(paths).To(Equal([]string{path}))
 	})
 
 	It("filters exclusions before writing snapshots or stderr", func() {
 		excluded := finding
 		excluded.Rule, excluded.Message = &models.Rule{Method: "excluded"}, models.StringPtr("Excluded finding")
 		reporter.UpsertLintResult(&linters.LinterResult{Linter: "review", WorkDir: root, Violations: []models.Violation{excluded, finding}})
-		snapshot, err := snapshots.LoadRunFile(reporter.path)
+		snapshot, err := snapshots.LoadRunFile(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(unfingerprinted(snapshot.Lint[0].Violations)).To(Equal([]models.Violation{finding}))
 		Expect(output.String()).NotTo(ContainSubstring(*excluded.Message))
+	})
+
+	It("keeps one saved run ID when the live snapshot settles into compressed history", func() {
+		properties.Set("gavel.compress.threshold", "0")
+		DeferCleanup(properties.Unset, "gavel.compress.threshold")
+		id := reporter.snapshot.Metadata.SavedRun
+		reporter.UpsertLintResult(&linters.LinterResult{Linter: "review", WorkDir: root, Violations: []models.Violation{finding}})
+		Expect(path).To(BeAnExistingFile())
+
+		final, err := reporter.Finish(nil, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(final.Metadata.SavedRun).To(Equal(id))
+		Expect(path).NotTo(BeAnExistingFile())
+		Expect(path + ".zst").To(BeAnExistingFile())
+		Expect(snapshots.LoadRun(root, id)).To(Equal(final))
 	})
 
 	It("preserves findings when concurrent cumulative updates arrive out of order", func() {
@@ -82,7 +100,7 @@ var _ = Describe("Prompt lint reporter", func() {
 		reporter.UpsertLintResult(result)
 		result.Violations = []models.Violation{finding}
 		reporter.UpsertLintResult(result)
-		snapshot, err := snapshots.LoadRunFile(reporter.path)
+		snapshot, err := snapshots.LoadRunFile(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(unfingerprinted(snapshot.Lint[0].Violations)).To(Equal([]models.Violation{finding, second}))
 		Expect(strings.Count(output.String(), *second.Message)).To(Equal(1))
@@ -92,7 +110,7 @@ var _ = Describe("Prompt lint reporter", func() {
 		reporter.UpsertLintResult(&linters.LinterResult{Linter: "review/lint", WorkDir: root, Status: linters.LinterStatusRunning})
 		reporter.UpsertLintResult(&linters.LinterResult{Linter: "review/json", WorkDir: root, Success: true, Violations: []models.Violation{finding}})
 		reporter.RemoveLintResult("review/lint", root)
-		snapshot, err := snapshots.LoadRunFile(reporter.path)
+		snapshot, err := snapshots.LoadRunFile(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(snapshot.Lint).To(HaveExactElements(HaveField("Linter", "review/json")))
 		Expect(output.String()).To(SatisfyAll(ContainSubstring("review/json"), ContainSubstring(*finding.Message)))
@@ -114,7 +132,7 @@ var _ = Describe("Prompt lint reporter", func() {
 		Expect(final.Status.Stopped).To(BeTrue())
 		Expect(final.Error).To(ContainSubstring("context canceled"))
 		Expect(unfingerprinted(final.Lint[0].Violations)).To(Equal([]models.Violation{finding}))
-		persisted, err := snapshots.LoadRunFile(reporter.path)
+		persisted, err := snapshots.LoadRunFile(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(persisted).To(Equal(final))
 	})
@@ -125,7 +143,7 @@ var _ = Describe("Prompt lint reporter", func() {
 		Expect(errors.Is(context.Cause(ctx), io.ErrClosedPipe)).To(BeTrue())
 		_, err := reporter.Finish(nil, context.Cause(ctx))
 		Expect(errors.Is(err, io.ErrClosedPipe)).To(BeTrue())
-		snapshot, err := snapshots.LoadRunFile(reporter.path)
+		snapshot, err := snapshots.LoadRunFile(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(snapshot.Status.Running).To(BeFalse())
 		Expect(unfingerprinted(snapshot.Lint[0].Violations)).To(Equal([]models.Violation{finding}))
@@ -133,16 +151,16 @@ var _ = Describe("Prompt lint reporter", func() {
 
 	It("surfaces a disk failure without corrupting the last valid snapshot", func() {
 		reporter.UpsertLintResult(&linters.LinterResult{Linter: "review", WorkDir: root, Violations: []models.Violation{finding}})
-		previous, err := os.ReadFile(reporter.path)
+		previous, err := os.ReadFile(path)
 		Expect(err).NotTo(HaveOccurred())
-		stateDir := filepath.Dir(reporter.path)
+		stateDir := filepath.Dir(path)
 		Expect(os.Chmod(stateDir, 0o500)).To(Succeed())
 		DeferCleanup(func() { Expect(os.Chmod(stateDir, 0o700)).To(Succeed()) })
 		reporter.RemoveLintResult("review", root)
 		Expect(context.Cause(ctx)).To(MatchError(ContainSubstring("remove prompt lint result")))
 		_, err = reporter.Finish(nil, context.Cause(ctx))
 		Expect(err).To(HaveOccurred())
-		persisted, err := os.ReadFile(reporter.path)
+		persisted, err := os.ReadFile(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(persisted).To(Equal(previous))
 	})

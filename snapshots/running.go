@@ -163,7 +163,7 @@ func writeRunningJSON(workDir string, snap *testui.Snapshot) error {
 	if err := utils.MkdirOutput(dir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	return writeJSON(filepath.Join(dir, RunningName), snap)
+	return WriteSnapshot(filepath.Join(dir, RunningName), snap)
 }
 
 // SavePerRun writes a per-run timestamped snapshot, run-<ts>.json, to workDir's snapshot store
@@ -198,20 +198,36 @@ func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time, label 
 	if label = slugifyLabel(label); label != "" {
 		stem += "-" + label
 	}
-	key, err := uniqueRunKey(store, stem)
+	var name string
+	if err := withSnapshotLock(context.Background(), store, func() error {
+		key, err := uniqueRunKey(store, stem)
+		if err != nil {
+			return err
+		}
+		if snap.Metadata != nil {
+			snap.Metadata.SavedRun = SnapshotStem(key)
+		}
+		name, err = putSnapshot(store, key, snap)
+		return err
+	}); err != nil {
+		return "", err
+	}
+	return Location(workDir, name), nil
+}
+
+// UpdatePerRun persists an in-flight run under its existing run ID, compressing it once it settles.
+func UpdatePerRun(workDir string, snap *testui.Snapshot) error {
+	if workDir == "" || snap == nil || snap.Metadata == nil || !validRunID(snap.Metadata.SavedRun) {
+		return errors.New("updating a run snapshot requires a workspace and saved run ID")
+	}
+	store, err := OpenStore(workDir)
 	if err != nil {
-		return "", err
+		return err
 	}
-	if snap.Metadata != nil {
-		snap.Metadata.SavedRun = strings.TrimSuffix(key, ".json")
-	}
-	if err := putJSON(store, key, snap); err != nil {
-		return "", err
-	}
-	if err := ignoreLocalStore(workDir); err != nil {
-		return "", err
-	}
-	return Location(workDir, key), nil
+	return withSnapshotLock(context.Background(), store, func() error {
+		_, err := replaceSnapshot(store, snap.Metadata.SavedRun+".json", snap)
+		return err
+	})
 }
 
 // uniqueRunKey returns <stem>.json, suffixing -2, -3, … when that key is taken. The per-run
@@ -223,11 +239,18 @@ func uniqueRunKey(store blob.Store, stem string) (string, error) {
 			name = fmt.Sprintf("%s-%d", stem, i)
 		}
 		key := name + ".json"
-		exists, err := store.Exists(context.Background(), key)
-		if err != nil {
-			return "", err
+		var taken bool
+		for _, candidate := range snapshotKeys(key) {
+			exists, err := store.Exists(context.Background(), candidate)
+			if err != nil {
+				return "", err
+			}
+			if exists {
+				taken = true
+				break
+			}
 		}
-		if !exists {
+		if !taken {
 			return key, nil
 		}
 	}

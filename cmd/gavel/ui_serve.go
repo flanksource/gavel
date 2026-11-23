@@ -163,7 +163,7 @@ func runUIServe(ctx context.Context, opts UIServeOptions) (any, error) {
 func runIDsOf(paths []string) []string {
 	var ids []string
 	for _, path := range paths {
-		if name := strings.TrimSuffix(filepath.Base(path), ".json"); strings.HasPrefix(name, snapshots.PerRunPrefix) {
+		if name := snapshots.SnapshotStem(filepath.Base(path)); strings.HasPrefix(name, snapshots.PerRunPrefix) {
 			ids = append(ids, name)
 		}
 	}
@@ -248,7 +248,7 @@ func loadResults(srv *testui.Server, paths ...string) error {
 	var merged testui.Snapshot
 	var runs []testui.TraceRun
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		data, err := snapshots.ReadFile(path)
 		if err != nil {
 			return err
 		}

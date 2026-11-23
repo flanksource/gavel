@@ -15,7 +15,6 @@ import (
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/gavel/blob"
 	testui "github.com/flanksource/gavel/testrunner/ui"
-	"github.com/flanksource/gavel/utils"
 )
 
 const (
@@ -52,34 +51,28 @@ func Save(workDir string, snap *testui.Snapshot) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fileName := snapshotFileName(sha, uncommitted)
-	if err := putJSON(store, fileName, snap); err != nil {
-		return "", err
-	}
-
-	pointer := &Pointer{
-		Path:        filepath.Join(Dir, fileName),
-		SHA:         sha,
-		Uncommitted: uncommitted,
-	}
-	if err := putJSON(store, PointerLast+".json", pointer); err != nil {
-		return "", err
-	}
-	if branch := branchPointerName(workDir); branch != "" {
-		if err := putJSON(store, branch+".json", pointer); err != nil {
-			return "", err
+	var fileName string
+	if err := withSnapshotLock(context.Background(), store, func() error {
+		var err error
+		fileName, err = replaceSnapshot(store, snapshotFileName(sha, uncommitted), snap)
+		if err != nil {
+			return err
 		}
-	}
-	if err := ignoreLocalStore(workDir); err != nil {
+		return savePointers(store, workDir, &Pointer{Path: filepath.Join(Dir, fileName), SHA: sha, Uncommitted: uncommitted})
+	}); err != nil {
 		return "", err
 	}
 	return Location(workDir, fileName), nil
 }
 
-// ignoreLocalStore makes workDir's .gavel directory, where a local store writes, ignore itself, so
-// Git never lists gavel's snapshots. A store elsewhere leaves no directory to ignore.
-func ignoreLocalStore(workDir string) error {
-	return utils.IgnoreOutputDir(filepath.Join(workDir, Dir))
+func savePointers(store blob.Store, workDir string, pointer *Pointer) error {
+	if err := putJSON(store, PointerLast+".json", pointer); err != nil {
+		return err
+	}
+	if branch := branchPointerName(workDir); branch != "" {
+		return putJSON(store, branch+".json", pointer)
+	}
+	return nil
 }
 
 // LoadPointer reads the <name>.json pointer from workDir's snapshot store. A missing pointer
@@ -122,15 +115,7 @@ func LoadByPointer(workDir string, p *Pointer) (*testui.Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := readKey(store, key)
-	if err != nil {
-		return nil, err
-	}
-	var snap testui.Snapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("decode snapshot %s: %w", Location(workDir, key), err)
-	}
-	return &snap, nil
+	return loadRun(store, workDir, key)
 }
 
 // ResolveLast returns a local file holding the snapshot last.json points at. It errors loudly
@@ -156,18 +141,24 @@ func ResolveLast(workDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := readKey(store, key)
+	name, reader, err := openSnapshotKey(store, key)
 	if err != nil {
 		return "", fmt.Errorf("last-run snapshot missing at %s: %w", Location(workDir, key), err)
 	}
-	path := filepath.Join(workDir, Dir, key)
-	if _, err := os.Stat(path); err == nil {
+	defer reader.Close()
+	dir := filepath.Join(workDir, Dir)
+	path := filepath.Join(dir, name)
+	if local, ok := blob.LocalDirectory(store); ok && local == dir {
 		return path, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", fmt.Errorf("create %s: %w", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	local := blob.Local(dir)
+	ctx := context.Background()
+	if err := withSnapshotLock(ctx, local, func() error {
+		if err := local.Write(ctx, name, reader); err != nil {
+			return err
+		}
+		return deleteSnapshotKeys(ctx, local, name, name)
+	}); err != nil {
 		return "", fmt.Errorf("copy the last-run snapshot to %s: %w", path, err)
 	}
 	return path, nil
@@ -287,9 +278,25 @@ func SanitiseBranch(name string) string {
 	return name
 }
 
-// WriteSnapshot writes snap to an explicit path, without the git-sha naming
-// and pointer bookkeeping Save performs. Used for snapshots that are not a
-// local run — e.g. the merged CI results `--pr` caches at .gavel/pr-<n>.json.
+// SavePullRequest caches merged CI results for --pr in the workspace's local state directory.
+func SavePullRequest(workDir string, number int, snap *testui.Snapshot) (string, error) {
+	if workDir == "" || number <= 0 || snap == nil {
+		return "", errors.New("saving a PR snapshot requires a workspace, PR number, and snapshot")
+	}
+	dir := filepath.Join(workDir, Dir)
+	store := blob.Local(dir)
+	var name string
+	if err := withSnapshotLock(context.Background(), store, func() error {
+		var err error
+		name, err = replaceSnapshot(store, fmt.Sprintf("pr-%d.json", number), snap)
+		return err
+	}); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// WriteSnapshot writes a plain JSON snapshot at an explicit path.
 func WriteSnapshot(path string, snap *testui.Snapshot) error {
 	if snap == nil {
 		return errors.New("snapshots.WriteSnapshot: snapshot is nil")

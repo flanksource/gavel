@@ -63,7 +63,12 @@ When a package's deadline fires, Gavel sends `SIGQUIT` to each Go test binary un
 With a process capture the dump is also stored as `stacks` records on the binary's process key, with reason `package-timeout:<pkg>`.
 
 ```bash
-jq '.tests[] | .. | objects | select(.timed_out?) | {sequence, command, goroutine_count}' "$(jq -r .path .gavel/last.json)"
+snapshot="$(jq -r .path .gavel/last.json)"
+case "$snapshot" in
+  *.zst) zstd -dc -- "$snapshot" ;;
+  *.gz) gzip -dc -- "$snapshot" ;;
+  *) cat -- "$snapshot" ;;
+esac | jq '.tests[] | .. | objects | select(.timed_out?) | {sequence, command, goroutine_count}'
 ```
 
 ### Collecting stacks on demand

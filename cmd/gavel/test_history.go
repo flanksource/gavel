@@ -14,7 +14,7 @@ type testHistoryOptions struct {
 }
 
 func (o testHistoryOptions) Help() api.Textable {
-	return clicky.Text(`Show local test execution history from .gavel/run-*.json snapshots.
+	return clicky.Text(`Show local test execution history from saved .gavel snapshots.
 
 The history report aggregates completed gavel test runs and shows executable
 test leaves grouped by package, file, and suite. Each test row includes

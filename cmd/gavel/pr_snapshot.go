@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
-	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/workspace"
 )
 
@@ -89,8 +87,7 @@ func resolvePRFailed(ref string, dirs workspace.Dirs, failedPath, baselinePath s
 }
 
 // resolvePRSnapshot downloads every gavel artifact published on the referenced
-// PR, merges them, and caches the result at .gavel/pr-<n>.json so `--pr` can
-// hand a plain path to the same `--failed` narrowing a local re-run uses.
+// PR, then caches the merged snapshot for the same narrowing a local re-run uses.
 func resolvePRSnapshot(ref string, dirs workspace.Dirs) (path string, snap *testui.Snapshot, err error) {
 	repo, number, err := parsePRRef(ref)
 	if err != nil {
@@ -107,12 +104,8 @@ func resolvePRSnapshot(ref string, dirs workspace.Dirs) (path string, snap *test
 		return "", nil, err
 	}
 
-	dir := dirs.State()
-	if err := utils.MkdirOutput(dir, 0o755); err != nil {
-		return "", nil, fmt.Errorf("create %s: %w", dir, err)
-	}
-	path = filepath.Join(dir, fmt.Sprintf("pr-%d.json", number))
-	if err := snapshots.WriteSnapshot(path, snap); err != nil {
+	path, err = snapshots.SavePullRequest(dirs.StateRoot, number, snap)
+	if err != nil {
 		return "", nil, err
 	}
 	logger.Infof("--pr %d: downloaded gavel results to %s", number, path)

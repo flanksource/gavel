@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/spf13/cobra"
 )
 
@@ -39,7 +40,7 @@ func init() {
 			if err != nil {
 				return err
 			}
-			data, err := os.ReadFile(file)
+			data, err := snapshots.ReadFile(file)
 			if err != nil {
 				return fmt.Errorf("read the results: %w", err)
 			}
