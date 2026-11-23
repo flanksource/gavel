@@ -1,6 +1,6 @@
 // Package branchmerge lands a branch's commits onto the branch checked out in
-// a target checkout, either one cherry-pick per commit (incremental) or as a
-// single squash commit, and afterwards removes the branch's worktree and
+// a target checkout, either one cherry-pick per commit (incremental), as a
+// single squash commit, or as a merge commit, and afterwards removes the branch's worktree and
 // deletes the branch once its work is verified to be in the landed commit.
 // A failed merge is always rolled back, leaving the checkout where it started.
 package branchmerge
@@ -19,9 +19,30 @@ type Mode string
 const (
 	// Squash lands the branch as one commit carrying Options.Message.
 	Squash Mode = "squash"
-	// Incremental cherry-picks Options.Commits one by one.
+	// Incremental cherry-picks (rebases) Options.Commits one by one.
 	Incremental Mode = "incremental"
+	// MergeCommit lands the branch with `git merge --no-ff` as a merge commit
+	// carrying Options.Message, keeping the branch's commits in history.
+	MergeCommit Mode = "merge"
 )
+
+// Strategy is the recursive/ort strategy option (`-X`) that resolves
+// conflicting hunks instead of stopping the merge.
+type Strategy string
+
+const (
+	// StrategyOurs keeps the target branch's side of a conflicting hunk.
+	StrategyOurs Strategy = "ours"
+	// StrategyTheirs keeps the source branch's side of a conflicting hunk.
+	StrategyTheirs Strategy = "theirs"
+)
+
+func (s Strategy) args() []string {
+	if s == "" {
+		return nil
+	}
+	return []string{"-X", string(s)}
+}
 
 var (
 	ErrInvalidOptions   = errors.New("invalid branch merge options")
@@ -39,8 +60,10 @@ type Options struct {
 	// Commits are cherry-picked in order (Incremental only).
 	Commits []string
 	Mode    Mode
-	// Message is the squash commit message (Squash only).
+	// Message is the squash or merge commit message (Squash and MergeCommit).
 	Message string
+	// Strategy, when set, resolves conflicting hunks toward one side.
+	Strategy Strategy
 }
 
 // validated checks o and returns a copy built only from the checked values, so
@@ -54,6 +77,12 @@ func (o Options) validated() (Options, error) {
 		return Options{}, fmt.Errorf("%w: %w", ErrInvalidOptions, err)
 	}
 	out := Options{Repo: o.Repo, Branch: o.Branch, Mode: o.Mode, Message: o.Message}
+	switch o.Strategy {
+	case "", StrategyOurs, StrategyTheirs:
+		out.Strategy = o.Strategy
+	default:
+		return Options{}, fmt.Errorf("%w: strategy %q must be %q or %q", ErrInvalidOptions, o.Strategy, StrategyOurs, StrategyTheirs)
+	}
 	if o.Base != "" {
 		if err := gavelgit.ValidateBranchName(o.Base); err != nil {
 			return Options{}, fmt.Errorf("%w: base: %w", ErrInvalidOptions, err)
@@ -71,15 +100,15 @@ func (o Options) validated() (Options, error) {
 			}
 			out.Commits = append(out.Commits, commit)
 		}
-	case Squash:
+	case Squash, MergeCommit:
 		if strings.TrimSpace(o.Message) == "" {
-			return Options{}, fmt.Errorf("%w: a squash merge needs a commit message", ErrInvalidOptions)
+			return Options{}, fmt.Errorf("%w: a %s merge needs a commit message", ErrInvalidOptions, o.Mode)
 		}
 		if len(o.Commits) > 0 {
-			return Options{}, fmt.Errorf("%w: a squash merge lands the whole branch; commits only apply to %s", ErrInvalidOptions, Incremental)
+			return Options{}, fmt.Errorf("%w: a %s merge lands the whole branch; commits only apply to %s", ErrInvalidOptions, o.Mode, Incremental)
 		}
 	default:
-		return Options{}, fmt.Errorf("%w: mode %q must be %q or %q", ErrInvalidOptions, o.Mode, Squash, Incremental)
+		return Options{}, fmt.Errorf("%w: mode %q must be %q, %q or %q", ErrInvalidOptions, o.Mode, Squash, Incremental, MergeCommit)
 	}
 	return out, nil
 }
@@ -124,10 +153,10 @@ func Merge(opts Options) (Result, error) {
 		return Result{}, err
 	}
 	commits := len(opts.Commits)
-	if opts.Mode == Squash {
-		commits, err = squash(opts, target, before)
-	} else {
+	if opts.Mode == Incremental {
 		err = cherryPick(opts, target, before)
+	} else {
+		commits, err = mergeWhole(opts, target, before)
 	}
 	if err != nil {
 		return Result{}, err

@@ -132,6 +132,77 @@ var _ = Describe("Merge", func() {
 		})
 	})
 
+	Describe("merge commit", func() {
+		It("lands the branch as a merge commit whose parents are the target and the branch tip", func() {
+			before := commitFile(f.repo, "main.txt", "main moved on\n", "chore: main moves")
+
+			result, err := branchmerge.Merge(branchmerge.Options{
+				Repo: f.repo, Branch: featureBranch, Base: "main", Mode: branchmerge.MergeCommit, Message: "Merge feature work",
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			head := git(f.repo, "rev-parse", "HEAD")
+			Expect(result).To(Equal(branchmerge.Result{TargetBranch: "main", LandedSHA: head, Commits: 2}))
+			Expect([]string{git(f.repo, "rev-parse", "HEAD^1"), git(f.repo, "rev-parse", "HEAD^2"), git(f.repo, "log", "-1", "--format=%B")}).
+				To(Equal([]string{before, f.commits[1], "Merge feature work"}))
+			Expect(git(f.repo, "status", "--porcelain")).To(BeEmpty())
+		})
+
+		It("aborts a conflicting merge and leaves no merge in progress", func() {
+			before := commitFile(f.repo, "a.txt", "main's a\n", "chore: conflicting a")
+
+			_, err := branchmerge.Merge(branchmerge.Options{
+				Repo: f.repo, Branch: featureBranch, Mode: branchmerge.MergeCommit, Message: "Merge",
+			})
+
+			var conflict *branchmerge.ConflictError
+			Expect(errors.As(err, &conflict)).To(BeTrue(), "expected *ConflictError, got %v", err)
+			Expect(conflict.Paths).To(Equal([]string{"a.txt"}))
+			Expect(git(f.repo, "rev-parse", "HEAD")).To(Equal(before))
+			Expect(git(f.repo, "status", "--porcelain")).To(BeEmpty())
+			Expect(filepath.Join(f.repo, ".git", "MERGE_HEAD")).NotTo(BeAnExistingFile())
+		})
+
+		It("requires a message and no explicit commits", func() {
+			_, err := branchmerge.Merge(branchmerge.Options{Repo: f.repo, Branch: featureBranch, Mode: branchmerge.MergeCommit})
+			Expect(err).To(MatchError(branchmerge.ErrInvalidOptions))
+			_, err = branchmerge.Merge(branchmerge.Options{
+				Repo: f.repo, Branch: featureBranch, Mode: branchmerge.MergeCommit, Message: "m", Commits: f.commits,
+			})
+			Expect(err).To(MatchError(branchmerge.ErrInvalidOptions))
+		})
+	})
+
+	DescribeTable("a conflict strategy resolves conflicting hunks instead of aborting",
+		func(mode branchmerge.Mode, strategy branchmerge.Strategy, wantA string) {
+			commitFile(f.repo, "a.txt", "main's a\n", "chore: conflicting a")
+			opts := branchmerge.Options{Repo: f.repo, Branch: featureBranch, Mode: mode, Strategy: strategy, Message: "land"}
+			if mode == branchmerge.Incremental {
+				opts.Commits, opts.Message = f.commits, ""
+			}
+
+			_, err := branchmerge.Merge(opts)
+
+			Expect(err).NotTo(HaveOccurred())
+			content, readErr := os.ReadFile(filepath.Join(f.repo, "a.txt"))
+			Expect(readErr).NotTo(HaveOccurred())
+			Expect([]string{string(content), git(f.repo, "status", "--porcelain")}).To(Equal([]string{wantA, ""}))
+		},
+		Entry("rebase, theirs keeps the branch's side", branchmerge.Incremental, branchmerge.StrategyTheirs, "a\n"),
+		Entry("rebase, ours keeps the target's side", branchmerge.Incremental, branchmerge.StrategyOurs, "main's a\n"),
+		Entry("squash, theirs keeps the branch's side", branchmerge.Squash, branchmerge.StrategyTheirs, "a\n"),
+		Entry("squash, ours keeps the target's side", branchmerge.Squash, branchmerge.StrategyOurs, "main's a\n"),
+		Entry("merge commit, theirs keeps the branch's side", branchmerge.MergeCommit, branchmerge.StrategyTheirs, "a\n"),
+		Entry("merge commit, ours keeps the target's side", branchmerge.MergeCommit, branchmerge.StrategyOurs, "main's a\n"),
+	)
+
+	It("rejects a strategy other than ours or theirs", func() {
+		_, err := branchmerge.Merge(branchmerge.Options{
+			Repo: f.repo, Branch: featureBranch, Mode: branchmerge.Squash, Message: "m", Strategy: "patience",
+		})
+		Expect(err).To(MatchError(branchmerge.ErrInvalidOptions))
+	})
+
 	It("rejects an unknown mode", func() {
 		_, err := branchmerge.Merge(branchmerge.Options{Repo: f.repo, Branch: featureBranch, Mode: "rebase"})
 		Expect(err).To(MatchError(branchmerge.ErrInvalidOptions))
@@ -181,6 +252,40 @@ var _ = Describe("Cleanup", func() {
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("kept branch " + featureBranch)))
+		Expect(branchExists(f.repo, featureBranch)).To(BeTrue())
+	})
+
+	It("deletes a branch landed as a merge commit", func() {
+		commitFile(f.repo, "main.txt", "main moved on\n", "chore: main moves")
+		landed, err := branchmerge.Merge(branchmerge.Options{
+			Repo: f.repo, Branch: featureBranch, Mode: branchmerge.MergeCommit, Message: "Merge",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := branchmerge.Cleanup(branchmerge.CleanupOptions{
+			Repo: f.repo, Worktree: f.worktree, Branch: featureBranch, LandedSHA: landed.LandedSHA, Mode: branchmerge.MergeCommit,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(branchmerge.CleanupResult{WorktreeRemoved: true, BranchDeleted: true}))
+	})
+
+	It("keeps, without failing, a branch whose conflicting hunks -X ours deliberately dropped", func() {
+		commitFile(f.repo, "a.txt", "main's a\n", "chore: conflicting a")
+		landed, err := branchmerge.Merge(branchmerge.Options{
+			Repo: f.repo, Branch: featureBranch, Mode: branchmerge.Squash, Message: "land", Strategy: branchmerge.StrategyOurs,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := branchmerge.Cleanup(branchmerge.CleanupOptions{
+			Repo: f.repo, Worktree: f.worktree, Branch: featureBranch, LandedSHA: landed.LandedSHA, Mode: branchmerge.Squash,
+			KeepUnlanded: true,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.WorktreeRemoved).To(BeTrue())
+		Expect(result.BranchDeleted).To(BeFalse())
+		Expect(result.BranchKept).To(ContainSubstring("kept branch " + featureBranch))
 		Expect(branchExists(f.repo, featureBranch)).To(BeTrue())
 	})
 

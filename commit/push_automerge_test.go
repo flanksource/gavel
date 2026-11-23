@@ -106,9 +106,23 @@ var _ = Describe("commit -p --auto-merge", func() {
 				return nil
 			},
 		}
-		err := pushAfterCommitForTest(context.Background(), opts, &Result{
-			Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}},
-		}, deps)
+		result := &Result{Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}}}
+		err := pushAfterCommitForTest(context.Background(), opts, result, deps)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(result.PR).To(Equal(&PushedPR{Number: 3, URL: "http://x/3", Branch: "feat/topic"}))
+	})
+
+	It("records the newly opened PR on the result", func() {
+		result := &Result{Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}}}
+		Expect(pushAfterCommitForTest(context.Background(), opts, result, newPRDeps(func(github.Options, *model.CreatePRResult, string) error { return nil }))).To(Succeed())
+		Expect(result.PR).To(Equal(&PushedPR{Number: 7, URL: "http://x/7", Title: "feat: work", Base: "main", Branch: "feat/topic", Created: true}))
+	})
+
+	It("records no PR for a dry run", func() {
+		dryOpts := opts
+		dryOpts.DryRun = true
+		result := &Result{Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}}}
+		Expect(pushAfterCommitForTest(context.Background(), dryOpts, result, newPRDeps(nil))).To(Succeed())
+		Expect(result.PR).To(BeNil())
 	})
 })

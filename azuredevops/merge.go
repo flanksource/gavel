@@ -28,10 +28,14 @@ func (c *Client) MergePR(ctx context.Context, number int, input model.MergeInput
 	if err := c.Preflight(ctx); err != nil {
 		return err
 	}
+	completion := mergeCompletionOptions(strategy)
+	if message := strings.TrimSpace(strings.TrimSpace(input.CommitTitle) + "\n\n" + strings.TrimSpace(input.CommitBody)); message != "" && strategy != "rebase" {
+		completion["mergeCommitMessage"] = message
+	}
 	payload := map[string]any{
 		"status":                "completed",
 		"lastMergeSourceCommit": commitRef{ID: input.HeadSHA},
-		"completionOptions":     mergeCompletionOptions(strategy),
+		"completionOptions":     completion,
 	}
 	data, _, err := c.request(ctx, http.MethodPatch, c.repositoryPath()+"/pullrequests/"+strconv.Itoa(number), nil, payload)
 	if err != nil {

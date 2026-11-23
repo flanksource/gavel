@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -25,7 +26,7 @@ func FetchDefaultBranchStatus(opts Options) (RepoBranchStatus, error) {
 	if err != nil {
 		return RepoBranchStatus{}, err
 	}
-	body, _, err := postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, repoDefaultBranchStatusQuery, map[string]any{"owner": parts[0], "name": parts[1]})
+	body, _, err := postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindGraphQL, repoDefaultBranchStatusQuery, map[string]any{"owner": parts[0], "name": parts[1]})
 	if err != nil {
 		return RepoBranchStatus{}, err
 	}

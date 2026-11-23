@@ -1,6 +1,9 @@
 package github
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 const checkContextsQuery = `query($id: ID!, $after: String!) {
   node(id: $id) { ... on Commit {
@@ -17,7 +20,7 @@ const checkContextsQuery = `query($id: ID!, $after: String!) {
   } }
 }`
 
-func completeHeadChecks(token string, pr *graphQLPR) error {
+func completeHeadChecks(ctx context.Context, token string, pr *graphQLPR) error {
 	if len(pr.Commits.Nodes) == 0 {
 		return nil
 	}
@@ -32,7 +35,7 @@ func completeHeadChecks(token string, pr *graphQLPR) error {
 				Node *graphQLCommit `json:"node"`
 			} `json:"data"`
 		}
-		if err := fetchReviewPage(token, checkContextsQuery, head.ID, page, &result); err != nil {
+		if err := fetchReviewPage(ctx, token, checkContextsQuery, head.ID, page, &result); err != nil {
 			return err
 		}
 		if result.Data.Node == nil || result.Data.Node.StatusCheckRollup == nil {

@@ -52,10 +52,28 @@ func TestEnableAutoMerge_SendsMutation(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("GITHUB_API_URL", srv.URL)
 
-	err := EnableAutoMerge(Options{Token: "tok"}, "PR_node_1", "rebase")
+	err := EnableAutoMerge(Options{Token: "tok"}, MergeOptions{NodeID: "PR_node_1", Method: "rebase"})
 	require.NoError(t, err)
-	assert.Equal(t, "PR_node_1", gotVars["prId"])
-	assert.Equal(t, "REBASE", gotVars["method"])
+	assert.Equal(t, map[string]any{"prId": "PR_node_1", "method": "REBASE"}, gotVars)
+}
+
+func TestEnableAutoMerge_SendsCommitMessage(t *testing.T) {
+	var gotVars map[string]any
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		var payload struct {
+			Variables map[string]any `json:"variables"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		gotVars = payload.Variables
+		_, _ = w.Write([]byte(`{"data":{"enablePullRequestAutoMerge":{"pullRequest":{"number":7}}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("GITHUB_API_URL", srv.URL)
+
+	headline, body := "Merge pull request #7 from acme/widgets", "Add widgets"
+	err := EnableAutoMerge(Options{Token: "tok"}, MergeOptions{NodeID: "PR_node_1", Method: "merge", HeadSHA: "abc", CommitHeadline: headline, CommitBody: body})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"prId": "PR_node_1", "method": "MERGE", "head": "abc", "headline": headline, "body": body}, gotVars)
 }
 
 func TestEnableAutoMerge_SurfacesGraphQLError(t *testing.T) {
@@ -65,7 +83,7 @@ func TestEnableAutoMerge_SurfacesGraphQLError(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("GITHUB_API_URL", srv.URL)
 
-	err := EnableAutoMerge(Options{Token: "tok"}, "PR_node_1", "rebase")
+	err := EnableAutoMerge(Options{Token: "tok"}, MergeOptions{NodeID: "PR_node_1", Method: "rebase"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Auto merge is not allowed")
 }
@@ -77,13 +95,13 @@ func TestEnableAutoMerge_EmptyNodeIDFailsBeforeRequest(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("GITHUB_API_URL", srv.URL)
 
-	err := EnableAutoMerge(Options{Token: "tok"}, "  ", "rebase")
+	err := EnableAutoMerge(Options{Token: "tok"}, MergeOptions{NodeID: "  ", Method: "rebase"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "node ID is required")
 }
 
 func TestEnableAutoMerge_InvalidMergeType(t *testing.T) {
-	err := EnableAutoMerge(Options{Token: "tok"}, "PR_node_1", "fast-forward")
+	err := EnableAutoMerge(Options{Token: "tok"}, MergeOptions{NodeID: "PR_node_1", Method: "fast-forward"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid merge type")
 }

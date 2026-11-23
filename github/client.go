@@ -1,6 +1,7 @@
 package github
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +33,13 @@ type Options struct {
 	// Cache is the GitHub response cache of the organization this client acts for;
 	// nil is the shared local-org cache.
 	Cache *cache.Store
+}
+
+func (o Options) context() context.Context {
+	if o.Context != nil {
+		return o.Context
+	}
+	return context.Background()
 }
 
 func (o Options) cacheStore() *cache.Store {
@@ -253,6 +262,11 @@ type RunLogOptions struct {
 	JobID     int64
 	FetchLogs bool
 	TailLines int
+	// Checks is the PR's current check rollup. Re-running a workflow keeps its
+	// run id, so a cached completed run these checks contradict is fetched again.
+	Checks model.StatusChecks
+	// Revalidate asks GitHub for the run even when it is cached as completed.
+	Revalidate bool
 }
 
 func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.WorkflowRun, error) {
@@ -264,31 +278,20 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 	if err != nil {
 		return nil, err
 	}
-
-	if payload := opts.cacheStore().GetCompletedRunPayload(runID); logOpts.JobID == 0 && payload != nil {
-		var cached model.WorkflowRun
-		if err := json.Unmarshal(payload, &cached); err == nil {
-			logger.Tracef("github cache hit for completed run %d", runID)
-			// Older cached payloads contain tails from a previous request.
-			for i := range cached.Jobs {
-				job := &cached.Jobs[i]
-				job.Logs, job.LogHeadings = "", nil
-				for j := range job.Steps {
-					job.Steps[j].Logs, job.Steps[j].LogHeadings = "", nil
-				}
-			}
-			if logOpts.FetchLogs {
-				FetchAndAttachLogs(opts, &cached, logOpts.TailLines)
-			}
-			return &cached, nil
+	var cached *model.WorkflowRun
+	if logOpts.JobID == 0 {
+		cached = loadCompletedRun(opts.cacheStore(), runID)
+	}
+	if cached != nil && !logOpts.Revalidate && !contradictedByChecks(cached, logOpts.Checks) {
+		logger.Tracef("github cache hit for completed run %d", runID)
+		if logOpts.FetchLogs {
+			FetchAndAttachLogs(opts, cached, logOpts.TailLines)
 		}
-		logger.Warnf("github cache: corrupt completed run %d, refetching", runID)
+		return cached, nil
 	}
 
-	ctx := context.Background()
-
 	runPath := fmt.Sprintf("/repos/%s/actions/runs/%d", repo, runID)
-	runResp, err := cachedGet(ctx, opts.cacheStore(), token, runPath, nil)
+	runResp, err := cachedGet(opts.context(), opts.cacheStore(), token, runPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -297,18 +300,24 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 		return nil, fmt.Errorf("parse run response: %w", err)
 	}
 
-	jobs, err := fetchRunJobs(opts, runID, logOpts.JobID)
+	jobs, staleJobs, err := fetchRunJobs(opts, runID, logOpts.JobID)
 	if err != nil {
 		return nil, err
 	}
 
 	result := run.toWorkflowRun(jobs)
-	logger.Debugf("fetched run %d %q: status=%s conclusion=%s jobs=%d",
-		result.DatabaseID, result.Name, result.Status, result.Conclusion, len(result.Jobs))
+	result.Stale = cmp.Or(runResp.Stale, staleJobs)
+	logger.Debugf("fetched run %d %q: status=%s conclusion=%s jobs=%d stale=%q",
+		result.DatabaseID, result.Name, result.Status, result.Conclusion, len(result.Jobs), result.Stale)
 
 	// Cache the run metadata before attaching request-specific tails from raw job logs.
-	if result.Status == "completed" && logOpts.JobID == 0 {
-		persistCompletedRun(opts.cacheStore(), repo, runID, result)
+	if logOpts.JobID == 0 {
+		switch {
+		case runSettled(result):
+			persistCompletedRun(opts.cacheStore(), repo, runID, result)
+		case cached != nil && result.Stale == "":
+			opts.cacheStore().DeleteCompletedRun(runID)
+		}
 	}
 	if logOpts.FetchLogs {
 		FetchAndAttachLogs(opts, result, logOpts.TailLines)
@@ -317,48 +326,104 @@ func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*model.Work
 	return result, nil
 }
 
-func fetchRunJobs(opts Options, runID, jobID int64) ([]model.Job, error) {
+// loadCompletedRun returns the cached completed run, or nil. A payload that is
+// not a settled run (a job still in progress) is not trusted.
+func loadCompletedRun(store *cache.Store, runID int64) *model.WorkflowRun {
+	payload := store.GetCompletedRunPayload(runID)
+	if payload == nil {
+		return nil
+	}
+	var run model.WorkflowRun
+	if err := json.Unmarshal(payload, &run); err != nil {
+		logger.Warnf("github cache: corrupt completed run %d, refetching: %v", runID, err)
+		return nil
+	}
+	if !runSettled(&run) {
+		logger.Warnf("github cache: completed run %d has unfinished jobs, refetching", runID)
+		return nil
+	}
+	// Older cached payloads contain tails from a previous request.
+	for i := range run.Jobs {
+		job := &run.Jobs[i]
+		job.Logs, job.LogHeadings = "", nil
+		for j := range job.Steps {
+			job.Steps[j].Logs, job.Steps[j].LogHeadings = "", nil
+		}
+	}
+	return &run
+}
+
+// runSettled reports whether GitHub confirmed the run and all its jobs finished.
+func runSettled(run *model.WorkflowRun) bool {
+	return run.Stale == "" && run.Status == "completed" &&
+		!slices.ContainsFunc(run.Jobs, func(job model.Job) bool { return job.Status != "completed" })
+}
+
+// contradictedByChecks reports whether the PR's checks show the run was re-run:
+// one of its checks is unfinished, or names a job the run does not have.
+func contradictedByChecks(run *model.WorkflowRun, checks model.StatusChecks) bool {
+	for _, check := range checks {
+		if runID, err := ExtractRunID(check.DetailsURL); err != nil || runID != run.DatabaseID {
+			continue
+		}
+		if check.Status != "COMPLETED" {
+			return true
+		}
+		jobID, err := ExtractJobID(check.DetailsURL)
+		if err != nil {
+			continue
+		}
+		if !slices.ContainsFunc(run.Jobs, func(job model.Job) bool { return job.DatabaseID == jobID }) {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchRunJobs returns the run's latest jobs, or only jobID's when it is set,
+// and why they are stale when GitHub could not confirm them.
+func fetchRunJobs(opts Options, runID, jobID int64) (jobs []model.Job, stale string, err error) {
 	token, err := opts.token()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	repo, err := opts.resolveRepo()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if jobID != 0 {
-		response, err := cachedGet(context.Background(), opts.cacheStore(), token, fmt.Sprintf("/repos/%s/actions/jobs/%d", repo, jobID), nil)
+		response, err := cachedGet(opts.context(), opts.cacheStore(), token, fmt.Sprintf("/repos/%s/actions/jobs/%d", repo, jobID), nil)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		var job restJob
 		if err := json.Unmarshal(response.Body, &job); err != nil {
-			return nil, fmt.Errorf("parse job response: %w", err)
+			return nil, "", fmt.Errorf("parse job response: %w", err)
 		}
 		if job.ID != jobID || job.RunID != runID {
-			return nil, fmt.Errorf("job %d belongs to run %d, expected job %d in run %d", job.ID, job.RunID, jobID, runID)
+			return nil, "", fmt.Errorf("job %d belongs to run %d, expected job %d in run %d", job.ID, job.RunID, jobID, runID)
 		}
-		return []model.Job{job.toJob()}, nil
+		return []model.Job{job.toJob()}, response.Stale, nil
 	}
-	var jobs []model.Job
 	for page := 1; ; page++ {
 		path := fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?per_page=100&page=%d", repo, runID, page)
-		response, err := cachedGet(context.Background(), opts.cacheStore(), token, path, nil)
+		response, err := cachedGet(opts.context(), opts.cacheStore(), token, path, nil)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
+		stale = cmp.Or(stale, response.Stale)
 		var payload restJobsResponse
 		if err := json.Unmarshal(response.Body, &payload); err != nil {
-			return nil, fmt.Errorf("parse jobs response: %w", err)
+			return nil, "", fmt.Errorf("parse jobs response: %w", err)
 		}
 		for _, job := range payload.Jobs {
 			jobs = append(jobs, job.toJob())
 		}
 		if len(jobs) >= payload.TotalCount {
-			return jobs, nil
+			return jobs, stale, nil
 		}
 		if len(payload.Jobs) == 0 {
-			return nil, fmt.Errorf("workflow run %d returned an empty jobs page before total_count %d", runID, payload.TotalCount)
+			return nil, "", fmt.Errorf("workflow run %d returned an empty jobs page before total_count %d", runID, payload.TotalCount)
 		}
 	}
 }
@@ -399,25 +464,23 @@ func FetchJobLogs(opts Options, job *model.Job, tailLines int) error {
 	if err != nil {
 		return fmt.Errorf("cannot resolve repo for logs: %w", err)
 	}
-
 	if logs, ok := opts.cacheStore().GetJobLogs(job.DatabaseID); ok {
 		logger.Tracef("github cache hit for job logs %d", job.DatabaseID)
 		attachLogsToSteps(job, logs, tailLines)
 		return nil
 	}
 
-	ctx := context.Background()
 	path := fmt.Sprintf("/repos/%s/actions/jobs/%d/logs", repo, job.DatabaseID)
-	result, err := cachedGet(ctx, opts.cacheStore(), token, path, nil)
+	result, err := cachedGet(opts.context(), opts.cacheStore(), token, path, nil)
 	if err != nil {
 		return err
 	}
 	logs := string(result.Body)
 	attachLogsToSteps(job, logs, tailLines)
 
-	// Only persist logs once the job has reached a terminal state — otherwise
-	// the cache would lock in a half-finished log stream.
-	if job.Conclusion != "" {
+	// Only persist logs GitHub served after the job reached a terminal state —
+	// otherwise the cache would lock in a half-finished log stream.
+	if job.Conclusion != "" && result.Stale == "" {
 		opts.cacheStore().PutJobLogs(job.DatabaseID, repo, logs)
 	}
 	return nil

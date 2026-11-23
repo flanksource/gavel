@@ -165,6 +165,18 @@ type Options struct {
 	lintGates LintGates
 }
 
+// PushedPR is the pull request a push landed on.
+type PushedPR struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+	Title  string `json:"title,omitempty"`
+	Base   string `json:"base,omitempty"`
+	// Branch is the PR's head branch the commits were pushed to.
+	Branch string `json:"branch,omitempty"`
+	// Created is set when the push opened the PR rather than updating one.
+	Created bool `json:"created,omitempty"`
+}
+
 type CommitResult struct {
 	Label   string   `json:"label,omitempty"`
 	Message string   `json:"message"`
@@ -184,6 +196,9 @@ type Result struct {
 	Staged   []string       `json:"staged,omitempty"`
 	Hooks    []HookResult   `json:"hooks,omitempty"`
 	Commits  []CommitResult `json:"commits,omitempty"`
+	// PR is the pull request a --push opened or pushed to; nil when nothing
+	// was pushed to a PR (no --push, a dry run, or a --push-branch push).
+	PR *PushedPR `json:"pr,omitempty"`
 	// Lint is set when the pre-commit lint gate ran. Non-nil whether it
 	// passed (Violations==0) or blocked (Violations>0); the CLI uses it to
 	// render findings and run the triage flow.

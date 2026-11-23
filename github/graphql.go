@@ -56,6 +56,7 @@ const prFragment = `fragment prFields on PullRequest {
     }
   }
   url
+  updatedAt
   additions
   deletions
   changedFiles
@@ -112,6 +113,7 @@ const prFragment = `fragment prFields on PullRequest {
     }
   }
   comments(last: 100) {
+    pageInfo { hasPreviousPage startCursor }
     nodes {
       databaseId
       body
@@ -196,6 +198,7 @@ type graphQLPR struct {
 	} `json:"headRepository"`
 	BaseRef       *graphQLRef          `json:"baseRef"`
 	URL           string               `json:"url"`
+	UpdatedAt     time.Time            `json:"updatedAt"`
 	Additions     int                  `json:"additions"`
 	Deletions     int                  `json:"deletions"`
 	ChangedFiles  int                  `json:"changedFiles"`
@@ -218,7 +221,8 @@ type graphQLRef struct {
 }
 
 type graphQLCommentList struct {
-	Nodes []graphQLCommentNode `json:"nodes"`
+	PageInfo graphQLPageInfo      `json:"pageInfo"`
+	Nodes    []graphQLCommentNode `json:"nodes"`
 }
 
 type graphQLCommentNode struct {
@@ -357,6 +361,7 @@ func (pr graphQLPR) toPRInfo() *model.PRInfo {
 		HeadRefOID:        pr.HeadRefOid,
 		HeadRepositoryURL: pr.HeadRepository.URL,
 		URL:               pr.URL,
+		UpdatedAt:         pr.UpdatedAt,
 		Additions:         pr.Additions,
 		Deletions:         pr.Deletions,
 		ChangedFiles:      pr.ChangedFiles,
@@ -557,8 +562,9 @@ func FetchPR(opts Options, prNumber int) (*model.PRInfo, error) {
 		variables["branch"] = branch
 	}
 
+	ctx := opts.context()
 	logger.Tracef("fetching PR via GraphQL (pr=%s, repo=%s)", formatPRArg(prNumber), repo)
-	respBody, _, err := postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, query, variables)
+	respBody, _, err := postGraphQL(ctx, token, graphqlEndpoint(), activity.KindGraphQL, query, variables)
 	if err != nil {
 		return nil, err
 	}
@@ -578,10 +584,13 @@ func FetchPR(opts Options, prNumber int) (*model.PRInfo, error) {
 		return nil, fmt.Errorf("no PR found for %s in %s", formatPRArg(prNumber), repo)
 	}
 
-	if err := completeReviewThreads(token, gqlPR); err != nil {
+	if err := completeReviewThreads(ctx, token, gqlPR); err != nil {
 		return nil, err
 	}
-	if err := completeHeadChecks(token, gqlPR); err != nil {
+	if err := completeComments(ctx, token, gqlPR); err != nil {
+		return nil, err
+	}
+	if err := completeHeadChecks(ctx, token, gqlPR); err != nil {
 		return nil, err
 	}
 	pr := gqlPR.toPRInfo()

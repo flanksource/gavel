@@ -75,7 +75,7 @@ func defaultPushDeps(ctx context.Context, opts Options) pushDeps {
 			return confirmProtectedBranchPush(ctx, branch)
 		},
 		enableAutoMerge: func(opts github.Options, pr *model.CreatePRResult, method string) error {
-			return github.EnableAutoMerge(opts, pr.NodeID, method)
+			return github.EnableAutoMerge(opts, github.MergeOptions{NodeID: pr.NodeID, Method: method})
 		},
 	}
 }
@@ -233,15 +233,17 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 		logger.Warnf("--auto-merge only applies to newly opened PRs; pushing to an existing PR, auto-merge not changed")
 	}
 
+	var pushed *PushedPR
 	switch target.kind {
 	case pushTargetBranchMatch:
-		return executeExistingPRPush(opts, deps, target.pr, "branch-match")
+		pushed, err = executeExistingPRPush(opts, deps, target.pr, "branch-match")
 	case pushTargetAncestorPR:
-		return executeExistingPRPush(opts, deps, target.pr, "ancestor-match")
+		pushed, err = executeExistingPRPush(opts, deps, target.pr, "ancestor-match")
 	case pushTargetNewPR:
-		return executeNewPRPush(ctx, opts, ghOpts, deps, branch, prSeed)
+		pushed, err = executeNewPRPush(ctx, opts, ghOpts, deps, branch, prSeed)
 	}
-	return nil
+	result.PR = pushed
+	return err
 }
 
 func decidePushTarget(opts Options, ghOpts github.Options, branch string, deps pushDeps) (pushTarget, []github.PRListItem, error) {
@@ -299,17 +301,17 @@ func findAncestorPRs(opts Options, prs github.PRSearchResults, isAncestor func(s
 	return out
 }
 
-func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, reason string) error {
+func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, reason string) (*PushedPR, error) {
 	if opts.DryRun {
 		fmt.Fprintf(dryRunOutput, "would push HEAD:%s (%s → PR #%d %s; remote %s)\n", pr.Source, reason, pr.Number, pr.URL, opts.target.remoteName())
-		return nil
+		return nil, nil
 	}
 	if err := pushHEADTo(opts, deps, pr.Source); err != nil {
-		return err
+		return nil, err
 	}
 	logger.Infof("Pushed to PR #%d (%s): %s", pr.Number, pr.Source, pr.URL)
 	printExistingPRSummary(pr)
-	return nil
+	return &PushedPR{Number: pr.Number, URL: pr.URL, Title: pr.Title, Base: pr.Target, Branch: pr.Source}, nil
 }
 
 // pushHEADTo rebases HEAD onto origin/<branch> and pushes it there, confirming
@@ -332,10 +334,13 @@ func pushHEADTo(opts Options, deps pushDeps, branch string) error {
 	return nil
 }
 
-func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) (err error) {
+// executeNewPRPush pushes HEAD and opens a PR for it, returning the PR. A PR
+// that opened but whose auto-merge could not be enabled is returned with the
+// error, since it exists either way.
+func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) (*PushedPR, error) {
 	base, baseErr := opts.pushBase(deps, ghOpts)
 	if baseErr != nil {
-		return fmt.Errorf("resolve default branch: %w", baseErr)
+		return nil, fmt.Errorf("resolve default branch: %w", baseErr)
 	}
 
 	prIn := PRContentInput{
@@ -343,7 +348,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	}
 	content, err := deps.generatePRPrompt(ctx, prIn)
 	if err != nil {
-		return fmt.Errorf("generate PR title/body: %w", err)
+		return nil, fmt.Errorf("generate PR title/body: %w", err)
 	}
 
 	// When the user is on a protected branch (e.g. main/master), pushing
@@ -355,12 +360,12 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		headBranch = opts.target.head
 	} else if isProtectedBranch(branch) || branch == base {
 		if content.Branch == "" {
-			return fmt.Errorf("on protected branch %q, but AI did not suggest a branch name", branch)
+			return nil, fmt.Errorf("on protected branch %q, but AI did not suggest a branch name", branch)
 		}
 		headBranch = content.Branch
 	}
 	if headBranch == base {
-		return fmt.Errorf("PR topic branch %q must differ from base", headBranch)
+		return nil, fmt.Errorf("PR topic branch %q must differ from base", headBranch)
 	}
 	refspec := "HEAD:" + headBranch
 
@@ -373,7 +378,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		if opts.AutoMerge {
 			fmt.Fprintf(dryRunOutput, "would enable auto-merge (%s) on the new PR\n", opts.MergeType)
 		}
-		return nil
+		return nil, nil
 	}
 
 	// Guard against pushing directly to a protected remote branch. This
@@ -381,7 +386,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	// branch on the non-protected path) collides with main/master/etc.
 	if isProtectedBranch(headBranch) {
 		if !deps.confirmProtectedRef(headBranch) {
-			return fmt.Errorf("push to protected branch %q cancelled", headBranch)
+			return nil, fmt.Errorf("push to protected branch %q cancelled", headBranch)
 		}
 	}
 
@@ -389,12 +394,12 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	// from HEAD: there's nothing remote to reconcile against.
 	if headBranch == branch || opts.Target != "" {
 		if err := deps.rebaseOnto(opts.WorkDir, base); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if err := deps.gitPush(opts.WorkDir, refspec); err != nil {
-		return fmt.Errorf("git push %s: %w", refspec, err)
+		return nil, fmt.Errorf("git push %s: %w", refspec, err)
 	}
 
 	created, err := deps.createPR(ghOpts, model.CreatePRInput{
@@ -404,19 +409,20 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		Base:  base,
 	})
 	if err != nil {
-		return fmt.Errorf("create PR: %w", err)
+		return nil, fmt.Errorf("create PR: %w", err)
 	}
 	logger.Infof("Opened PR #%d against %s: %s", created.Number, created.Base, created.URL)
+	pushed := &PushedPR{Number: created.Number, URL: created.URL, Title: created.Title, Base: created.Base, Branch: headBranch, Created: true}
 
 	if opts.AutoMerge {
 		if err := deps.enableAutoMerge(ghOpts, created, opts.MergeType); err != nil {
-			return fmt.Errorf("enable auto-merge on PR #%d: %w", created.Number, err)
+			return pushed, fmt.Errorf("enable auto-merge on PR #%d: %w", created.Number, err)
 		}
 		logger.Infof("Enabled auto-merge (%s) on PR #%d", opts.MergeType, created.Number)
 	}
 
 	printNewPRSummary(created, content)
-	return nil
+	return pushed, nil
 }
 
 // printNewPRSummary renders the just-opened PR's title, URL, and body on

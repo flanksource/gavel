@@ -18,7 +18,7 @@ var _ = Describe("complete head check evidence", func() {
 		DeferCleanup(server.Close)
 		GinkgoT().Setenv("GITHUB_API_URL", server.URL)
 		pr := &graphQLPR{Commits: graphQLCommits{Nodes: []graphQLCommitNode{{Commit: graphQLCommit{ID: "commit-node", StatusCheckRollup: &graphQLStatusCheckRollup{Contexts: graphQLContexts{PageInfo: graphQLPageInfo{HasNextPage: true, EndCursor: "cursor"}}}}}}}}
-		Expect(completeHeadChecks("token", pr)).To(Succeed())
+		Expect(completeHeadChecks(GinkgoT().Context(), "token", pr)).To(Succeed())
 		Expect(pr.toPRInfo().StatusCheckRollup.HasFailure()).To(BeTrue())
 		Expect(pr.toPRInfo().StatusCheckRollup).To(HaveLen(1))
 		Expect(pr.toPRInfo().StatusCheckRollup[0].NodeID).To(Equal("check-node"))

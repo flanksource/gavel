@@ -177,7 +177,7 @@ var _ = Describe("commit AI agent lifecycle", func() {
 		deps.defaultBranch = func(github.Options) (string, error) { return "main", nil }
 		opts := promptTestOptions()
 		opts.DryRun = true
-		err := executeNewPRPush(context.Background(), opts, github.Options{}, deps, "fix/close-agent", &Result{
+		_, err := executeNewPRPush(context.Background(), opts, github.Options{}, deps, "fix/close-agent", &Result{
 			Commits: []CommitResult{{Message: "fix: close agent"}},
 		})
 
@@ -193,7 +193,7 @@ var _ = Describe("commit AI agent lifecycle", func() {
 		deps.defaultBranch = func(github.Options) (string, error) { return "main", nil }
 		opts := promptTestOptions()
 		opts.DryRun = true
-		err := executeNewPRPush(context.Background(), opts, github.Options{}, deps, "fix/close-agent", &Result{
+		_, err := executeNewPRPush(context.Background(), opts, github.Options{}, deps, "fix/close-agent", &Result{
 			Commits: []CommitResult{{Message: "fix: close agent"}},
 		})
 

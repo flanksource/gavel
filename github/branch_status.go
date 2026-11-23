@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -142,7 +143,7 @@ func FetchOrgDefaultBranchStatus(opts Options, opt OrgStatusOptions) (OrgBranchS
 
 	for {
 		vars := map[string]any{"org": opt.Org, "first": orgRepoPageSize, "after": cursor}
-		body, rl, err := postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, orgDefaultBranchStatusQuery, vars)
+		body, rl, err := postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindGraphQL, orgDefaultBranchStatusQuery, vars)
 		if rl != nil {
 			lastRL = rl
 		}

@@ -16,6 +16,9 @@ import (
 type cachedGetResult struct {
 	Body      []byte
 	FromCache bool
+	// Stale is why Body was served unrevalidated (a network error or 5xx). Empty
+	// when GitHub confirmed Body, which is the only Body to treat as final.
+	Stale string
 }
 
 // cachedGet performs a GET against the GitHub API with ETag-aware caching.
@@ -30,8 +33,9 @@ type cachedGetResult struct {
 //  3. Issue the request.
 //  4. On 304, touch the cache entry and return cached Body.
 //  5. On 2xx, store the new body + ETag and return it.
-//  6. On 5xx with a stale cached body, log a warning and return the stale
-//     body so the caller can degrade gracefully.
+//  6. On a network error or 5xx with a cached body, log a warning and return
+//     that body marked Stale so the caller can degrade gracefully. A cancelled
+//     ctx is an error, never a stale body.
 func cachedGet(ctx context.Context, store *cache.Store, token, path string, extraHeaders map[string]string) (*cachedGetResult, error) {
 	absURL := githubAPIBase() + path
 	entry := store.LookupHTTP(absURL, "GET")
@@ -55,14 +59,14 @@ func cachedGet(ctx context.Context, store *cache.Store, token, path string, extr
 	resp, err := req.Get(absURL)
 	if err != nil {
 		// Network error: fall back to stale cache if available.
-		if entry != nil {
+		if entry != nil && ctx.Err() == nil {
 			logger.Warnf("cachedGet: network error on %s, serving stale cache: %v", path, err)
 			activity.Shared().Record(activity.Entry{
 				Method: "GET", URL: path, Kind: activity.KindREST,
 				Duration: time.Since(start), SizeBytes: len(entry.Body),
 				FromCache: true, Error: err.Error(),
 			})
-			return &cachedGetResult{Body: entry.Body, FromCache: true}, nil
+			return &cachedGetResult{Body: entry.Body, FromCache: true, Stale: err.Error()}, nil
 		}
 		activity.Shared().Record(activity.Entry{
 			Method: "GET", URL: path, Kind: activity.KindREST,
@@ -100,7 +104,7 @@ func cachedGet(ctx context.Context, store *cache.Store, token, path string, extr
 			StatusCode: resp.StatusCode, Duration: time.Since(start),
 			SizeBytes: len(entry.Body), FromCache: true,
 		})
-		return &cachedGetResult{Body: entry.Body, FromCache: true}, nil
+		return &cachedGetResult{Body: entry.Body, FromCache: true, Stale: fmt.Sprintf("GitHub returned status %d", resp.StatusCode)}, nil
 	}
 	if !resp.IsOK() {
 		activity.Shared().Record(activity.Entry{

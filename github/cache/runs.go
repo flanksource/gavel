@@ -35,6 +35,18 @@ func (s *Store) GetCompletedRunPayload(runID int64) []byte {
 	return entry.Payload
 }
 
+// DeleteCompletedRun drops a cached completed run, once it is running again.
+func (s *Store) DeleteCompletedRun(runID int64) {
+	if s == nil || s.disabled {
+		return
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.gorm().Where("org_id = ? AND run_id = ?", s.org, runID).Delete(&WorkflowRunCache{}).Error; err != nil {
+		logger.Warnf("github cache: DeleteCompletedRun(%d) failed: %v", runID, err)
+	}
+}
+
 // PutCompletedRun stores a workflow run, but only if status == "completed".
 // In-progress runs are intentionally left to the ETag-aware HTTP cache.
 func (s *Store) PutCompletedRun(repo string, runID int64, status, conclusion string, payload []byte) {

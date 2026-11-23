@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -424,7 +425,7 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 	}
 
 	logger.Tracef("searching PRs via GraphQL: %s", queryString)
-	respBody, rl, err := postGraphQL(token, graphqlEndpoint(), activity.KindSearch, query, map[string]any{
+	respBody, rl, err := postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindSearch, query, map[string]any{
 		"query": queryString,
 		"first": limit,
 	})
@@ -485,6 +486,10 @@ func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 		if items[i].CheckStatus == nil {
 			continue
 		}
+		checks := make(model.StatusChecks, len(items[i].CheckStatus.Failures))
+		for j, failure := range items[i].CheckStatus.Failures {
+			checks[j] = model.StatusCheck{Status: "COMPLETED", DetailsURL: failure.DetailsURL}
+		}
 		for j := range items[i].CheckStatus.Failures {
 			f := &items[i].CheckStatus.Failures[j]
 			if f.DetailsURL == "" {
@@ -496,7 +501,7 @@ func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 			}
 			run, ok := runCache[runID]
 			if !ok {
-				run, err = FetchRunJobs(opts, runID, RunLogOptions{FetchLogs: fetchLogs, TailLines: 20})
+				run, err = FetchRunJobs(opts, runID, RunLogOptions{FetchLogs: fetchLogs, TailLines: 20, Checks: checks})
 				if err != nil {
 					logger.Warnf("failed to fetch run %d: %v", runID, err)
 					runCache[runID] = nil
