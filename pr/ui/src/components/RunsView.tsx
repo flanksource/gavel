@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, CopyButton, DetailEmptyState, SegmentedControl, SplitPane, Tabs } from '@flanksource/clicky-ui/components';
-import { Callout, JsonView, KeyValueList, LogViewer, ProgressBar, StatusDot, Timestamp } from '@flanksource/clicky-ui/data';
+import { Callout, JsonView, LogViewer, ProgressBar, StatusDot, Timestamp } from '@flanksource/clicky-ui/data';
 import { fetchJSON, queryKeys, responseError } from '../query';
 import { useNow } from '../useNow';
 
@@ -303,22 +303,25 @@ function RunDetail({ run }: { run: SandboxRun }) {
 
       <RunTime run={run} />
 
-      <KeyValueList
-        items={[
-          { key: 'created', label: 'Created', value: <Timestamp value={run.createdAt} format="short" /> },
-          { key: 'started', label: 'Started', value: run.startedAt ? <Timestamp value={run.startedAt} format="short" /> : '—' },
-          { key: 'finished', label: 'Finished', value: run.finishedAt ? <Timestamp value={run.finishedAt} format="short" /> : '—' },
-          { key: 'commit', label: 'Commit', value: <span className="font-mono text-xs">{run.sha}</span>, hidden: !run.sha },
-          { key: 'todo', label: 'Todo', value: run.todoTitle, hidden: !run.todoTitle },
-          { key: 'pr', label: 'PR', value: <a className="text-primary hover:underline" href={run.spec?.pr} target="_blank" rel="noreferrer">{run.spec?.pr}</a>, hidden: !run.spec?.pr },
-          { key: 'step', label: 'Step', value: run.spec?.step, hidden: !run.spec?.step },
-          { key: 'args', label: 'Args', value: <span className="font-mono text-xs">{args}</span>, hidden: !args },
-          { key: 'backend', label: 'Backend', value: run.backend },
-          { key: 'size', label: 'Size', value: formatSize(run), hidden: !formatSize(run) },
-          { key: 'job', label: 'Job', value: <span className="font-mono text-xs">{run.backendRef}</span>, hidden: !run.backendRef },
-          { key: 'id', label: 'Run ID', value: <span className="font-mono text-xs">{run.id}</span> },
-        ]}
-      />
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-3 xl:grid-cols-4">
+        {[
+          { label: 'Created', value: <Timestamp value={run.createdAt} format="short" /> },
+          { label: 'Started', value: run.startedAt ? <Timestamp value={run.startedAt} format="short" /> : '—' },
+          { label: 'Finished', value: run.finishedAt ? <Timestamp value={run.finishedAt} format="short" /> : '—' },
+          { label: 'Size', value: formatSize(run) },
+          { label: 'Backend', value: run.backend },
+          { label: 'Job', value: run.backendRef, mono: true },
+          { label: 'Args', value: args, mono: true },
+          { label: 'Step', value: run.spec?.step },
+          { label: 'Todo', value: run.todoTitle },
+          { label: 'PR', value: run.spec?.pr && <a className="text-primary hover:underline" href={run.spec.pr} target="_blank" rel="noreferrer">{run.spec.pr.replace(/^https:\/\/github\.com\//, '')}</a> },
+        ].filter(item => item.value).map(item => (
+          <div key={item.label} className="min-w-0">
+            <dt className="text-muted-foreground">{item.label}</dt>
+            <dd className={`truncate ${item.mono ? 'font-mono' : ''}`}>{item.value}</dd>
+          </div>
+        ))}
+      </dl>
 
       <div className="flex flex-col gap-3">
         <Tabs tabs={[{ id: 'log', label: 'Log' }, { id: 'spec', label: 'Spec' }]} value={tab} onChange={setTab} />
