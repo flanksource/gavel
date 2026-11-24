@@ -41,7 +41,7 @@ jobs:
           task pr-ui
           task editor-ui
 
-      - uses: flanksource/deps@v1.0.46
+      - uses: flanksource/deps@v1.0.51
         with:
           tools: |
             svu
@@ -288,7 +288,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-    uses: flanksource/action-workflows/.github/workflows/push-helm-chart.yml@5d7f5f3616936fd703e58c5ee7e4527dc9f6adcc # main
+    uses: flanksource/action-workflows/.github/workflows/push-helm-chart.yml@6dc0bcd1c064bb3aaadd05bf6a4ac5b6cd40125a # main
     with:
       filename_regex: "gavel-*.tgz"
       version: ${{ needs.tag.outputs.tag }}
