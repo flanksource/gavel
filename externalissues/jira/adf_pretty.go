@@ -126,13 +126,19 @@ func (n ADFNode) markedNode(node markdown.Node, path string) markdown.Node {
 			node.Kind = "code"
 		}
 	}
-	for index, mark := range n.Marks {
-		value, err := n.applyMark(node, mark)
-		if err != nil {
-			logger.Warnf("ADF %s.marks[%d] %s: %v", path, index, mark.Type, err)
-			continue
+	// Links wrap every other mark so formatting stays inside the link text.
+	for _, links := range []bool{false, true} {
+		for index, mark := range n.Marks {
+			if (mark.Type == "link") != links {
+				continue
+			}
+			value, err := n.applyMark(node, mark)
+			if err != nil {
+				logger.Warnf("ADF %s.marks[%d] %s: %v", path, index, mark.Type, err)
+				continue
+			}
+			node = value
 		}
-		node = value
 	}
 	return node
 }

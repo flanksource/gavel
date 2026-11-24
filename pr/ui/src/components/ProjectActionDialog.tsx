@@ -118,7 +118,8 @@ function ProjectActionFormDialog({ projectName, action, stagedFiles, onClose, on
     setRunning(true);
     setRunError('');
     try {
-      const options = action === 'commit' ? withoutRemovedAIOptions(value) : value;
+      const sparse = Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+      const options = action === 'commit' ? withoutRemovedAIOptions(sparse) : sparse;
       await onRun(action, options);
       const remembered = { ...options };
       if (action !== 'test') delete remembered.files;
