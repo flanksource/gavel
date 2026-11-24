@@ -476,7 +476,7 @@ func ResolveWorkDirFromCWD(cwd, baseDir string, opts fixtures.RunOptions) string
 
 func templateString(value string, data map[string]any) (string, error) {
 	value = fixtures.ExpandVars(value, data)
-	return gomplate.RunTemplate(data, gomplate.Template{Template: value})
+	return gomplate.RunTemplate(data, gomplate.Template{Template: value, Strict: true})
 }
 
 func findGoModRoot(path string) string {

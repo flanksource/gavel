@@ -237,7 +237,5 @@ func freePort() (int, error) {
 
 // renderBuildTemplate renders a gomplate template for build commands
 func renderBuildTemplate(template string, data map[string]interface{}) (string, error) {
-	return gomplate.RunTemplate(data, gomplate.Template{
-		Template: template,
-	})
+	return gomplate.RunTemplate(data, gomplate.Template{Template: template, Strict: true})
 }
