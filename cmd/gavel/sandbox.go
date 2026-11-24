@@ -107,13 +107,21 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 // sandboxSweepInterval is how often serve sweeps what runs left behind.
 const sandboxSweepInterval = 10 * time.Minute
 
-// sweepSandboxEvery sweeps what runs older than lifetime left behind, and, when templates is set,
-// the organizations' templates no run uses any more, every sandboxSweepInterval until ctx ends.
-func sweepSandboxEvery(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration, templates templateSweeper) {
+// sweepSandboxEvery fails the runs dispatcher lost track of and, when sweeper is set, sweeps what
+// runs older than their lifetime left behind, and, when templates is set, the organizations'
+// templates no run uses any more, now and every sandboxSweepInterval until ctx ends.
+func sweepSandboxEvery(ctx context.Context, dispatcher *sandbox.Dispatcher, sweeper sandbox.Sweeper, templates templateSweeper) {
 	ticker := time.NewTicker(sandboxSweepInterval)
 	defer ticker.Stop()
 	for {
-		sweepSandbox(ctx, sweeper, lifetime)
+		if failed, err := dispatcher.FailExpiredRuns(ctx); err != nil && ctx.Err() == nil {
+			logger.Warnf("%v", err)
+		} else if failed > 0 {
+			logger.Infof("failed %d sandbox runs still running past their lifetime of %s", failed, dispatcher.RunLifetime())
+		}
+		if sweeper != nil {
+			sweepSandbox(ctx, sweeper, dispatcher.RunLifetime())
+		}
 		if templates != nil {
 			sweepOrgTemplates(ctx, templates)
 		}

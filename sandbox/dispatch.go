@@ -519,6 +519,20 @@ func (d *Dispatcher) FailQueuedRuns(ctx context.Context) (int64, error) {
 	return result.RowsAffected, nil
 }
 
+// FailExpiredRuns fails the runs still recorded as running past RunLifetime. No run lives that
+// long: its token has expired and the sweeper deletes its environment, so serve lost track of it,
+// by restarting while it ran or by its follow never returning. It returns how many it failed.
+func (d *Dispatcher) FailExpiredRuns(ctx context.Context) (int64, error) {
+	lifetime := d.RunLifetime().Seconds()
+	result := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'failed', status_message = 'serve lost track of the run: it did not end within its lifetime',
+		finished_at = started_at + ? * interval '1 second'
+		WHERE status = 'running' AND started_at < now() - ? * interval '1 second'`, lifetime, lifetime)
+	if result.Error != nil {
+		return 0, fmt.Errorf("fail the sandbox runs past their lifetime: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
 // RunRecord is what the run API needs of a run: its organization, the user it runs for (nil
 // for a system run) and its spec.
 type RunRecord struct {
