@@ -363,6 +363,10 @@ spec:
   templating:
     - key: org
       label: Organization ID
+      # The View CRD requires values or valueFrom. Mission Control uses a passed value only when
+      # the variable has no options, or the value is one of them, else the first option, so an
+      # empty list keeps any organization's ID.
+      values: []
   panels:
     - name: Running environments
       type: number
