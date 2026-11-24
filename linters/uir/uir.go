@@ -24,7 +24,7 @@ func (u *UIR) SetOptions(options linters.RunOptions)    { u.RunOptions = options
 func (u *UIR) ProjectRootMarkers() []string             { return []string{".uir.yaml", ".uir.d/"} }
 func (u *UIR) RequiresExecutable() bool                 { return true }
 func (u *UIR) DefaultIncludes() []string {
-	return []string{".uir.yaml", "**/.uir.d/*.yaml", "**/.uir.d/*.yml", "**/*.go", "**/go.mod", "**/go.sum", "**/go.work"}
+	return []string{".uir.yaml", "**/.uir.d/*.yaml", "**/.uir.d/*.yml", "**/*.go", "**/go.mod", "**/go.sum", "**/go.work", "**/*.sql", "**/*.xml"}
 }
 func (u *UIR) DefaultExcludes() []string { return []string{"vendor/**", "node_modules/**"} }
 func (u *UIR) SupportsJSON() bool        { return true }
@@ -57,7 +57,12 @@ func (u *UIR) DryRunCommand() (string, []string) {
 	return binary, args
 }
 
-func (u *UIR) Run(ctx commonsContext.Context, _ *clicky.Task) (violations []models.Violation, err error) {
+func (u *UIR) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+	result, err := u.RunResult(ctx, task)
+	return u.found(result, err)
+}
+
+func (u *UIR) RunResult(ctx commonsContext.Context, _ *clicky.Task) (_ *linters.LinterResult, err error) {
 	fragment, err := u.writeFragment(ctx)
 	if err != nil {
 		return nil, err
@@ -67,7 +72,11 @@ func (u *UIR) Run(ctx commonsContext.Context, _ *clicky.Task) (violations []mode
 	}
 	binary, args := u.DryRunCommand()
 	result, err := u.RunReport(ctx, u.Name(), binary, args...)
-	return u.found(result, err)
+	_, err = u.found(result, err)
+	if result != nil && result.Linter != u.Name() {
+		return nil, err
+	}
+	return result, err
 }
 
 func (u *UIR) parse(output []byte, exitCode int) ([]models.Violation, error) {

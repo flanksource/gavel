@@ -85,7 +85,10 @@ func FilterViolationsByUserScope(results []*LinterResult, workDir string, scopes
 		}
 		kept := result.Violations[:0]
 		for _, v := range result.Violations {
-			if violationMatchesAnyScope(v.File, result.WorkDir, workDir, absScopes) {
+			if violationMatchesAnyScope(v.File, result.WorkDir, workDir, absScopes) ||
+				slices.ContainsFunc(result.Sources[v.File].Inputs, func(input string) bool {
+					return violationMatchesAnyScope(input, result.WorkDir, workDir, absScopes)
+				}) {
 				kept = append(kept, v)
 			} else {
 				dropped++

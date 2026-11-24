@@ -15,6 +15,15 @@ import (
 )
 
 var _ = Describe("UIR native configuration", func() {
+	It("admits mapped SQL bodies and descriptors in a SQL-only project", func() {
+		root := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(root, ".uir.yaml"), []byte("version: 1\nsources:\n  - match: 'scripts/**/data.xml'\n    dialect: tsql\n"), 0o600)).To(Succeed())
+		for _, file := range []string{"scripts/PostDeployment_Seed/SQLData.xml", "scripts/PostDeployment_Seed/data.xml", "migrations/seed.sql"} {
+			invocation := linterInvocation{linter: uir.New(root), projectRoot: root, files: []string{file}}
+			Expect(anyRequestedFileApplies(invocation)).To(BeTrue())
+		}
+	})
+
 	DescribeTable("keeps testdata projects out of automatic discovery and allows explicit targets", func(target string) {
 		root := GinkgoT().TempDir()
 		fixture := filepath.Join(root, "lint", "testdata", "project")

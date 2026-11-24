@@ -14,8 +14,8 @@ type TagsMapper interface {
 }
 
 // filterGeneratedViolations drops findings in generated sources when
-// opts.Generated is false. A finding whose File is a key of sources is judged
-// by that source's Content: it is virtual, so there is nothing on disk to read.
+// opts.Generated is false. Stored content takes precedence over the checkout;
+// provenance-only entries name physical input files and have no stored content.
 func filterGeneratedViolations(opts RunOptions, violations []models.Violation, sources map[string]SourceFile) ([]models.Violation, error) {
 	if opts.Generated == nil || *opts.Generated {
 		return violations, nil
@@ -27,7 +27,7 @@ func filterGeneratedViolations(opts RunOptions, violations []models.Violation, s
 			kept = append(kept, violation)
 			continue
 		}
-		if source, virtual := sources[violation.File]; virtual {
+		if source, exists := sources[violation.File]; exists && (source.Content != "" || len(source.Inputs) == 0) {
 			if !generatedSource(filepath.Base(violation.File), source.Content) {
 				kept = append(kept, violation)
 			}

@@ -2,7 +2,7 @@
 
 Install a UIR version providing `.uir.d` configuration discovery and `_expires` timestamps on PATH. Gavel detects home, ancestor and project `.uir.yaml` files and `.uir.d/` YAML fragments, then runs `uir lint --format json --no-progress` from the project directory. UIR owns validation and merging; Gavel does not import its library. Run `gavel lint uir`; the results use Gavel's normal snapshots, baselines, summaries and UI.
 
-UIR incrementally indexes the project's Go modules, then evaluates SQL rules against pinned snapshots. Every row is a violation. A rule requires `id`, `query` and a Go template `message`; severity defaults to `error`, with `warning` and `info` also supported. Additional UIR flags can be supplied through the existing linter runtime arguments.
+UIR indexes the project's Go modules and mapped SQL sources, then evaluates native rules against the snapshots. A SQL-only project with `.uir.yaml` can run `gavel lint uir` without a Go module. Mapped SQL findings retain their source locations when the selected scope names a companion descriptor. Every rule row is a violation. A rule requires `id`, `query` and a Go template `message`. Severity defaults to `error`, with `warning` and `info` also supported. Additional UIR flags can be supplied through the existing linter runtime arguments.
 
 ```yaml
 version: 1

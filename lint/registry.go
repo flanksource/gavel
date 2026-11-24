@@ -21,6 +21,7 @@ import (
 	"github.com/flanksource/gavel/linters/pyright"
 	"github.com/flanksource/gavel/linters/reactdoctor"
 	"github.com/flanksource/gavel/linters/ruff"
+	sqllint "github.com/flanksource/gavel/linters/sql"
 	"github.com/flanksource/gavel/linters/tsc"
 	"github.com/flanksource/gavel/linters/uir"
 	"github.com/flanksource/gavel/linters/vale"
@@ -68,6 +69,7 @@ func builtinLinterRegistry(workDir string) *linters.Registry {
 	registry.Register(jscpd.NewJSCPD(workDir))
 	registry.Register(betterleaks.NewBetterleaks(workDir))
 	registry.Register(uir.New(workDir))
+	registry.Register(sqllint.New(workDir))
 	registry.Register(jsonlint.New(workDir))
 	registry.Register(githublint.New(workDir))
 	return registry

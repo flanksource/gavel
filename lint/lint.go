@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky"
@@ -77,7 +79,21 @@ func NarrowToFailed(opts Options) (Options, error) {
 	if err != nil {
 		return opts, fmt.Errorf("--failed: %w", err)
 	}
-	linterNames, files := baseline.ExtractFailedLintTargets(snapshot.Lint)
+	results := snapshot.Lint
+	if len(opts.Linters) > 0 {
+		selected := map[string]bool{}
+		for _, name := range opts.Linters {
+			name = strings.TrimSpace(name)
+			if canonical := linterAliases[name]; canonical != "" {
+				name = canonical
+			}
+			selected[name] = true
+		}
+		results = slices.DeleteFunc(slices.Clone(results), func(result *linters.LinterResult) bool {
+			return result == nil || !selected[result.Linter]
+		})
+	}
+	linterNames, files := baseline.ExtractFailedLintTargets(results)
 	if len(linterNames) == 0 {
 		return opts, fmt.Errorf("--failed: no lint violations found in %s", failedPath)
 	}

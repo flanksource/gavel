@@ -48,7 +48,7 @@ var _ = Describe("Preview declarations", func() {
 	It("resolves a schema's x-clicky-preview against the schema that declares it", func() {
 		Expect(os.MkdirAll(filepath.Join(dir, "schemas"), 0700)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(dir, "schemas", "data.json"), []byte(`{"type":"object","x-clicky-preview":{"ref":"views/Preview.tsx"}}`), 0600)).To(Succeed())
-		bundle, err := EditorSchema(context.Background(), []byte(`{"$schema":"./schemas/data.json"}`), filepath.Join(dir, "data.json"), "")
+		bundle, err := EditorSchema(context.Background(), EditorSchemaOptions{Data: []byte(`{"$schema":"./schemas/data.json"}`), Path: filepath.Join(dir, "data.json")})
 		Expect(err).NotTo(HaveOccurred())
 
 		component, err := SchemaPreview(bundle)

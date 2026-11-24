@@ -235,8 +235,9 @@ var DefaultRegistry = NewRegistry()
 // Content, which the UI shows with the findings overlaid, and a URL to browse
 // it at its origin, to which the UI appends `line=<n>` unless it names a line.
 type SourceFile struct {
-	URL     string `json:"url,omitempty"`
-	Content string `json:"content,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Content string   `json:"content,omitempty"`
+	Inputs  []string `json:"inputs,omitempty"`
 }
 
 // LinterResult represents the result of running a linter
@@ -638,7 +639,7 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 	start := time.Now()
 	result, err := runForResult(commonsContext.NewContext(ctx), task, linter)
 	violations := opts.RuleExclusions.Filter(linter.Name(), result.Violations)
-	scoped := &LinterResult{WorkDir: opts.WorkDir, Violations: violations}
+	scoped := &LinterResult{WorkDir: opts.WorkDir, Violations: violations, Sources: result.Sources}
 	FilterViolationsByUserScope([]*LinterResult{scoped}, opts.WorkDir, opts.Scopes)
 	violations = scoped.Violations
 	violations, filterErr := filterGeneratedViolations(opts, violations, result.Sources)
