@@ -8,11 +8,10 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/task"
-	"github.com/flanksource/gomplate/v3"
-
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // findingsSource is Violation.Source and the fingerprint's linter name.

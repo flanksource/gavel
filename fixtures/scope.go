@@ -12,7 +12,7 @@ import (
 
 	"github.com/flanksource/gavel/internal/safefs"
 
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // StepScope is the state one fixture run shares across its steps: the

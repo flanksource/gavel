@@ -7,11 +7,11 @@ import (
 	"strconv"
 	"strings"
 
+	celast "cel.dev/cel-go/common/ast"
+	"cel.dev/cel-go/common/operators"
+	"cel.dev/cel-go/common/types/ref"
 	commonsContext "github.com/flanksource/commons/context"
-	"github.com/flanksource/gomplate/v3"
-	celast "github.com/google/cel-go/common/ast"
-	"github.com/google/cel-go/common/operators"
-	"github.com/google/cel-go/common/types/ref"
+	"github.com/flanksource/gomplate/v4"
 )
 
 type celFailureKind int

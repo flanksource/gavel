@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // ExportRecord is one exported variable on a step's result:

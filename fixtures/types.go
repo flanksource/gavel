@@ -20,7 +20,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/testrunner/parsers"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // FixtureTest represents a single test case parsed from a markdown table.
