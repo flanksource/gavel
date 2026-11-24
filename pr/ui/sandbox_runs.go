@@ -44,7 +44,10 @@ type sandboxRun struct {
 	CPUMillicores *int64 `json:"cpuMillicores,omitempty"`
 	MemoryBytes   *int64 `json:"memoryBytes,omitempty"`
 	// Spec is the sandbox.RunSpec the job ran.
-	Spec json.RawMessage `json:"spec,omitempty"`
+	Spec json.RawMessage `json:"spec,omitempty" gorm:"-"`
+	// SpecText holds spec::text as scanned: database/sql cannot store a text column in a
+	// json.RawMessage.
+	SpecText string `json:"-" gorm:"column:spec"`
 	// TimeoutSeconds is the longest the run may work.
 	TimeoutSeconds int64 `json:"timeoutSeconds"`
 	// Lost marks a run still recorded as running past its lifetime: its job can no longer
@@ -92,6 +95,7 @@ func (s *Server) handleSandboxRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	timeout, lifetime := s.agentRuns.Dispatcher.RunTimeout(), s.agentRuns.Dispatcher.RunLifetime()
 	for i := range runs {
+		runs[i].Spec = json.RawMessage(runs[i].SpecText)
 		runs[i].TimeoutSeconds = int64(timeout / time.Second)
 		runs[i].Lost = runs[i].Status == "running" && runs[i].StartedAt != nil && time.Since(*runs[i].StartedAt) > lifetime
 	}
