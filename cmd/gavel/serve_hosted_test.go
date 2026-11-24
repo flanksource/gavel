@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
+	"github.com/flanksource/captain/pkg/substrate/substratetest"
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/api/clerktest"
@@ -30,9 +32,11 @@ import (
 	"github.com/flanksource/gavel/github/githubtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/internal/logtest"
+	"github.com/flanksource/gavel/missioncontrol/missioncontroltest"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sshkeys"
+	"github.com/flanksource/incident-commander/clientapi"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,6 +161,106 @@ func TestHostedDashboard(t *testing.T) {
 	saved, err := ui.LoadOrgSearchConfig(t.Context(), opened.Gorm(), alpha.ID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"acme/app"}, saved.Repos)
+}
+
+// The platform dashboard is served behind the Clerk middleware, across organizations,
+// to a user whose Clerk public metadata marks them a platform admin.
+func TestHostedPlatformAPI(t *testing.T) {
+	f := newHostedFixture(t)
+	f.clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+	f.clerk.Organizations = []clerktest.Organization{
+		{ID: "org_a", Slug: "alpha", Name: "Alpha", Members: 2},
+		{ID: "org_c", Slug: "gamma", Name: "Gamma", Members: 1},
+	}
+	get := func(header http.Header) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, f.server.URL+"/api/platform/tenants", nil)
+		require.NoError(t, err)
+		req.Header = header
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return resp.StatusCode, string(data)
+	}
+
+	status, _ := get(http.Header{})
+	assert.Equal(t, http.StatusUnauthorized, status, "the platform API needs a signed-in user")
+
+	session := f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour))
+	status, body := get(http.Header{"Cookie": {"__session=" + session}})
+	require.Equal(t, http.StatusOK, status, body)
+	var tenants ui.PlatformTenants
+	require.NoError(t, json.Unmarshal([]byte(body), &tenants))
+	assert.Empty(t, tenants.ClerkError)
+	var names []string
+	for _, row := range tenants.Tenants {
+		names = append(names, fmt.Sprintf("%s inGavel=%t", row.Name, row.InGavel))
+	}
+	assert.Equal(t, []string{"Alpha inGavel=true", "Beta inGavel=true", "Gamma inGavel=false"}, names,
+		"the user's organizations, synced on sign-in, and one only Clerk has")
+}
+
+func TestHostedPlatformReadsMissionControl(t *testing.T) {
+	mc := missioncontroltest.New(t)
+	mc.SetResources(clientapi.SearchResourcesResponse{Configs: []clientapi.SelectedResource{{ID: "c1", Name: "gavel"}}})
+	mc.SetView("substrate", "capacity", map[string]any{"panels": []map[string]any{{"name": "Crashes", "type": "number", "rows": []map[string]any{{"value": 3}}}}})
+	mc.SetView("substrate", "org-usage", map[string]any{"panels": []map[string]any{{"name": "Running environments", "type": "number", "rows": []map[string]any{{"value": 2}}}}})
+	f := newHostedFixture(t, func(o *DashboardOptions) {
+		o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = mc.URL, "namespace=gavel", missioncontroltest.Token
+		o.MissionControlSubstrateView, o.MissionControlOrgView = "substrate/capacity", "substrate/org-usage"
+	})
+	f.clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+	get := func(path string) string {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, f.server.URL+path, nil)
+		require.NoError(t, err)
+		req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+		return string(body)
+	}
+
+	assert.Contains(t, get("/api/platform/infrastructure"), `"name":"gavel"`)
+	require.Len(t, mc.Searches(), 2, "config items, then health checks")
+	assert.Equal(t, "namespace=gavel", mc.Searches()[0].Configs[0].Search)
+	assert.Equal(t, "c1", mc.ChangeSearches()[0].CatalogID, "and the changes of the config items found")
+	assert.Contains(t, get("/api/platform/substrate/metrics"), `"name":"Crashes","type":"number","value":3`)
+
+	other := uuid.New()
+	assert.Contains(t, get("/api/platform/orgs/"+other.String()+"/measured-usage"), `"name":"Running environments","type":"number","value":2`)
+	assert.Contains(t, get("/api/usage/measured"), `"name":"Running environments"`, "an organization admin sees their own")
+	views := mc.ViewRequests()
+	require.Len(t, views, 3)
+	assert.Equal(t, map[string]any{"org": other.String()}, views[1]["variables"])
+	assert.NotEqual(t, other.String(), views[2]["variables"].(map[string]any)["org"], "the admin's own organization")
+}
+
+func TestHostedPlatformListsSubstratesInventory(t *testing.T) {
+	server := substratetest.Start(t)
+	server.AddWorker(substrate.Worker{Name: "pool-a-0", Pool: "pool-a", State: "active"})
+	options := server.Options()
+	f := newHostedFixture(t, func(o *DashboardOptions) {
+		o.Sandbox, o.SubstrateTemplate = "substrate", "gavel-runner"
+		o.SubstrateEnvAPI, o.SubstrateControl = options.EnvAPI, options.Control
+		o.SubstrateGavelName, o.credentialProviderToken = "beta", "provider-token"
+	})
+	f.clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+	req, err := http.NewRequest(http.MethodGet, f.server.URL+"/api/platform/substrate/inventory", nil)
+	require.NoError(t, err)
+	req.Header.Set("Cookie", "__session="+f.clerk.SessionToken(hostedPublicURL, time.Now().Add(time.Hour)))
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	assert.Contains(t, string(body), `"name":"pool-a-0"`)
 }
 
 func TestHostedPush(t *testing.T) {

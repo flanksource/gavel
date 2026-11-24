@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,11 +14,14 @@ import (
 
 	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/commons/properties"
+	"github.com/flanksource/gavel/budget"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -79,6 +83,16 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 		dispatcher.Logs = cache.OrgBlobs
 	}
 	if opts.Sandbox == "substrate" {
+		templates, err := orgTemplates(opts, db)
+		if err != nil {
+			return nil, err
+		}
+		dispatcher.Templates = templates
+		dispatcher.Admission = &sandbox.Admission{
+			Budgets: budget.Store{DB: db}, RunLifetime: dispatcher.RunLifetime(),
+			Wait:    properties.Duration(15*time.Minute, "sandbox.queue.timeout"),
+			Recheck: properties.Duration(30*time.Second, "sandbox.budget.interval"),
+		}
 		dispatcher.Sources = sources
 		// Each run's requests carry its organization's keys, which the credential provider in
 		// substrate's cluster fetches from this gavel by the run.
@@ -93,18 +107,39 @@ func newSandboxDispatcher(ctx context.Context, opts DashboardOptions, db *gorm.D
 // sandboxSweepInterval is how often serve sweeps what runs left behind.
 const sandboxSweepInterval = 10 * time.Minute
 
-// sweepSandboxEvery sweeps what runs older than lifetime left behind, every sandboxSweepInterval
-// until ctx ends.
-func sweepSandboxEvery(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration) {
+// sweepSandboxEvery sweeps what runs older than lifetime left behind, and, when templates is set,
+// the organizations' templates no run uses any more, every sandboxSweepInterval until ctx ends.
+func sweepSandboxEvery(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Duration, templates templateSweeper) {
 	ticker := time.NewTicker(sandboxSweepInterval)
 	defer ticker.Stop()
 	for {
 		sweepSandbox(ctx, sweeper, lifetime)
+		if templates != nil {
+			sweepOrgTemplates(ctx, templates)
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// templateSweeper deletes the organizations' templates no run uses any more, and returns their
+// names.
+type templateSweeper interface {
+	Sweep(ctx context.Context) ([]string, error)
+}
+
+// sweepOrgTemplates deletes the organizations' templates no run uses any more, logging what it
+// deleted. A sweep that fails is a warning; the next one tries again.
+func sweepOrgTemplates(ctx context.Context, templates templateSweeper) {
+	swept, err := templates.Sweep(ctx)
+	if len(swept) > 0 {
+		logger.Infof("deleted %d organization substrate templates no run uses any more: %s", len(swept), strings.Join(swept, ", "))
+	}
+	if err != nil && ctx.Err() == nil {
+		logger.Warnf("sweep the organizations' substrate templates: %v", err)
 	}
 }
 
@@ -118,6 +153,42 @@ func sweepSandbox(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Du
 	if err != nil && ctx.Err() == nil {
 		logger.Warnf("sweep the sandbox environments runs left behind: %v", err)
 	}
+}
+
+// orgTemplates gives each organization's runs their own copy of --substrate-template, at
+// --substrate-cpu and --substrate-memory unless a platform admin set the organization's size.
+func orgTemplates(opts DashboardOptions, db *gorm.DB) (*sandbox.OrgTemplates, error) {
+	size, err := substrateSize(opts)
+	if err != nil {
+		return nil, err
+	}
+	client, err := substrate.Dial(substrateOptions(opts))
+	if err != nil {
+		return nil, fmt.Errorf("--sandbox substrate: %w", err)
+	}
+	return &sandbox.OrgTemplates{DB: db, Client: client, Atespace: opts.SubstrateAtespace, Base: opts.SubstrateTemplate, Size: size}, nil
+}
+
+// substrateSize is --substrate-cpu and --substrate-memory; a flag left empty is zero, which the
+// base template's size fills.
+func substrateSize(opts DashboardOptions) (substrate.Size, error) {
+	var size substrate.Size
+	var errs []error
+	if opts.SubstrateCPU != "" {
+		cpu, err := resource.ParseQuantity(opts.SubstrateCPU)
+		if err != nil || cpu.Sign() <= 0 {
+			errs = append(errs, fmt.Errorf("--substrate-cpu must be a positive Kubernetes quantity such as 2 or 500m, got %q", opts.SubstrateCPU))
+		}
+		size.CPUMillicores = cpu.MilliValue()
+	}
+	if opts.SubstrateMemory != "" {
+		memory, err := resource.ParseQuantity(opts.SubstrateMemory)
+		if err != nil || memory.Sign() <= 0 {
+			errs = append(errs, fmt.Errorf("--substrate-memory must be a positive Kubernetes quantity such as 4Gi, got %q", opts.SubstrateMemory))
+		}
+		size.MemoryBytes = memory.Value()
+	}
+	return size, errors.Join(errs...)
 }
 
 // substrateOptions is how the --substrate-* flags reach the substrate jobs and agent runs execute

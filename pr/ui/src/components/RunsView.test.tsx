@@ -66,6 +66,17 @@ describe('RunsView', () => {
     expect(agentRow.getByText('Fix the build')).toBeTruthy();
   });
 
+  it('says why a run waits or why it never ran', async () => {
+    runs = [
+      { ...agentRun, id: 'run-queued', status: 'queued', statusMessage: 'queued: this organization\'s runs hold 8 of its 8 concurrent cores, and no run is ahead of this one' },
+      { ...pushCheck, id: 'run-refused', status: 'failed', exitCode: undefined, statusMessage: 'budget used up: this organization has used $50.00 of its $50.00 model cost budget' },
+    ];
+    renderRuns();
+
+    expect(await screen.findByText('queued: this organization\'s runs hold 8 of its 8 concurrent cores, and no run is ahead of this one')).toBeTruthy();
+    expect(screen.getByText('budget used up: this organization has used $50.00 of its $50.00 model cost budget')).toBeTruthy();
+  });
+
   it('selects a run from its row', async () => {
     const onSelect = vi.fn();
     renderRuns({ onSelect });

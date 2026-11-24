@@ -93,3 +93,42 @@ var _ = Describe("Changed lint execution", func() {
 		Expect(goInvocation.files).To(BeEmpty())
 	})
 })
+
+var _ = Describe("Changed project manifest lint execution", func() {
+	It("reruns the project for a changed package.json and .gavel.yaml but reports only changed files", func() {
+		root := GinkgoT().TempDir()
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		GinkgoT().Setenv("GAVEL_CHANGED_BASE", "")
+		GinkgoT().Setenv("CI", "false")
+		Expect(os.Mkdir(filepath.Join(root, "bin"), 0o755)).To(Succeed())
+		script, err := os.ReadFile("../linters/reactdoctor/testdata/react-doctor.sh")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(os.WriteFile(filepath.Join(root, "bin", "react-doctor"), script, 0o700)).To(Succeed())
+		GinkgoT().Setenv("PATH", filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+		GinkgoT().Setenv("REACT_DOCTOR_TEST_REPORT", `{"diagnostics":[{"filePath":"selected.tsx","rule":"no-danger","severity":"warning","line":42},{"filePath":"other.tsx","rule":"no-danger","severity":"error","line":7}]}`)
+		GinkgoT().Setenv("REACT_DOCTOR_TEST_EXIT", "0")
+		files := map[string]string{
+			"package.json": `{"name":"sample","dependencies":{"react":"18.0.0"}}` + "\n",
+			".gavel.yaml":  "lint: {}\n",
+			"selected.tsx": "export const selected = 1\n",
+			"other.tsx":    "export const other = 1\n",
+		}
+		for file, content := range files {
+			Expect(os.WriteFile(filepath.Join(root, file), []byte(content), 0o600)).To(Succeed())
+		}
+		for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Test"}, {"config", "user.email", "test@example.com"}, {"config", "commit.gpgsign", "false"}, {"add", "--", "package.json", ".gavel.yaml", "selected.tsx", "other.tsx"}, {"commit", "-qm", "initial"}} {
+			cmd := exec.Command("git", args...)
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), string(out))
+		}
+		Expect(os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte("bin/\n"), 0o600)).To(Succeed())
+		for _, file := range []string{"package.json", ".gavel.yaml"} {
+			Expect(os.WriteFile(filepath.Join(root, file), []byte(files[file]+"\n"), 0o600)).To(Succeed())
+		}
+		results, err := Execute(Options{WorkDir: root, Linters: []string{"react-doctor"}, Since: "HEAD"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results).To(HaveExactElements(SatisfyAll(HaveField("Linter", "react-doctor"), HaveField("Skipped", false), HaveField("Violations", BeEmpty()))))
+		Expect(linters.HasFailures(results)).To(BeFalse())
+	})
+})

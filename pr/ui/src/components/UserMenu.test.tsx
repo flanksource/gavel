@@ -88,9 +88,8 @@ describe('UserMenu', () => {
     const page = screen.getByTestId('profile-page');
     expect(page.dataset.label).toBe('SSH keys');
     expect(page.dataset.url).toBe('ssh-keys');
-    const orgPage = screen.getByTestId('organization-profile-page');
-    expect(orgPage.dataset.label).toBe('Model keys');
-    expect(orgPage.dataset.url).toBe('model-keys');
+    const orgPages = screen.getAllByTestId('organization-profile-page');
+    expect(orgPages.map(orgPage => [orgPage.dataset.label, orgPage.dataset.url])).toEqual([['Model keys', 'model-keys'], ['Usage and budgets', 'usage']]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

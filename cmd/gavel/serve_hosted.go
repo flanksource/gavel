@@ -22,12 +22,15 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/api"
+	"github.com/flanksource/gavel/budget"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github"
 	ghcache "github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/github/installations"
 	shared "github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/missioncontrol"
 	"github.com/flanksource/gavel/modelkeys"
+	"github.com/flanksource/gavel/platform"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sandbox"
@@ -183,10 +186,30 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		return hostedStack{}, err
 	}
 	if dispatcher != nil {
+		// A run left waiting for room when serve stopped lost its caller with it.
+		if failed, err := dispatcher.FailQueuedRuns(ctx); err != nil {
+			logger.Warnf("%v", err)
+		} else if failed > 0 {
+			logger.Infof("failed %d sandbox runs left waiting for room when serve stopped", failed)
+		}
 		if sweeper, ok := dispatcher.Executor.(sandbox.Sweeper); ok {
-			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime())
+			var templates templateSweeper
+			if dispatcher.Templates != nil {
+				templates = dispatcher.Templates
+			}
+			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime(), templates)
+		}
+		if dispatcher.Admission != nil {
+			// Running runs stop once a cumulative budget of their organization is used up.
+			go dispatcher.WatchBudgets(ctx, dispatcher.Admission.Recheck)
 		}
 	}
+
+	var missionControl *missioncontrol.Source
+	if opts.MissionControlURL != "" {
+		missionControl = missioncontrol.New(opts.MissionControlURL, opts.missionControlToken, opts.MissionControlInfra)
+	}
+	measured := ui.MeasuredUsage{MissionControl: missionControl, View: opts.MissionControlOrgView}
 
 	orgs := ui.NewOrgServers(func(ctx context.Context, scope tenant.Scope) (*ui.Server, error) {
 		cfg, err := ui.LoadOrgSearchConfig(ctx, db, scope.OrgID)
@@ -203,6 +226,7 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		srv.SetHostedMode(true)
 		srv.SetHostedWorkspaces(ui.HostedWorkspaces{DB: db, Sources: sources})
 		srv.SetFixtureSchemaProvider(func() (any, error) { return fixturesSchemaDocument() })
+		srv.SetMeasuredUsage(measured)
 		if dispatcher != nil {
 			srv.SetAgentRuns(ui.AgentRuns{
 				Dispatcher: dispatcher, Substrate: substrateBackend, Sources: sources,
@@ -219,14 +243,28 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		}
 		return srv, nil
 	}, orgIdleTTL)
-	next := orgs.Handler()
+	// The platform dashboard reads across organizations, so it is served beside the
+	// per-org servers, not by them.
+	platformAPI := &ui.PlatformAPI{
+		Store: platform.Store{DB: db, Issuer: issuer}, Clerk: backend, App: app,
+		MissionControl: missionControl, SubstrateView: opts.MissionControlSubstrateView, OrgView: opts.MissionControlOrgView,
+	}
+	// With --sandbox substrate the executor lists substrate's inventory over its own connection.
+	if dispatcher != nil {
+		if inventory, ok := dispatcher.Executor.(ui.SubstrateInventory); ok {
+			platformAPI.Substrate = inventory
+		}
+	}
+	if dispatcher != nil && dispatcher.Templates != nil {
+		platformAPI.Sizes = dispatcher.Templates
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/api/platform/", platformAPI.Handler())
 	if app != nil {
 		link := &ui.GitHubLink{App: app, Store: store, Clerk: backend, SecretKey: secret}
-		mux := http.NewServeMux()
 		mux.Handle("/api/github/", link.Handler())
-		mux.Handle("/", next)
-		next = mux
 	}
+	mux.Handle("/", orgs.Handler())
 
 	shellCtx, stopShell := context.WithCancel(ctx)
 	shell := ui.NewServer(gavelctx.New(shellCtx), interval, github.Options{TokenSource: githubNotConnected}, ui.SearchConfig{})
@@ -251,10 +289,11 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		credentials := &ui.CredentialsAPI{
 			DB: db, Keys: modelkeys.Store{DB: db}, Atespace: opts.SubstrateAtespace,
 			RunLifetime: dispatcher.RunLifetime(), Token: opts.credentialProviderToken,
+			Budgets: &budget.Store{DB: db},
 		}
 		root.Handle("/api/credentials/", credentials.Handler())
 	}
-	root.Handle("/", auth.Middleware(next, shell.Handler()))
+	root.Handle("/", auth.Middleware(mux, shell.Handler()))
 	return hostedStack{handler: root, members: auth.Members, stop: stop, dispatcher: dispatcher}, nil
 }
 

@@ -120,12 +120,64 @@ created from the runner image. The environment is deleted once the job exits or 
   no run token and can't reach serve, as a job's can't.
 - **Cleanup.** A run works at most its timeout, an hour, whatever its step's own budget. Every
   ten minutes serve deletes `gavel-run-` environments older than a run can live (its timeout
-  plus 15 minutes), left behind when serve stopped mid-run. Substrate's access
-  policy must let serve's identity list the atespace's actors for this.
+  plus 15 minutes), left behind when serve stopped mid-run, and the organizations' templates
+  no actor runs that are no longer their organization's (an old size or an old base template),
+  or whose organization gavel no longer has. Substrate's access policy must let serve's identity
+  list the atespace's actors and templates for this.
 - **Image.** Environments are created from `--substrate-template`, which is required: an image
   template an operator registered with `ate-env manifest template --rootfs-image
-  <image@sha256:…>`, which sets the image they run and their CPU, memory and volumes.
+  <image@sha256:…>`, which sets the image they run and their volumes.
   `--sandbox-image` is refused, since env creates no environment from an image of its own.
+- **Organization templates and sizes.** Each organization's runs, jobs and agent runs alike, are
+  created from its own copy of `--substrate-template`, `gavel-org-<organization>-<hash>`, which
+  gavel makes on the organization's first run. The copy runs what the base template runs at the
+  organization's size, the CPU and memory substrate books on a worker and holds each environment
+  to: the size a platform admin set for the organization on the platform dashboard, else
+  `--substrate-cpu` and `--substrate-memory` (chart `sandbox.substrate.size.cpu` and `.memory`),
+  else the base template's own. A copy builds no golden snapshot, so a run starts at once from
+  the image, even right after its template was made. A template can't change, so the hash names
+  the base template's UID and the size: registering the runner's next image under the same name,
+  or a new size, gives each organization a new template on its next run, and the sweep deletes
+  the old ones once nothing runs them. Each run records its template and size
+  (`sandbox_runs.template`, `cpu_millicores`, `memory_bytes`). Substrate's metrics name an
+  environment's template, so an organization's actual CPU and memory show under its template's
+  name. Serve's identity must be allowed to get, create, list and delete actor templates in the
+  atespace, which its `editor` role allows. A run whose organization can't get its template
+  fails without being recorded, saying why.
+- **Usage.** Every member sees what the organization used, this month, the last 30 days or this
+  week, on the Usage and budgets page of its profile (`GET /api/usage?window=now/M`). Its runs'
+  CPU and memory count what each was sized at for as long as it ran, whatever it used of it:
+  core-hours and GiB-hours, and the cores and GiB its runs hold now. A run serve left running when
+  it stopped counts only as long as a run can live. Its model calls count their tokens by kind
+  and their cost in USD: what the provider reported for each call, else its list price, each kind
+  of token at the model's price for it; a call priced in another currency counts its tokens but
+  not its cost. Counted tokens are input, cache writes, output and reasoning; cache reads are
+  shown but not counted, as the providers leave them out of their input limits.
+  Its admins also see its measured CPU and memory there, sampled from substrate's Prometheus
+  through Mission Control (`--mission-control-org-view`, see
+  [platform-dashboard.md](platform-dashboard.md#measured-cpu-and-memory)).
+- **Budgets.** An organization admin sets its budgets on the same page (`/api/budgets`), at most
+  one per resource and kind; without one, nothing is capped. A cumulative budget caps what the
+  organization uses in a window, such as this month (`now/M`): core-hours, GiB-hours, counted
+  tokens or USD. A concurrent one caps the cores or GiB its runs hold at once. CPU and memory
+  budgets hold back every run; token and model cost budgets hold back agent runs only, as only
+  they call models. Budgets are enforced:
+  - A run is refused when a cumulative budget it counts towards is used up, or when it is bigger
+    than a concurrent budget on its own. Its record fails saying why, and a project action
+    answers 429.
+  - A run that would take the organization over a concurrent budget waits its turn, first in
+    first out, recorded as queued with why, which the Runs view, a push's output and an agent
+    run's log show. It starts once a run ends and it fits, or an admin raises the budget, and
+    fails after `sandbox.queue.timeout` (a property, 15 minutes). Its token is signed when it
+    starts. A run left queued when serve stopped fails at serve's start.
+  - Running runs stop once a cumulative budget that covers them is used up, ending cancelled with
+    `stopped: <why>`: serve checks every organization with a running run each
+    `sandbox.budget.interval` (a property, 30 seconds), and an agent run's organization after each
+    of its transcripts is ingested. An agent run's spend is also capped at what the model cost
+    budget leaves, and the credential provider is refused the organization's model keys once its
+    token or model cost budget is used up.
+  - Lowering a concurrent budget below what runs hold stops none of them; new runs wait.
+  - What runs hold at once is counted in serve's memory, so serve runs as one replica.
 - **Versions.** gavel speaks Substrate 1.0.0-rc.2 and env `56424de` or later.
 - **Egress.** Substrate denies every destination an actor's egress policy doesn't allow. gavel
   gives each environment, a job's or an agent run's, a policy that allows proxy.golang.org,
@@ -168,7 +220,7 @@ created from the runner image. The environment is deleted once the job exits or 
 
 ### Running the substrate e2e
 
-Two tests run on a live cluster, whose runner image must be this gavel's, since the environment
+These tests run on a live cluster, whose runner image must be this gavel's, since the environment
 runs its `gavel runner run-task`. `TestPushChecksRunOnSubstrate` (`pr/ui`) runs a failing and a
 passing push check through the dispatcher: each job runs in a checkout of the pushed commit, asks
 a run API on the host over its run's channel and exits with the check's verdict.
@@ -217,8 +269,22 @@ Then run:
 
 ```sh
 GAVEL_SANDBOX_SUBSTRATE_TEST=1 GAVEL_SUBSTRATE_TOKEN_FILE=gavel.token go test ./sandbox ./pr/ui \
-  -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate|TestHostedTodoRunsOnSubstrate'
+  -run 'TestSubstrateExecutorAgainstACluster|TestPushChecksRunOnSubstrate|TestHostedTodoRunsOnSubstrate|TestOrgBudgetsHoldOnSubstrate|TestOrgTokenBudgetsHoldAgentRunsOnSubstrate'
 ```
+
+`TestOrgBudgetsHoldOnSubstrate` (`pr/ui`) holds an organization's push checks to its budgets: they
+run from its own copy of the runner template at its size (1 core, 1 GiB, read from
+`/proc/meminfo`), a second check waits while the first holds the organization's one concurrent
+core and starts once it ends, and a used-up CPU budget stops a running check, deleting its
+environment, and refuses the next. It needs `gavel-e2e/gavel` to create and delete templates in
+`ate-env` (an `editor`), and deletes the template it made.
+
+`TestOrgTokenBudgetsHoldAgentRunsOnSubstrate` (`pr/ui`) holds an organization's agent runs to its
+token budget against the real model: a plan step runs from the organization's template and its
+tokens count, a run whose budget its first transcript uses up is stopped and its environment
+deleted, and the next is refused with 429. Like `TestHostedTodoRunsOnSubstrate` it needs the
+template's image to hold this tree's gavel: an environment whose captain is older than the host's
+refuses the run's spec (`invalid schemaStrictness "repair"` from a captain before v0.0.78).
 
 `TestHostedTodoRunsOnSubstrate` runs a hosted todo's plan step whole in an environment against the
 real model, so the `gavel-runner` template's image must hold this tree's gavel; on failure it logs the environment's

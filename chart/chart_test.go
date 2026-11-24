@@ -392,6 +392,16 @@ func TestChartRunsSandboxJobsOnSubstrate(t *testing.T) {
 	assert.NotContains(t, strings.Join(serveContainer(t, render(t)).Args, " "), "--sandbox", "the sandbox is off unless enabled")
 }
 
+func TestChartSizesEachOrganizationsSubstrateEnvironments(t *testing.T) {
+	requireHelm(t)
+	args := strings.Join(serveContainer(t, render(t, substrateSandbox()...)).Args, " ")
+	assert.NotContains(t, args, "--substrate-cpu", "by default an organization's environments are the template's size")
+	assert.NotContains(t, args, "--substrate-memory")
+
+	args = strings.Join(serveContainer(t, render(t, append(substrateSandbox(), "sandbox.substrate.size.cpu=500m", "sandbox.substrate.size.memory=2Gi")...)).Args, " ")
+	assert.Contains(t, args, " --substrate-cpu 500m --substrate-memory 2Gi")
+}
+
 func TestChartReachesSubstrateInAnotherCluster(t *testing.T) {
 	requireHelm(t)
 	m := render(t, append(substrateSandbox(),
@@ -418,6 +428,31 @@ func TestChartReachesSubstrateInAnotherCluster(t *testing.T) {
 
 	assert.NotContains(t, strings.Join(serveContainer(t, render(t, substrateSandbox()...)).Args, " "),
 		"--substrate-client-cert", "an unset client certificate is not passed")
+}
+
+func TestChartReadsMissionControl(t *testing.T) {
+	requireHelm(t)
+	container := serveContainer(t, render(t,
+		"missionControl.url=https://mc.example.com/api", "missionControl.infra=namespace=gavel",
+		"missionControl.token.secretName=gavel-mission-control"))
+	assert.Contains(t, strings.Join(container.Args, " "), " --mission-control-url https://mc.example.com/api --mission-control-infra namespace=gavel")
+	assert.NotContains(t, strings.Join(container.Args, " "), "--mission-control-substrate-view", "substrate's metrics View is optional")
+	assert.NotContains(t, strings.Join(container.Args, " "), "--mission-control-org-view", "the organizations' measured use View is optional")
+
+	container = serveContainer(t, render(t,
+		"missionControl.url=https://mc.example.com/api", "missionControl.infra=namespace=gavel",
+		"missionControl.substrateView=substrate/capacity", "missionControl.token.secretName=gavel-mission-control"))
+	assert.Contains(t, strings.Join(container.Args, " "), " --mission-control-substrate-view substrate/capacity")
+
+	container = serveContainer(t, render(t,
+		"missionControl.url=https://mc.example.com/api", "missionControl.infra=namespace=gavel",
+		"missionControl.orgView=substrate/org-usage", "missionControl.token.secretName=gavel-mission-control"))
+	assert.Contains(t, strings.Join(container.Args, " "), " --mission-control-org-view substrate/org-usage")
+	assert.Equal(t, "secret:gavel-mission-control/token", env(container)["GAVEL_MISSION_CONTROL_TOKEN"])
+
+	container = serveContainer(t, render(t))
+	assert.NotContains(t, strings.Join(container.Args, " "), "--mission-control", "Mission Control is off unless its URL is set")
+	assert.NotContains(t, env(container), "GAVEL_MISSION_CONTROL_TOKEN")
 }
 
 // substrateSandbox are the values every substrate sandbox needs.

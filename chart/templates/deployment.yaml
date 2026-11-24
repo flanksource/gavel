@@ -64,6 +64,22 @@ spec:
             - --github-app-slug
             - {{ .Values.githubApp.slug | quote }}
             {{- end }}
+            {{- with .Values.missionControl }}
+            {{- if .url }}
+            - --mission-control-url
+            - {{ .url | quote }}
+            - --mission-control-infra
+            - {{ .infra | quote }}
+            {{- if .substrateView }}
+            - --mission-control-substrate-view
+            - {{ .substrateView | quote }}
+            {{- end }}
+            {{- if .orgView }}
+            - --mission-control-org-view
+            - {{ .orgView | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.sandbox.enabled }}
             {{- with .Values.sandbox.substrate }}
             - --sandbox
@@ -78,6 +94,16 @@ spec:
             - {{ .atespace | quote }}
             - --substrate-template
             - {{ .template | quote }}
+            {{- with .size }}
+            {{- if .cpu }}
+            - --substrate-cpu
+            - {{ .cpu | quote }}
+            {{- end }}
+            {{- if .memory }}
+            - --substrate-memory
+            - {{ .memory | quote }}
+            {{- end }}
+            {{- end }}
             {{- range .egress }}
             - --substrate-egress
             - {{ . | quote }}
@@ -122,6 +148,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "gavel.secretName" . }}
                   key: GAVEL_SECRET_KEY
+            {{- if .Values.missionControl.url }}
+            - name: GAVEL_MISSION_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.missionControl.token.secretName }}
+                  key: {{ .Values.missionControl.token.key }}
+            {{- end }}
             {{- if .Values.sandbox.enabled }}
             - name: GAVEL_CREDENTIAL_PROVIDER_TOKEN
               valueFrom:

@@ -1,4 +1,4 @@
-import { useState, useEffect, useEffectEvent, useMemo, useCallback, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useEffectEvent, useMemo, useCallback, useRef } from 'react';
 import type { PRItem, PRInfo, SearchConfig, Project } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
@@ -25,6 +25,8 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './hostedUI';
 import { currentAuthMode } from './query';
+import { meQuery } from './components/oneShotQueries';
+import { useQuery } from '@tanstack/react-query';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
 import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
@@ -48,7 +50,7 @@ import { useAppQueries } from './useAppQueries';
 import { useAppMutations } from './useAppMutations';
 import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiAdd, UiArrowLeft, UiChatDots, UiCheck, UiCog, UiCopy, UiDotsVertical, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiPlay, UiRobotAi, UiSearch, UiTerminal } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiAdd, UiArrowLeft, UiChatDots, UiCheck, UiCog, UiCopy, UiDotsVertical, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiOrganization, UiPlay, UiRobotAi, UiSearch, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
 import { MenubarView } from './components/mobile/MenubarView';
 import { MobilePRList } from './components/mobile/MobilePRList';
@@ -63,6 +65,10 @@ import { Spinner } from './icons/Spinner';
 import { applyProjectScope } from './projectScope';
 
 const defaultConfig: SearchConfig = { repos: [] };
+
+// PlatformView is code-split: only platform admins open it, and its charts pull in recharts,
+// so the rest of the dashboard loads without them.
+const PlatformView = lazy(() => import('./components/platform/PlatformView').then(m => ({ default: m.PlatformView })));
 
 // Percentage width of the AppShell body sidebar per tab. A PR row carries title,
 // repo, checks and badges so it wants half the body; a project is just a name and
@@ -149,6 +155,7 @@ export function App() {
   const syncedScopeProject = useRef(initialConfig.project ?? '');
   const visible = useDocumentVisible();
   const isMobile = useIsMobile();
+  const navTabs = useShownTabs();
 
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
   const isMenubar = pathname === '/menubar';
@@ -294,6 +301,10 @@ export function App() {
   const changeTaskTimeRange = useCallback((from: string, to: string) => {
     commitRoute({ ...routeState, taskTimeRange: { from, to } });
   }, [commitRoute, routeState]);
+
+  const navigatePlatformOrg = useCallback((org: string) => {
+    commitRoute({ tab: 'platform', selectedPath: org, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
+  }, [commitRoute, filters, scopeProject]);
 
   const navigateRun = useCallback((id: string) => {
     commitRoute({ tab: 'runs', selectedPath: id, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
@@ -816,7 +827,7 @@ export function App() {
         ) : brand}
         {...(isMobile
           ? {
-              navSections: [{ items: shownTabs().map(tab => ({
+              navSections: [{ items: navTabs.map(tab => ({
                 key: tab.id,
                 label: tab.label,
                 icon: tab.icon,
@@ -930,6 +941,10 @@ export function App() {
           </div>
         ) : activeTab === 'runs' ? (
           <RunsView selectedId={selectedPath} onSelect={navigateRun} />
+        ) : activeTab === 'platform' ? (
+          <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading the platform dashboard…</div>}>
+            <PlatformView selectedOrg={selectedPath} onSelectOrg={navigatePlatformOrg} />
+          </Suspense>
         ) : activeTab === 'prompts' ? (
           <PromptsView
             projects={scopedProjects}
@@ -970,10 +985,12 @@ const allTabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
   { id: 'tasks', label: 'Tasks', icon: UiListChecks },
   { id: 'prompts', label: 'Prompts', icon: UiRobotAi },
   { id: 'activity', label: 'Activity', icon: UiActivity },
+  { id: 'platform', label: 'Platform', icon: UiOrganization },
 ];
 
-function shownTabs() {
-  const shown = new Set(visibleTabs(currentAuthMode(), allTabs.map(t => t.id)));
+function useShownTabs() {
+  const me = useQuery(meQuery());
+  const shown = new Set(visibleTabs(currentAuthMode(), allTabs.map(t => t.id), me.data?.user?.platformAdmin));
   return allTabs.filter(t => shown.has(t.id));
 }
 
@@ -1026,9 +1043,10 @@ function MobileShellActions({ chat, newTodoDisabled, onNewTodo, moreOpen, onSear
 }
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
+  const tabs = useShownTabs();
   return (
     <div className="flex gap-1 border-b border-transparent">
-      {shownTabs().map(t => {
+      {tabs.map(t => {
         const Icon = t.icon;
         return (
           <Button

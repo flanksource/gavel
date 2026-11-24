@@ -49,6 +49,15 @@ var _ = Describe("ADF", func() {
 		Expect(rendered.Markdown()).To(ContainSubstring("atlassian-media://"))
 	})
 
+	It("keeps every mark on a text, including one inside a link", func() {
+		var doc ADFNode
+		err := json.Unmarshal([]byte(`{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Docs","marks":[{"type":"link","attrs":{"href":"https://example.com/docs"}},{"type":"strong"}]},{"type":"text","text":" and "},{"type":"text","text":"gone","marks":[{"type":"em"},{"type":"strike"}]}]}]}`), &doc)
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := doc.Render()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rendered.Markdown()).To(Equal("[**Docs**](https://example.com/docs) and ~~*gone*~~"))
+	})
+
 	It("reports unknown node types instead of silently dropping content", func() {
 		doc := ADFNode{Type: "doc", Version: 1, Content: []ADFNode{{Type: "unknown"}}}
 		output, err := doc.Render()

@@ -15,6 +15,20 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var _ = Describe("Lint exit code", func() {
+	DescribeTable("fails CI only on error-severity violations or a linter that failed to run",
+		func(result *linters.LinterResult, expected int) {
+			Expect(lintExitCode([]*linters.LinterResult{result})).To(Equal(expected))
+		},
+		Entry("warnings only", &linters.LinterResult{Linter: "react-doctor", Success: true,
+			Violations: []models.Violation{{Severity: models.SeverityWarning}, {Severity: models.SeverityInfo}}}, 0),
+		Entry("an error among warnings", &linters.LinterResult{Linter: "react-doctor", Success: true,
+			Violations: []models.Violation{{Severity: models.SeverityWarning}, {Severity: models.SeverityError}}}, 1),
+		Entry("linter crashed", &linters.LinterResult{Linter: "oxlint", Error: "exit status 2"}, 1),
+		Entry("linter not installed", &linters.LinterResult{Linter: "tsc", Skipped: true, Error: "not found on PATH"}, 0),
+	)
+})
+
 var _ = Describe("Standalone lint output", func() {
 	It("returns a persistence error when the history directory cannot be created", func() {
 		dir := GinkgoT().TempDir()

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/gavel/internal/logtest"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/google/uuid"
@@ -134,6 +135,54 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		{"GAVEL_SECRET_KEY not base64", func(o *DashboardOptions) { o.secretKey = "not base64!" }, []string{
 			"GAVEL_SECRET_KEY must be at least 32 random bytes, base64-encoded (it isn't valid base64)",
 		}},
+		{"mission control configured", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+		}, nil},
+		{"mission control without its token", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra = "https://mc.example.com/api", "namespace=gavel"
+		}, []string{"--mission-control-url requires the GAVEL_MISSION_CONTROL_TOKEN environment variable, a Mission Control access token with the viewer role"}},
+		{"mission control without a search", func(o *DashboardOptions) {
+			o.MissionControlURL, o.missionControlToken = "https://mc.example.com/api", "mc-token"
+		}, []string{"--mission-control-url requires --mission-control-infra, the Mission Control search selecting gavel's infrastructure, e.g. namespace=gavel"}},
+		{"mission control URL without a scheme", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "mc.example.com", "namespace=gavel", "mc-token"
+		}, []string{`--mission-control-url must be an http or https URL, got "mc.example.com"`}},
+		{"mission control search without its URL", func(o *DashboardOptions) { o.MissionControlInfra = "namespace=gavel" }, []string{
+			"--mission-control-infra needs --mission-control-url",
+		}},
+		{"mission control with substrate's metrics view", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+			o.MissionControlSubstrateView = "substrate/capacity"
+		}, nil},
+		{"substrate's metrics view without its namespace", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+			o.MissionControlSubstrateView = "capacity"
+		}, []string{`--mission-control-substrate-view must name a View as namespace/name, got "capacity"`}},
+		{"substrate's metrics view without its URL", func(o *DashboardOptions) { o.MissionControlSubstrateView = "substrate/capacity" }, []string{
+			"--mission-control-substrate-view needs --mission-control-url",
+		}},
+		{"mission control with the organizations' measured use view", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+			o.MissionControlOrgView = "substrate/org-usage"
+		}, nil},
+		{"organizations' measured use view without its namespace", func(o *DashboardOptions) {
+			o.MissionControlURL, o.MissionControlInfra, o.missionControlToken = "https://mc.example.com/api", "namespace=gavel", "mc-token"
+			o.MissionControlOrgView = "org-usage"
+		}, []string{`--mission-control-org-view must name a View as namespace/name, got "org-usage"`}},
+		{"organizations' measured use view without its URL", func(o *DashboardOptions) { o.MissionControlOrgView = "substrate/org-usage" }, []string{
+			"--mission-control-org-view needs --mission-control-url",
+		}},
+		{"organizations' measured use view without clerk", func(o *DashboardOptions) {
+			*o = DashboardOptions{Auth: "none", MissionControlOrgView: "substrate/org-usage"}
+		}, []string{"--mission-control-* flags serve the platform dashboard and need --auth clerk"}},
+		{"substrate environments at a size of their own", func(o *DashboardOptions) { o.SubstrateCPU, o.SubstrateMemory = "500m", "2Gi" }, nil},
+		{"substrate size that isn't a quantity", func(o *DashboardOptions) { o.SubstrateCPU, o.SubstrateMemory = "two", "-1Gi" }, []string{
+			`--substrate-cpu must be a positive Kubernetes quantity such as 2 or 500m, got "two"`,
+			`--substrate-memory must be a positive Kubernetes quantity such as 4Gi, got "-1Gi"`,
+		}},
+		{"mission control without clerk", func(o *DashboardOptions) {
+			*o = DashboardOptions{Auth: "none", MissionControlURL: "https://mc.example.com/api"}
+		}, []string{"--mission-control-* flags serve the platform dashboard and need --auth clerk"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			opts := clerkDashboardOptions()
@@ -148,6 +197,7 @@ func TestDashboardOptionsValidate(t *testing.T) {
 				assert.Contains(t, err.Error(), want)
 			}
 			assert.NotContains(t, err.Error(), "sk_test_abc", "errors must not echo secrets")
+			assert.NotContains(t, err.Error(), "mc-token", "errors must not echo secrets")
 		})
 	}
 }
@@ -160,6 +210,8 @@ func TestDashboardOptionsFromEnv(t *testing.T) {
 		"CLERK_SECRET_KEY":                  "sk_env",
 		"GAVEL_SECRET_KEY":                  testSecretKey,
 		"GAVEL_GITHUB_APP_PRIVATE_KEY_FILE": "/keys/app.pem",
+		"GAVEL_MISSION_CONTROL_URL":         "https://mc.example.com/api",
+		"GAVEL_MISSION_CONTROL_TOKEN":       "mc-token",
 	}
 	got := DashboardOptions{ClerkIssuer: "https://flag-clerk.example.com"}.withEnv(func(key string) string { return env[key] })
 	assert.Equal(t, "https://flag-clerk.example.com", got.ClerkIssuer, "a flag wins over its env var")
@@ -168,6 +220,8 @@ func TestDashboardOptionsFromEnv(t *testing.T) {
 	assert.Equal(t, "sk_env", got.clerkSecretKey)
 	assert.Equal(t, testSecretKey, got.secretKey)
 	assert.Equal(t, "/keys/app.pem", got.GitHubAppPrivateKey)
+	assert.Equal(t, "https://mc.example.com/api", got.MissionControlURL)
+	assert.Equal(t, "mc-token", got.missionControlToken, "the token comes from the environment only")
 }
 
 func TestServeCommandHasAuthFlags(t *testing.T) {
@@ -197,7 +251,8 @@ func TestSandboxSecretsCopyServesEnvironment(t *testing.T) {
 
 func TestSubstrateSandboxRefusesSecretsInItsJobs(t *testing.T) {
 	opts := DashboardOptions{Sandbox: "substrate", SandboxSecretEnv: []string{"ANTHROPIC_API_KEY"},
-		SubstrateEnvAPI: "ate-env-api.ate-env.svc:7777", SubstrateControl: "api.ate-system.svc:443"}
+		SubstrateEnvAPI: "ate-env-api.ate-env.svc:7777", SubstrateControl: "api.ate-system.svc:443",
+		SubstrateAtespace: "ate-env", SubstrateTemplate: "gavel-runner"}
 	sources := &sandbox.Sources{DataDir: t.TempDir()}
 	_, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil, sources, http.NotFoundHandler())
 	require.EqualError(t, err, "--sandbox substrate keeps secrets out of its jobs: drop --sandbox-secret-env; organizations set their own model keys, which substrate's egress gateway injects")
@@ -211,6 +266,20 @@ func TestSubstrateSandboxRefusesSecretsInItsJobs(t *testing.T) {
 	run := uuid.MustParse("6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f")
 	require.NotNil(t, dispatcher.CredentialURI, "substrate jobs get their organization's keys")
 	assert.Equal(t, "ate-secret://gavel/beta/6f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f/anthropic", dispatcher.CredentialURI(run, "anthropic"))
+	require.NotNil(t, dispatcher.Templates, "each organization's runs come from its own template")
+	assert.Equal(t, "ate-env", dispatcher.Templates.Atespace)
+	assert.Equal(t, "gavel-runner", dispatcher.Templates.Base)
+	assert.Equal(t, substrate.Size{}, dispatcher.Templates.Size, "without --substrate-cpu and --substrate-memory an organization runs at the base template's size")
+
+	opts.SubstrateCPU, opts.SubstrateMemory = "500m", "2Gi"
+	sized, err := newSandboxDispatcher(t.Context(), opts, nil, nil, nil, sources, http.NotFoundHandler())
+	require.NoError(t, err)
+	assert.Equal(t, substrate.Size{CPUMillicores: 500, MemoryBytes: 2 << 30}, sized.Templates.Size)
+
+	require.NotNil(t, dispatcher.Admission, "each run is admitted within its organization's budgets")
+	assert.Equal(t, 15*time.Minute, dispatcher.Admission.Wait, "sandbox.queue.timeout: a run waits at most 15 minutes for room")
+	assert.Equal(t, 30*time.Second, dispatcher.Admission.Recheck, "sandbox.budget.interval")
+	assert.Equal(t, dispatcher.RunLifetime(), dispatcher.Admission.RunLifetime)
 }
 
 func TestContainerAndKubernetesSandboxesWarnTheyUseServesKeys(t *testing.T) {
@@ -285,4 +354,22 @@ func TestSweepingSaysWhatRunsLeftBehind(t *testing.T) {
 	sweeper.names, sweeper.err = nil, errors.New("permission denied")
 	sweepSandbox(context.Background(), sweeper, time.Hour)
 	assert.Contains(t, logged.String(), "sweep the sandbox environments runs left behind: permission denied")
+}
+
+// fakeTemplateSweeper sweeps the names it was given, and fails with err.
+type fakeTemplateSweeper struct {
+	names []string
+	err   error
+}
+
+func (s *fakeTemplateSweeper) Sweep(context.Context) ([]string, error) { return s.names, s.err }
+
+func TestSweepingSaysWhichOrganizationTemplatesItDeleted(t *testing.T) {
+	logged := logtest.Capture(t)
+
+	sweepOrgTemplates(context.Background(), &fakeTemplateSweeper{names: []string{"gavel-org-a-1", "gavel-org-b-2"}})
+	assert.Contains(t, logged.String(), "deleted 2 organization substrate templates no run uses any more: gavel-org-a-1, gavel-org-b-2")
+
+	sweepOrgTemplates(context.Background(), &fakeTemplateSweeper{err: errors.New("permission denied")})
+	assert.Contains(t, logged.String(), "sweep the organizations' substrate templates: permission denied")
 }

@@ -360,10 +360,18 @@ func finishLint(run lintResultOptions) (any, error) {
 	if _, err := lint.SaveSnapshot(opts.Dirs.StateRoot, snap); err != nil {
 		return nil, err
 	}
-	if linters.HasFailures(run.Results) {
-		exitCode = 1
-	}
+	exitCode = max(exitCode, lintExitCode(run.Results))
 	return lintRunReturnValue(snap, opts), nil
+}
+
+// lintExitCode is 1 when a linter that ran reported an error-severity
+// violation or failed to run (including timeouts), so CI fails on lint whether
+// or not --ui is set. Warnings and info stay amber, matching the report verdict.
+func lintExitCode(results []*linters.LinterResult) int {
+	if linters.HasFailures(results) {
+		return 1
+	}
+	return 0
 }
 
 func lintRunReturnValue(snap *testui.Snapshot, opts LintOptions) any {
