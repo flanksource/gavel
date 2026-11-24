@@ -140,7 +140,10 @@ func classifyAuthError(r *http.Request, err error) *authFailure {
 	case errors.Is(err, api.ErrNotMember):
 		return &authFailure{http.StatusForbidden, "not_a_member", err.Error()}
 	default:
-		logger.Warnf("authenticate %s %s: %v", r.Method, r.URL.Path, err)
+		// A request its caller dropped, such as a browser reloading, fails for that alone.
+		if r.Context().Err() == nil {
+			logger.Warnf("authenticate %s %s: %v", r.Method, r.URL.Path, err)
+		}
 		return &authFailure{http.StatusServiceUnavailable, "auth_unavailable",
 			"could not check the request's identity: " + err.Error()}
 	}

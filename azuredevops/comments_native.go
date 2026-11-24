@@ -195,7 +195,7 @@ func (c *Client) ApplyComment(ctx context.Context, action string, p comments.Pub
 		}
 		resolved, err := threadResolved(result.Status)
 		if err != nil || result.ID != id || resolved != (action == "resolve-native") {
-			return before, fmt.Errorf("Azure did not confirm requested thread state")
+			return before, fmt.Errorf("thread state change was not confirmed by Azure DevOps")
 		}
 		thread.Status = result.Status
 		thread.UpdatedAt = result.UpdatedAt

@@ -138,7 +138,7 @@ var _ = Describe("Markdown frontmatter schemas", func() {
 	It("gives the editor the glob's schema for a page without frontmatter", func() {
 		page := write("docs/new.md", "# New\n")
 
-		schema, err := EditorSchema(context.Background(), nil, page, "")
+		schema, err := EditorSchema(context.Background(), EditorSchemaOptions{Data: nil, Path: page, Override: ""})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(schema).To(HaveKeyWithValue("$defs", HaveKeyWithValue("resource0", HaveKeyWithValue("required", ConsistOf("title")))))
@@ -147,9 +147,9 @@ var _ = Describe("Markdown frontmatter schemas", func() {
 	It("gives the editor a builtin schema twice, unchanged by bundling", func() {
 		page := write("menus/stew.recipe.md", "---\nserves: 2\n---\n")
 
-		first, err := EditorSchema(context.Background(), []byte("serves: 2\n"), page, "")
+		first, err := EditorSchema(context.Background(), EditorSchemaOptions{Data: []byte("serves: 2\n"), Path: page, Override: ""})
 		Expect(err).NotTo(HaveOccurred())
-		second, err := EditorSchema(context.Background(), []byte("serves: 2\n"), page, "")
+		second, err := EditorSchema(context.Background(), EditorSchemaOptions{Data: []byte("serves: 2\n"), Path: page, Override: ""})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(second).To(Equal(first))

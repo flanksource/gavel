@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // ClerkOrganizations resolves canonical org metadata on a trusted backend.
@@ -88,8 +89,8 @@ type Membership struct {
 	Role    string `json:"role"`
 }
 
-// membershipPageSize is how many memberships each Backend API page asks for.
-const membershipPageSize = 100
+// backendPageSize is how many items each page of a Backend API list asks for.
+const backendPageSize = 100
 
 // UserMemberships lists every organization clerkUserID belongs to, paging by offset.
 func (c ClerkOrganizations) UserMemberships(ctx context.Context, clerkUserID string) ([]Membership, error) {
@@ -109,7 +110,7 @@ func (c ClerkOrganizations) UserMemberships(ctx context.Context, clerkUserID str
 			} `json:"data"`
 			TotalCount int `json:"total_count"`
 		}
-		path := fmt.Sprintf("/users/%s/organization_memberships?limit=%d&offset=%d", url.PathEscape(clerkUserID), membershipPageSize, len(memberships))
+		path := fmt.Sprintf("/users/%s/organization_memberships?limit=%d&offset=%d", url.PathEscape(clerkUserID), backendPageSize, len(memberships))
 		if err := c.call(ctx, http.MethodGet, path, nil, &page); err != nil {
 			return nil, err
 		}
@@ -118,6 +119,42 @@ func (c ClerkOrganizations) UserMemberships(ctx context.Context, clerkUserID str
 		}
 		if len(page.Data) == 0 || len(memberships) >= page.TotalCount {
 			return memberships, nil
+		}
+	}
+}
+
+// ClerkOrganization is one organization of the Clerk instance, with its member count.
+type ClerkOrganization struct {
+	ID        string    `json:"id"`
+	Slug      string    `json:"slug"`
+	Name      string    `json:"name"`
+	Members   int       `json:"members"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// Organizations lists every organization of the Clerk instance, paging by offset.
+func (c ClerkOrganizations) Organizations(ctx context.Context) ([]ClerkOrganization, error) {
+	orgs := []ClerkOrganization{}
+	for {
+		var page struct {
+			Data []struct {
+				ID           string `json:"id"`
+				Slug         string `json:"slug"`
+				Name         string `json:"name"`
+				MembersCount int    `json:"members_count"`
+				CreatedAt    int64  `json:"created_at"` // Unix milliseconds
+			} `json:"data"`
+			TotalCount int `json:"total_count"`
+		}
+		path := fmt.Sprintf("/organizations?include_members_count=true&limit=%d&offset=%d", backendPageSize, len(orgs))
+		if err := c.call(ctx, http.MethodGet, path, nil, &page); err != nil {
+			return nil, err
+		}
+		for _, o := range page.Data {
+			orgs = append(orgs, ClerkOrganization{ID: o.ID, Slug: o.Slug, Name: o.Name, Members: o.MembersCount, CreatedAt: time.UnixMilli(o.CreatedAt).UTC()})
+		}
+		if len(page.Data) == 0 || len(orgs) >= page.TotalCount {
+			return orgs, nil
 		}
 	}
 }

@@ -14,7 +14,7 @@ import (
 func (c *Client) Comments(ctx context.Context, key string) (Comments, error) {
 	return runJiraTask(ctx, "Load Jira comments "+key, func(ctx context.Context, progress *task.Task) (Comments, error) {
 		if key == "" {
-			return nil, fmt.Errorf("Jira issue key is required")
+			return nil, fmt.Errorf("jira issue key is required")
 		}
 		comments := make(Comments, 0)
 		progress.SetDescription("Fetching comments")
@@ -27,7 +27,7 @@ func (c *Client) Comments(ctx context.Context, key string) (Comments, error) {
 				return nil, err
 			}
 			if page.Total == nil || page.Comments == nil || *page.Total < 0 {
-				return nil, fmt.Errorf("Jira comments response requires total and comments")
+				return nil, fmt.Errorf("jira comments response requires total and comments")
 			}
 			for _, raw := range *page.Comments {
 				comment, err := parseComment(raw)
@@ -43,7 +43,7 @@ func (c *Client) Comments(ctx context.Context, key string) (Comments, error) {
 				return comments, nil
 			}
 			if len(*page.Comments) == 0 {
-				return nil, fmt.Errorf("Jira comments pagination stopped at %d of %d", start, *page.Total)
+				return nil, fmt.Errorf("jira comments pagination stopped at %d of %d", start, *page.Total)
 			}
 		}
 	})
@@ -60,7 +60,7 @@ func (c *Client) CreateComment(ctx context.Context, options CommentOptions) (ext
 		return externalissues.Comment{}, err
 	}
 	if options.Key == "" {
-		return externalissues.Comment{}, fmt.Errorf("Jira issue key is required")
+		return externalissues.Comment{}, fmt.Errorf("jira issue key is required")
 	}
 	var raw json.RawMessage
 	if err := c.json(ctx, requestOptions{Method: "POST", Path: "/issue/" + url.PathEscape(options.Key) + "/comment", Body: struct {

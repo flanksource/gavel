@@ -25,6 +25,7 @@ const (
 	viewTabComments = "comments"
 	viewTabSessions = "sessions"
 	viewTabRuns     = "runs"
+	viewTabPlatform = "platform"
 )
 
 type routeRequest struct {
@@ -241,7 +242,7 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 	// selected-node segments so a hard load such as /projects/{project}/runs/{runId}
 	// serves the app.
 	switch tabSeg {
-	case viewTabProjects, viewTabTodos, viewTabActivity, viewTabTasks, viewTabPrompts, viewTabSessions, viewTabRuns, viewTabComments:
+	case viewTabProjects, viewTabTodos, viewTabActivity, viewTabTasks, viewTabPrompts, viewTabSessions, viewTabRuns, viewTabComments, viewTabPlatform:
 		req.Tab = tabSeg
 		return req, true
 	}

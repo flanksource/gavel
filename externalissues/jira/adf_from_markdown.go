@@ -10,7 +10,7 @@ import (
 
 func MarkdownToADF(source string) (ADFNode, error) {
 	if strings.TrimSpace(source) == "" {
-		return ADFNode{}, fmt.Errorf("Jira comment body must not be empty")
+		return ADFNode{}, fmt.Errorf("comment body must not be empty")
 	}
 	document, err := markdown.ParseString(source)
 	if err != nil {
@@ -65,7 +65,7 @@ func markdownToADF(node markdown.Node, marks []ADFMark) (ADFNode, error) {
 		node.Children = node.Items
 	case "list_item":
 		if node.Checked != nil {
-			return ADFNode{}, fmt.Errorf("Jira Markdown task lists are not supported")
+			return ADFNode{}, fmt.Errorf("markdown task lists are not supported in Jira comments")
 		}
 		value.Type = "listItem"
 	case "table":

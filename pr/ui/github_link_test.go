@@ -122,6 +122,23 @@ func TestGitHubLink(t *testing.T) {
 		]`, rec.Body.String())
 	})
 
+	t.Run("app says this gavel has a GitHub App", func(t *testing.T) {
+		rec := serve(http.MethodGet, "/api/github/app", "")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.JSONEq(t, `{"configured": true}`, rec.Body.String())
+	})
+
+	t.Run("installations tells a user whose account isn't connected to GitHub how to connect it", func(t *testing.T) {
+		clerk.GitHubToken = ""
+		t.Cleanup(func() { clerk.GitHubToken = "ghu_ada" })
+		rec := serve(http.MethodGet, "/api/github/installations", "")
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.JSONEq(t, `{
+			"error": "Your account isn't connected to GitHub. Connect GitHub in your account settings, then try again.",
+			"code": "github_not_connected"
+		}`, rec.Body.String())
+	})
+
 	t.Run("link refuses what it can't trust", func(t *testing.T) {
 		for name, test := range map[string]struct {
 			id     string
@@ -152,4 +169,31 @@ func TestGitHubLink(t *testing.T) {
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 		assert.Equal(t, []string{"acme/api", "acme/web", "ada/tools"}, body.Repositories)
 	})
+}
+
+func TestGitHubWithoutAnApp(t *testing.T) {
+	handler := GitHubWithoutApp()
+	serve := func(method, target string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(method, target, nil))
+		return rec
+	}
+
+	rec := serve(http.MethodGet, "/api/github/app")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"configured": false}`, rec.Body.String())
+
+	for _, route := range []struct{ method, target string }{
+		{http.MethodGet, "/api/github/installations"},
+		{http.MethodPost, "/api/github/install"},
+		{http.MethodPost, "/api/github/installations/42/link"},
+	} {
+		rec := serve(route.method, route.target)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code, route.target)
+		assert.JSONEq(t, `{
+			"error": "This gavel has no GitHub App configured; ask its operator to set one up.",
+			"code": "github_app_not_configured"
+		}`, rec.Body.String(), route.target)
+	}
 }

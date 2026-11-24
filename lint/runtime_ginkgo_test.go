@@ -48,8 +48,8 @@ var _ = Describe("Shared linter runtime", func() {
 		lease, err := slots.Acquire(context.Background(), slots.Request{Limits: slots.Limits{Global: 1}, WorkDir: dir, Command: "blocker"})
 		Expect(err).NotTo(HaveOccurred())
 		defer lease.Close()
-		executable, err := os.Executable()
-		Expect(err).NotTo(HaveOccurred())
+		executable := filepath.Join(dir, "golangci-lint")
+		Expect(os.WriteFile(executable, []byte("#!/bin/sh\nprintf '%s\\n' '{\"Issues\":[]}'\n"), 0o700)).To(Succeed())
 		linter, exists := builtinLinterRegistry(dir).Get("golangci-lint")
 		Expect(exists).To(BeTrue())
 		released := make(chan error, 1)
@@ -88,6 +88,11 @@ var _ = Describe("Shared linter runtime", func() {
 		Expect(err).To(MatchError(ContainSubstring("timed out")))
 	})
 	for _, name := range verify.BuiltinLinterNames {
+		linter, exists := builtinLinterRegistry("").Get(name)
+		Expect(exists).To(BeTrue())
+		if required, ok := linter.(linters.ExecutableRequired); ok && !required.RequiresExecutable() {
+			continue
+		}
 		It("enforces memory limits for "+name, func() {
 			dir := GinkgoT().TempDir()
 			Expect(os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("runtime:\n  mem: 1B\n  env: {GAVEL_RUNTIME_LINTER_CHILD: '1'}\n"), 0o600)).To(Succeed())

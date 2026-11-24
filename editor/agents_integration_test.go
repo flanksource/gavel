@@ -7,11 +7,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-
 	"path/filepath"
 	"strings"
-
-	"github.com/flanksource/gavel/internal/safefs"
 
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
@@ -22,6 +19,7 @@ import (
 	commentapi "github.com/flanksource/gavel/comments/clicky"
 	"github.com/flanksource/gavel/comments/postgres"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/internal/safefs"
 	ui "github.com/flanksource/gavel/pr/ui"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

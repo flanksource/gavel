@@ -18,9 +18,10 @@ func checklistDocument(node markdown.Node) markdown.Node {
 	}
 	lines := [][]markdown.Node{{}}
 	for _, child := range node.Children {
-		if child.Kind == "linebreak" {
+		switch child.Kind {
+		case "linebreak":
 			lines = append(lines, nil)
-		} else if child.Kind == "text" {
+		case "text":
 			for index, part := range strings.Split(child.Text, "\n") {
 				if index > 0 {
 					lines = append(lines, nil)
@@ -31,7 +32,7 @@ func checklistDocument(node markdown.Node) markdown.Node {
 					lines[len(lines)-1] = append(lines[len(lines)-1], item)
 				}
 			}
-		} else {
+		default:
 			lines[len(lines)-1] = append(lines[len(lines)-1], child)
 		}
 	}

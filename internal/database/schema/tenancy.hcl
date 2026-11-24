@@ -282,6 +282,61 @@ table "org_model_keys" {
   }
 }
 
+# Each org's budgets for its substrate runs, set by its admins (package budget): at most one per
+# resource and kind. A cumulative budget caps what the org uses in a window (datemath relative to
+# now, such as now/M); a concurrent one caps what its runs hold at once. Amounts are in core-hours,
+# GiB-hours, tokens or USD for cumulative budgets, cores or GiB for concurrent ones.
+table "org_budgets" {
+  schema = schema.public
+  column "org_id" {
+    null = false
+    type = uuid
+  }
+  column "resource" {
+    null = false
+    type = text
+  }
+  column "kind" {
+    null = false
+    type = text
+  }
+  column "amount" {
+    null = false
+    type = double_precision
+  }
+  column "window" {
+    null    = false
+    type    = text
+    default = ""
+  }
+  column "updated_by" {
+    null = true
+    type = uuid
+  }
+  column "updated_at" {
+    null = false
+    type = timestamptz
+    default = sql("now()")
+  }
+  primary_key { columns = [column.org_id, column.resource, column.kind] }
+  foreign_key "org_budgets_org_id_fkey" {
+    columns = [column.org_id]
+    ref_columns = [table.orgs.column.id]
+    on_delete = CASCADE
+    on_update = NO_ACTION
+  }
+  foreign_key "org_budgets_updated_by_fkey" {
+    columns = [column.updated_by]
+    ref_columns = [table.users.column.id]
+    on_delete = SET_NULL
+    on_update = NO_ACTION
+  }
+  check "org_budgets_resource_valid" { expr = "resource IN ('cpu', 'memory', 'tokens', 'usd')" }
+  check "org_budgets_kind_valid" { expr = "kind IN ('cumulative', 'concurrent')" }
+  check "org_budgets_amount_positive" { expr = "amount > 0" }
+  check "org_budgets_window_matches_kind" { expr = "(kind = 'cumulative') = (\"window\" <> '') AND (kind = 'cumulative' OR resource IN ('cpu', 'memory'))" }
+}
+
 # Runs executed in a Kubernetes Job or container. The run reports back through the run API.
 table "sandbox_runs" {
   schema = schema.public
@@ -323,6 +378,12 @@ table "sandbox_runs" {
     null = false
     type = text
   }
+  # Why the run is queued, or why it was refused or failed before it ran; empty otherwise.
+  column "status_message" {
+    null    = false
+    type    = text
+    default = ""
+  }
   column "exit_code" {
     null = true
     type = integer
@@ -342,6 +403,21 @@ table "sandbox_runs" {
     null = false
     type = text
     default = ""
+  }
+  # The substrate template the run's environment was created from, and the size it ran at; empty
+  # and null on other backends.
+  column "template" {
+    null    = false
+    type    = text
+    default = ""
+  }
+  column "cpu_millicores" {
+    null = true
+    type = bigint
+  }
+  column "memory_bytes" {
+    null = true
+    type = bigint
   }
   # The RunSpec the run API serves to the job (sandbox.RunSpec).
   column "spec" {

@@ -1,3 +1,5 @@
+// Tests the procfile Supervisor: starting, restarting and stopping a Procfile's processes, their
+// environment and detected ports, its control socket, persisted state, profiles and defaults.
 package procfile_test
 
 import (
@@ -64,6 +66,11 @@ func statusOf(sup *pf.Supervisor, name string) string {
 	return p.Status
 }
 
+// runningTimeout bounds a wait for a process with no listening port to report running. clicky
+// reports one running only after a 2s quiet grace, polling the whole process table every 300ms,
+// which a loaded machine (a full `go test ./...`) stretches past 3s.
+const runningTimeout = 10 * time.Second
+
 // waitFor polls cond up to timeout, failing the spec if it never holds.
 func waitFor(timeout time.Duration, cond func() bool) {
 	EventuallyWithOffset(1, cond, timeout, 25*time.Millisecond).Should(BeTrue())
@@ -123,7 +130,7 @@ var _ = Describe("Supervisor", func() {
 		defer sup.Shutdown()
 
 		var pid int
-		waitFor(3*time.Second, func() bool {
+		waitFor(runningTimeout, func() bool {
 			p, ok := liveProc(sup, "ticker")
 			if ok && p.Status == pf.StatusRunning && p.PID > 0 {
 				pid = p.PID
@@ -379,16 +386,19 @@ var _ = Describe("Supervisor", func() {
 		// status read had to dial the control socket for a live sample.
 		sup, dir := newSupervisor("web: sh -c 'sleep 30'\n", verify.ProcfileConfig{})
 		defer sup.Shutdown()
-		waitFor(5*time.Second, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+		waitFor(runningTimeout, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+		observedRunning := time.Now()
 
 		first, err := pf.ReadState(dir)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(first.PublishedAt).NotTo(BeNil(), "the start-time persist must stamp PublishedAt")
 
 		// A later publish must advance the stamp with no lifecycle event at all.
+		// Only a publish stamped after the running observation is guaranteed to
+		// carry it: an earlier one may hold a snapshot from before promotion.
 		waitFor(10*time.Second, func() bool {
 			later, err := pf.ReadState(dir)
-			return err == nil && later.PublishedAt != nil && later.PublishedAt.After(*first.PublishedAt)
+			return err == nil && later.PublishedAt != nil && later.PublishedAt.After(observedRunning)
 		})
 
 		published, err := pf.ReadState(dir)
@@ -421,7 +431,7 @@ var _ = Describe("Supervisor", func() {
 		sup, dir := newSupervisor("a: sh -c 'sleep 30'\nb: sh -c 'sleep 30'\n", verify.ProcfileConfig{})
 
 		var pids []int
-		waitFor(3*time.Second, func() bool {
+		waitFor(runningTimeout, func() bool {
 			pids = nil
 			for _, p := range sup.State().Processes {
 				if p.Status == pf.StatusRunning && p.PID > 0 {
@@ -458,7 +468,7 @@ worker:
 		sup, _ := newSupervisorWith(procfile, pf.Options{})
 		defer sup.Shutdown()
 
-		waitFor(3*time.Second, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+		waitFor(runningTimeout, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
 		// mailcatcher (inactive profile) and worker (default:false) stay registered-but-stopped.
 		Consistently(func() string { return statusOf(sup, "mailcatcher") }, "750ms", "150ms").Should(Equal(pf.StatusStopped))
 		Expect(statusOf(sup, "worker")).To(Equal(pf.StatusStopped))
@@ -468,7 +478,7 @@ worker:
 		sup, _ := newSupervisorWith(procfile, pf.Options{Profile: "dev"})
 		defer sup.Shutdown()
 
-		waitFor(4*time.Second, func() bool {
+		waitFor(runningTimeout, func() bool {
 			return statusOf(sup, "web") == pf.StatusRunning && statusOf(sup, "mailcatcher") == pf.StatusRunning
 		})
 		Expect(statusOf(sup, "worker")).To(Equal(pf.StatusStopped), "default:false stays stopped")
@@ -478,10 +488,10 @@ worker:
 		sup, _ := newSupervisorWith(procfile, pf.Options{})
 		defer sup.Shutdown()
 
-		waitFor(3*time.Second, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+		waitFor(runningTimeout, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
 		Expect(statusOf(sup, "worker")).To(Equal(pf.StatusStopped))
 
 		sup.StartProc("worker")
-		waitFor(3*time.Second, func() bool { return statusOf(sup, "worker") == pf.StatusRunning })
+		waitFor(runningTimeout, func() bool { return statusOf(sup, "worker") == pf.StatusRunning })
 	})
 })

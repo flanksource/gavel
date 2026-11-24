@@ -17,6 +17,20 @@ func recordGitMetrics() {
 }
 
 var _ = Describe("ResetMetrics", func() {
+	It("keeps the unlabelled range counter available at zero", func() {
+		ResetMetrics()
+		families, err := prometheus.DefaultGatherer.Gather()
+		Expect(err).NotTo(HaveOccurred())
+		for _, family := range families {
+			if family.GetName() == "gavel_git_ranges_computed_total" {
+				Expect(family.GetMetric()).To(HaveLen(1))
+				Expect(family.GetMetric()[0].GetCounter().GetValue()).To(BeZero())
+				return
+			}
+		}
+		Fail("gavel_git_ranges_computed_total is missing after reset")
+	})
+
 	It("clears recorded activity while preserving the live tracker gauges and cache settings", func() {
 		before, err := Metrics(prometheus.DefaultGatherer)
 		Expect(err).NotTo(HaveOccurred())
@@ -63,5 +77,23 @@ var _ = Describe("ResetMetrics", func() {
 		}
 		Expect(snapshot.ScanTriggers).To(Equal([]CountStat{{Labels: map[string]string{"kind": "status", "source": sourceCadence}, Count: 1}}))
 		Expect(snapshot.RangesComputed).To(Equal(1))
+	})
+
+	It("still exports the ranges counter, at zero, before anything computes a range", func() {
+		DeferCleanup(ResetMetrics)
+		recordGitMetrics()
+		ResetMetrics()
+
+		families, err := prometheus.DefaultGatherer.Gather()
+		Expect(err).NotTo(HaveOccurred())
+		var values []float64
+		for _, family := range families {
+			if family.GetName() == "gavel_git_ranges_computed_total" {
+				for _, metric := range family.GetMetric() {
+					values = append(values, metric.GetCounter().GetValue())
+				}
+			}
+		}
+		Expect(values).To(Equal([]float64{0}), "a scrape must see the counter at 0, not miss it")
 	})
 })

@@ -25,7 +25,7 @@ func (c *Client) searchPage(ctx context.Context, options SearchOptions) (searchP
 		return page, err
 	}
 	if page.Issues == nil {
-		return page, fmt.Errorf("Jira search response has no issues array")
+		return page, fmt.Errorf("jira search response has no issues array")
 	}
 	return page, nil
 }
@@ -60,18 +60,18 @@ func (c *Client) syncKeys(ctx context.Context, options SyncOptions, selection *s
 					return nil, err
 				}
 				if !issueTarget.MatchString(issue.Key) {
-					return nil, fmt.Errorf("Jira discovery returned invalid key %q", issue.Key)
+					return nil, fmt.Errorf("jira discovery returned invalid key %q", issue.Key)
 				}
 				keys = append(keys, issue.Key)
 			}
 			if page.Last != nil && *page.Last {
 				if page.Next != "" {
-					return nil, fmt.Errorf("Jira search final page has a continuation token")
+					return nil, fmt.Errorf("jira search final page has a continuation token")
 				}
 				break
 			}
 			if page.Next == "" || seen[page.Next] || len(*page.Issues) == 0 {
-				return nil, fmt.Errorf("Jira search pagination stalled for %s", target)
+				return nil, fmt.Errorf("jira search pagination stalled for %s", target)
 			}
 			seen[page.Next] = true
 			cursor = page.Next

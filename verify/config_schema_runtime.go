@@ -1,6 +1,8 @@
 package verify
 
-func runtimeSchema() map[string]any {
+// RuntimeSchema is the JSON schema of processruntime.Options: the `runtime` key of
+// .gavel.yaml sections and of fixture test/lint steps.
+func RuntimeSchema() map[string]any {
 	nice := intProp("Child niceness adjustment, from -20 to 19. Increasing priority requires OS permission.")
 	nice["minimum"], nice["maximum"] = -20, 19
 	cpu := numberProp("Aggregate sustained CPU percentage across descendants. 100 is one core; 0 disables the cap. Sampled every 2s, terminating after 18 consecutive high samples.")

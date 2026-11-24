@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	gavelgit "github.com/flanksource/gavel/git"
 )
 
 func stash(ctx context.Context, op *Operation) error {
@@ -74,10 +76,13 @@ func check(ctx context.Context, op *Operation) error {
 		if op.TargetSHA == "" {
 			return errors.New("rebase target has not been resolved")
 		}
-		if _, err := git(ctx, op.Worktree, "merge-base", "--is-ancestor", op.TargetSHA, "HEAD"); err != nil {
+		if err := validateCommitID(op.TargetSHA); err != nil {
 			return err
 		}
-		if _, err := git(ctx, op.Worktree, "diff", "--check", op.TargetSHA+"...HEAD"); err != nil {
+		if _, err := git(ctx, op.Worktree, "merge-base", "--is-ancestor", "--", op.TargetSHA, "HEAD"); err != nil {
+			return err
+		}
+		if _, err := git(ctx, op.Worktree, "diff", "--check", op.TargetSHA+"...HEAD", "--"); err != nil {
 			return err
 		}
 	}
@@ -109,11 +114,14 @@ func finish(ctx context.Context, op *Operation) error {
 
 func restore(ctx context.Context, op *Operation) error {
 	if op.StashSHA != "" && op.Phase != "restore-conflict" && op.Phase != "restored" {
+		if err := validateCommitID(op.StashSHA); err != nil {
+			return err
+		}
 		op.Phase = "restore-applying"
 		if err := save(op); err != nil {
 			return err
 		}
-		if _, err := git(ctx, op.Worktree, "stash", "apply", "--index", op.StashSHA); err != nil {
+		if _, err := git(ctx, op.Worktree, "stash", "apply", "--index", "--", op.StashSHA); err != nil {
 			op.Phase = "restore-conflict"
 			return errors.Join(fmt.Errorf("restore saved edits (stash %s retained): %w", op.StashSHA, err), save(op))
 		}
@@ -155,7 +163,10 @@ func dropStash(ctx context.Context, op *Operation) error {
 	for _, line := range strings.Split(list, "\n") {
 		sha, ref, ok := strings.Cut(line, "\x00")
 		if ok && sha == op.StashSHA {
-			_, err := git(ctx, op.Worktree, "stash", "drop", ref)
+			if err := gavelgit.ValidateRevision(ref); err != nil {
+				return err
+			}
+			_, err := git(ctx, op.Worktree, "stash", "drop", "--", ref)
 			return err
 		}
 	}

@@ -35,6 +35,13 @@ table "users" {
     null = true
     type = text
   }
+  # Whether the user's Clerk public_metadata.gavel_role is platform_admin, for the
+  # platform dashboard that reads every organization.
+  column "platform_admin" {
+    null = false
+    type = boolean
+    default = false
+  }
   column "created_at" {
     null = false
     type = timestamptz
@@ -93,6 +100,16 @@ table "orgs" {
     type = timestamptz
     default = sql("now()")
   }
+  # The size of the organization's sandbox environments on substrate, set by a platform admin;
+  # null is serve's default size.
+  column "sandbox_cpu_millicores" {
+    null = true
+    type = bigint
+  }
+  column "sandbox_memory_bytes" {
+    null = true
+    type = bigint
+  }
   primary_key { columns = [column.id] }
   index "orgs_clerk_identity_key" {
     unique = true
@@ -105,6 +122,7 @@ table "orgs" {
   }
   check "orgs_identity_nonempty" { expr = "issuer <> '' AND clerk_org_id <> ''" }
   check "orgs_slug_nonempty" { expr = "slug IS NULL OR (slug <> '' AND slug = btrim(slug))" }
+  check "orgs_sandbox_size_whole" { expr = "(sandbox_cpu_millicores IS NULL) = (sandbox_memory_bytes IS NULL) AND (sandbox_cpu_millicores IS NULL OR (sandbox_cpu_millicores > 0 AND sandbox_memory_bytes > 0))" }
 }
 
 # Captain owns its schema. These Gavel-owned sidecars attach ownership without

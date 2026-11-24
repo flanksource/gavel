@@ -3,8 +3,8 @@ package jsonlint
 import (
 	"context"
 	"encoding/json"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 
@@ -17,7 +17,7 @@ var _ = Describe("Editor YAML schemas", func() {
 		dir := GinkgoT().TempDir()
 		Expect(os.WriteFile(filepath.Join(dir, "schema.yaml"), []byte("x-help-display: hover\ntype: object\nproperties:\n  count:\n    $ref: types.yml#/$defs/count\n"), 0o600)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(dir, "types.yml"), []byte("$defs:\n  count:\n    type: integer\n    minimum: 9007199254740993\n"), 0o600)).To(Succeed())
-		schema, err := EditorSchema(context.Background(), []byte("# yaml-language-server: $schema=./schema.yaml\ncount: 9007199254740993\n"), filepath.Join(dir, "config.yaml"), "")
+		schema, err := EditorSchema(context.Background(), EditorSchemaOptions{Data: []byte("# yaml-language-server: $schema=./schema.yaml\ncount: 9007199254740993\n"), Path: filepath.Join(dir, "config.yaml"), Override: ""})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(schema["$defs"]).To(HaveLen(2))
 		encoded, err := json.Marshal(schema)
@@ -27,13 +27,14 @@ var _ = Describe("Editor YAML schemas", func() {
 	})
 
 	It("loads extensionless remote YAML schemas by content type", func() {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 			_, err := w.Write([]byte("type: object\nproperties:\n  name:\n    type: string\n"))
 			Expect(err).NotTo(HaveOccurred())
 		}))
+
 		DeferCleanup(server.Close)
-		_, err := EditorSchema(context.Background(), []byte("name: example"), "config.yaml", server.URL+"/schema")
+		_, err := EditorSchema(context.Background(), EditorSchemaOptions{Data: []byte("name: example"), Path: "config.yaml", Override: server.URL + "/schema", RemoteSchemas: true})
 		Expect(err).NotTo(HaveOccurred())
 	})
 })

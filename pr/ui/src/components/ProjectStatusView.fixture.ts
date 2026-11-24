@@ -1,4 +1,6 @@
-export const projectStatusResponse = {
+import type { ProjectStatusResponse } from './ProjectStatusView';
+
+export const projectStatusResponse: ProjectStatusResponse = {
   project: { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] },
   workDir: '/work/gavel',
   branch: 'feature/projects',

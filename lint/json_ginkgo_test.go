@@ -2,12 +2,17 @@ package lint
 
 import (
 	"context"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/flanksource/gavel/linters"
 	jsonlint "github.com/flanksource/gavel/linters/json"
+	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -50,6 +55,19 @@ var _ = Describe("JSON lint integration", func() {
 		Expect(builtinLinterRegistry(root).Has("json")).To(BeTrue())
 	})
 
+	It("validates in process when subprocess resource limits and an executable are supplied", func() {
+		Expect(os.WriteFile(filepath.Join(root, "bad.json"), []byte(`{bad}`), 0o600)).To(Succeed())
+		memory := "1B"
+		result := linters.RunLinterWithTask(context.Background(), nil, jsonlint.New(root), linters.RunOptions{
+			WorkDir: root, Executable: filepath.Join(root, "missing-json-linter"),
+			Runtime: processruntime.Options{Mem: &memory},
+		})
+		Expect(result).To(And(HaveField("Success", true), HaveField("Error", ""),
+			HaveField("Violations", HaveExactElements(And(
+				HaveField("File", filepath.Join(root, "bad.json")), HaveField("Severity", models.SeverityError),
+			)))))
+	})
+
 	It("activates for matching files in a nested directory", func() {
 		nested := filepath.Join(root, "configs")
 		Expect(os.Mkdir(nested, 0o700)).To(Succeed())
@@ -79,6 +97,34 @@ var _ = Describe("JSON lint integration", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.LintOptionsFor("json").Schema).To(HaveValue(Equal("https://example.org/schema.json")))
 	})
+
+	DescribeTable("applies the remote schema policy through configuration and CLI options", func(config, schema string, remote, expectedFetch bool) {
+		var requests atomic.Int32
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			_, err := w.Write([]byte(`false`))
+			Expect(err).NotTo(HaveOccurred())
+		}))
+		DeferCleanup(server.Close)
+		Expect(os.WriteFile(filepath.Join(root, ".gavel.yaml"), []byte(config), 0600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "data.json"), []byte(`{"$schema":"`+server.URL+`/schema.json"}`), 0600)).To(Succeed())
+		if schema != "" {
+			schema = server.URL + "/schema.json"
+		}
+		results, err := Execute(Options{WorkDir: root, Linters: []string{"json"}, Files: []string{"data.json"}, Schema: schema, RemoteSchemas: remote})
+		Expect(err).NotTo(HaveOccurred())
+		severity := models.SeverityWarning
+		if expectedFetch {
+			severity = models.SeverityError
+		}
+		Expect(results).To(HaveExactElements(And(HaveField("Success", true), HaveField("Violations", HaveExactElements(HaveField("Severity", severity))))))
+		Expect(requests.Load() > 0).To(Equal(expectedFetch))
+	},
+		Entry("default", "{}", "", false, false),
+		Entry("configuration opt-in", "lint: {linters: {json: {options: {remote-schemas: true}}}}", "", false, true),
+		Entry("CLI opt-in", "{}", "", true, true),
+		Entry("explicit remote schema", "{}", "remote", false, true),
+	)
 
 	It("resolves CLI schemas before git-root grouping", func() {
 		nested := filepath.Join(root, "nested")

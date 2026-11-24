@@ -14,7 +14,7 @@ func lintSchema() map[string]any {
 		"Settings for `gavel lint`.",
 		map[string]any{
 			"options": runconfig.Schema(runconfig.Lint{}, false),
-			"runtime": runtimeSchema(),
+			"runtime": RuntimeSchema(),
 			"fix": promptSpecSchema(prompts.LintFix,
 				"AI spec for repairing lint violations from `gavel lint --ai-fix` and the `gavel commit` lint gate. "+
 					"This is independent of commit.message because fixing source requires an editing-capable agent."),
@@ -54,7 +54,7 @@ func lintSchema() map[string]any {
 					"Override for one linter.",
 					map[string]any{
 						"options": runconfig.Schema(runconfig.Lint{}, true),
-						"runtime": runtimeSchema(),
+						"runtime": RuntimeSchema(),
 						"config":  map[string]any{"type": "object", "description": "Native linter configuration. UIR accepts its native document; github has typed repository-selection settings.", "additionalProperties": true},
 						"args":    stringArray("Native linter arguments. Nonempty lists replace inherited arguments."),
 						"enabled": boolProp(
@@ -308,11 +308,11 @@ func testSchema() map[string]any {
 		"Settings for `gavel test`.",
 		map[string]any{
 			"options": runconfig.Schema(runconfig.Test{}, false),
-			"runtime": runtimeSchema(),
+			"runtime": RuntimeSchema(),
 			"frameworks": mapObject("Per-framework settings: go, ginkgo, jest, vitest, playwright, or fixture.", object("Runtime and native arguments for one test type.", map[string]any{
 				"enabled": boolProp("Enable or disable this framework within the configured directory."),
 				"options": runconfig.Schema(runconfig.Test{}, true),
-				"runtime": runtimeSchema(),
+				"runtime": RuntimeSchema(),
 				"args":    stringArray("Native runner arguments. Nonempty lists replace inherited arguments. Fixture arguments are passed to exec steps."),
 			})),
 			"outlineSummary": promptSpecSchema(prompts.TestOutlineSummary,

@@ -33,11 +33,11 @@ describe("consolidated documentation", () => {
     expect(renderToStaticMarkup(createElement(doc!.Component))).toContain('id="automatic-connections"');
   });
 
-  it("provides contributor and agent entry points without duplicate manuals", () => {
-    for (const path of ["package.json", "../CONTRIBUTING.md", "../AGENTS.md", "../gavel.schema.json", "content/public/diagrams/SessionDataModel.html", "diagrams/SessionDataModel.tsx"]) {
+  it("provides CLI references, contributor and agent entry points without the legacy site", () => {
+    for (const path of ["package.json", "../MANUAL.md", "../SCHEMA.md", "../CONTRIBUTING.md", "../AGENTS.md", "../gavel.schema.json", "content/public/diagrams/SessionDataModel.html", "diagrams/SessionDataModel.tsx"]) {
       expect(existsSync(resolve(path)), path).toBe(true);
     }
-    for (const path of ["../site", "../MANUAL.md", "../SCHEMA.md", "services/README.md"]) {
+    for (const path of ["../site", "services/README.md"]) {
       expect(existsSync(resolve(path)), path).toBe(false);
     }
   });

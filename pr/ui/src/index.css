@@ -27,3 +27,30 @@ body,
     font-size: max(16px, 1em);
   }
 }
+
+/* The platform dashboard's categorical chart colors: eight slots assigned in fixed order,
+   stepped for each theme's surface. Sandbox run kinds take the first four. */
+:root {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+  --series-8: #e34948;
+  --kind-test: var(--series-1);
+  --kind-lint: var(--series-2);
+  --kind-push-check: var(--series-3);
+  --kind-agent: var(--series-4);
+}
+:root[data-theme="dark"] {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+}

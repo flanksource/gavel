@@ -8,13 +8,43 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
+	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/gofrs/flock"
 )
 
+var commitIDPattern = regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`)
+
+func validateTarget(ref string) error {
+	if ref == "refs/remotes/origin/main" {
+		return nil
+	}
+	if !strings.HasPrefix(ref, "refs/heads/") {
+		return errors.New("target must be origin/main or a local branch ref")
+	}
+	return gavelgit.ValidateBranchName(strings.TrimPrefix(ref, "refs/heads/"))
+}
+
+func validateCommitID(sha string) error {
+	if !commitIDPattern.MatchString(sha) {
+		return fmt.Errorf("invalid rebase commit ID %q", sha)
+	}
+	return nil
+}
+
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	if strings.TrimSpace(dir) == "" {
+		return "", errors.New("git requires a worktree directory")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", fmt.Errorf("open git worktree: %w", err)
+	}
+	defer root.Close()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = root.Name()
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -54,6 +84,17 @@ func load(dir string) (*Operation, error) {
 	}
 	if op.ID == "" || op.Worktree != dir {
 		return nil, errors.New("invalid rebase recovery metadata")
+	}
+	if err := validateTarget(op.Target); err != nil {
+		return nil, fmt.Errorf("invalid rebase recovery target: %w", err)
+	}
+	for _, sha := range []string{op.OriginalHead, op.TargetSHA, op.StashSHA} {
+		if sha == "" {
+			continue
+		}
+		if err := validateCommitID(sha); err != nil {
+			return nil, fmt.Errorf("invalid rebase recovery commit ID: %w", err)
+		}
 	}
 	return &op, nil
 }

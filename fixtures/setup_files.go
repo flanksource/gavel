@@ -100,14 +100,14 @@ func (s *fileSetups) deferSetup(nodes []*FixtureNode, declared declaredSetup) er
 		})
 	}
 	if !hasParams {
-		return fmt.Errorf("%s: setup: reads {{.params…}} or a $cel value but the fixture declares no params:", declared.mdPath)
+		return fmt.Errorf("%s: setup: reads {{.params…}} or a $cel value but the fixture declares no params step", declared.mdPath)
 	}
 	relocates, err := declared.spec.declares("checkout", "cwd")
 	if err != nil {
 		return fmt.Errorf("%s: setup: %w", declared.mdPath, err)
 	}
 	if relocates {
-		return fmt.Errorf("%s: setup: a setup that reads {{.params…}} or a $cel value is prepared after the params form, so it cannot declare checkout: or cwd:", declared.mdPath)
+		return fmt.Errorf("%s: setup: a setup that reads {{.params…}} or a $cel value is prepared after the params form, so it cannot declare checkout or cwd", declared.mdPath)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

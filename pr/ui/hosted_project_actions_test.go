@@ -11,6 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/substrate"
+	"github.com/flanksource/captain/pkg/substrate/substratetest"
+	"github.com/flanksource/gavel/budget"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -125,4 +129,22 @@ func TestHostedProjectActionsRefuseWhatTheyCantRun(t *testing.T) {
 	var runs int64
 	require.NoError(t, h.db.Raw(`SELECT count(*) FROM sandbox_runs`).Scan(&runs).Error)
 	assert.Zero(t, runs, "nothing was dispatched")
+}
+
+func TestHostedProjectActionsSayWhenTheOrganizationsBudgetsHaveNoRoom(t *testing.T) {
+	h := serveHostedRuns(t, map[string]any{"envAPI": "env.example:443", "control": "control.example:443"}, func(d *sandbox.Dispatcher) {
+		server := substratetest.Start(t)
+		server.AddTemplate("ate-env", "gavel-runner", substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+		client, err := substrate.Dial(server.Options())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = client.Close() })
+		d.Templates = &sandbox.OrgTemplates{DB: d.DB, Client: client, Atespace: "ate-env", Base: "gavel-runner"}
+		d.Admission = &sandbox.Admission{Budgets: budget.Store{DB: d.DB}, RunLifetime: d.RunLifetime(), Wait: time.Minute, Recheck: time.Minute}
+	})
+	status, set := hostedCall(t, h.base, http.MethodPut, "/api/budgets/cpu/concurrent", h.ada, "org:admin", map[string]any{"amount": 1})
+	require.Equal(t, http.StatusOK, status, set)
+
+	status, body := hostedCall(t, h.base, http.MethodPost, "/api/projects/app/actions", h.ada, "org:member", map[string]any{"action": "test", "branch": "main"})
+	assert.Equal(t, http.StatusTooManyRequests, status, body)
+	assert.Contains(t, body["error"], "a run of 2 cores can never start under this organization's concurrent cpu budget of 1 core")
 }

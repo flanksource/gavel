@@ -1,0 +1,50 @@
+# Restores the PostgreSQL binaries the Go tests' shared embedded server runs, so a job reuses
+# them instead of downloading them from Maven Central.
+name: Restore embedded PostgreSQL binaries
+description: >
+  The Go tests start one shared embedded PostgreSQL (commons-db's dbtest), which
+  downloads its binaries from Maven Central the first time it starts on a
+  machine. Every runner is fresh, so without this each job downloads them, and
+  one bad Maven response (a rate limit, a 5xx) fails every database test in the
+  job at once: embedded-postgres reports any non-200 as "no version found
+  matching <version>". This points COMMONS_DB_BIN_DIR at one directory for the
+  rest of the job and restores it. When pg_ctl is already there, nothing is
+  downloaded. Like go-cache it only restores: the Test job saves with
+  actions/cache/save, keyed by the `key` output. The PostgreSQL version comes
+  from commons-db, so go.sum changes whenever it can; restore-keys brings back
+  the newest copy and only a new version is downloaded.
+
+outputs:
+  key:
+    description: Exact cache key for this go.sum; pass to actions/cache/save.
+    value: ${{ steps.key.outputs.key }}
+  cache-hit:
+    description: true when the exact key was restored, so there is nothing new to save.
+    value: ${{ steps.restore.outputs.cache-hit }}
+  path:
+    description: The binaries directory; pass to actions/cache/save.
+    value: ${{ steps.key.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve embedded PostgreSQL cache key
+      id: key
+      shell: bash
+      env:
+        GO_SUM_HASH: ${{ hashFiles('go.sum') }}
+        BIN_DIR: ${{ runner.temp }}/commons-db-bin
+      run: |
+        set -euo pipefail
+        echo "COMMONS_DB_BIN_DIR=${BIN_DIR}" >> "$GITHUB_ENV"
+        echo "path=${BIN_DIR}" >> "$GITHUB_OUTPUT"
+        echo "key=embedded-postgres-${RUNNER_OS}-${RUNNER_ARCH}-${GO_SUM_HASH}" >> "$GITHUB_OUTPUT"
+        echo "prefix=embedded-postgres-${RUNNER_OS}-${RUNNER_ARCH}-" >> "$GITHUB_OUTPUT"
+
+    - name: Restore embedded PostgreSQL binaries
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.key.outputs.path }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}

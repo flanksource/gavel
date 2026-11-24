@@ -234,6 +234,7 @@ describe('session errors', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy error details' }));
 
     await waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'));
+    // The label changes only after copyText resolves and React renders, a step after execCommand.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Copy error details' }).textContent).toContain('Copied'));
   });
 });

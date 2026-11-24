@@ -17,6 +17,7 @@ import (
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/secret"
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/budget"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/tenant"
@@ -74,12 +75,17 @@ type sandboxRunRow struct {
 	SHA        string
 	StartedAt  *time.Time
 	FinishedAt *time.Time
+	// Template, CPUMillicores and MemoryBytes are the substrate template the run's environment
+	// came from and its size.
+	Template      string
+	CPUMillicores *int64
+	MemoryBytes   *int64
 }
 
 func readRun(t *testing.T, db *gorm.DB, id uuid.UUID) sandboxRunRow {
 	t.Helper()
 	var row sandboxRunRow
-	require.NoError(t, db.Raw(`SELECT status, exit_code, backend, backend_ref, log_key, kind, ref, sha, started_at, finished_at FROM sandbox_runs WHERE id = ?`, id).Scan(&row).Error)
+	require.NoError(t, db.Raw(`SELECT status, exit_code, backend, backend_ref, log_key, kind, ref, sha, started_at, finished_at, template, cpu_millicores, memory_bytes FROM sandbox_runs WHERE id = ?`, id).Scan(&row).Error)
 	return row
 }
 
@@ -132,6 +138,9 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.NotNil(t, row.StartedAt)
 	assert.NotNil(t, row.FinishedAt)
 	assert.Equal(t, "runs/"+run.ID.String()+"/log.txt", row.LogKey)
+	assert.Empty(t, row.Template, "without org templates a run records no template")
+	assert.Nil(t, row.CPUMillicores)
+	assert.Nil(t, row.MemoryBytes)
 
 	reader, err := logs.Read(ctx, "orgs/"+org.String()+"/"+row.LogKey)
 	require.NoError(t, err)
@@ -156,6 +165,7 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, "ghcr.io/flanksource/gavel-runner:1", job.Image)
 	assert.Equal(t, []string{"gavel", "runner", "exec", "--run", run.ID.String()}, job.Command)
 	assert.Nil(t, job.Source, "an executor that brings no source in leaves the job to download it")
+	assert.Empty(t, job.Template, "without org templates the executor's own template is used")
 	assert.Equal(t, map[string]string{"GAVEL_SERVER": "https://gavel.example", "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"}, job.Env)
 	tokenRun, tokenOrg, err := VerifyRunToken(dispatcher.TokenKey, job.SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(44*time.Minute))
 	require.NoError(t, err, "the token outlives the timeout by 15 minutes")
@@ -163,6 +173,46 @@ func TestDispatcherRunsAJobToItsOutcome(t *testing.T) {
 	assert.Equal(t, org, tokenOrg)
 	_, _, err = VerifyRunToken(dispatcher.TokenKey, job.SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(46*time.Minute))
 	assert.Error(t, err, "and no longer")
+}
+
+func TestDispatcherRunsEachRunFromItsOrganizationsTemplateAndRecordsItsSize(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	templates, server := orgTemplatesOn(t, db, substrate.Size{CPUMillicores: 1000, MemoryBytes: 2 << 30})
+	dispatcher.Templates = templates
+	ctx := context.Background()
+	want, err := templates.Resolve(ctx, org)
+	require.NoError(t, err)
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.NoError(t, err)
+	_, err = run.Wait(ctx)
+	require.NoError(t, err)
+	require.Len(t, executor.submitted, 1)
+	assert.Equal(t, want.Name, executor.submitted[0].Template, "the job's environment comes from its organization's template")
+	row := readRun(t, db, run.ID)
+	assert.Equal(t, want.Name, row.Template)
+	require.NotNil(t, row.CPUMillicores)
+	require.NotNil(t, row.MemoryBytes)
+	assert.Equal(t, int64(1000), *row.CPUMillicores)
+	assert.Equal(t, int64(2<<30), *row.MemoryBytes)
+
+	recorded, err := dispatcher.RecordRun(ctx, uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
+	require.NoError(t, err)
+	recorded.Finish(true)
+	assert.Equal(t, want.Name, recorded.Template, "an agent run's environment comes from its organization's template too")
+	assert.Equal(t, want.Name, readRun(t, db, recorded.ID).Template)
+
+	require.NoError(t, templates.Client.DeleteTemplate(ctx, "gavel-runner"))
+	_, ok := server.Template("ate-env", "gavel-runner")
+	require.False(t, ok)
+	refused := uuid.New()
+	_, err = dispatcher.StartRun(ctx, refused, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "give organization "+org.String()+" its substrate template")
+	var rows int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM sandbox_runs WHERE id = ?`, refused).Scan(&rows).Error)
+	assert.Zero(t, rows, "a run with no template to run from isn't recorded")
 }
 
 func TestDispatcherGivesAJobItsSourceForAnExecutorThatBringsItIn(t *testing.T) {
@@ -377,4 +427,167 @@ func TestDispatcherRecordsNoAgentRunWithoutAModelKey(t *testing.T) {
 
 	_, err := dispatcher.RecordRun(t.Context(), uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
 	require.ErrorIs(t, err, ErrNoModelKey)
+}
+
+// newBudgetedDispatcher is a dispatcher whose runs come from their organization's template, of
+// 2 cores and 4 GiB, admitted within the organization's budgets.
+func newBudgetedDispatcher(t *testing.T, executor Executor) (*Dispatcher, *gorm.DB, uuid.UUID) {
+	t.Helper()
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	dispatcher.Templates, _ = orgTemplatesOn(t, db, substrate.Size{})
+	dispatcher.Admission = &Admission{Budgets: budget.Store{DB: db}, RunLifetime: dispatcher.RunLifetime(), Wait: time.Minute, Recheck: time.Minute}
+	return dispatcher, db, org
+}
+
+func runMessage(t *testing.T, db *gorm.DB, id uuid.UUID) (string, string) {
+	t.Helper()
+	var row struct{ Status, StatusMessage string }
+	require.NoError(t, db.Raw(`SELECT status, status_message FROM sandbox_runs WHERE id = ?`, id).Scan(&row).Error)
+	return row.Status, row.StatusMessage
+}
+
+func TestDispatcherQueuesARunUntilItsOrganizationHasRoom(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, org := newBudgetedDispatcher(t, executor)
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
+	require.NoError(t, err)
+	holding, err := dispatcher.Admission.Enter(ctx, org, Demand{Size: substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30}})
+	require.NoError(t, err)
+	var streamed bytes.Buffer
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, &streamed)
+	require.NoError(t, err, "a run that must wait for room isn't refused")
+	status, message := runMessage(t, db, run.ID)
+	assert.Equal(t, "queued", status)
+	assert.Equal(t, "queued: this organization's runs hold 2 of its 2 concurrent cores, and no run is ahead of this one", message)
+	assert.Contains(t, streamed.String(), message+"\n", "the caller is told the run waits, and why")
+	assert.Empty(t, executor.submitted, "the job isn't submitted while it waits")
+
+	holding.Release()
+	_, err = run.Wait(ctx)
+	require.NoError(t, err)
+	require.Len(t, executor.submitted, 1)
+	status, message = runMessage(t, db, run.ID)
+	assert.Equal(t, "succeeded", status)
+	assert.Empty(t, message)
+	assert.Contains(t, streamed.String(), "started after waiting for room\n")
+	_, _, err = VerifyRunToken(dispatcher.TokenKey, executor.submitted[0].SecretEnv["GAVEL_RUN_TOKEN"], time.Now().Add(44*time.Minute))
+	require.NoError(t, err, "the run's token is signed when it leaves the line, so waiting uses none of its lifetime")
+}
+
+func TestDispatcherRefusesARunItsBudgetsHaveNoRoomFor(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, org := newBudgetedDispatcher(t, executor)
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 1})
+	require.NoError(t, err)
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.ErrorIs(t, err, ErrBudgetUsedUp)
+	assert.Contains(t, err.Error(), "a run of 2 cores can never start under this organization's concurrent cpu budget of 1 core")
+	status, message := runMessage(t, db, run.ID)
+	assert.Equal(t, "failed", status)
+	assert.Contains(t, message, "can never start", "the run's record says why it didn't run")
+	assert.Empty(t, executor.submitted)
+
+	_, err = dispatcher.RecordRun(ctx, uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
+	require.ErrorIs(t, err, ErrBudgetUsedUp, "an agent run is refused too")
+}
+
+func TestDispatcherFailsAQueuedRunThatWaitsTooLong(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, org := newBudgetedDispatcher(t, executor)
+	dispatcher.Admission.Wait = 50 * time.Millisecond
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
+	require.NoError(t, err)
+	holding, err := dispatcher.Admission.Enter(ctx, org, Demand{Size: substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30}})
+	require.NoError(t, err)
+	defer holding.Release()
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.NoError(t, err)
+	_, err = run.Wait(ctx)
+	require.ErrorIs(t, err, ErrQueueTimeout)
+	status, message := runMessage(t, db, run.ID)
+	assert.Equal(t, "failed", status)
+	assert.Contains(t, message, "waited 50ms for room and gave up")
+	assert.Empty(t, executor.submitted)
+}
+
+func TestCancellingAQueuedRunTakesItOutOfLine(t *testing.T) {
+	executor := &memoryExecutor{}
+	dispatcher, db, org := newBudgetedDispatcher(t, executor)
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.CPU, Kind: budget.Concurrent, Amount: 2})
+	require.NoError(t, err)
+	holding, err := dispatcher.Admission.Enter(ctx, org, Demand{Size: substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30}})
+	require.NoError(t, err)
+
+	run, err := dispatcher.Start(ctx, tenant.Scope{OrgID: org}, RunSpec{Kind: "lint"}, nil)
+	require.NoError(t, err)
+	require.NoError(t, run.Cancel(ctx))
+	_, err = run.Wait(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	status, message := runMessage(t, db, run.ID)
+	assert.Equal(t, "cancelled", status)
+	assert.Equal(t, "cancelled while it waited for room", message)
+	holding.Release()
+	assert.Empty(t, executor.submitted, "a cancelled run never starts")
+}
+
+func TestAnAgentRunWaitsForRoomWritingWhyToItsLog(t *testing.T) {
+	dispatcher, db, org := newBudgetedDispatcher(t, &memoryExecutor{})
+	ctx := context.Background()
+	_, err := dispatcher.Admission.Budgets.Set(ctx, org, nil, budget.Budget{Resource: budget.Memory, Kind: budget.Concurrent, Amount: 4})
+	require.NoError(t, err)
+	holding, err := dispatcher.Admission.Enter(ctx, org, Demand{Size: substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30}})
+	require.NoError(t, err)
+	id := uuid.New()
+	recorded := make(chan *RecordedRun)
+	go func() {
+		run, err := dispatcher.RecordRun(ctx, id, tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
+		assert.NoError(t, err)
+		recorded <- run
+	}()
+
+	// The run is recorded as queued, then why it waits.
+	require.Eventually(t, func() bool {
+		status, message := runMessage(t, db, id)
+		return status == "queued" && message != ""
+	}, 5*time.Second, 10*time.Millisecond)
+	_, message := runMessage(t, db, id)
+	assert.Contains(t, message, "hold 4 of its 4 concurrent GiB")
+	holding.Release()
+	run := <-recorded
+	status, message := runMessage(t, db, id)
+	assert.Equal(t, "running", status)
+	assert.Empty(t, message)
+	run.Finish(true)
+
+	stored, err := dispatcher.Logs(org).Read(ctx, "runs/"+id.String()+"/log.txt")
+	require.NoError(t, err)
+	defer stored.Close()
+	data, err := io.ReadAll(stored)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "queued: this organization's runs hold 4 of its 4 concurrent GiB")
+	assert.Contains(t, string(data), "started after waiting for room")
+}
+
+func TestFailQueuedRunsSaysServeRestartedWhileTheyWaited(t *testing.T) {
+	dispatcher, db, _, org := newDispatcher(t, &memoryExecutor{})
+	queued, running := uuid.New(), uuid.New()
+	for id, status := range map[uuid.UUID]string{queued: "queued", running: "running"} {
+		require.NoError(t, db.Exec(`INSERT INTO sandbox_runs (id, org_id, kind, status, backend) VALUES (?, ?, 'lint', ?, 'memory')`, id, org, status).Error)
+	}
+
+	failed, err := dispatcher.FailQueuedRuns(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), failed)
+	status, message := runMessage(t, db, queued)
+	assert.Equal(t, "failed", status)
+	assert.Equal(t, "serve restarted while the run waited for room", message)
+	status, _ = runMessage(t, db, running)
+	assert.Equal(t, "running", status)
 }

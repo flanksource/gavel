@@ -13,17 +13,17 @@ describe("schema reference pages", () => {
     page.innerHTML = renderToStaticMarkup(createElement(FixtureKindReference, { kind }));
     expect(page.querySelectorAll('[role="tree"]')).toHaveLength(1);
     const sections = [...page.querySelectorAll('[role="tree"] > [role="treeitem"]')];
-    expect(sections.map((section) => section.querySelector('[data-schema-section]')?.textContent)).toEqual(["Global fields", `${kind} fields`]);
+    expect(sections.map((section) => section.querySelector(".font-mono")?.textContent)).toEqual(["Global fields", `${kind} fields`]);
     const names = sections.map((section) => [...section.querySelectorAll(':scope > [role="group"] > [role="treeitem"]')].map((row) => row.querySelector(".font-mono")?.textContent));
     expect(names[0]?.slice(0, 11)).toEqual(["id", "name", "cel", "timeout", "wait", "retry", "traces", "export", "override", "background", "continueOnError"]);
     expect(names[1]?.[0]).toBe("kind");
-    const fields = [...page.querySelectorAll('[data-schema-key]')].filter((node) => /^root\/[^/]+$/.test(node.getAttribute("data-schema-key")!)).map((node) => node.textContent);
-    expect(fields.sort()).toEqual(Object.keys(branch.properties).sort());
+    const format = [...sections[0]!.querySelectorAll(':scope > [role="group"] > [role="treeitem"]')].find(row => row.querySelector(".font-mono")?.textContent === "format");
+    const shortcuts = [...format?.querySelectorAll(':scope > [role="group"] > [role="treeitem"] > div > span > .font-mono') ?? []].map(label => label.textContent);
+    expect([...names.flat(), ...shortcuts].sort()).toEqual(Object.keys(branch.properties).sort());
     if (kind === "test" || kind === "lint") {
       expect(names[0]).toEqual(expect.arrayContaining(["format", "no-color", "log-level", "loglevel", "no-progress", "max-concurrent", "cwd", "db-url", "properties"]));
       expect(names[1]).not.toEqual(expect.arrayContaining(["json", "format", "no-progress"]));
-      const format = page.querySelector('[data-schema-key="root/format"]')!.closest('[role="treeitem"]')!;
-      expect(format.querySelector('[data-schema-key="root/json"]')).not.toBeNull();
+      expect(shortcuts).toContain("json");
     }
   });
 

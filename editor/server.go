@@ -247,16 +247,19 @@ func (s *Server) editorSchema(ctx context.Context, doc Document, source string) 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	override := s.Schema
-	if override == "" {
-		cfg, err := verify.LoadGavelConfig(filepath.Dir(doc.Path))
-		if err != nil {
-			return nil, err
-		}
-		if configured := cfg.LintOptionsFor("json").Schema; configured != nil {
-			override = *configured
-		}
+	cfg, err := verify.LoadGavelConfig(filepath.Dir(doc.Path))
+	if err != nil {
+		return nil, err
 	}
-	return jsonlint.EditorSchema(ctx, []byte(source), doc.Path, override)
+	configured := cfg.LintOptionsFor("json")
+	remote := strings.HasPrefix(s.Schema, "http://") || strings.HasPrefix(s.Schema, "https://")
+	if configured.RemoteSchemas != nil && *configured.RemoteSchemas {
+		remote = true
+	}
+	if override == "" && configured.Schema != nil {
+		override = *configured.Schema
+	}
+	return jsonlint.EditorSchema(ctx, jsonlint.EditorSchemaOptions{Data: []byte(source), Path: doc.Path, Override: override, RemoteSchemas: remote})
 }
 func (s *Server) startLint(w http.ResponseWriter, r *http.Request) {
 	var input struct {

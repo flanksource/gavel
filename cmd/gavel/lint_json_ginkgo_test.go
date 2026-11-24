@@ -15,6 +15,7 @@ var _ = Describe("JSON lint command", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(command.Name()).To(Equal("yaml"))
 		Expect(command.Flags().Lookup("schema")).NotTo(BeNil())
+		Expect(command.Flags().Lookup("remote-schemas")).NotTo(BeNil())
 	})
 	DescribeTable("binds the schema flag around the linter subcommand", func(args []string) {
 		root := &cobra.Command{Use: "gavel"}
@@ -52,5 +53,6 @@ var _ = Describe("JSON lint command", func() {
 		fences := doc["fences"].(map[string]any)
 		lintSchema := fences["lint"].(map[string]any)["schema"].(fixtureJSONSchema)
 		Expect(lintSchema["properties"]).To(HaveKey("schema"))
+		Expect(lintSchema["properties"]).To(HaveKey("remote-schemas"))
 	})
 })

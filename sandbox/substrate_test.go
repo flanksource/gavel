@@ -242,6 +242,30 @@ func TestSubstrateWarnsWhenAFinishedJobsEnvironmentIsNotDeleted(t *testing.T) {
 		"delete substrate environment ate-env/gavel-run-"+run.String()+": rpc error: code = Internal desc = object-store plugin upload failed")
 }
 
+func TestSubstrateCreatesAJobsEnvironmentFromTheTemplateItNames(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	for template, want := range map[string]string{"gavel-org-acme": "gavel-org-acme", "": "gavel-runner"} {
+		run := uuid.New()
+		api := &fakeRunAPI{}
+		server, executor, _ := startSubstrate(t, api.handler())
+		var created string
+		api.onSpec = func(run string) {
+			if env, ok := server.Environment("ate-env", "gavel-run-"+run); ok {
+				created = env.Template
+			}
+		}
+		job := testJob(t, run, "0")
+		job.Template = template
+
+		handle, err := executor.Submit(ctx, job)
+		require.NoError(t, err)
+		_, err = handle.Wait(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, want, created, "a job naming no template gets the executor's")
+	}
+}
+
 func TestSubstrateCancelKillsTheJobAndRemovesItsEnvironment(t *testing.T) {
 	run := uuid.New()
 	server, executor, _ := startSubstrate(t, (&fakeRunAPI{}).handler())
@@ -324,6 +348,24 @@ func TestSubstrateSubmitLogsTheCredentialsTheGatewayInjects(t *testing.T) {
 	assert.Contains(t, logged.String(), "sandbox run 7a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d in substrate environment ate-env/gavel-run-7a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d: the egress gateway injects no credentials")
 }
 
+func TestSubstrateListsItsSubstratesWorkersAndActors(t *testing.T) {
+	server, executor, _ := startSubstrate(t, http.NotFoundHandler())
+	server.AddWorker(substrate.Worker{Name: "pool-a-0", Pool: "pool-a", State: "active"})
+	inventory, ok := executor.(interface {
+		ListWorkers(ctx context.Context) ([]substrate.Worker, error)
+		ListActors(ctx context.Context, atespace string) ([]substrate.Actor, error)
+	})
+	require.True(t, ok, "the platform dashboard reads substrate's inventory over the executor's connection")
+
+	workers, err := inventory.ListWorkers(t.Context())
+	require.NoError(t, err)
+	require.Len(t, workers, 1)
+	assert.Equal(t, "pool-a-0", workers[0].Name)
+	actors, err := inventory.ListActors(t.Context(), "")
+	require.NoError(t, err)
+	assert.Empty(t, actors, "no job has started an environment")
+}
+
 func TestSubstrateBackendIsCaptainsSubstrateSandboxOptions(t *testing.T) {
 	backend := SubstrateBackend(substrate.Options{
 		EnvAPI: "envapi.example:443", Control: "control.example:443", ControlTokenFile: "/run/token",
@@ -333,7 +375,7 @@ func TestSubstrateBackendIsCaptainsSubstrateSandboxOptions(t *testing.T) {
 		"envAPI": "envapi.example:443", "control": "control.example:443", "tokenFile": "/run/token",
 		"atespace": "ate-env", "template": "gavel-runner", "trustBundle": "/run/ate/trust.pem",
 		"egress": []string{
-			"proxy.golang.org:443", "sum.golang.org:443", "registry.npmjs.org:443", "pypi.org:443", "files.pythonhosted.org:443",
+			"proxy.golang.org:443", "sum.golang.org:443", "storage.googleapis.com:443", "registry.npmjs.org:443", "pypi.org:443", "files.pythonhosted.org:443",
 			"github.com:443", "codeload.github.com:443", "objects.githubusercontent.com:443", "goproxy.example.com:443",
 		},
 	}, backend, "a run reaches the package hosts and GitHub, and never serve, which it asks over its channel")

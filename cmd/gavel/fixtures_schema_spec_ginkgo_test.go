@@ -32,7 +32,7 @@ var _ = g.Describe("builtin fixture schemas", func() {
 		adapter.Files = []string{markdown, document}
 		violations, err := adapter.Run(commonsContext.NewContext(context.Background()), nil)
 		o.Expect(err).NotTo(o.HaveOccurred())
-		editor, err := jsonlint.EditorSchema(context.Background(), []byte("timeout: 30s\n"), markdown, "")
+		editor, err := jsonlint.EditorSchema(context.Background(), jsonlint.EditorSchemaOptions{Data: []byte("timeout: 30s\n"), Path: markdown, Override: ""})
 		o.Expect(err).NotTo(o.HaveOccurred())
 
 		o.Expect(frontmatter).To(o.Equal("gavel:fixture-frontmatter"))

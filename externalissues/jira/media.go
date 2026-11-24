@@ -41,7 +41,7 @@ func findMediaAttachment(reference mediaReference, attachments []externalissues.
 		return nil, nil
 	}
 	if match.URL == "" {
-		return nil, fmt.Errorf("Jira media %s attachment %s has no content URL", reference.ID, match.ID)
+		return nil, fmt.Errorf("jira media %s attachment %s has no content URL", reference.ID, match.ID)
 	}
 	return match, nil
 }

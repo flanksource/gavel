@@ -517,7 +517,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 }
 
 func runDashboardFrontend(ctx context.Context, srv *ui.Server, dashboardURL string, opts PRListOptions) error {
-	if opts.UI {
+	if opts.Open {
 		testui.OpenBrowser(dashboardURL)
 	}
 	if opts.MenuBar {

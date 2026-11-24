@@ -34,7 +34,7 @@ func gavelConfigSchema() map[string]any {
 		map[string]any{
 			"slots":          slotsSchema(),
 			"externalIssues": externalIssuesSchema(),
-			"runtime":        runtimeSchema(),
+			"runtime":        RuntimeSchema(),
 			"ai":             aiSchema(specSchema),
 			"lint":           lintSchema(),
 			"commit":         commitSchema(),

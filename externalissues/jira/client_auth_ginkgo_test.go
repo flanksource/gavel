@@ -36,7 +36,7 @@ func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 var _ = Describe("Jira authentication boundaries", func() {
 	It("rejects invalid bearer tokens before an HTTP error can expose them", func() {
 		_, err := NewClient(context.Background(), ClientOptions{Site: "example", Credentials: Credentials{AccessToken: "private-token\ninvalid"}})
-		Expect(err).To(MatchError("Jira OAuth access token contains invalid characters"))
+		Expect(err).To(MatchError("jira OAuth access token contains invalid characters"))
 	})
 
 	It("discovers the selected TWG profile through its refresh/export command without a shell", func() {

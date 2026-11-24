@@ -73,9 +73,10 @@ type Options struct {
 	// Explicit flags override lint.fix; Captain supplies any remaining runtime
 	// defaults.
 	captaincli.AIRuntimeOptions
-	Selection    *changeset.Selection `flag:"-" json:"-" yaml:"-"`
-	OptionFields map[string]bool      `json:"-" yaml:"-" flag:"-"`
-	Schema       string               `flag:"schema" json:"schema,omitempty" yaml:"schema,omitempty" help:"For the JSON/YAML linter, use this JSON Schema path or HTTP(S) URL instead of auto-selecting a schema"`
+	Selection     *changeset.Selection `flag:"-" json:"-" yaml:"-"`
+	OptionFields  map[string]bool      `json:"-" yaml:"-" flag:"-"`
+	Schema        string               `flag:"schema" json:"schema,omitempty" yaml:"schema,omitempty" help:"For the JSON/YAML linter, use this JSON Schema path or HTTP(S) URL instead of auto-selecting a schema"`
+	RemoteSchemas bool                 `flag:"remote-schemas" json:"remote-schemas,omitempty" yaml:"remote-schemas,omitempty" help:"Allow HTTP(S) schemas and references declared by input files"`
 }
 
 func (o Options) Pretty() api.Text {

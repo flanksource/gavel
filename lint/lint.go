@@ -135,6 +135,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 	group := clicky.StartGroup[*linters.LinterResult](testui.LintTaskGroupName, clickytask.WithConcurrency(1))
 	var allResults []*linters.LinterResult
 	var lintTasks []clickytask.TypedTask[*linters.LinterResult]
+	var schedule []func()
 	ctx := opts.Context
 	if ctx == nil {
 		ctx = context.Background()
@@ -204,7 +205,7 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				continue
 			}
 
-			runOpts := linters.RunOptions{Schema: opts.Schema,
+			runOpts := linters.RunOptions{Schema: opts.Schema, RemoteSchemas: opts.RemoteSchemas, SchemaExplicit: opts.OptionFields["schema"],
 				Scopes:               scopes,
 				RuleExclusions:       exclusions,
 				NativeRuleExclusions: exclusions.NativeFor(linter.Name(), len(requestedLinters) == 1),
@@ -224,16 +225,18 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 			optsCopy := runOpts
 			parentCtx := opts.Context
 			progress.scheduled()
-			lintTasks = append(lintTasks, group.Add(linter.Name(), func(ctx commonsContext.Context, t *clickytask.Task) (*linters.LinterResult, error) {
-				runCtx := mergeContexts(ctx, parentCtx)
-				result := linters.RunLinterWithTask(runCtx, t, invCopy.linter, optsCopy)
-				result.WorkDir = invCopy.projectRoot
-				if invCopy.configDir != "" {
-					linters.FilterViolationsByUserScope([]*linters.LinterResult{result}, invCopy.projectRoot, configScopes(invCopy, nil))
-				}
-				progress.finished()
-				return result, nil
-			}))
+			schedule = append(schedule, func() {
+				lintTasks = append(lintTasks, group.Add(linter.Name(), func(ctx commonsContext.Context, t *clickytask.Task) (*linters.LinterResult, error) {
+					runCtx := mergeContexts(ctx, parentCtx)
+					result := linters.RunLinterWithTask(runCtx, t, invCopy.linter, optsCopy)
+					result.WorkDir = invCopy.projectRoot
+					if invCopy.configDir != "" {
+						linters.FilterViolationsByUserScope([]*linters.LinterResult{result}, invCopy.projectRoot, configScopes(invCopy, nil))
+					}
+					progress.finished()
+					return result, nil
+				}))
+			})
 			scheduledRoots = append(scheduledRoots, inv.projectRoot)
 			anyScheduled = true
 		}
@@ -246,6 +249,9 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		}
 	}
 
+	for _, start := range schedule {
+		start()
+	}
 	if len(lintTasks) == 0 && len(allResults) == 0 && opts.Selection.Active() {
 		logger.Infof("Change selection: no applicable lint work")
 	}
@@ -483,7 +489,7 @@ func dryRunGroup(opts Options) error {
 				continue
 			}
 
-			runOpts := linters.RunOptions{Schema: opts.Schema,
+			runOpts := linters.RunOptions{Schema: opts.Schema, RemoteSchemas: opts.RemoteSchemas, SchemaExplicit: opts.OptionFields["schema"],
 				Scopes:               scopes,
 				RuleExclusions:       exclusions,
 				NativeRuleExclusions: exclusions.NativeFor(linter.Name(), len(requestedLinters) == 1),

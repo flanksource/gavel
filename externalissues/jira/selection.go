@@ -36,7 +36,7 @@ func (s *syncSelection) predicate(seen map[string]bool) issuePredicate {
 			return false, err
 		}
 		if issue.Key == "" || issue.Fields == nil {
-			return false, fmt.Errorf("Jira issue response requires a key and fields object")
+			return false, fmt.Errorf("jira issue response requires a key and fields object")
 		}
 		if seen[issue.Key] {
 			return false, nil

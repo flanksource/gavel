@@ -2,8 +2,8 @@ package jsonlint
 
 import (
 	"context"
+	"github.com/flanksource/gavel/linters/json/jsonlinttest"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,6 +67,19 @@ var _ = Describe("JSON linter", func() {
 		Entry("bad NDJSON records", "data.ndjson", "{}\n\n{bad}\n{} {}\n", 2),
 		Entry("large NDJSON record", "data.ndjson", `{"text":"`+strings.Repeat("x", 70000)+`"}`, 0),
 	)
+
+	It("skips Helm chart templates, which are Go templates rather than YAML", func() {
+		const template = "{{- if .Values.enabled }}\nkind: ConfigMap\n{{- end }}\n"
+		write("chart/Chart.yaml", "apiVersion: v2\nname: example\nversion: 0.1.0\n")
+		write("chart/templates/config.yaml", template)
+		write("chart/templates/nested/secret.yaml", template)
+		plain := write("other/templates/data.yaml", "enabled: [\n")
+		adapter.Files = []string{"."}
+		violations, err := adapter.Run(commonsContext.NewContext(context.Background()), nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(violations).To(HaveExactElements(HaveField("File", plain)), "a templates/ directory outside a chart is still YAML")
+		Expect(adapter.GetFileCount()).To(Equal(2), "Chart.yaml and the non-chart file are linted; the two templates are not")
+	})
 
 	It("reports original NDJSON line numbers and continues after malformed records", func() {
 		violations, err := run("data.ndjson", "{}\n\n{bad}\n{bad}\n")
@@ -133,6 +146,31 @@ var _ = Describe("JSON linter", func() {
 		Expect(err.Error()).To(ContainSubstring("schema.json"))
 	}, Entry("malformed", `{`), Entry("invalid", `{"type":"unknown"}`), Entry("missing reference", `{"$ref":"missing.json"}`))
 
+	DescribeTable("warns once and skips validation when a declared schema cannot be compiled", func(name, schema, contents string) {
+		write("nested/schema.json", schema)
+		violations, err := run(name, contents)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(violations).To(HaveExactElements(And(
+			HaveField("Severity", models.SeverityWarning),
+			HaveField("Rule.Method", "schema"),
+			HaveField("Line", 1),
+		)))
+		Expect(*violations[0].Message).To(And(ContainSubstring("schema.json"), ContainSubstring("not validated")))
+	},
+		Entry("fails its metaschema", "nested/data.json",
+			`{"$schema":"http://json-schema.org/draft-04/schema#","properties":{"retry":{"exclusiveMinimum":0}}}`,
+			`{"$schema":"schema.json","retry":5}`),
+		Entry("uses a regex Go cannot compile", "nested/data.json",
+			`{"properties":{"path":{"pattern":"^/(?!/).*$"}}}`,
+			`{"$schema":"schema.json","path":"/x"}`),
+		Entry("YAML header", "nested/data.yaml",
+			`{"properties":{"path":{"pattern":"^/(?!/).*$"}}}`,
+			"# yaml-language-server: $schema=./schema.json\npath: /x\n---\npath: /y\n"),
+		Entry("every NDJSON record", "nested/data.ndjson",
+			`{"properties":{"path":{"pattern":"^/(?!/).*$"}}}`,
+			"{\"$schema\":\"schema.json\",\"path\":\"/x\"}\n{\"$schema\":\"schema.json\",\"path\":\"/y\"}\n"),
+	)
+
 	It("fails on a missing declared schema", func() {
 		_, err := run("data.yaml", "# yaml-language-server: $schema=missing.json\nname: value\n")
 		Expect(err).To(MatchError(ContainSubstring("missing.json")))
@@ -150,7 +188,7 @@ var _ = Describe("JSON linter", func() {
 
 	It("loads remote schemas and references once per run", func() {
 		var requests atomic.Int32
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requests.Add(1)
 			if r.URL.Path == "/schema.json" {
 				_, err := w.Write([]byte(`{"$ref":"types.json"}`))
@@ -160,26 +198,90 @@ var _ = Describe("JSON linter", func() {
 			_, err := w.Write([]byte(`{"type":"object","required":["name"]}`))
 			Expect(err).NotTo(HaveOccurred())
 		}))
+
 		DeferCleanup(server.Close)
 		adapter.Schema = server.URL + "/schema.json"
+		adapter.SchemaExplicit = true
 		violations, err := run("data.ndjson", "{}\n{}\n")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(violations).To(HaveLen(2))
 		Expect(requests.Load()).To(Equal(int32(2)))
 	})
 
+	DescribeTable("warns once without fetching remote declarations or references by default", func(name, contents string, local bool) {
+		var requests atomic.Int32
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			_, err := w.Write([]byte(`{"required":["name"]}`))
+			Expect(err).NotTo(HaveOccurred())
+		}))
+
+		DeferCleanup(server.Close)
+		reference := server.URL + "/schema.json"
+		if local {
+			write("schema.json", `{"$ref":"`+reference+`"}`)
+			reference = "schema.json"
+		}
+		violations, err := run(name, strings.ReplaceAll(contents, "SCHEMA", reference))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(requests.Load()).To(BeZero())
+		Expect(violations).To(HaveExactElements(And(
+			HaveField("File", filepath.Join(adapter.WorkDir, name)),
+			HaveField("Severity", models.SeverityWarning), HaveField("Rule.Method", "schema"), HaveField("Line", 1),
+		)))
+		Expect(*violations[0].Message).To(And(ContainSubstring("not fetched"), ContainSubstring("not validated"), ContainSubstring("--remote-schemas")))
+	},
+		Entry("JSON declaration", "data.json", `{"$schema":"SCHEMA"}`, false),
+		Entry("YAML header", "data.yaml", "# yaml-language-server: $schema=SCHEMA\n{}\n---\n{}\n", false),
+		Entry("NDJSON records", "data.ndjson", "{\"$schema\":\"SCHEMA\"}\n{\"$schema\":\"SCHEMA\"}\n", false),
+		Entry("local schema with remote reference", "data.json", `{"$schema":"SCHEMA"}`, true),
+	)
+
+	It("fetches and validates remote declarations when enabled", func() {
+		var requests atomic.Int32
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			_, err := w.Write([]byte(`{"required":["name"]}`))
+			Expect(err).NotTo(HaveOccurred())
+		}))
+
+		DeferCleanup(server.Close)
+		adapter.RemoteSchemas = true
+		violations, err := run("data.json", `{"$schema":"`+server.URL+`/schema.json"}`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(requests.Load()).To(Equal(int32(1)))
+		Expect(violations).To(HaveExactElements(And(HaveField("Severity", models.SeverityError), HaveField("Rule.Method", "schema"))))
+		Expect(*violations[0].Message).To(ContainSubstring("name"))
+	})
+
+	It("warns for an empty NDJSON file when an explicit local schema reaches a remote reference", func() {
+		adapter.Schema = write("schema.json", `{"$ref":"https://example.com/schema.json"}`)
+		adapter.SchemaExplicit = true
+		violations, err := run("data.ndjson", "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(violations).To(HaveExactElements(And(HaveField("Line", 1), HaveField("Severity", models.SeverityWarning))))
+	})
+
+	DescribeTable("refuses unsupported remote schemes even when fetching is enabled", func(reference string) {
+		adapter.RemoteSchemas = true
+		_, err := run("data.json", `{"$schema":"`+reference+`"}`)
+		Expect(err).To(MatchError(ContainSubstring("unsupported schema URL scheme")))
+	}, Entry("FTP", "ftp://example.com/schema.json"), Entry("data", "data:application/json,true"))
+
 	It("surfaces HTTP failures", func() {
-		server := httptest.NewServer(http.NotFoundHandler())
+		server := jsonlinttest.ServePublicSchema(http.NotFoundHandler())
 		DeferCleanup(server.Close)
 		adapter.Schema = server.URL + "/schema.json"
+		adapter.SchemaExplicit = true
 		_, err := run("data.json", `{}`)
 		Expect(err).To(MatchError(ContainSubstring("404")))
 	})
 
 	It("cancels an in-flight remote schema request", func() {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+		server := jsonlinttest.ServePublicSchema(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 		DeferCleanup(server.Close)
 		adapter.Schema = server.URL + "/schema.json"
+		adapter.SchemaExplicit = true
 		adapter.Files = []string{write("data.json", `{}`)}
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		DeferCleanup(cancel)

@@ -36,6 +36,28 @@ var _ = Describe("Nested lint configuration", func() {
 			Expect(inv.files).To(HaveLen(1))
 		}
 	})
+
+	DescribeTable("rejects violation paths escaping the result workspace", func(kind string) {
+		outside := GinkgoT().TempDir()
+		path := filepath.Join(outside, "guide.md")
+		switch kind {
+		case "relative":
+			var err error
+			path, err = filepath.Rel(root, path)
+			Expect(err).NotTo(HaveOccurred())
+		case "symlink":
+			Expect(os.Symlink(outside, filepath.Join(root, "escape"))).To(Succeed())
+			path = "escape/guide.md"
+		}
+		results := []*linters.LinterResult{{WorkDir: root, Violations: []models.Violation{{File: path}}}}
+		Expect(FilterConfiguredViolations(results, root)).NotTo(Succeed())
+	}, Entry("absolute", "absolute"), Entry("relative", "relative"), Entry("symlink", "symlink"))
+
+	It("uses the nearest existing directory for deleted files inside the workspace", func() {
+		results := []*linters.LinterResult{{WorkDir: root, Violations: []models.Violation{{File: "child/deleted/guide.md"}}}}
+		Expect(FilterConfiguredViolations(results, root)).To(Succeed())
+		Expect(results[0].Violations).To(HaveLen(1))
+	})
 	It("applies nested ignore rules relative to their declaring directory", func() {
 		Expect(os.WriteFile(filepath.Join(child, ".gavel.yaml"), []byte("lint: {ignore: [{rule: MD001, file: guide.md}]}\n"), 0o600)).To(Succeed())
 		results := []*linters.LinterResult{{Linter: "markdownlint", WorkDir: root, Violations: []models.Violation{{File: "guide.md", Rule: &models.Rule{Method: "MD001"}}, {File: "child/guide.md", Rule: &models.Rule{Method: "MD001"}}}}}

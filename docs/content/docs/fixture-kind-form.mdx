@@ -6,13 +6,10 @@ order: 12
 ---
 
 import FixtureKindReference from "../../src/components/site/FixtureKindReference";
-import FixtureExample from "../../src/components/site/FixtureExample";
 
 Use the `form` step to ask a person to fill a JSON-schema form and wait for the answer. A fixture's `params:` is a form asked before the first step. With `if:`, a later step runs only when the answers allow it.
 
 ## Example
-
-<FixtureExample>
 
 ```yaml
 kind: Fixture
@@ -44,8 +41,6 @@ steps:
     query: SELECT 1 AS purged
     cel: row.purged == 1
 ```
-
-</FixtureExample>
 
 Save it as `purge.fixture.yaml` and run `gavel fixtures purge.fixture.yaml --ui --param minSize=20`. The run pauses at `approval`, shown amber as waiting, and the run view's banner opens the form. Submit `2` and `purge` runs. Cancel, and `approval.approved` is false, so `purge` is skipped and the fixture still passes. On a terminal, `gavel fixtures purge.fixture.yaml` asks the same questions in the terminal.
 

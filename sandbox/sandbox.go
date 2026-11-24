@@ -34,6 +34,9 @@ type Job struct {
 	// Source is the repository the job's commit is in, for an executor that brings the source
 	// into the job itself; nil leaves the job to download it.
 	Source *JobSource
+	// Template is the substrate template the job's environment is created from, its
+	// organization's; empty is the executor's own. Other executors ignore it.
+	Template string
 }
 
 // JobSource is the repository on serve a job's commit is in.
@@ -102,6 +105,16 @@ func JobName(run uuid.UUID) string {
 
 // jobPrefix starts every run's job name.
 const jobPrefix = "gavel-run-"
+
+// RunOfJob is the run whose job is named name; false when name isn't one JobName gives.
+func RunOfJob(name string) (uuid.UUID, bool) {
+	raw, found := strings.CutPrefix(name, jobPrefix)
+	if !found {
+		return uuid.UUID{}, false
+	}
+	run, err := uuid.Parse(raw)
+	return run, err == nil
+}
 
 // SubstrateActor is the SPIFFE ID substrate's egress gateway reports for run's environment in
 // atespace, the actor named after the run.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/budget"
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/google/uuid"
@@ -28,6 +29,9 @@ type CredentialsAPI struct {
 	RunLifetime time.Duration
 	// Token is the credential provider's bearer token.
 	Token string
+	// Budgets, when set, refuse an organization's keys once its token or model cost budget is
+	// used up, so a run's model calls stop at the gateway too.
+	Budgets *budget.Store
 }
 
 // Handler routes the credential fetch.
@@ -82,6 +86,18 @@ func (a *CredentialsAPI) handleFetch(w http.ResponseWriter, r *http.Request) {
 	case body.Actor != sandbox.SubstrateActor(a.Atespace, run.ID):
 		refuse(http.StatusForbidden, fmt.Sprintf("actor %q isn't run %s's environment", body.Actor, run.ID))
 		return
+	}
+	if a.Budgets != nil {
+		statuses, err := a.Budgets.Status(r.Context(), run.Org, a.RunLifetime)
+		if err != nil {
+			logger.Errorf("credential fetch for run %s: %v", run.ID, err)
+			writeCIError(w, http.StatusInternalServerError, "could not read the organization's budgets")
+			return
+		}
+		if usedUp := sandbox.UsedUpModelBudgets(statuses); len(usedUp) > 0 {
+			refuse(http.StatusForbidden, "budget used up: "+strings.Join(usedUp, "; "))
+			return
+		}
 	}
 	value, err := a.Keys.Value(r.Context(), run.Org, body.Provider)
 	if errors.Is(err, modelkeys.ErrNotFound) {

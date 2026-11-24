@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
+	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/google/uuid"
 )
 
@@ -140,14 +140,11 @@ func prepare(ctx context.Context, opts Options) (*Operation, error) {
 	if head != opts.ExpectedHead {
 		return nil, errors.New("HEAD changed; refresh before rebasing")
 	}
-	if opts.Target != "refs/remotes/origin/main" && !strings.HasPrefix(opts.Target, "refs/heads/") {
-		return nil, errors.New("target must be origin/main or a local branch ref")
+	if err := validateTarget(opts.Target); err != nil {
+		return nil, err
 	}
 	if opts.Target == "refs/heads/"+branch {
 		return nil, errors.New("cannot rebase a branch onto itself")
-	}
-	if _, err := git(ctx, opts.Worktree, "check-ref-format", opts.Target); err != nil {
-		return nil, err
 	}
 	op := &Operation{ID: uuid.NewString(), Worktree: opts.Worktree, Branch: branch, Target: opts.Target, OriginalHead: head, Phase: "fetch", Conflicts: []string{}}
 	return op, save(op)
@@ -179,8 +176,14 @@ func start(ctx context.Context, op *Operation) error {
 				return err
 			}
 		}
+		if err := gavelgit.ValidateRevision(op.Target); err != nil {
+			return err
+		}
 		sha, err := git(ctx, op.Worktree, "rev-parse", "--verify", "--end-of-options", op.Target+"^{commit}")
 		if err != nil {
+			return err
+		}
+		if err := validateCommitID(sha); err != nil {
 			return err
 		}
 		op.TargetSHA, op.Phase = sha, "stash"
@@ -214,7 +217,10 @@ func start(ctx context.Context, op *Operation) error {
 	if head != op.OriginalHead {
 		return finish(ctx, op)
 	}
-	if _, err := git(ctx, op.Worktree, "-c", "core.editor=true", "rebase", "--no-autostash", op.TargetSHA); err != nil {
+	if err := validateCommitID(op.TargetSHA); err != nil {
+		return err
+	}
+	if _, err := git(ctx, op.Worktree, "-c", "core.editor=true", "rebase", "--no-autostash", "--", op.TargetSHA); err != nil {
 		return err
 	}
 	return finish(ctx, op)

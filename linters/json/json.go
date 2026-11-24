@@ -2,6 +2,7 @@ package jsonlint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,6 +56,9 @@ func (j *JSON) DryRunCommand() (string, []string) {
 	if j.Schema != "" {
 		args = append(args, "--schema", j.Schema)
 	}
+	if j.RemoteSchemas {
+		args = append(args, "--remote-schemas")
+	}
 	return "gavel", append(args, j.Files...)
 }
 
@@ -72,10 +76,13 @@ func (j *JSON) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Viol
 	if err != nil {
 		return nil, err
 	}
-	validator := newValidator(ctx)
+	validator := newValidator(schemaLoader{ctx: ctx, remoteSchemas: j.RemoteSchemas || j.SchemaExplicit && remoteSchema(j.Schema)})
 	if j.Schema != "" {
 		if _, err := validator.compile(j.Schema, j.WorkDir); err != nil {
-			return nil, err
+			var remote *remoteSchemaDisabledError
+			if !errors.As(err, &remote) {
+				return nil, err
+			}
 		}
 	}
 	var violations []models.Violation
@@ -136,6 +143,13 @@ func (j *JSON) files(ctx context.Context) ([]string, error) {
 		if !supported(file) {
 			continue
 		}
+		template, err := helmTemplate(file)
+		if err != nil {
+			return nil, err
+		}
+		if template {
+			continue
+		}
 		relative, err := filepath.Rel(j.WorkDir, file)
 		if err != nil {
 			return nil, err
@@ -154,6 +168,26 @@ func (j *JSON) files(ctx context.Context) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+// helmTemplate reports whether path sits under a Helm chart's templates/
+// directory (one whose parent holds Chart.yaml). Those files are Go templates
+// that only become YAML once Helm renders them, so they are not linted as YAML.
+func helmTemplate(path string) (bool, error) {
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		if filepath.Base(dir) == "templates" {
+			_, err := os.Stat(filepath.Join(filepath.Dir(dir), "Chart.yaml"))
+			if err == nil {
+				return true, nil
+			}
+			if !os.IsNotExist(err) {
+				return false, err
+			}
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			return false, nil
+		}
+	}
 }
 
 func supported(path string) bool {

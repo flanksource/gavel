@@ -3,6 +3,7 @@ package prompt
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -82,7 +83,11 @@ var _ = Describe("review tools", func() {
 			clicky.ClearGlobalTasks()
 			DeferCleanup(clicky.ClearGlobalTasks)
 			Expect(os.Mkdir(filepath.Join(workDir, ".git"), 0o755)).To(Succeed())
-			GinkgoT().Setenv("PATH", GinkgoT().TempDir())
+			git, err := exec.LookPath("git")
+			Expect(err).NotTo(HaveOccurred())
+			bin := GinkgoT().TempDir()
+			Expect(os.Symlink(git, filepath.Join(bin, "git"))).To(Succeed())
+			GinkgoT().Setenv("PATH", bin)
 			GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 			GinkgoT().Setenv("CI", "false")
 			writeFiles(workDir, map[string]string{

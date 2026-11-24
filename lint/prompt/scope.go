@@ -4,9 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/flanksource/gavel/internal/safefs"
 )
 
 // fileScope is what one review covers: Paths as given, relative to the work
@@ -22,7 +23,7 @@ type fileScope struct {
 func newFileScope(dir string, paths []string) (fileScope, error) {
 	scope := fileScope{Paths: paths, Exact: len(paths) > 0}
 	for _, path := range paths {
-		info, err := os.Stat(scopePath(dir, path))
+		info, err := safefs.Stat(dir, path)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fileScope{}, fmt.Errorf("prompt lint path: %w", err)
 		}

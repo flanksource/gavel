@@ -18,6 +18,7 @@ type GitHub struct {
 func New(workDir string) *GitHub                            { return &GitHub{RunOptions: linters.RunOptions{WorkDir: workDir}} }
 func (l *GitHub) Name() string                              { return "github" }
 func (l *GitHub) InProcess() bool                           { return true }
+func (l *GitHub) RequiresExecutable() bool                  { return false }
 func (l *GitHub) DefaultIncludes() []string                 { return nil }
 func (l *GitHub) DefaultExcludes() []string                 { return nil }
 func (l *GitHub) SupportsJSON() bool                        { return true }

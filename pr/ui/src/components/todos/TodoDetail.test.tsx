@@ -188,7 +188,14 @@ const baseTodo: TodoItem = {
   lifecycle: LIFECYCLE_MOCK_DRAFT,
 };
 
-async function renderDetail(todo: TodoItem) {
+async function renderDetail(todo: TodoItem, { mobile = false } = {}) {
+  if (mobile) {
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
+      ...matchMedia(query),
+      matches: query === '(max-width: 767px)',
+    }));
+  }
   render(
     <StatefulTodoDetail
       todo={todo}
@@ -374,7 +381,9 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(labelRequests()).toEqual([]);
 
     rerender(<StatefulTodoDetail todo={baseTodo} dir="/repo" {...props} loading={false} />);
-    await waitFor(() => expect(labelRequests()).toEqual(['/api/todos/labels?dir=%2Frepo']));
+    await waitFor(() => expect(labelRequests()).toEqual(['/api/todos/labels/batch']));
+    const request = vi.mocked(fetch).mock.calls.find(([url]) => url === '/api/todos/labels/batch');
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ dirs: ['/repo'] });
   });
 
   it('opens the exact historical Session tab resolved from a session UUID', async () => {
@@ -388,8 +397,8 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(screen.getByTestId('session-viewer').textContent).toBe(historicalSession);
   });
 
-  it('keeps Resume, Run, and Plan enabled for a pending todo', async () => {
-    await renderDetail({ ...baseTodo, status: 'pending' });
+  it('keeps Resume, Run, and Plan enabled in the mobile menu for a pending todo', async () => {
+    await renderDetail({ ...baseTodo, status: 'pending' }, { mobile: true });
 
     for (const label of ['Resume session', 'Run todo', 'Plan todo']) {
       const item = screen.getByText(label).closest('button');
@@ -399,8 +408,8 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(screen.queryByText(RESOLVE_MESSAGE)).toBeNull();
   });
 
-  it('disables Resume, Run, and Plan while a todo awaits plan review', async () => {
-    await renderDetail({ ...baseTodo, status: 'review' });
+  it('disables Resume, Run, and Plan in the mobile menu while a todo awaits plan review', async () => {
+    await renderDetail({ ...baseTodo, status: 'review' }, { mobile: true });
 
     for (const label of ['Resume session', 'Run todo', 'Plan todo']) {
       const item = screen.getByText(label).closest('button');
@@ -409,8 +418,8 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(screen.getAllByText(RESOLVE_MESSAGE).length).toBeGreaterThan(0);
   });
 
-  it('disables Resume, Run, and Plan while a todo awaits an answer', async () => {
-    await renderDetail({ ...baseTodo, status: 'ask' });
+  it('disables Resume, Run, and Plan in the mobile menu while a todo awaits an answer', async () => {
+    await renderDetail({ ...baseTodo, status: 'ask' }, { mobile: true });
 
     for (const label of ['Resume session', 'Run todo', 'Plan todo']) {
       const item = screen.getByText(label).closest('button');

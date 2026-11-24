@@ -2,6 +2,7 @@ package branchrebase_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,6 +80,56 @@ var _ = Describe("Rebase and keep", func() {
 		Expect(err).To(MatchError(ContainSubstring("HEAD changed")))
 		Expect(filepath.Join(worktree, "local.txt")).To(HaveContents("local\n"))
 		Expect(git(worktree, "stash", "list")).To(BeEmpty())
+	})
+
+	DescribeTable("rejects option injection from persisted recovery metadata before running git", func(field string) {
+		state := branchrebase.Operation{ID: "recovery", Worktree: worktree, Branch: "topic", OriginalHead: head, Target: "refs/heads/main", TargetSHA: head, Phase: "rebase"}
+		switch field {
+		case "target":
+			state.TargetSHA = "--help"
+		case "stash":
+			state.StashSHA = "--help"
+		case "original":
+			state.OriginalHead = "--help"
+		}
+		raw, err := json.Marshal(state)
+		Expect(err).NotTo(HaveOccurred())
+		path := git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "gavel-rebase.json")
+		Expect(os.WriteFile(path, raw, 0600)).To(Succeed())
+		_, err = branchrebase.Inspect(context.Background(), worktree)
+		Expect(err).To(MatchError(ContainSubstring("invalid rebase recovery")))
+	}, Entry("target", "target"), Entry("stash", "stash"), Entry("original", "original"))
+
+	DescribeTable("refuses git worktrees that are not real directories", func(kind string) {
+		path := ""
+		if kind == "file" {
+			path = filepath.Join(worktree, "topic.txt")
+		}
+		_, err := branchrebase.Inspect(context.Background(), path)
+		Expect(err).To(HaveOccurred())
+	}, Entry("empty", "empty"), Entry("file", "file"))
+
+	DescribeTable("rejects invalid targets in recovery metadata before resuming", func(target string) {
+		state := branchrebase.Operation{ID: "recovery", Worktree: worktree, Branch: "topic", OriginalHead: head, Target: target, TargetSHA: head, Phase: "rebase"}
+		raw, err := json.Marshal(state)
+		Expect(err).NotTo(HaveOccurred())
+		path := git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "gavel-rebase.json")
+		Expect(os.WriteFile(path, raw, 0600)).To(Succeed())
+		_, err = branchrebase.Inspect(context.Background(), worktree)
+		Expect(err).To(HaveOccurred())
+		Expect(git(worktree, "rev-parse", "HEAD")).To(Equal(head))
+	},
+		Entry("option", "--exec=unexpected"),
+		Entry("revision expression", "refs/heads/main^{commit}"),
+		Entry("control character", "refs/heads/main\n--exec=unexpected"),
+		Entry("unapproved remote", "refs/remotes/other/main"),
+	)
+
+	It("rejects option-like targets before changing the worktree", func() {
+		opts.Target = "--exec=unexpected"
+		_, err := branchrebase.Run(context.Background(), opts)
+		Expect(err).To(MatchError(ContainSubstring("target must be")))
+		Expect(git(worktree, "rev-parse", "HEAD")).To(Equal(head))
 	})
 
 	It("retains a conflicting rebase and its stash across inspection, then aborts and restores edits", func() {

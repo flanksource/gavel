@@ -25,7 +25,7 @@ var _ = DescribeTable("durable result store contract", func(open func(context.Co
 			Expect(original.Close()).To(Succeed())
 		}
 	})
-	run := Run{Metadata: Metadata{ExecutionID: uuid.NewString(), Workspace: dir, Kind: "test+lint", Started: time.Unix(100, 0)}, Status: Status{State: "queued", Running: true}, Admission: "request-key", InputHash: "input-one"}
+	run := Run{Metadata: Metadata{ExecutionID: uuid.NewString(), Workspace: dir, Kind: "test+lint", Started: time.Unix(100, 0).UTC()}, Status: Status{State: "queued", Running: true}, Admission: "request-key", InputHash: "input-one"}
 	accepted, created, err := store.Create(ctx, run)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(created).To(BeTrue())
@@ -43,7 +43,7 @@ var _ = DescribeTable("durable result store contract", func(open func(context.Co
 	message := "visible finding"
 	accepted.Lint = []*linters.LinterResult{{Linter: "prompt", Violations: []models.Violation{{Message: &message, Line: 7}}}}
 	accepted.Status = Status{State: "completed", LintRun: true}
-	accepted.Metadata.Ended = time.Unix(110, 0)
+	accepted.Metadata.Ended = time.Unix(110, 0).UTC()
 	finished, err := store.Update(ctx, accepted, 1)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(finished.Metadata.Revision).To(Equal(uint64(2)))

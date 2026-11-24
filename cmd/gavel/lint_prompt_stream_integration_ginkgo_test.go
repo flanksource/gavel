@@ -24,6 +24,12 @@ import (
 	"github.com/onsi/gomega/gbytes"
 )
 
+// streamStepTimeout bounds each wait on the compiled gavel subprocess (a
+// reviewer turn, the nested lint, finalizing the run). It is an upper bound,
+// not part of the assertion: the full CI run shares the runner with ~145 Go
+// packages, where finalizing a UI run took over 15s.
+const streamStepTimeout = 60 * time.Second
+
 var _ = Describe("Prompt lint live reporting", Ordered, func() {
 	var dsn string
 	BeforeAll(func(ctx SpecContext) {
@@ -95,7 +101,7 @@ var _ = Describe("Prompt lint live reporting", Ordered, func() {
 		finished := make(chan error, 1)
 		go func() { finished <- cmd.Wait() }()
 		DeferCleanup(func() { _ = cmd.Process.Kill() })
-		Eventually(blocked, 15*time.Second).Should(Receive(Equal(int32(2))), string(stderr.Contents()))
+		Eventually(blocked, streamStepTimeout).Should(Receive(Equal(int32(2))), string(stderr.Contents()))
 		Expect(string(stderr.Contents())).To(ContainSubstring("State the decision criteria"))
 		Expect(string(stderr.Contents())).NotTo(ContainSubstring("Excluded finding"))
 		paths, err := filepath.Glob(filepath.Join(root, ".gavel", "run-*.json"))
@@ -111,7 +117,7 @@ var _ = Describe("Prompt lint live reporting", Ordered, func() {
 			Expect(cmd.Process.Signal(os.Interrupt)).To(Succeed())
 		} else {
 			release <- struct{}{}
-			Eventually(blocked, 15*time.Second).Should(Receive(Equal(int32(3))), string(stderr.Contents()))
+			Eventually(blocked, streamStepTimeout).Should(Receive(Equal(int32(3))), string(stderr.Contents()))
 			nested, err := snapshots.LoadRunFile(paths[0])
 			Expect(err).NotTo(HaveOccurred())
 			Expect(nested.Status.Running).To(BeTrue())
@@ -122,11 +128,11 @@ var _ = Describe("Prompt lint live reporting", Ordered, func() {
 				Eventually(func() bool {
 					snapshot, err := snapshots.LoadRunFile(paths[0])
 					return err == nil && !snapshot.Status.Running
-				}, 15*time.Second).Should(BeTrue())
+				}, streamStepTimeout).Should(BeTrue())
 				Expect(cmd.Process.Signal(os.Interrupt)).To(Succeed())
 			}
 		}
-		Eventually(finished, 15*time.Second).Should(Receive(&err))
+		Eventually(finished, streamStepTimeout).Should(Receive(&err))
 		Expect(cmd.ProcessState.ExitCode()).To(Equal(1), string(stderr.Contents()))
 		Expect(strings.Count(string(stderr.Contents()), "State the decision criteria")).To(Equal(1))
 		var final testui.Snapshot
