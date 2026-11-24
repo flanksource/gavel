@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,21 @@ type sandboxRun struct {
 	CreatedAt     time.Time  `json:"createdAt"`
 	StartedAt     *time.Time `json:"startedAt,omitempty"`
 	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+	// BackendRef names the run's job in its backend.
+	BackendRef    string `json:"backendRef,omitempty"`
+	Template      string `json:"template,omitempty"`
+	CPUMillicores *int64 `json:"cpuMillicores,omitempty"`
+	MemoryBytes   *int64 `json:"memoryBytes,omitempty"`
+	// Spec is the sandbox.RunSpec the job ran.
+	Spec json.RawMessage `json:"spec,omitempty" gorm:"-"`
+	// SpecText holds spec::text as scanned: database/sql cannot store a text column in a
+	// json.RawMessage.
+	SpecText string `json:"-" gorm:"column:spec"`
+	// TimeoutSeconds is the longest the run may work.
+	TimeoutSeconds int64 `json:"timeoutSeconds"`
+	// Lost marks a run still recorded as running past its lifetime: its job can no longer
+	// report how it ended.
+	Lost bool `json:"lost,omitempty"`
 }
 
 var errNoSandboxRuns = errors.New("sandbox runs exist only on a hosted dashboard with a sandbox (gavel serve --auth clerk --sandbox ...)")
@@ -47,7 +63,8 @@ func (s *Server) sandboxRunsQuery(r *http.Request, where string, args ...any) (s
 	visible, visibleArgs := native.VisibleIssue(r.Context(), "todo")
 	query := `SELECT run.id, run.kind, run.status, run.status_message, run.exit_code, run.ref, run.sha, repo.name AS repo,
 			COALESCE(NULLIF(u.name, ''), u.email, '') AS "user", run.todo_id, todo.title AS todo_title, run.backend,
-			run.log_key <> '' AS has_log, run.created_at, run.started_at, run.finished_at
+			run.log_key <> '' AS has_log, run.created_at, run.started_at, run.finished_at,
+			run.backend_ref, run.template, run.cpu_millicores, run.memory_bytes, run.spec::text AS spec
 		FROM sandbox_runs AS run
 		LEFT JOIN repos AS repo ON repo.id = run.repo_id
 		LEFT JOIN users AS u ON u.id = run.user_id
@@ -75,6 +92,12 @@ func (s *Server) handleSandboxRuns(w http.ResponseWriter, r *http.Request) {
 		append(args, sandboxRunsLimit)...).Scan(&runs).Error; err != nil {
 		writeJSONError(w, http.StatusInternalServerError, fmt.Errorf("list sandbox runs: %w", err))
 		return
+	}
+	timeout, lifetime := s.agentRuns.Dispatcher.RunTimeout(), s.agentRuns.Dispatcher.RunLifetime()
+	for i := range runs {
+		runs[i].Spec = json.RawMessage(runs[i].SpecText)
+		runs[i].TimeoutSeconds = int64(timeout / time.Second)
+		runs[i].Lost = runs[i].Status == "running" && runs[i].StartedAt != nil && time.Since(*runs[i].StartedAt) > lifetime
 	}
 	writeJSON(w, runs)
 }

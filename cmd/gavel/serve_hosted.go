@@ -192,13 +192,12 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 		} else if failed > 0 {
 			logger.Infof("failed %d sandbox runs left waiting for room when serve stopped", failed)
 		}
-		if sweeper, ok := dispatcher.Executor.(sandbox.Sweeper); ok {
-			var templates templateSweeper
-			if dispatcher.Templates != nil {
-				templates = dispatcher.Templates
-			}
-			go sweepSandboxEvery(ctx, sweeper, dispatcher.RunLifetime(), templates)
+		sweeper, _ := dispatcher.Executor.(sandbox.Sweeper)
+		var templates templateSweeper
+		if dispatcher.Templates != nil {
+			templates = dispatcher.Templates
 		}
+		go sweepSandboxEvery(ctx, dispatcher, sweeper, templates)
 		if dispatcher.Admission != nil {
 			// Running runs stop once a cumulative budget of their organization is used up.
 			go dispatcher.WatchBudgets(ctx, dispatcher.Admission.Recheck)
@@ -263,6 +262,8 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 	if app != nil {
 		link := &ui.GitHubLink{App: app, Store: store, Clerk: backend, SecretKey: secret}
 		mux.Handle("/api/github/", link.Handler())
+	} else {
+		mux.Handle("/api/github/", ui.GitHubWithoutApp())
 	}
 	mux.Handle("/", orgs.Handler())
 
