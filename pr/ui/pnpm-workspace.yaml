@@ -109,6 +109,7 @@ enableGlobalVirtualStore: true
 
 minimumReleaseAgeExclude:
   - '@flanksource/clicky-ui'
+  - '@flanksource/page-runtime@0.1.0'
 
 # Keep shared peer types on React 19; the test-runner workspace uses React 18.
 overrides:

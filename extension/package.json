@@ -12,9 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@flanksource/clicky-ui": "^0.3.60",
-    "@flanksource/page-runtime": "0.0.0",
-    "@flanksource/react-grab": "0.1.50",
+    "@flanksource/clicky-ui": "^0.3.73",
+    "@flanksource/page-runtime": "0.1.0",
     "@iconify-icons/ph": "1.2.5",
     "bippy": "0.6.1",
     "@mdxeditor/editor": "^4.0.4",
