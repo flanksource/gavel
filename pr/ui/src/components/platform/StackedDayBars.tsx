@@ -1,7 +1,8 @@
 // Stacked bars of a platform dashboard window's days, one segment per series in its fixed color,
 // with the same numbers as a table: some of the colors are faint on the light surface.
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Suspense, use } from 'react';
 import { formatDay, formatDayShort } from './dates';
+import { loadRecharts } from './recharts';
 
 // DaySeries is one stacked segment: the key its value is under in each day's row, its label and color.
 export interface DaySeries {
@@ -12,26 +13,35 @@ export interface DaySeries {
 
 export type DayRow = { day: string } & Record<string, number | string>;
 
-export function StackedDayBars({ title, data, series, unit }: { title: string; data: DayRow[]; series: DaySeries[]; unit: string }) {
+function DayBarsChart({ data, series, unit }: { data: DayRow[]; series: DaySeries[]; unit: string }) {
+  const { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } = use(loadRecharts());
   const labels = Object.fromEntries(series.map(s => [s.key, s.label]));
+  return (
+    // initialDimension sizes the first render, before the container is measured.
+    <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 480, height: 192 }}>
+      <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.15} />
+        <XAxis dataKey="day" tickFormatter={formatDayShort} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
+        <YAxis allowDecimals={false} width={36} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
+        <Tooltip formatter={(v, key) => [`${Math.round(Number(v))} ${unit}`, labels[String(key)] ?? String(key)]} cursor={{ fillOpacity: 0.08 }} />
+        <Legend formatter={(key: string) => <span className="text-xs text-foreground">{labels[key] ?? key}</span>} iconSize={8} />
+        {series.map(s => (
+          <Bar key={s.key} dataKey={s.key} stackId="series" fill={s.color} stroke="var(--background)" strokeWidth={1} maxBarSize={24} />
+        ))}
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function StackedDayBars({ title, data, series, unit }: { title: string; data: DayRow[]; series: DaySeries[]; unit: string }) {
   const value = (row: DayRow, key: string) => Number(row[key] ?? 0);
   return (
     <figure className="flex flex-col gap-1">
       <figcaption className="text-xs text-muted-foreground">{title}</figcaption>
       <div className="h-48 text-muted-foreground">
-        {/* initialDimension sizes the first render, before the container is measured. */}
-        <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 480, height: 192 }}>
-          <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.15} />
-            <XAxis dataKey="day" tickFormatter={formatDayShort} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
-            <YAxis allowDecimals={false} width={36} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
-            <Tooltip formatter={(v, key) => [`${Math.round(Number(v))} ${unit}`, labels[String(key)] ?? String(key)]} cursor={{ fillOpacity: 0.08 }} />
-            <Legend formatter={(key: string) => <span className="text-xs text-foreground">{labels[key] ?? key}</span>} iconSize={8} />
-            {series.map(s => (
-              <Bar key={s.key} dataKey={s.key} stackId="series" fill={s.color} stroke="var(--background)" strokeWidth={1} maxBarSize={24} />
-            ))}
-          </BarChart>
-        </ResponsiveContainer>
+        <Suspense fallback={null}>
+          <DayBarsChart data={data} series={series} unit={unit} />
+        </Suspense>
       </div>
       <details className="text-xs">
         <summary className="cursor-pointer text-muted-foreground">Show as a table</summary>

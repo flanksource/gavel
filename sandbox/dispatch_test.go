@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,7 @@ type memoryExecutor struct {
 	waitErr   error
 	submitted []Job
 	cancelled []string
+	waits     int
 }
 
 func (e *memoryExecutor) Name() string { return "memory" }
@@ -56,6 +58,7 @@ func (h *memoryHandle) Logs(context.Context) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader(h.executor.output)), nil
 }
 func (h *memoryHandle) Wait(context.Context) (Result, error) {
+	h.executor.waits++
 	return Result{ExitCode: h.executor.exitCode}, h.executor.waitErr
 }
 func (h *memoryHandle) Cancel(context.Context) error {
@@ -354,6 +357,21 @@ func TestDispatcherRecordsAJobThatDidNotFinish(t *testing.T) {
 	row := readRun(t, db, run.ID)
 	assert.Equal(t, "failed", row.Status)
 	assert.Nil(t, row.ExitCode)
+}
+
+// A job's end is followed once: an error that reads like a transient one ("connection") is the
+// job's outcome, not a reason to wait on the ended job again and lose what it said.
+func TestDispatcherFollowsAJobThatFailedOnce(t *testing.T) {
+	waitErr := errors.New("lost the connection to the sandbox worker")
+	executor := &memoryExecutor{waitErr: waitErr}
+	dispatcher, db, _, org := newDispatcher(t, executor)
+	run, err := dispatcher.Start(context.Background(), tenant.Scope{OrgID: org}, RunSpec{Kind: "test"}, nil)
+	require.NoError(t, err)
+	_, err = run.Wait(context.Background())
+	require.ErrorIs(t, err, waitErr)
+	assert.Equal(t, fmt.Sprintf("sandbox run %s: %s", run.ID, waitErr), err.Error())
+	assert.Equal(t, 1, executor.waits)
+	assert.Equal(t, "failed", readRun(t, db, run.ID).Status)
 }
 
 func TestDispatcherRejectsAnUnknownKind(t *testing.T) {

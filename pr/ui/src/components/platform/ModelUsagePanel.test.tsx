@@ -63,6 +63,14 @@ it('shows the spend, each organization\'s and model\'s share, and calls left out
   expect(within(screen.getByRole('table', { name: 'Model spend per day (USD)' })).getByRole('row', { name: /^10\/11\/2026/ }), 'days are written day first').toBeTruthy();
 });
 
+it('draws the spend chart once recharts has loaded on demand', async () => {
+  response = { status: 200, body: { days: [call({ costUSD: 1.25 })] } };
+  const { container } = render(<ModelUsagePanel />, { wrapper: queryTestWrapper() });
+
+  await screen.findByText('$1.25 spent');
+  await vi.waitFor(() => expect(container.querySelector('.recharts-wrapper')).not.toBeNull());
+});
+
 it('says why model usage didn\'t load', async () => {
   response = { status: 500, body: { error: 'read the platform\'s model usage: connection refused' } };
   render(<ModelUsagePanel />, { wrapper: queryTestWrapper() });

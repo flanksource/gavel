@@ -1,12 +1,13 @@
 // The platform dashboard's model usage panel: what every organization's agents spent on model
 // calls per day, the headline figures, and each organization's and model's share.
+import { Suspense, use } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { StatStrip } from '@flanksource/clicky-ui/data';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { fetchJSON, queryKeys } from '../../query';
 import { windowDays } from './windowDays';
 import { PanelHeading } from './PanelHeading';
 import { formatDay, formatDayShort } from './dates';
+import { loadRecharts } from './recharts';
 
 // ModelUsageDay is one UTC day's model calls of an organization with one model and provider;
 // org is absent for calls no organization of this Clerk instance owns.
@@ -94,7 +95,7 @@ function ShareTable({ title, first, rows }: { title: string; first: string[]; ro
       <tbody>
         {rows.map(({ cells, share }) => (
           <tr key={share.key} className="border-b border-border">
-            {cells.map((cell, i) => <td key={i} className={`px-2 py-1.5${i === 0 ? ' font-medium' : ''}`}>{cell}</td>)}
+            {first.map((heading, i) => <td key={heading} className={`px-2 py-1.5${i === 0 ? ' font-medium' : ''}`}>{cells[i]}</td>)}
             <td className="px-2 py-1.5">{count.format(share.calls)}</td>
             <td className="px-2 py-1.5">{count.format(share.tokens)}</td>
             <td className="px-2 py-1.5">{usd.format(share.costUSD)}</td>
@@ -105,6 +106,22 @@ function ShareTable({ title, first, rows }: { title: string; first: string[]; ro
   );
 }
 
+function CostChart({ data }: { data: DayCost[] }) {
+  const { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } = use(loadRecharts());
+  return (
+    // initialDimension sizes the first render, before the container is measured.
+    <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 480, height: 192 }}>
+      <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.15} />
+        <XAxis dataKey="day" tickFormatter={formatDayShort} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
+        <YAxis width={44} tickFormatter={(value: number) => usd.format(value)} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
+        <Tooltip formatter={value => [usd.format(Number(value)), 'Spent']} cursor={{ fillOpacity: 0.08 }} />
+        <Bar dataKey="costUSD" fill="var(--series-1)" radius={[4, 4, 0, 0]} maxBarSize={24} isAnimationActive={false} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 // CostBars draws the cost of each day, with the same numbers as a table.
 function CostBars({ data }: { data: DayCost[] }) {
   const title = 'Model spend per day (USD)';
@@ -112,16 +129,9 @@ function CostBars({ data }: { data: DayCost[] }) {
     <figure className="flex flex-col gap-1">
       <figcaption className="text-xs text-muted-foreground">{title}</figcaption>
       <div className="h-48 text-muted-foreground">
-        {/* initialDimension sizes the first render, before the container is measured. */}
-        <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 480, height: 192 }}>
-          <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.15} />
-            <XAxis dataKey="day" tickFormatter={formatDayShort} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
-            <YAxis width={44} tickFormatter={(value: number) => usd.format(value)} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
-            <Tooltip formatter={value => [usd.format(Number(value)), 'Spent']} cursor={{ fillOpacity: 0.08 }} />
-            <Bar dataKey="costUSD" fill="var(--series-1)" radius={[4, 4, 0, 0]} maxBarSize={24} isAnimationActive={false} />
-          </BarChart>
-        </ResponsiveContainer>
+        <Suspense fallback={null}>
+          <CostChart data={data} />
+        </Suspense>
       </div>
       <details className="text-xs">
         <summary className="cursor-pointer text-muted-foreground">Show as a table</summary>
