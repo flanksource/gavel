@@ -17,7 +17,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/processruntime"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 	"github.com/flanksource/repomap"
 )
 
@@ -433,7 +433,7 @@ func ResolveWorkDirFromCWD(cwd, baseDir string, opts fixtures.RunOptions) string
 
 func templateString(value string, data map[string]any) (string, error) {
 	value = fixtures.ExpandVars(value, data)
-	return gomplate.RunTemplate(data, gomplate.Template{Template: value})
+	return gomplate.RunTemplate(data, gomplate.Template{Template: value, Strict: true})
 }
 
 func findGoModRoot(path string) string {

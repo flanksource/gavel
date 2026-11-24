@@ -9,7 +9,7 @@ import (
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // Expectations represents expected outcomes for code block execution.

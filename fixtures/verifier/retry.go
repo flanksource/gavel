@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"cel.dev/cel-go/cel"
 	"github.com/flanksource/captain/pkg/api"
-	"github.com/google/cel-go/cel"
 
 	"github.com/flanksource/gavel/fixtures"
 )
