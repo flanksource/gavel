@@ -72,7 +72,7 @@ describe('connectionLookupFetcher', () => {
   it('scopes a query field to the connection its linked param holds and keeps each option\'s icon, description, group and badges', async () => {
     const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify({
       filters: { query: { options: { orders: {
-        plain: 'Orders', icon: 'ph:table-thin', description: '12 rows', group: 'public', badges: [{ label: 'pk', tone: 'info' }],
+        plain: 'Orders', icon: 'ph:table-thin', description: '12 rows', group: 'public', badges: [{ label: 'pk', tone: 'sky' }],
       } } } },
     }), { status: 200 }));
     vi.stubGlobal('fetch', fetch);
@@ -85,7 +85,7 @@ describe('connectionLookupFetcher', () => {
 
     expect(fetch.mock.calls[0]?.[0]).toBe('/api/v1/lookup/abc/table?connection=connection%3A%2F%2Flab&__lookup_filter=query&__lookup_q=ord');
     expect(options).toEqual([{
-      value: 'orders', label: 'Orders', icon: 'ph:table-thin', description: '12 rows', group: 'public', badges: [{ label: 'pk', tone: 'info' }],
+      value: 'orders', label: 'Orders', icon: 'ph:table-thin', description: '12 rows', group: 'public', badges: [{ label: 'pk', tone: 'sky' }],
     }]);
   });
 
