@@ -57,6 +57,36 @@ func TestViewGroupsTimeseriesRowsIntoSeries(t *testing.T) {
 	assert.Equal(t, missioncontrol.Panel{Name: "By pool", Type: "piechart", Unsupported: "gavel doesn't draw piechart panels"}, view.Panels[4])
 }
 
+// Mission Control runs a panel's query on SQLite, which keeps a Prometheus sample's time as Go's
+// default text for a time.
+func TestViewReadsTimestampsAsMissionControlsSQLiteWritesThem(t *testing.T) {
+	mc := missioncontroltest.New(t)
+	mc.SetView("mission-control", "substrate-org-usage", map[string]any{
+		"panels": []map[string]any{
+			{
+				"name": "CPU (cores)", "type": "timeseries",
+				"timeseries": map[string]any{"timeKey": "timestamp", "valueKey": "value"},
+				"rows": []map[string]any{
+					{"timestamp": "2026-11-23 23:20:53.317 +0000 UTC", "value": 0.5},
+					{"timestamp": "2026-11-24 04:45:53.317 +0530 IST", "value": 0.25},
+				},
+			},
+		},
+	})
+
+	view, err := missioncontrol.New(mc.URL, missioncontroltest.Token, "").View(t.Context(), "mission-control/substrate-org-usage", nil)
+	require.NoError(t, err)
+	require.Len(t, view.Panels, 1)
+	assert.Empty(t, view.Panels[0].Unsupported)
+	require.Len(t, view.Panels[0].Series, 1)
+	points := view.Panels[0].Series[0].Points
+	require.Len(t, points, 2)
+	assert.True(t, points[0].Time.Equal(time.Date(2026, 11, 23, 23, 15, 53, 317_000_000, time.UTC)), "got %s", points[0].Time)
+	assert.Equal(t, 0.25, points[0].Value)
+	assert.True(t, points[1].Time.Equal(time.Date(2026, 11, 23, 23, 20, 53, 317_000_000, time.UTC)), "got %s", points[1].Time)
+	assert.Equal(t, 0.5, points[1].Value)
+}
+
 func TestViewSaysWhyAPanelCantBeRead(t *testing.T) {
 	mc := missioncontroltest.New(t)
 	mc.SetView("substrate", "capacity", map[string]any{
@@ -71,7 +101,7 @@ func TestViewSaysWhyAPanelCantBeRead(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "prometheus: connection refused", view.RefreshError)
 	require.Len(t, view.Panels, 2)
-	assert.Equal(t, `row 1's timestamp "yesterday" isn't an RFC 3339 time`, view.Panels[0].Unsupported)
+	assert.Equal(t, `row 1's timestamp "yesterday" isn't an RFC 3339 time or Go's text for one`, view.Panels[0].Unsupported)
 	assert.Empty(t, view.Panels[0].Series)
 	assert.Equal(t, `row 1's value "many" isn't a number`, view.Panels[1].Unsupported)
 }
