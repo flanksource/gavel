@@ -40,7 +40,7 @@ vi.mock('@flanksource/clicky-ui/components', async (importOriginal) => {
 });
 
 const WORKTREE = '/src/acme/.worktrees/topic';
-const operation: RebaseOperation = { id: 'op-123', worktree: WORKTREE, branch: 'topic', target: 'refs/heads/main', targetSha: 'target', originalHead: 'before', stashSha: 'saved', phase: 'rebase', error: 'Conflicting rebase', conflicts: ['shared file.txt'], aborted: false };
+const operation: RebaseOperation = { id: 'op-123', worktree: WORKTREE, branch: 'topic', strategy: 'rebase', target: 'refs/heads/main', targetSha: 'target', originalHead: 'before', stashSha: 'saved', phase: 'rebase', error: 'Conflicting rebase', conflicts: ['shared file.txt'], aborted: false };
 const context: RebaseContext = { executable: 'gavel', branch: 'topic', head: 'before', dirtyCount: 126, targets: [{ ref: 'refs/remotes/origin/main', label: 'origin/main' }, { ref: 'refs/heads/main', label: 'main' }], operation: null };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 
@@ -75,7 +75,38 @@ describe('Project rebase', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Rebase' }));
     await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
     const [, init] = fetch.mock.calls.find(([, init]) => init?.method === 'POST')!;
-    expect(JSON.parse(String(init?.body))).toEqual({ worktree: WORKTREE, branch: 'topic', target: 'refs/remotes/origin/main', expectedHead: 'before' });
+    expect(JSON.parse(String(init?.body))).toEqual({ worktree: WORKTREE, branch: 'topic', target: 'refs/remotes/origin/main', expectedHead: 'before', strategy: 'rebase' });
+  });
+
+  const postedBody = (fetch: ReturnType<typeof setup>['fetch']) => {
+    const [, init] = fetch.mock.calls.find(([, init]) => init?.method === 'POST')!;
+    return JSON.parse(String(init?.body));
+  };
+
+  it('merges the selected target in from the Rebase split button menu', async () => {
+    const { fetch } = setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Rebase…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge origin/main in' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
+    expect(postedBody(fetch)).toEqual({ worktree: WORKTREE, branch: 'topic', target: 'refs/remotes/origin/main', expectedHead: 'before', strategy: 'merge' });
+  });
+
+  it.each([
+    { strategy: 'Merge the target into topic', option: 'Always create a merge commit (--no-ff)', submit: 'Merge', sent: { strategy: 'merge', noFastForward: true } },
+    { strategy: 'Rebase topic onto the target', option: 'Keep merge commits (--rebase-merges)', submit: 'Rebase', sent: { strategy: 'rebase', rebaseMerges: true } },
+  ])('starts the advanced dialog choice: $submit with its option onto the chosen target', async ({ strategy, option, submit, sent }) => {
+    const { fetch } = setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Rebase…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Advanced…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Advanced update options' });
+    const target = within(dialog).getByRole('combobox', { name: 'Target' });
+    fireEvent.change(target, { target: { value: 'main' } });
+    fireEvent.click(await within(dialog).findByRole('option', { name: 'main' }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: strategy }));
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: option }));
+    fireEvent.click(within(dialog).getByRole('button', { name: submit }));
+    await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
+    expect(postedBody(fetch)).toEqual({ worktree: WORKTREE, branch: 'topic', target: 'refs/heads/main', expectedHead: 'before', ...sent });
   });
 
   it('requires an explicit click before handing a failure to the new rebase prompt', async () => {

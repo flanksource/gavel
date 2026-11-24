@@ -5,7 +5,7 @@ import { UiGitCommit, UiGitMerge, UiGitPr, UiSparkles } from '@flanksource/click
 import { useProjectGit } from '../projectGitQueries';
 import type { BranchMergeMode, BranchMergeResult, GitWorktree } from '../types';
 import { useBranchAIMerge } from './branchAIMerge';
-import { landConflicts, useBranchLandMutation, type BranchLandRequest } from './projectGitMutations';
+import { landFailure, useBranchLandMutation, type BranchLandRequest } from './projectGitMutations';
 import { useRebaseAction } from './rebaseAction';
 
 export interface BranchLandReasonInput {
@@ -98,11 +98,11 @@ function landEffect(method: LandMethod, base: string): string {
 export function BranchLandActions({ projectName, branch, onMerged, ...reasonInput }: BranchLandActionsProps) {
   const { base } = reasonInput;
   const land = useBranchLandMutation({ projectName, onMerged });
-  const ai = useBranchAIMerge({ projectName, onMerged });
   const worktrees = useProjectGit(projectName).data?.worktrees ?? [];
   const targets = mergeTargets({ worktrees, base, branch });
   const rebaseAction = useRebaseAction();
   const [open, setOpen] = useState(false);
+  const ai = useBranchAIMerge({ projectName, worktree: reasonInput.worktreePath, enabled: open, onMerged });
   const [target, setTarget] = useState(base);
   const [method, setMethod] = useState<LandMethod>('squash');
   const [message, setMessage] = useState('');
@@ -111,32 +111,33 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
   // because a checkout already has it, so only the branch's own state can block it.
   const mergeReason = target === base ? reasons.merge : reasons.pr;
   const repo = target === base ? worktrees.find(worktree => worktree.primary)?.path : targets.find(candidate => candidate.branch === target)?.path;
-  const aiReason = branchAIMergeBlockedReason({ merge: mergeReason, worktreePath: reasonInput.worktreePath, repo });
+  const aiReason = branchAIMergeBlockedReason({ merge: mergeReason, worktreePath: reasonInput.worktreePath, repo }) || ai.unavailableReason;
   const reason = method === 'ai' ? aiReason : mergeReason;
   const openMerge = (next: string) => { setTarget(next); land.reset(); setOpen(true); };
   const aiActive = ai.state.status === 'starting' || ai.state.status === 'running';
   const busy = land.isPending || aiActive;
   const submit = (request: BranchLandRequest) => land.mutate(request);
-  const conflicts = landConflicts(land.error);
-  const mergeWithAI = (mode: BranchMergeMode) => {
+  const failedRequest = land.error && land.variables?.via === 'merge' ? land.variables : undefined;
+  const failure = failedRequest ? landFailure(land.error) : undefined;
+  const mergeWithAI = (retry?: typeof failedRequest) => {
     if (!repo || !reasonInput.worktreePath) return;
     land.reset();
     void ai.start({
-      repo, worktree: reasonInput.worktreePath, branch, base: target, mode,
-      message, conflicts, ahead: reasonInput.ahead,
+      repo, worktree: reasonInput.worktreePath, branch, base: target, mode: retry?.mode ?? 'squash',
+      message: retry ? retry.message ?? '' : message, conflicts: retry ? failure?.conflicts ?? [] : [],
+      failure: retry ? failure?.reason : undefined, ahead: reasonInput.ahead,
     });
   };
   const confirm = () => {
     if (reason || busy) return;
-    if (method === 'ai') return mergeWithAI('squash');
+    if (method === 'ai') return mergeWithAI();
     const text = message.trim();
     land.mutate(
       { via: 'merge', branch, mode: method, ...(method === 'squash' && text ? { message: text } : {}), ...(target !== base ? { target } : {}) },
       { onSuccess: () => setOpen(false) },
     );
   };
-  const mergeFailed = land.variables?.via === 'merge' && land.error;
-  const failedMode: BranchMergeMode = land.variables?.via === 'merge' ? land.variables.mode : 'squash';
+  const conflicts = failure?.conflicts ?? [];
   const merging = land.isPending && land.variables?.via === 'merge';
   const opening = land.isPending && land.variables?.via === 'pr';
   const opened = land.data?.via === 'pr' ? land.data : null;
@@ -170,18 +171,21 @@ export function BranchLandActions({ projectName, branch, onMerged, ...reasonInpu
           />
         )}
         {reason && <p className="text-amber-700 dark:text-amber-400">{reason}</p>}
-        {mergeFailed && (
+        {failedRequest && (
           <div role="alert" className="whitespace-pre-wrap text-destructive">
-            {land.error!.message}
+            {land.error?.message}
             {conflicts.length > 0 && <ul className="mt-0.5 list-none font-mono text-xs">{conflicts.map(path => <li key={path}>{path}</li>)}</ul>}
           </div>
         )}
-        {conflicts.length > 0 && !aiActive && (
-          <span className="inline-flex" title={aiReason || undefined}>
-            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!!aiReason} onClick={() => mergeWithAI(failedMode)}>
-              <UiSparkles />Resolve with AI &amp; {failedMode === 'squash' ? 'squash' : 'merge each commit'}
-            </Button>
-          </span>
+        {failure?.aborted && !aiActive && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">The target checkout was restored.</span>
+            <span className="inline-flex" title={aiReason || undefined}>
+              <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!!aiReason} onClick={() => mergeWithAI(failedRequest)}>
+                <UiSparkles />Send to prompt
+              </Button>
+            </span>
+          </div>
         )}
         {aiActive && (
           <div className="flex items-center gap-2 text-xs">

@@ -35,6 +35,14 @@ vi.mock('./ProjectStatusView', () => ({
 vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
   ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
   DropdownMenu: ({ trigger }: { trigger: ReactNode }) => <div>{trigger}</div>,
+  // The real SplitButton mounts floating-ui; this double renders the primary
+  // action and each menu item as a plain button.
+  SplitButton: ({ label, onClick, items }: { label: ReactNode; onClick: () => void; items: Array<{ label: ReactNode; onSelect: () => void; disabled?: boolean }> }) => (
+    <div>
+      <button type="button" onClick={onClick}>{label}</button>
+      {items.map((item, index) => <button key={index} type="button" disabled={item.disabled} onClick={item.onSelect}>{item.label}</button>)}
+    </div>
+  ),
   Combobox: ({ ariaLabel, value, options, onChange }: { ariaLabel: string; value: string; options: ComboboxOption[]; onChange: (value: string) => void }) => (
     <div role="listbox" aria-label={ariaLabel} data-value={value}>
       {options.map(option => (

@@ -5,6 +5,8 @@ import {
   UiBeaker,
   UiCheck,
   UiCog,
+  UiComment,
+  UiSparkles,
   UiGitBranch,
   UiGitCommit,
   UiGitPr,
@@ -24,7 +26,9 @@ import { ProjectActionRunDialog, type ProjectRunnerAction } from './ProjectActio
 import { ProjectCommitTasks } from './ProjectCommitTasks';
 import { ProjectDiffView } from './ProjectDiffView';
 import { ProjectChangesView } from './ProjectChangesView';
-import { ProjectFileTree } from './ProjectFileTree';
+import { ProjectFileTree, type PathRequest } from './ProjectFileTree';
+import { ProjectCommentDialog } from './comments/ProjectCommentDialog';
+import { ProjectPromptRunDialog } from './prompts/ProjectPromptRunDialog';
 import { ProjectGitLockPrompt, useProjectGitLockRequest } from './ProjectGitLockPrompt';
 import { useRebaseAction } from './rebaseAction';
 import {
@@ -127,6 +131,9 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   const [commitRunId, setCommitRunId] = useState('');
   const [lockedFiles, setLockedFiles] = useState<Map<string, number>>(new Map());
   const [commitTaskError, setCommitTaskError] = useState('');
+  const [commenting, setCommenting] = useState<PathRequest | null>(null);
+  // An empty path runs the prompt on the whole project.
+  const [prompting, setPrompting] = useState<PathRequest | null>(null);
   const actionWasRunning = useRef(false);
 
   // The editors are only asked for once a row menu opens, then cached for the session.
@@ -208,7 +215,8 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
         ...gitLock.request(),
         url: `/api/projects/${encodeURIComponent(project.name)}/commit-queue`,
         method: 'POST',
-        body: { ...(options ? { action, options } : { action, files }), ...(worktree ? { worktree } : {}) },
+        // Commit options carry their files; open-pr options are push flags beside the staged files.
+        body: { action, ...(options && action === 'commit' ? { options } : { files, ...(options && { options }) }), ...(worktree ? { worktree } : {}) },
         context: `Failed to queue ${label} for ${project.name}`,
       });
       if (typeof result.runId !== 'string' || result.runId === '') {
@@ -277,7 +285,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   }, [queueCommitMutation.mutateAsync, stagedFiles]);
 
   const startAction = useCallback(async (action: ProjectAction, options?: Record<string, unknown>) => {
-    if (action === 'commit') return queueCommit('commit', options);
+    if (action === 'commit' || action === 'open-pr') return queueCommit(action, options);
     const body = options
       ? { action, options }
       : action === 'lint' && stagedFiles.length > 0
@@ -381,6 +389,10 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
         label: stagedFiles.length > 0 ? `Commit & open PR (${stagedFiles.length})` : 'Open PR',
         disabled: commitTaskError !== '',
         onSelect: () => void queueStaged('open-pr'),
+      }, {
+        label: 'Open PR advanced…',
+        disabled: commitTaskError !== '',
+        onSelect: () => setAdvancedAction('open-pr'),
       }] : []),
       ...(mobile && rebaseAction ? [rebaseAction] : []),
       { label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>, onSelect: () => setAdvancedAction('commit') },
@@ -431,8 +443,14 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
               title="Pull request options"
               label={<span className="flex items-center gap-1" title={stagedFiles.length > 0 ? 'Commit the staged files, push, and open a PR' : 'Push local commits and open or update the branch PR'}><UiGitPr />{stagedFiles.length > 0 ? `Commit & open PR (${stagedFiles.length})` : 'Open PR'}</span>}
               onClick={() => void queueStaged('open-pr')}
-              items={rebaseAction ? [rebaseAction] : []}
+              items={[
+                { label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>, disabled: commitTaskError !== '', onSelect: () => setAdvancedAction('open-pr') },
+                ...(rebaseAction ? [rebaseAction] : []),
+              ]}
             />
+            <Button type="button" variant="outline" size="sm" onClick={() => setPrompting({ path: '', folder: true })} title="Run a prompt on this project">
+              <span className="flex items-center gap-1"><UiSparkles />Run prompt</span>
+            </Button>
             <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status">
               <UiRefresh />
             </Button>
@@ -485,12 +503,18 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
                   onIgnore={request => void ignore(request)}
                   onOpenInEditor={(path, editor) => void openInEditor(path, editor)}
                   onCopyPath={path => void copyPath(path)}
+                  onComment={setCommenting}
+                  onRunPrompt={setPrompting}
                 />
               )}
             </div>
           </div>
         }
-        diff={<ProjectDiffView projectName={project.name} path={diffPath} worktree={worktree} />}
+        diff={<ProjectDiffView projectName={project.name} path={diffPath} worktree={worktree} actions={diffPath && <DiffPathActions
+          request={{ path: diffPath, folder: !status.files.some(file => file.path === diffPath) }}
+          onComment={setCommenting}
+          onRunPrompt={setPrompting}
+        />} />}
       />
       {mobile && <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-background px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status" className="min-h-11 min-w-11"><UiRefresh /></Button>
@@ -505,6 +529,8 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
         onRun={(action, options) => startAction(action, options)}
       />
       <ProjectGitLockPrompt owner={gitLock.owner} enabled={indexMutation.isPending || queueCommitMutation.isPending} />
+      {commenting && <ProjectCommentDialog project={project} path={commenting.path} folder={commenting.folder} onClose={() => setCommenting(null)} />}
+      {prompting && <ProjectPromptRunDialog project={project.name} workDir={status.workDir} path={prompting.path} onClose={() => setPrompting(null)} />}
       {activeRun && (
         <ProjectActionRunDialog
           projectName={project.name}
@@ -526,6 +552,21 @@ function projectActionRunFromLocation(): { action: ProjectRunnerAction; runId: s
   const runId = params.get('run');
   if ((action !== 'test' && action !== 'lint') || !runId) return null;
   return { action, runId };
+}
+
+function DiffPathActions({ request, onComment, onRunPrompt }: {
+  request: PathRequest;
+  onComment: (request: PathRequest) => void;
+  onRunPrompt: (request: PathRequest) => void;
+}) {
+  return <div className="flex shrink-0 items-center gap-1">
+    <Button type="button" variant="ghost" size="sm" onClick={() => onComment(request)} title={`Comment on ${request.path}`}>
+      <span className="flex items-center gap-1"><UiComment />Comment</span>
+    </Button>
+    <Button type="button" variant="ghost" size="sm" onClick={() => onRunPrompt(request)} title={`Run a prompt on ${request.path}`}>
+      <span className="flex items-center gap-1"><UiSparkles />Run prompt</span>
+    </Button>
+  </div>;
 }
 
 function Centered({ children }: { children: React.ReactNode }) {

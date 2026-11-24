@@ -27,6 +27,8 @@ function renderTree(files: ProjectFileStatus[], props: Partial<React.ComponentPr
     onIgnore: vi.fn(),
     onOpenInEditor: vi.fn(),
     onCopyPath: vi.fn(),
+    onComment: vi.fn(),
+    onRunPrompt: vi.fn(),
   };
   render(
     <ProjectFileTree
@@ -45,7 +47,8 @@ function renderTree(files: ProjectFileStatus[], props: Partial<React.ComponentPr
 
 // A folder's treeitem wraps its children, so scope to the item's own row.
 const row = (path: string) => within(screen.getByRole('treeitem', { name: path }).firstElementChild as HTMLElement);
-const menuLabels = (path: string) => row(path).getAllByRole('menuitem').map(item => item.textContent);
+const agentItems = ['Add comment…', 'Run prompt…'];
+const menuLabels = (path: string) => row(path).getAllByRole('menuitem').map(item => item.textContent).slice(agentItems.length);
 
 afterEach(cleanup);
 
@@ -189,6 +192,15 @@ describe('ProjectFileTree row menu', () => {
     renderTree([file('.gitignore', 'unstaged'), file('Makefile', 'unstaged')]);
     expect(menuLabels('.gitignore')).toEqual(['Copy path', 'Discard changes', 'Ignore .gitignore']);
     expect(menuLabels('Makefile')).toEqual(['Copy path', 'Discard changes', 'Ignore Makefile']);
+  });
+
+  it('leads every menu with comment and run-prompt requests for the row path', () => {
+    const { onComment, onRunPrompt } = renderTree([file('src/x.go', 'unstaged')]);
+    expect(row('src').getAllByRole('menuitem').slice(0, agentItems.length).map(item => item.textContent)).toEqual(agentItems);
+    fireEvent.click(row('src').getByRole('menuitem', { name: 'Add comment…' }));
+    expect(onComment).toHaveBeenCalledWith({ path: 'src', folder: true });
+    fireEvent.click(row('src/x.go').getByRole('menuitem', { name: 'Run prompt…' }));
+    expect(onRunPrompt).toHaveBeenCalledWith({ path: 'src/x.go', folder: false });
   });
 
   it('dispatches copy, open-in-editor and ignore requests', () => {

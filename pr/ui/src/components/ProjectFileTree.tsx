@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ConfirmDialog, DropdownMenu, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
 import { Tree } from '@flanksource/clicky-ui/data';
-import { UiCopy, UiDotsVertical, UiEdit, UiEyeClosed, UiFileCode, UiTrash } from '@flanksource/clicky-ui/icons';
+import { UiComment, UiCopy, UiDotsVertical, UiEdit, UiEyeClosed, UiFileCode, UiSparkles, UiTrash } from '@flanksource/clicky-ui/icons';
 import type { ProjectFileStatus, FileState } from './ProjectStatusView';
 import { ProjectFileIcon } from '../icons/ProjectFileIcon';
 import { ProjectLinkedDepsBadge } from './ProjectLinkedDepsBadge';
@@ -38,7 +38,14 @@ interface ProjectFileTreeProps {
   onIgnore: (request: IgnoreRequest) => void;
   onOpenInEditor: (path: string, editor: string) => void;
   onCopyPath: (path: string) => void;
+  onComment: (request: PathRequest) => void;
+  onRunPrompt: (request: PathRequest) => void;
   onDiffPathChange?: (path: string) => void;
+}
+
+export interface PathRequest {
+  path: string;
+  folder: boolean;
 }
 
 const noLockedFiles = new Map<string, number>();
@@ -67,6 +74,8 @@ export function ProjectFileTree({
   onIgnore,
   onOpenInEditor,
   onCopyPath,
+  onComment,
+  onRunPrompt,
   onDiffPathChange,
 }: ProjectFileTreeProps) {
   const roots = useMemo(() => buildFileTree(files), [files]);
@@ -107,6 +116,8 @@ export function ProjectFileTree({
             onIgnore={onIgnore}
             onOpenInEditor={onOpenInEditor}
             onCopyPath={onCopyPath}
+            onComment={onComment}
+            onRunPrompt={onRunPrompt}
           />
         )}
         indentPx={12}
@@ -161,8 +172,8 @@ function extensionOf(path: string): string {
   return dot > 0 ? name.slice(dot) : '';
 }
 
-// rowMenuItems builds the ⋮ menu: File actions, then Ignore rules.
-function rowMenuItems({ node, folder, untracked, editors, onCopyPath, onOpenInEditor, onDiscard, onIgnore }: {
+// rowMenuItems builds the ⋮ menu: Agent actions, File actions, then Ignore rules.
+function rowMenuItems({ node, folder, untracked, editors, onCopyPath, onOpenInEditor, onDiscard, onIgnore, onComment, onRunPrompt }: {
   node: ProjectFileTreeNode;
   folder: boolean;
   untracked: boolean;
@@ -171,10 +182,14 @@ function rowMenuItems({ node, folder, untracked, editors, onCopyPath, onOpenInEd
   onOpenInEditor: (path: string, editor: string) => void;
   onDiscard: (request: DiscardRequest) => void;
   onIgnore: (request: IgnoreRequest) => void;
+  onComment: (request: PathRequest) => void;
+  onRunPrompt: (request: PathRequest) => void;
 }): DropdownMenuItem[] {
   const ignoreGate = untracked ? {} : { disabled: true, title: TRACKED_IGNORE_REASON };
   const extension = folder ? '' : extensionOf(node.path);
   return [
+    { label: 'Add comment…', icon: UiComment, group: 'Agent', onSelect: () => onComment({ path: node.path, folder }) },
+    { label: 'Run prompt…', icon: UiSparkles, group: 'Agent', onSelect: () => onRunPrompt({ path: node.path, folder }) },
     { label: 'Copy path', icon: UiCopy, group: 'File', onSelect: () => onCopyPath(node.path) },
     ...editors.map(editor => ({ label: `Open in ${editor.label}`, icon: UiEdit, group: 'File', onSelect: () => onOpenInEditor(node.path, editor.id) })),
     {
@@ -203,6 +218,8 @@ function ProjectFileTreeRow({
   onIgnore,
   onOpenInEditor,
   onCopyPath,
+  onComment,
+  onRunPrompt,
 }: {
   node: ProjectFileTreeNode;
   directory: boolean;
@@ -216,6 +233,8 @@ function ProjectFileTreeRow({
   onIgnore: (request: IgnoreRequest) => void;
   onOpenInEditor: (path: string, editor: string) => void;
   onCopyPath: (path: string) => void;
+  onComment: (request: PathRequest) => void;
+  onRunPrompt: (request: PathRequest) => void;
 }) {
   const descendants = filesBelow(node);
   const state = stageStateOf(descendants);
@@ -272,7 +291,7 @@ function ProjectFileTreeRow({
               <UiDotsVertical className="size-4" />
             </button>
           }
-          items={rowMenuItems({ node, folder: directory, untracked, editors, onCopyPath, onOpenInEditor, onDiscard, onIgnore })}
+          items={rowMenuItems({ node, folder: directory, untracked, editors, onCopyPath, onOpenInEditor, onDiscard, onIgnore, onComment, onRunPrompt })}
         />
       </span>
     </>

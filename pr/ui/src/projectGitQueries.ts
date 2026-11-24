@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { readLocalCache, writeLocalCache } from './localQueryCache';
 import { fetchJSON, queryKeys } from './query';
 import type { ProjectGit, ProjectGitSummary } from './types';
+import type { RebaseContext } from './types/branchRebase';
 
 // The last good git summary seeds the first render of the next page load. Git
 // queries never poll: the server pushes each project's generation over
@@ -60,6 +61,20 @@ export function useProjectGit(projectName: string, { refetchIntervalMs, enabled 
       context: `Load git state of ${projectName}`,
     })),
     staleTime: Infinity,
+  });
+}
+
+export function useProjectRebaseContext({ projectName, worktree, generation, enabled = true }: {
+  projectName: string; worktree?: string; generation?: number; enabled?: boolean;
+}) {
+  return useQuery<RebaseContext>({
+    queryKey: ['projects', projectName, 'rebase', worktree, generation],
+    queryFn: ({ signal }) => fetchJSON({
+      url: `/api/projects/${encodeURIComponent(projectName)}/branch/rebase?worktree=${encodeURIComponent(worktree ?? '')}`,
+      signal, context: 'Load rebase options',
+    }),
+    enabled: enabled && !!worktree,
+    retry: false,
   });
 }
 

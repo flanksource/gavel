@@ -18,18 +18,21 @@ export interface ProjectActionStatus {
 
 const runningLabels: Record<ProjectAction, string> = {
   commit: 'Creating commit',
+  'open-pr': 'Opening PR',
   lint: 'Running lint',
   test: 'Running tests',
 };
 
 const completedLabels: Record<ProjectAction, string> = {
   commit: 'Commit completed',
+  'open-pr': 'PR opened',
   lint: 'Lint completed',
   test: 'Tests completed',
 };
 
 const failedLabels: Record<ProjectAction, string> = {
   commit: 'Commit failed',
+  'open-pr': 'Open PR failed',
   lint: 'Lint failed',
   test: 'Tests failed',
 };

@@ -36,7 +36,10 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
 }));
 /* oxlint-enable clicky-ui/prefer-clicky-components */
 
-vi.mock('./ProjectActionDialog', () => ({ ProjectActionDialog: () => null }));
+const actionDialog = vi.hoisted(() => ({ props: null as null | { action: string | null; onRun: (action: string, options: Record<string, unknown>) => Promise<void> } }));
+vi.mock('./ProjectActionDialog', () => ({
+  ProjectActionDialog: (props: NonNullable<typeof actionDialog.props>) => { actionDialog.props = props; return null; },
+}));
 vi.mock('./ProjectActionRunDialog', () => ({ ProjectActionRunDialog: () => null }));
 vi.mock('./ProjectCommitTasks', () => ({ ProjectCommitTasks: () => null }));
 vi.mock('./ProjectDiffView', () => ({ ProjectDiffView: () => null }));
@@ -122,6 +125,18 @@ describe('Project Open PR action', () => {
     const prGroup = await screen.findByRole('group', { name: 'Pull request options' });
     fireEvent.click(within(prGroup).getByRole('button', { name: 'Rebase…' }));
     expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the advanced Open PR dialog and queues the staged files with its push options', async () => {
+    const fetchMock = renderProject('staged');
+    const prGroup = await screen.findByRole('group', { name: 'Pull request options' });
+    fireEvent.click(within(prGroup).getByRole('button', { name: 'Advanced…' }));
+    await waitFor(() => expect(actionDialog.props?.action).toBe('open-pr'));
+    await actionDialog.props!.onRun('open-pr', { push: 'branch', 'auto-merge': true });
+    expect(await postedQueueRequest(fetchMock)).toEqual({
+      url: '/api/projects/gavel/commit-queue',
+      body: { action: 'open-pr', files: [changedFile], options: { push: 'branch', 'auto-merge': true } },
+    });
   });
 
   it('no longer offers Open PR inside the Commit split button', async () => {

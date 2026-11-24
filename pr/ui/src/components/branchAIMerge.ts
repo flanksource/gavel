@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useProjectRebaseContext } from '../projectGitQueries';
 import { queryKeys } from '../query';
 import type { BranchMergeMode, BranchMergeResult } from '../types';
 import { projectDiffQueryKey } from './projectMutations';
@@ -16,23 +17,26 @@ export interface BranchAIMergeInput {
   branch: string;
   base: string;
   mode: BranchMergeMode;
-  /** Squash commit message; empty keeps git's squash message. */
+  /** Optional squash commit message. */
   message: string;
   /** Paths the failed land conflicted on, listed for the agent. */
   conflicts: string[];
+  failure?: string;
   /** Commits ahead of base when the run started, reported once it lands. */
   ahead: number;
 }
 
-export function branchAIMergeVariables(input: BranchAIMergeInput) {
+export function branchAIMergeVariables(input: BranchAIMergeInput, gavelExecutable: string) {
   return {
     repo: input.repo,
     worktree: input.worktree,
     branch: input.branch,
+    gavelExecutable,
     base: input.base,
     mode: input.mode,
     message: input.message.trim(),
     conflicts: input.conflicts,
+    ...(input.failure && { failure: input.failure }),
   };
 }
 
@@ -40,11 +44,16 @@ export function branchAIMergeVariables(input: BranchAIMergeInput) {
  * Runs the branch-merge prompt. Its own post-verify steps land the branch and
  * remove its worktree, so success reports a merge.
  */
-export function useBranchAIMerge({ projectName, onMerged }: {
+export function useBranchAIMerge({ projectName, worktree, enabled, onMerged }: {
   projectName: string;
+  worktree?: string;
+  enabled: boolean;
   onMerged?: (result: BranchMergeResult) => void;
 }) {
   const client = useQueryClient();
+  const context = useProjectRebaseContext({ projectName, worktree, enabled });
+  const executable = context.data?.executable;
+  const unavailableReason = executable ? '' : context.error?.message || (context.isPending ? 'Loading the merge prompt…' : 'The server did not report its Gavel executable.');
   const input = useRef<BranchAIMergeInput | null>(null);
   const run = usePromptRun({
     prompt: BRANCH_MERGE_PROMPT,
@@ -68,9 +77,10 @@ export function useBranchAIMerge({ projectName, onMerged }: {
   });
 
   const start = (next: BranchAIMergeInput) => {
+    if (!executable) return;
     input.current = next;
-    return run.start(branchAIMergeVariables(next));
+    return run.start(branchAIMergeVariables(next, executable));
   };
 
-  return { state: run.state, start, stop: run.stop };
+  return { state: run.state, start, stop: run.stop, unavailableReason };
 }

@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { compactAISpecRuntime, SessionTail, SpecRuntimeBar, type AISpecRuntimeValue } from '@flanksource/clicky-ui/ai';
 import { Button, Combobox, Modal, SplitButton, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
 import { ActionError, AnsiHtml } from '@flanksource/clicky-ui/data';
-import { UiGitMerge, UiSparkles, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
-import { fetchJSON, HttpError, mutationJSON, queryKeys } from '../query';
+import { UiCog, UiGitMerge, UiSparkles, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { HttpError, mutationJSON, queryKeys } from '../query';
+import { useProjectRebaseContext } from '../projectGitQueries';
 import { chatModelsQuery, chatRuntimesQuery } from './oneShotQueries';
-import type { RebaseContext, RebaseOperation } from '../types/branchRebase';
+import type { RebaseOperation, RebaseStart, RebaseStrategy } from '../types/branchRebase';
 import { projectDiffQueryKey } from './projectMutations';
 import { usePromptRun } from './promptRun';
 
@@ -31,14 +32,11 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
   const [runtimeOpen, setRuntimeOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [target, setTarget] = useState('refs/remotes/origin/main');
   const url = `/api/projects/${encodeURIComponent(projectName)}/branch/rebase`;
-  const context = useQuery<RebaseContext>({
-    queryKey: ['projects', projectName, 'rebase', worktree, generation],
-    queryFn: ({ signal }) => fetchJSON({ url: `${url}?worktree=${encodeURIComponent(worktree ?? '')}`, signal, context: 'Load rebase options' }),
-    enabled: !!worktree, retry: false,
-  });
+  const context = useProjectRebaseContext({ projectName, worktree, generation });
   const refresh = () => Promise.all([
     client.invalidateQueries({ queryKey: ['projects', projectName, 'rebase'] }),
     client.invalidateQueries({ queryKey: queryKeys.projectGit(projectName) }),
@@ -48,11 +46,11 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
   ]);
   const mutation = useMutation({
     onMutate: () => setNotice(''),
-    mutationFn: ({ abort = false, operation }: { abort?: boolean; operation?: RebaseOperation }) => mutationJSON<RebaseOperation>({
-      url: abort ? `${url}/abort` : url, method: 'POST', context: abort ? 'Abort rebase' : 'Rebase branch',
-      body: { worktree, branch: context.data?.branch, target, expectedHead: context.data?.head, ...(operation && { operation: operation.id }) },
+    mutationFn: ({ abort = false, operation, start }: { abort?: boolean; operation?: RebaseOperation; start?: RebaseStart }) => mutationJSON<RebaseOperation>({
+      url: abort ? `${url}/abort` : url, method: 'POST', context: abort ? `Abort ${strategyNoun(operation?.strategy)}` : start?.strategy === 'merge' ? 'Merge into branch' : 'Rebase branch',
+      body: { worktree, branch: context.data?.branch, expectedHead: context.data?.head, ...start, ...(operation && { operation: operation.id }) },
     }),
-    onSuccess: result => setNotice(result.phase === 'aborted' ? 'Rebase aborted; saved edits restored.' : 'Rebase complete; saved edits restored.'),
+    onSuccess: result => setNotice(`${strategyNoun(result.strategy, true)} ${result.phase === 'aborted' ? 'aborted' : 'complete'}; saved edits restored.`),
     onSettled: refresh,
   });
   const ai = usePromptRun({ prompt: BRANCH_REBASE_PROMPT, label: 'rebase run', onSuccess: () => { mutation.reset(); setNotice('Rebase complete; saved edits restored.'); }, onSettled: () => { void refresh(); } });
@@ -68,6 +66,12 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
     void ai.start({ gavelExecutable: context.data.executable, worktree: operation.worktree, operation: operation.id, branch: operation.branch, target: operation.target, targetSha: operation.targetSha, phase: operation.phase, error: operation.error, conflicts: operation.conflicts, stashSha: operation.stashSha }, { spec: compactAISpecRuntime(runtime) });
   };
   const openDialog = () => { mutation.reset(); setOpen(true); void context.refetch(); };
+  const startDisabled = busy || !context.data?.branch || context.isFetching || !!context.error;
+  const begin = (start: RebaseStart) => {
+    setAdvancedOpen(false);
+    mutation.mutate({ start }, { onSettled: () => setOpen(false) });
+  };
+  const targetLabel = context.data?.targets.find(item => item.ref === target)?.label ?? target;
   const disabled = !!reason || busy || !!active;
 
   const action: DropdownMenuItem = { label: <span className="flex items-center gap-2"><UiGitMerge />Rebase…</span>, title: reason || undefined, disabled, onSelect: openDialog };
@@ -78,7 +82,7 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
       {notice && !active && <span role="status">{notice}</span>}
       {error && <RebaseFailure error={error} operation={operation} />}
       {active && <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-        <span className="min-w-0 break-words">Rebase of {operation.branch}: {operation.phase}{operation.stashSha && ` · saved edits: ${operation.stashSha.slice(0, 8)}`}</span>
+        <span className="min-w-0 break-words">{strategyNoun(operation.strategy, true)} of {operation.branch}: {operation.phase}{operation.stashSha && ` · saved edits: ${operation.stashSha.slice(0, 8)}`}</span>
         {!error && <ConflictPaths paths={operation.conflicts} />}
         <SplitButton variant="outline" size="sm" disabled={busy || !context.data?.executable} title="Rebase prompt options" label="Send to rebase prompt" onClick={() => send()}
           items={[{ label: <span className="flex items-center gap-2"><UiSparkles />Choose runtime…</span>, onSelect: () => setRuntimeOpen(true) }]} />
@@ -92,7 +96,10 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
     </div>}
     <Modal open={open} onClose={() => { if (!mutation.isPending) setOpen(false); }} title="Rebase branch" size="md" footer={<>
       <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button>
-      <Button disabled={busy || !context.data?.branch || context.isFetching || !!context.error} loading={mutation.isPending} onClick={() => { mutation.mutate({}, { onSettled: () => setOpen(false) }); }}>Rebase</Button>
+      <SplitButton label="Rebase" title="Rebase options" disabled={startDisabled} loading={mutation.isPending} onClick={() => begin({ target, strategy: 'rebase' })} items={[
+        { label: <span className="flex items-center gap-2"><UiGitMerge />Merge {targetLabel} in</span>, onSelect: () => begin({ target, strategy: 'merge' }) },
+        { label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>, onSelect: () => setAdvancedOpen(true) },
+      ]} />
     </>}>
       <div className="flex flex-col gap-3 text-sm">
         <p>Rebase <strong>{context.data?.branch}</strong> in <span className="break-all font-mono">{worktree}</span>.</p>
@@ -104,10 +111,65 @@ export function ProjectRebase({ projectName, worktree, branch, generation, child
         {context.error && <p role="alert" className="text-destructive">{context.error.message}</p>}
       </div>
     </Modal>
+    {advancedOpen && <RebaseAdvancedDialog
+      branch={context.data?.branch ?? ''}
+      targets={context.data?.targets ?? []}
+      initialTarget={target}
+      busy={startDisabled}
+      onClose={() => setAdvancedOpen(false)}
+      onStart={start => { setTarget(start.target); begin(start); }}
+    />}
     {runtimeOpen && <RebaseRuntimeDialog busy={busy} onClose={() => setRuntimeOpen(false)} onSend={send} />}
   </>;
 
   return <>{children({ action, status })}</>;
+}
+
+// strategyNoun names an operation in status text; operations recorded before
+// strategies existed are rebases.
+function strategyNoun(strategy: RebaseStrategy | undefined, capitalized = false) {
+  const noun = strategy === 'merge' ? 'merge' : 'rebase';
+  return capitalized ? noun[0]!.toUpperCase() + noun.slice(1) : noun;
+}
+
+// RebaseAdvancedDialog chooses how the branch is brought up to date: rebase
+// onto the target (optionally keeping merge commits) or merge the target in
+// (optionally always recording a merge commit).
+function RebaseAdvancedDialog({ branch, targets, initialTarget, busy, onClose, onStart }: {
+  branch: string;
+  targets: { ref: string; label: string }[];
+  initialTarget: string;
+  busy: boolean;
+  onClose: () => void;
+  onStart: (start: RebaseStart) => void;
+}) {
+  const [target, setTarget] = useState(initialTarget);
+  const [strategy, setStrategy] = useState<RebaseStrategy>('rebase');
+  const [rebaseMerges, setRebaseMerges] = useState(false);
+  const [noFastForward, setNoFastForward] = useState(false);
+  const start: RebaseStart = strategy === 'merge'
+    ? { target, strategy, ...(noFastForward && { noFastForward }) }
+    : { target, strategy, ...(rebaseMerges && { rebaseMerges }) };
+  return (
+    <Modal open onClose={onClose} title="Advanced update options" size="md" footer={<>
+      <Button variant="ghost" onClick={onClose}>Cancel</Button>
+      <Button disabled={busy || !target} onClick={() => onStart(start)}>{strategy === 'merge' ? 'Merge' : 'Rebase'}</Button>
+    </>}>
+      <div className="flex flex-col gap-3 text-sm">
+        <label className="flex flex-col gap-1">Target
+          <Combobox ariaLabel="Target" value={target} onChange={setTarget} options={targets.map(item => ({ value: item.ref, label: item.label }))} allowCustomValue={false} required />
+        </label>
+        <fieldset className="flex flex-col gap-1.5">
+          <legend className="mb-1 font-medium">Strategy</legend>
+          <label className="flex items-center gap-1.5"><input type="radio" name="rebase-strategy" checked={strategy === 'rebase'} onChange={() => setStrategy('rebase')} />Rebase {branch} onto the target</label>
+          {strategy === 'rebase' && <label className="ml-5 flex items-center gap-1.5 text-muted-foreground"><input type="checkbox" checked={rebaseMerges} onChange={event => setRebaseMerges(event.currentTarget.checked)} />Keep merge commits (--rebase-merges)</label>}
+          <label className="flex items-center gap-1.5"><input type="radio" name="rebase-strategy" checked={strategy === 'merge'} onChange={() => setStrategy('merge')} />Merge the target into {branch}</label>
+          {strategy === 'merge' && <label className="ml-5 flex items-center gap-1.5 text-muted-foreground"><input type="checkbox" checked={noFastForward} onChange={event => setNoFastForward(event.currentTarget.checked)} />Always create a merge commit (--no-ff)</label>}
+        </fieldset>
+        <p className="text-xs text-muted-foreground">Uncommitted files are stashed first and restored afterwards, either way.</p>
+      </div>
+    </Modal>
+  );
 }
 
 // Picks the Captain runtime (mode, model, effort…) layered over the branch-rebase

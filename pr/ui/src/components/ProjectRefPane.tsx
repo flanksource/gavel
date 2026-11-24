@@ -8,6 +8,7 @@ import { GIT_HOT_REFRESH_MS, useGitFocus } from '../useGitFocus';
 import { useNow } from '../useNow';
 import { useIsMobile } from '../useIsMobile';
 import { CheckoutSwitch } from './CheckoutSwitch';
+import { useBranchActions } from './BranchActions';
 import { ProjectBranchChanges } from './ProjectBranchChanges';
 import { ProjectStatusView } from './ProjectStatusView';
 import { ProjectRebase } from './ProjectRebase';
@@ -109,6 +110,8 @@ export function ProjectRefPane({ project, projectRef, diffPath, showResults, onR
 
 function RefBar({ projectName, git, scannedAt, loading, error, notices, value, onChange, commitSlotRef }: { projectName: string; git: ProjectGit | undefined; scannedAt: string; loading: boolean; error: string; notices: string[]; value: string; onChange: (ref: string) => void; commitSlotRef: (slot: HTMLElement | null) => void }) {
   const mobile = useIsMobile();
+  const branchActions = useBranchActions({ projectName, git, value, onDeleted: () => onChange('') });
+  const checkoutSwitch = git && <CheckoutSwitch projectName={projectName} git={git} items={branchActions.items} branch={branchActions.branch} />;
   const entries = git ? projectRefEntries(git) : [];
   const selected = entries.find(entry => entry.value === value);
   const options: ComboboxOption[] = entries.map(entry => ({
@@ -148,8 +151,9 @@ function RefBar({ projectName, git, scannedAt, loading, error, notices, value, o
             {scannedAt && <GitStateAge scannedAt={scannedAt} />}
           </div>
         )}
-        {git && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 empty:hidden"><CheckoutSwitch projectName={projectName} git={git} /></div>}
+        {git && <div className="flex flex-wrap items-center gap-2 px-3 pb-1 empty:hidden">{checkoutSwitch}</div>}
         {notices.length > 0 && <div className="flex flex-col gap-0.5 px-3 pb-1"><GitNotices notices={notices} /></div>}
+        {branchActions.dialog}
       </div>
     );
   }
@@ -159,10 +163,11 @@ function RefBar({ projectName, git, scannedAt, loading, error, notices, value, o
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2 md:px-4">
         {picker}
         {selected && <RefSummary entry={selected} compact />}
-        {git && <CheckoutSwitch projectName={projectName} git={git} />}
+        {checkoutSwitch}
         <GitNotices notices={notices} />
         {scannedAt && <GitStateAge scannedAt={scannedAt} />}
       </div>
+      {branchActions.dialog}
     </div>
   );
 }

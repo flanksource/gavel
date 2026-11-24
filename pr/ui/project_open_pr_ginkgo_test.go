@@ -3,9 +3,11 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 
 	"github.com/flanksource/gavel/projects"
 
@@ -14,6 +16,32 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+// openPRFlagsProvider renders open-pr options as flags in a fixed order; the
+// real schema-driven provider lives in cmd/gavel and is specced there.
+type openPRFlagsProvider struct{}
+
+func (openPRFlagsProvider) Schema(action string) (ProjectActionSchema, error) {
+	return ProjectActionSchema{}, fmt.Errorf("schema for %s is not used by Open PR queue specs", action)
+}
+
+func (openPRFlagsProvider) Args(action string, options map[string]any) ([]string, error) {
+	if action != string(projectActionOpenPR) {
+		return nil, fmt.Errorf("unexpected %s options", action)
+	}
+	var args []string
+	for _, name := range []string{"push", "target", "auto-merge", "merge-type"} {
+		if value, ok := options[name]; ok {
+			args = append(args, fmt.Sprintf("--%s=%v", name, value))
+		}
+	}
+	for name := range options {
+		if !slices.Contains([]string{"push", "target", "auto-merge", "merge-type"}, name) {
+			return nil, fmt.Errorf("unsupported open-pr option %q", name)
+		}
+	}
+	return args, nil
+}
 
 var _ = Describe("project Open PR queue", func() {
 	var (
@@ -109,15 +137,33 @@ var _ = Describe("project Open PR queue", func() {
 		Expect(queued.args).To(Equal([]string{"commit", "--work-dir", project.ResolvedDir(), "--stage=staged", "--push"}))
 	})
 
-	It("rejects missing actions and advanced Open PR options", func() {
+	It("rejects a missing action", func() {
 		_, err := server.commitQueueActionArgs(project, projectActionRequest{Files: []string{"one.go"}})
 		Expect(err).To(MatchError("unknown commit queue action \"\""))
+	})
 
-		_, err = server.commitQueueActionArgs(project, projectActionRequest{
-			Action:  projectActionOpenPR,
-			Options: map[string]any{"files": []any{"one.go"}},
-		})
-		Expect(err).To(MatchError("advanced options are not supported for open-pr"))
+	It("commits the files with default options and pushes with the advanced Open PR flags", func() {
+		server.SetProjectActionOptionsProvider(openPRFlagsProvider{})
+		options := map[string]any{"push": "branch", "auto-merge": true}
+		queued, err := server.commitQueueActionArgs(project, projectActionRequest{Action: projectActionOpenPR, Files: []string{"one.go"}, Options: options})
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{queued.args, queued.options}).To(Equal([]any{
+			[]string{"commit", "--work-dir", project.ResolvedDir(), "--index-patch", queued.indexPatch, "--push=branch", "--auto-merge=true"},
+			options,
+		}))
+	})
+
+	It("adds a bare --push to advanced flags that leave the push mode unset, also when pushing only", func() {
+		server.SetProjectActionOptionsProvider(openPRFlagsProvider{})
+		queued, err := server.commitQueueActionArgs(project, projectActionRequest{Action: projectActionOpenPR, Options: map[string]any{"target": "zim/main"}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(queued.args).To(Equal([]string{"commit", "--work-dir", project.ResolvedDir(), "--stage=staged", "--push", "--target=zim/main"}))
+	})
+
+	It("refuses invalid advanced Open PR options before queueing", func() {
+		server.SetProjectActionOptionsProvider(openPRFlagsProvider{})
+		_, err := server.commitQueueActionArgs(project, projectActionRequest{Action: projectActionOpenPR, Files: []string{"one.go"}, Options: map[string]any{"message": "x"}})
+		Expect(err).To(MatchError(`unsupported open-pr option "message"`))
 	})
 
 	It("reports the queued action on each entry", func() {

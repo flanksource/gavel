@@ -3,12 +3,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import commitSchema from '../../../../schemas/commit.schema.json';
 import lintSchema from '../../../../schemas/lint.schema.json';
+import openPRSchema from '../../../../schemas/open-pr.schema.json';
 import testSchema from '../../../../schemas/test.schema.json';
 import { ProjectActionDialog, type ProjectAction } from './ProjectActionDialog';
 
 const storageKey = 'gavel.project-action-options.v2';
 const projectName = 'acme/widget';
-const documents = { commit: commitSchema, lint: lintSchema, test: testSchema };
+const documents = { commit: commitSchema, 'open-pr': openPRSchema, lint: lintSchema, test: testSchema };
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -253,6 +254,16 @@ describe('ProjectActionDialog sparse v2 options', () => {
     expect(screen.queryByText(dependent, { exact: true })).toBeNull();
     fireEvent.click(input);
     expect(await screen.findByText(dependent, { exact: true })).toBeTruthy();
+  });
+
+  it('offers Open PR push options without the staged files and sends only what was chosen', async () => {
+    const view = renderAction('open-pr');
+    expect(await screen.findByRole('dialog', { name: 'Advanced Open PR options' })).toBeTruthy();
+    const push = within(await screen.findByRole('radiogroup', { name: 'What to push' }));
+    fireEvent.click(push.getByRole('radio', { name: 'Whole branch' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Enable auto-merge' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open PR' }));
+    await waitFor(() => expect(view.onRun).toHaveBeenCalledWith('open-pr', { push: 'branch', 'auto-merge': true }));
   });
 
   it('does not save rejected requests', async () => {

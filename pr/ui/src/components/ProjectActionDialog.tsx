@@ -98,13 +98,13 @@ function ProjectActionFormDialog({ projectName, action, stagedFiles, onClose, on
       ? { ...remembered.value }
       : {};
     if (action === 'commit') initial = withoutRemovedAIOptions(initial);
-    if (action !== 'test') delete initial.files;
+    if (takesStagedFiles(action)) delete initial.files;
     setValue(initial);
     setRunError('');
   }, [action, definition, projectName]);
 
   useEffect(() => {
-    if (!action || action === 'test' || !definition) return;
+    if (!action || !takesStagedFiles(action) || !definition) return;
     setValue(current => {
       const next = { ...current };
       delete next.files;
@@ -122,7 +122,7 @@ function ProjectActionFormDialog({ projectName, action, stagedFiles, onClose, on
       const options = action === 'commit' ? withoutRemovedAIOptions(sparse) : sparse;
       await onRun(action, options);
       const remembered = { ...options };
-      if (action !== 'test') delete remembered.files;
+      if (takesStagedFiles(action)) delete remembered.files;
       rememberOptions(projectName, action, definition.schemaVersion, remembered);
       onClose();
     } catch (cause) {
@@ -136,7 +136,7 @@ function ProjectActionFormDialog({ projectName, action, stagedFiles, onClose, on
     <Modal
       open={action !== null}
       onClose={onClose}
-      title={action ? `Advanced ${action} options` : 'Advanced options'}
+      title={action ? `Advanced ${actionTitle(action)} options` : 'Advanced options'}
       size="lg"
       footer={
         <div className="flex items-center justify-end gap-2">
@@ -157,7 +157,7 @@ function ProjectActionFormDialog({ projectName, action, stagedFiles, onClose, on
             value={value}
             onChange={setValue}
             applyDefaults={false}
-            pre={action === 'commit' ? commitExtensions : formExtensions}
+            pre={action === 'commit' || action === 'open-pr' ? commitExtensions : formExtensions}
             size="sm"
             layout={{ mode: 'stacked' }}
             idPrefix={`project-${projectName}-${action}`}
@@ -170,8 +170,19 @@ function ProjectActionFormDialog({ projectName, action, stagedFiles, onClose, on
   );
 }
 
+// The staged files ride in the options of the actions whose schema lists them;
+// open-pr commits the staged files beside its push options, test takes paths.
+function takesStagedFiles(action: ProjectAction) {
+  return action === 'commit' || action === 'lint';
+}
+
+function actionTitle(action: ProjectAction) {
+  return action === 'open-pr' ? 'Open PR' : action;
+}
+
 function actionButtonLabel(action: ProjectAction | null) {
   if (action === 'commit') return 'Commit staged';
+  if (action === 'open-pr') return 'Open PR';
   if (action === 'test') return 'Run tests';
   return 'Run lint';
 }

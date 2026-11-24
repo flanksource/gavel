@@ -128,8 +128,9 @@ func retryCommitRequests(runID string, details projectCommitGroupDetails, status
 		if !commitRetryable(status) {
 			continue
 		}
-		request := projectActionRequest{Action: entry.Action, Files: entry.Files, Worktree: entry.Worktree, indexPatch: entry.IndexPatch}
-		if entry.Options != nil {
+		// open-pr options are push flags beside its files; commit options carry the files.
+		request := projectActionRequest{Action: entry.Action, Files: entry.Files, Options: entry.Options, Worktree: entry.Worktree, indexPatch: entry.IndexPatch}
+		if entry.Options != nil && entry.Action != projectActionOpenPR {
 			request = projectActionRequest{Action: entry.Action, Options: entry.Options, Worktree: entry.Worktree, indexPatch: entry.IndexPatch}
 		}
 		requests = append(requests, request)

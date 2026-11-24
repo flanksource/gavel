@@ -8,7 +8,7 @@ import { queryKeys } from '../query';
 
 const oneShotStaleTime = 5 * 60 * 1000;
 
-export type ProjectActionName = 'commit' | 'lint' | 'test';
+export type ProjectActionName = 'commit' | 'open-pr' | 'lint' | 'test';
 
 export interface ProjectActionSchemaResponse {
   schemaVersion: number;

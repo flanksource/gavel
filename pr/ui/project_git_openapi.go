@@ -34,6 +34,11 @@ func jsonRequestBody(schema string) map[string]any {
 func projectGitOpenAPIPaths() map[string]any {
 	summary := projectLifecycleOp("projects_git_summary", "Get every project's unmerged line counts, worktrees, unmerged branches and branches with uncommitted files", "200", "ProjectGitSummaries")
 	delete(summary, "parameters")
+	merge := projectLifecycleOp("projects_branch_merge", "Merge a branch with autostash, then remove its worktree and branch", "200", "ProjectBranchMergeResponse", jsonRequestBody("ProjectBranchMergeRequest"))
+	merge["responses"].(map[string]any)["409"] = map[string]any{
+		"description": "Merge refused or aborted",
+		"content":     map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/ProjectBranchMergeError"}}},
+	}
 	return map[string]any{
 		"/api/projects/git-summary": map[string]any{"get": summary},
 		"/api/projects/{name}/git": map[string]any{
@@ -46,7 +51,7 @@ func projectGitOpenAPIPaths() map[string]any {
 			"get": projectLifecycleOp("projects_branch_diff", "Get a branch's diff since it forked from base", "200", "ProjectBranchDiff", branchQueryParams(true)),
 		},
 		"/api/projects/{name}/branch/merge": map[string]any{
-			"post": projectLifecycleOp("projects_branch_merge", "Merge a branch into the base branch, then remove its worktree and branch", "200", "ProjectBranchMergeResponse", jsonRequestBody("ProjectBranchMergeRequest")),
+			"post": merge,
 		},
 		"/api/projects/{name}/branch/pr": map[string]any{
 			"post": projectLifecycleOp("projects_branch_pr", "Open a pull request carrying a branch's commits", "200", "ProjectBranchPRResponse", jsonRequestBody("ProjectBranchPRRequest")),
@@ -55,6 +60,7 @@ func projectGitOpenAPIPaths() map[string]any {
 			"get":  projectLifecycleOp("projects_branch_rebase_context", "Get rebase targets and a worktree's recoverable operation", "200", "ProjectRebaseContext", map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam())}),
 			"post": projectLifecycleOp("projects_branch_rebase", "Rebase a checked-out branch and restore its saved local edits", "200", "ProjectRebaseOperation", jsonRequestBody("ProjectRebaseRequest")),
 		},
+		"/api/projects/{name}/branch/delete": projectBranchDeleteOpenAPIPath(),
 		"/api/projects/{name}/branch/rebase/abort": map[string]any{
 			"post": projectLifecycleOp("projects_branch_rebase_abort", "Abort an owned rebase and restore its saved local edits", "200", "ProjectRebaseOperation", jsonRequestBody("ProjectRebaseRequest")),
 		},
@@ -145,6 +151,11 @@ func projectGitOpenAPISchemas() map[string]any {
 			"targetBranch": typed("string"), "landedSha": typed("string"), "mode": typed("string"), "commits": typed("integer"),
 			"worktreeRemoved": typed("boolean"), "branchDeleted": typed("boolean"),
 		}),
+		"ProjectBranchMergeError": objectSchema([]string{"error"}, map[string]any{
+			"error":     typed("string"),
+			"aborted":   map[string]any{"type": "boolean", "description": "The attempted merge was rolled back and saved local changes were restored"},
+			"conflicts": map[string]any{"type": "array", "items": typed("string")},
+		}),
 		"ProjectBranchPRRequest": objectSchema([]string{"branch"}, map[string]any{
 			"branch": typed("string"), "draft": typed("boolean"),
 		}),
@@ -153,6 +164,9 @@ func projectGitOpenAPISchemas() map[string]any {
 		}),
 	}
 	for name, schema := range projectRebaseOpenAPISchemas() {
+		schemas[name] = schema
+	}
+	for name, schema := range projectBranchDeleteOpenAPISchemas() {
 		schemas[name] = schema
 	}
 	return schemas

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -452,7 +453,7 @@ func (s *Server) handleProjectActionSchema(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	action := r.URL.Query().Get("action")
-	if action != string(projectActionCommit) && action != string(projectActionLint) && action != string(projectActionTest) {
+	if !slices.Contains([]projectAction{projectActionCommit, projectActionOpenPR, projectActionLint, projectActionTest}, projectAction(action)) {
 		respondError(w, http.StatusBadRequest, fmt.Sprintf("unsupported project action %q", action))
 		return
 	}

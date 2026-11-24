@@ -718,6 +718,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}/branch/rebase", s.handleProjectRebaseContext)
 	mux.HandleFunc("POST /api/projects/{name}/branch/rebase", s.handleProjectRebase)
 	mux.HandleFunc("POST /api/projects/{name}/branch/rebase/abort", s.handleProjectRebaseAbort)
+	mux.HandleFunc("GET /api/projects/{name}/branch/delete", s.handleProjectBranchDeletePlan)
+	mux.HandleFunc("POST /api/projects/{name}/branch/delete", s.handleProjectBranchDelete)
 	mux.HandleFunc("GET /api/projects/{name}/checkout/switch", s.handleProjectCheckoutSwitchPlan)
 	mux.HandleFunc("POST /api/projects/{name}/checkout/switch", s.handleProjectCheckoutSwitch)
 	mux.HandleFunc("GET /api/git/stream", s.handleGitStream)

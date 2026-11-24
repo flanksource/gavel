@@ -182,7 +182,7 @@ func projectCommitQueueRequestSchema() map[string]any {
 		"properties": map[string]any{
 			"action":   map[string]any{"type": "string", "enum": []string{"commit", "open-pr"}},
 			"files":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Files to commit; optional for open-pr, which pushes existing local commits when empty"},
-			"options":  map[string]any{"type": "object", "additionalProperties": true, "description": "Authored overrides validated against the commit v2 schema; omitted properties inherit configuration. Not supported for open-pr."},
+			"options":  map[string]any{"type": "object", "additionalProperties": true, "description": "Authored overrides; omitted properties inherit configuration. For commit, validated against the commit v2 schema and carrying the files. For open-pr, the open-pr schema's push flags (push, target, auto-merge, merge-type), beside the files."},
 			"worktree": map[string]any{"type": "string", "description": "Absolute path of the project worktree to commit in; defaults to the project directory"},
 		},
 	}
@@ -194,7 +194,7 @@ func projectActionSchemaResponseSchema() map[string]any {
 		"required": []string{"schemaVersion", "action", "schema", "defaults"},
 		"properties": map[string]any{
 			"schemaVersion": map[string]any{"type": "integer", "enum": []int{2}},
-			"action":        map[string]any{"type": "string", "enum": []string{"commit", "lint", "test"}},
+			"action":        map[string]any{"type": "string", "enum": []string{"commit", "open-pr", "lint", "test"}},
 			"schema":        map[string]any{"type": "object", "additionalProperties": true, "description": "Embedded action schema with native Clicky form annotations."},
 			"defaults":      map[string]any{"type": "object", "additionalProperties": true, "description": "Display hints only. Do not merge these into submitted options or saved preferences."},
 		},
@@ -392,10 +392,10 @@ func projectsOpenAPI() map[string]any {
 				}),
 			},
 			"/api/projects/{name}/actions/schema": map[string]any{
-				"get": projectLifecycleOp("projects_action_schema", "Get safe advanced commit, lint, or test options", "200", "ProjectActionSchema", map[string]any{
+				"get": projectLifecycleOp("projects_action_schema", "Get safe advanced commit, open-pr, lint, or test options", "200", "ProjectActionSchema", map[string]any{
 					"parameters": append(nameParam()["parameters"].([]any), map[string]any{
 						"name": "action", "in": "query", "required": true,
-						"schema": map[string]any{"type": "string", "enum": []string{"commit", "lint", "test"}},
+						"schema": map[string]any{"type": "string", "enum": []string{"commit", "open-pr", "lint", "test"}},
 					}),
 				}),
 			},

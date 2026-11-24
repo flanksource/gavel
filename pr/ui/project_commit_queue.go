@@ -153,15 +153,19 @@ func (s *Server) commitQueueActionArgs(project projects.Project, request project
 }
 
 func (s *Server) commitQueueArgs(workDir string, request projectActionRequest) (commitQueueRequest, error) {
-	action := request.Action
+	action, options := request.Action, request.Options
+	// open-pr's options are its push flags (the open-pr schema); the staged
+	// files are committed with the default commit options.
+	var pushArgs []string
 	if action == projectActionOpenPR {
-		if request.Options != nil {
-			return commitQueueRequest{}, errors.New("advanced options are not supported for open-pr")
+		var err error
+		if pushArgs, err = s.openPRPushArgs(options); err != nil {
+			return commitQueueRequest{}, err
 		}
 		if len(request.Files) == 0 {
-			return pushOnlyCommitRequest(workDir), nil
+			return pushOnlyCommitRequest(workDir, pushArgs, options), nil
 		}
-		request.Action = projectActionCommit
+		request.Action, request.Options = projectActionCommit, nil
 	}
 	args, err := s.projectActionArgs(workDir, request)
 	if err != nil {
@@ -171,7 +175,7 @@ func (s *Server) commitQueueArgs(workDir string, request projectActionRequest) (
 	if err != nil {
 		return commitQueueRequest{}, err
 	}
-	queued := commitQueueRequest{action: action, files: files, options: request.Options, indexPatch: request.indexPatch}
+	queued := commitQueueRequest{action: action, files: files, options: options, indexPatch: request.indexPatch}
 	if queued.indexPatch == "" {
 		if queued.snapshot, err = stagedCommitPaths(workDir, files); err != nil {
 			return commitQueueRequest{}, err
@@ -183,7 +187,7 @@ func (s *Server) commitQueueArgs(workDir string, request projectActionRequest) (
 		// A run deletes its snapshot only once the commit lands, so a failed
 		// open-pr without one still owes its push.
 		if action == projectActionOpenPR {
-			return pushOnlyCommitRequest(workDir), nil
+			return pushOnlyCommitRequest(workDir, pushArgs, options), nil
 		}
 		return commitQueueRequest{}, fmt.Errorf("staged snapshot of %s was already committed; nothing to retry", strings.Join(files, ", "))
 	} else if err != nil {
@@ -192,20 +196,38 @@ func (s *Server) commitQueueArgs(workDir string, request projectActionRequest) (
 	// The positional files trail args; the snapshot replaces them, so a
 	// commit lands exactly what was staged, line selections included.
 	queued.args = slices.Concat(args[:len(args)-len(files)], []string{"--index-patch", queued.indexPatch})
-	if action == projectActionOpenPR {
-		queued.args = append(queued.args, "--push")
-	}
+	queued.args = append(queued.args, pushArgs...)
 	return queued, nil
+}
+
+// openPRPushArgs are the gavel commit flags that push and open the PR: a bare
+// --push without options, else the open-pr schema's options as flags.
+func (s *Server) openPRPushArgs(options map[string]any) ([]string, error) {
+	if options == nil {
+		return []string{"--push"}, nil
+	}
+	if s.projectActionOptionsProvider == nil {
+		return nil, errors.New("project action options provider is not configured")
+	}
+	args, err := s.projectActionOptionsProvider.Args(string(projectActionOpenPR), options)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(args, func(arg string) bool { return strings.HasPrefix(arg, "--push=") }) {
+		args = append([]string{"--push"}, args...)
+	}
+	return args, nil
 }
 
 // pushOnlyCommitRequest pushes what HEAD already has: gavel commit --push skips
 // the commit when nothing is staged, and --stage=staged stops the default
 // session staging from picking up a session id inherited by the server process.
-func pushOnlyCommitRequest(workDir string) commitQueueRequest {
+func pushOnlyCommitRequest(workDir string, pushArgs []string, options map[string]any) commitQueueRequest {
 	return commitQueueRequest{
-		action: projectActionOpenPR,
-		files:  []string{},
-		args:   []string{"commit", "--work-dir", workDir, "--stage=staged", "--push"},
+		action:  projectActionOpenPR,
+		files:   []string{},
+		options: options,
+		args:    slices.Concat([]string{"commit", "--work-dir", workDir, "--stage=staged"}, pushArgs),
 	}
 }
 

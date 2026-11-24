@@ -13,6 +13,11 @@ type projectRebaseRequest struct {
 	Target       string `json:"target"`
 	ExpectedHead string `json:"expectedHead"`
 	Operation    string `json:"operation"`
+	// Strategy, RebaseMerges and NoFastForward shape a new operation; see
+	// branchrebase.Options.
+	Strategy      branchrebase.Strategy `json:"strategy,omitempty"`
+	RebaseMerges  bool                  `json:"rebaseMerges,omitempty"`
+	NoFastForward bool                  `json:"noFastForward,omitempty"`
 }
 
 func (s *Server) rebaseWorktree(w http.ResponseWriter, r *http.Request, path string) (string, bool) {
@@ -68,7 +73,10 @@ func (s *Server) projectRebaseAction(w http.ResponseWriter, r *http.Request, act
 	if !ok {
 		return
 	}
-	result, err := branchrebase.Run(r.Context(), branchrebase.Options{Action: action, Worktree: dir, Branch: request.Branch, Target: request.Target, ExpectedHead: request.ExpectedHead, Operation: request.Operation})
+	result, err := branchrebase.Run(r.Context(), branchrebase.Options{
+		Action: action, Worktree: dir, Branch: request.Branch, Target: request.Target, ExpectedHead: request.ExpectedHead, Operation: request.Operation,
+		Strategy: request.Strategy, RebaseMerges: request.RebaseMerges, NoFastForward: request.NoFastForward,
+	})
 	s.touchGit(dir)
 	if err != nil {
 		respondJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "operation": result})

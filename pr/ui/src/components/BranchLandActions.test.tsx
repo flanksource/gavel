@@ -73,6 +73,7 @@ const PROJECT = 'gavel';
 const BRANCH = 'feat/git-panel';
 const REPO = '/src/gavel';
 const WORKTREE = '/src/gavel/.worktrees/git-panel';
+const GAVEL_EXECUTABLE = '/opt/flanksource/gavel';
 
 const changes = { staged: 0, unstaged: 0, both: 0, untracked: 0, conflict: 0, adds: 0, dels: 0 };
 const projectGit = {
@@ -114,9 +115,13 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 // primary checkout) is served separately and never counted as a land request.
 function stubLand(status: number, body: unknown, git = projectGit) {
   const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(status, body));
-  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => (
-    url === `/api/projects/${PROJECT}/git` ? json(200, git) : fetchMock(url, init)
-  )));
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === `/api/projects/${PROJECT}/git`) return json(200, git);
+    if (url === `/api/projects/${PROJECT}/branch/rebase?worktree=${encodeURIComponent(WORKTREE)}`) {
+      return json(200, { executable: GAVEL_EXECUTABLE });
+    }
+    return fetchMock(url, init);
+  }));
   return fetchMock;
 }
 
@@ -259,7 +264,7 @@ describe('BranchLandActions', () => {
     expect(onMerged).not.toHaveBeenCalled();
   });
 
-  it('keeps the dialog open on a 409, listing the conflicting paths', async () => {
+  it('lists conflicting paths and only offers the prompt after a confirmed rollback', async () => {
     stubLand(409, { error: 'squash of feat/git-panel onto main conflicts', conflicts: ['a.txt', 'dir/b.txt'] });
     renderActions();
 
@@ -271,6 +276,7 @@ describe('BranchLandActions', () => {
     expect(alert.textContent).toContain('conflicts');
     expect(Array.from(alert.querySelectorAll('li')).map(item => item.textContent)).toEqual(['a.txt', 'dir/b.txt']);
     expect(confirmButton(/^Squash & merge$/).disabled).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Send to prompt' })).toBeNull();
   });
 
   it('shows a refused PR inline as a plain error', async () => {
@@ -352,7 +358,8 @@ describe('BranchLandActions AI merge', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(startedRun(fetchMock)).toEqual({
-      repo: REPO, worktree: WORKTREE, branch: BRANCH, base: 'main', mode: 'squash', message: 'feat: git panel', conflicts: [],
+      repo: REPO, worktree: WORKTREE, branch: BRANCH, base: 'main', mode: 'squash',
+      message: 'feat: git panel', conflicts: [], gavelExecutable: GAVEL_EXECUTABLE,
     });
     await waitFor(() => expect(streams.at(-1)?.url).toBe(`/api/captain/prompt/runs/${RUN}/stream`));
     expect(screen.getByText(/Starting the AI merge/)).toBeTruthy();
@@ -370,21 +377,23 @@ describe('BranchLandActions AI merge', () => {
     expect(screen.queryByTestId('session-tail')).toBeNull();
   });
 
-  it('offers to resolve a conflicting land with AI in the mode that failed, listing the conflicts', async () => {
-    const fetchMock = stubLand(409, { error: 'cherry-pick of feat/git-panel onto main conflicts', conflicts: ['a.txt'] });
+  it.each([['a conflict', ['a.txt']], ['another merge failure', []]] as const)('offers to send %s to the prompt only after aborting', async (_label, conflicts) => {
+    const error = 'cherry-pick of feat/git-panel onto main failed';
+    const fetchMock = stubLand(409, { error, aborted: true, conflicts });
     renderActions({ worktreePath: WORKTREE });
 
     openMergeDialog();
     fireEvent.click(screen.getByRole('radio', { name: /Each commit/ }));
     fireEvent.click(confirmButton(/^Merge each commit$/));
-    const resolve = await screen.findByRole('button', { name: /Resolve with AI & merge each commit/ });
+    const resolve = await screen.findByRole('button', { name: 'Send to prompt' });
     await waitFor(() => expect((resolve as HTMLButtonElement).disabled).toBe(false));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     fetchMock.mockImplementationOnce(async () => json(200, { runId: RUN, status: 'running' }));
     fireEvent.click(resolve);
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(startedRun(fetchMock, 1)).toMatchObject({ mode: 'incremental', conflicts: ['a.txt'] });
-    await waitFor(() => expect(screen.queryByRole('button', { name: /Resolve with AI/ })).toBeNull());
+    expect(startedRun(fetchMock, 1)).toMatchObject({ mode: 'incremental', conflicts, failure: error });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Send to prompt' })).toBeNull());
   });
 
   it('shows a failed run and reports no merge, also once the dialog is closed', async () => {

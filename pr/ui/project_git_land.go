@@ -110,7 +110,7 @@ func (s *Server) mergeProjectBranch(ctx context.Context, ref projectBranchRef, r
 	if len(commits) == 0 {
 		return projectBranchMergeResponse{}, fmt.Errorf("%w: %s has no commits that are not on %s", branchmerge.ErrNothingToMerge, ref.branch, target)
 	}
-	opts := branchmerge.Options{Repo: checkout, Branch: ref.branch, Base: target, Mode: request.Mode, Message: strings.TrimSpace(request.Message)}
+	opts := branchmerge.Options{Repo: checkout, Branch: ref.branch, Base: target, Mode: request.Mode, Message: strings.TrimSpace(request.Message), Autostash: true}
 	if request.Mode == branchmerge.Incremental {
 		opts.Commits = commits
 	} else if opts.Message == "" {

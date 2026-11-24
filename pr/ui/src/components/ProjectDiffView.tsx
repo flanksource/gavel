@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { GitDiffPanel, type DiffLineSelection, type GitDiffPayload } from '@flanksource/clicky-ui/data';
 import { UiDiff } from '@flanksource/clicky-ui/icons';
@@ -14,6 +14,8 @@ interface Props {
   // Absolute path of a linked worktree whose working tree is diffed; omitted
   // for the main checkout.
   worktree?: string;
+  // actions render in the header beside the path.
+  actions?: ReactNode;
 }
 
 // ProjectDiffPayload is the diff endpoint's answer: the combined diff, plus the
@@ -26,7 +28,7 @@ interface ProjectDiffPayload extends GitDiffPayload {
 
 type LineTarget = { side: 'old' | 'new'; line: number };
 
-export function ProjectDiffView({ projectName, path, refreshKey = 0, worktree }: Props) {
+export function ProjectDiffView({ projectName, path, refreshKey = 0, worktree, actions }: Props) {
   const queryClient = useQueryClient();
   const gitLock = useProjectGitLockRequest();
   const diff = useQuery({
@@ -69,6 +71,7 @@ export function ProjectDiffView({ projectName, path, refreshKey = 0, worktree }:
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
         <UiDiff className="shrink-0 text-muted-foreground" />
         <h3 className="min-w-0 flex-1 truncate font-mono text-sm font-semibold" title={path}>{path}</h3>
+        {actions}
       </div>
       {stageLines.error && <div role="alert" className="shrink-0 border-b border-border px-4 py-2 text-xs text-red-600 dark:text-red-400">{stageLines.error.message}</div>}
       <ProjectGitLockPrompt owner={gitLock.owner} enabled={stageLines.isPending} />

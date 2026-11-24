@@ -213,10 +213,13 @@ func (s *Server) squashMessage(ctx context.Context, dir string, commits []string
 // options and 500 for anything else.
 func respondBranchError(w http.ResponseWriter, err error) {
 	var conflict *branchmerge.ConflictError
+	var aborted *branchmerge.AbortedError
 	var prConflict *prcreate.ConflictError
 	switch {
 	case errors.As(err, &conflict):
-		respondJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "conflicts": conflict.Paths})
+		respondJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "conflicts": conflict.Paths, "aborted": errors.As(err, &aborted)})
+	case errors.As(err, &aborted):
+		respondJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "aborted": true})
 	case errors.As(err, &prConflict):
 		paths, pathsErr := unmergedPaths(prConflict.Worktree)
 		if pathsErr != nil {

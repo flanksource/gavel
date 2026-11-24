@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Modal, SegmentedControl, type SegmentedOption } from '@flanksource/clicky-ui/components';
-import { UiGitBranch, UiRefresh } from '@flanksource/clicky-ui/icons';
+import { Button, DropdownMenu, Modal, SegmentedControl, SplitButton, type DropdownMenuItem, type SegmentedOption } from '@flanksource/clicky-ui/components';
+import { UiDotsVertical, UiGitBranch, UiRefresh } from '@flanksource/clicky-ui/icons';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import type { ProjectGit } from '../types';
 import type { CheckoutSwitchPlan, CheckoutSwitchRequest, CheckoutSwitchResult, CheckoutSync } from '../types/checkoutSwitch';
@@ -58,7 +58,14 @@ export function defaultCheckoutSync(choices: CheckoutSyncChoice[]): CheckoutSync
  * plans the move from the server, offers fast-forward, reset or a plain
  * switch with the reason each is refused, then performs it.
  */
-export function CheckoutSwitch({ projectName, git }: { projectName: string; git: ProjectGit }) {
+export function CheckoutSwitch({ projectName, git, items = [], branch: selected = '' }: {
+  projectName: string;
+  git: ProjectGit;
+  // Operations on the selected branch, offered in the button's menu; with
+  // nothing to switch or sync they get a menu button of their own.
+  items?: DropdownMenuItem[];
+  branch?: string;
+}) {
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState<CheckoutSync | null>(null);
@@ -84,7 +91,12 @@ export function CheckoutSwitch({ projectName, git }: { projectName: string; git:
     ]),
   });
   if (git.baseCheckedOut && git.upstreamBehind === 0) {
-    return notice ? <span role="status" className="text-xs text-muted-foreground">{notice}</span> : null;
+    return <>
+      {items.length > 0 && <DropdownMenu align="left" menuLabel={`Actions for ${selected}`} items={items} trigger={
+        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" aria-label={`Actions for ${selected}`}><UiGitBranch />{selected}<UiDotsVertical /></Button>
+      } />}
+      {notice && <span role="status" className="text-xs text-muted-foreground">{notice}</span>}
+    </>;
   }
 
   const choices = plan.data ? checkoutSyncChoices(plan.data) : [];
@@ -92,6 +104,7 @@ export function CheckoutSwitch({ projectName, git }: { projectName: string; git:
   const choice = choices.find(candidate => candidate.id === sync);
   const label = git.baseCheckedOut ? `Sync ${branch}…` : `Switch to ${branch}…`;
   const options: SegmentedOption<CheckoutSync>[] = choices.map(({ id, label: text, reason }) => ({ id, label: text, title: reason || undefined }));
+  const openSwitch = () => { mutation.reset(); setPicked(null); setOpen(true); };
   const confirm = () => {
     if (!plan.data || !choice || choice.reason) return;
     mutation.mutate({ branch, expectedHead: plan.data.head, sync });
@@ -99,9 +112,14 @@ export function CheckoutSwitch({ projectName, git }: { projectName: string; git:
 
   return (
     <>
-      <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => { mutation.reset(); setPicked(null); setOpen(true); }}>
-        {git.baseCheckedOut ? <UiRefresh /> : <UiGitBranch />}{label}
-      </Button>
+      {items.length > 0 ? (
+        <SplitButton variant="outline" size="sm" title={`Actions for ${selected}`} onClick={openSwitch} items={items}
+          label={<span className="flex items-center gap-1 text-xs">{git.baseCheckedOut ? <UiRefresh /> : <UiGitBranch />}{label}</span>} />
+      ) : (
+        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={openSwitch}>
+          {git.baseCheckedOut ? <UiRefresh /> : <UiGitBranch />}{label}
+        </Button>
+      )}
       {open && (
         <Modal open onClose={() => { if (!mutation.isPending) setOpen(false); }} title={git.baseCheckedOut ? `Sync ${branch}` : `Switch the main checkout to ${branch}`} size="md" footer={
           <div className="flex justify-end gap-2">

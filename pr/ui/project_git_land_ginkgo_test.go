@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	commitpkg "github.com/flanksource/gavel/commit"
@@ -38,6 +40,21 @@ var _ = Describe("project branch landing", func() {
 		return recorder.Code, decodeProjectGit[map[string]any](recorder)
 	}
 
+	dirtyTarget := func() {
+		GinkgoHelper()
+		Expect(os.WriteFile(filepath.Join(f.repo, "staged.txt"), []byte("staged\n"), 0o644)).To(Succeed())
+		pgGit(f.repo, "add", "staged.txt")
+		Expect(os.WriteFile(filepath.Join(f.repo, "staged.txt"), []byte("unstaged\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(f.repo, "untracked.txt"), []byte("untracked\n"), 0o644)).To(Succeed())
+	}
+	expectTargetEdits := func() {
+		GinkgoHelper()
+		Expect(pgGit(f.repo, "status", "--porcelain")).To(Equal("AM staged.txt\n?? untracked.txt"))
+		Expect(pgGit(f.repo, "show", ":staged.txt")).To(Equal("staged"))
+		Expect(os.ReadFile(filepath.Join(f.repo, "staged.txt"))).To(Equal([]byte("unstaged\n")))
+		Expect(os.ReadFile(filepath.Join(f.repo, "untracked.txt"))).To(Equal([]byte("untracked\n")))
+	}
+
 	It("refuses to merge a branch whose worktree has uncommitted changes", func() {
 		code, response := merge(map[string]any{"branch": pgFeature, "mode": "incremental"})
 
@@ -48,6 +65,7 @@ var _ = Describe("project branch landing", func() {
 
 	It("merges a worktree branch commit by commit, then removes its worktree and branch", func() {
 		pgGit(f.worktree, "checkout", "--", "b.txt")
+		dirtyTarget()
 
 		code, response := merge(map[string]any{"branch": pgFeature, "mode": "incremental"})
 
@@ -60,6 +78,8 @@ var _ = Describe("project branch landing", func() {
 		Expect(pgGit(f.repo, "log", "--format=%s", f.base+"..HEAD")).To(Equal("feat: add b\nfeat: add a"))
 		Expect(f.worktree).NotTo(BeAnExistingFile())
 		Expect(pgGit(f.repo, "branch", "--list", pgFeature)).To(BeEmpty())
+		expectTargetEdits()
+		Expect(pgGit(f.repo, "stash", "list")).To(BeEmpty())
 	})
 
 	It("squashes a branch with the given message and deletes it", func() {
@@ -82,15 +102,55 @@ var _ = Describe("project branch landing", func() {
 		Expect(pgGit(f.repo, "log", "-1", "--format=%B")).To(Equal("fix: shout the greeting\n\nSummarises fix: shout hello"))
 	})
 
-	It("answers 409 with the conflicting paths and leaves main untouched", func() {
-		before := pgCommit(f.repo, "README.md", "hi there\n", "chore: reword readme")
+	DescribeTable("aborts a conflicting merge and restores the target's saved edits", func(mode string) {
+		pgGit(f.worktree, "checkout", "--", "b.txt")
+		before := pgCommit(f.repo, "b.txt", "main version\n", "chore: add main's b")
+		Expect(os.WriteFile(filepath.Join(f.repo, "older.txt"), []byte("older stash\n"), 0o644)).To(Succeed())
+		pgGit(f.repo, "stash", "push", "--include-untracked", "-m", "existing stash")
+		existingStash := pgGit(f.repo, "stash", "list")
+		dirtyTarget()
+
+		code, response := merge(map[string]any{"branch": pgFeature, "mode": mode, "message": "feat: land files"})
+
+		Expect(code).To(Equal(http.StatusConflict), "%v", response)
+		Expect(response).To(HaveKeyWithValue("aborted", true))
+		Expect(response["conflicts"]).To(Equal([]any{"b.txt"}))
+		Expect(pgGit(f.repo, "rev-parse", "HEAD")).To(Equal(before))
+		expectTargetEdits()
+		Expect(pgGit(f.repo, "stash", "list")).To(Equal(existingStash))
+		Expect(pgGit(f.repo, "branch", "--list", pgFeature)).NotTo(BeEmpty())
+		Expect(f.worktree).To(BeADirectory())
+	},
+		Entry("squash", "squash"),
+		Entry("each commit", "incremental"),
+	)
+
+	It("restores the target's edits when the squash commit fails", func() {
+		dirtyTarget()
+		pgGit(f.repo, "config", "commit.gpgsign", "true")
+		pgGit(f.repo, "config", "gpg.program", "false")
 
 		code, response := merge(map[string]any{"branch": "solo", "mode": "squash", "message": "fix: louder hello"})
 
 		Expect(code).To(Equal(http.StatusConflict), "%v", response)
-		Expect(response["conflicts"]).To(Equal([]any{"README.md"}))
-		Expect(pgGit(f.repo, "rev-parse", "HEAD")).To(Equal(before))
-		Expect(pgGit(f.repo, "status", "--porcelain")).To(BeEmpty())
+		Expect(response).To(HaveKeyWithValue("aborted", true))
+		Expect(response["error"]).To(ContainSubstring("git commit:"))
+		Expect(pgGit(f.repo, "rev-parse", "HEAD")).To(Equal(f.base))
+		expectTargetEdits()
+		Expect(pgGit(f.repo, "stash", "list")).To(BeEmpty())
+	})
+
+	It("keeps the stash and source branch if local edits cannot be restored onto the landed commit", func() {
+		Expect(os.WriteFile(filepath.Join(f.repo, "README.md"), []byte("local version\n"), 0o644)).To(Succeed())
+		pgGit(f.repo, "add", "README.md")
+
+		code, response := merge(map[string]any{"branch": "solo", "mode": "squash", "message": "fix: louder hello"})
+
+		Expect(code).To(Equal(http.StatusInternalServerError), "%v", response)
+		Expect(response).NotTo(HaveKey("aborted"))
+		Expect(response["error"]).To(And(ContainSubstring("merged solo onto main"), ContainSubstring("retained")))
+		Expect(pgGit(f.repo, "show", "stash:README.md")).To(Equal("local version"))
+		Expect(pgGit(f.repo, "show", "HEAD:README.md")).To(Equal("HELLO"))
 		Expect(pgGit(f.repo, "branch", "--list", "solo")).NotTo(BeEmpty())
 	})
 
