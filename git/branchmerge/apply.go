@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+var errRollback = errors.New("could not roll back the merge")
+
 // cherryPick picks opts.Commits onto the target. A failed pick is aborted.
 // With a strategy, a pick the strategy resolves to no change is dropped
 // rather than stopping the run.
@@ -21,6 +23,14 @@ func cherryPick(opts Options, target, before string) error {
 		return nil
 	}
 	return abortMerge(opts, target, before, fmt.Errorf("git cherry-pick: %s: %w", out, err))
+}
+
+func fastForward(opts Options, target, before string) error {
+	out, err := combinedGit(opts.Repo, "merge", "--ff-only", "--no-autostash", "refs/heads/"+opts.Branch)
+	if err == nil {
+		return nil
+	}
+	return abortMerge(opts, target, before, fmt.Errorf("git merge --ff-only: %s: %w", out, err))
 }
 
 // mergeWhole stages the whole branch onto the target, with `git merge --squash`
@@ -45,6 +55,9 @@ func mergeWhole(opts Options, target, before string) (int, error) {
 		kind = "--no-ff"
 	}
 	args := append([]string{"merge", kind, "--no-commit"}, opts.Strategy.args()...)
+	if opts.Autostash {
+		args = append(args, "--no-autostash")
+	}
 	if out, err := combinedGit(opts.Repo, append(args, source)...); err != nil {
 		return 0, abortMerge(opts, target, before, fmt.Errorf("git merge %s: %s: %w", kind, out, err))
 	}
@@ -58,27 +71,23 @@ func mergeWhole(opts Options, target, before string) (int, error) {
 	return commits, nil
 }
 
-// abortMerge rolls a failed cherry-pick or squash back and reports why it
-// failed: a *ConflictError naming the unmerged paths, or the cause itself.
+// abortMerge records the conflicts before rolling back the failed operation.
 func abortMerge(opts Options, target, before string, cause error) error {
-	unmerged, err := captureGit(opts.Repo, "diff", "--name-only", "--diff-filter=U")
-	if err != nil {
-		return errors.Join(cause, err)
-	}
+	unmerged, pathsErr := captureGit(opts.Repo, "diff", "--name-only", "--diff-filter=U", "-z")
 	if err := rollback(opts, before); err != nil {
-		return errors.Join(cause, err)
+		return errors.Join(cause, pathsErr, fmt.Errorf("%w: %w", errRollback, err))
 	}
 	after, err := captureGit(opts.Repo, "rev-parse", "HEAD")
 	if err != nil {
-		return errors.Join(cause, err)
+		return errors.Join(cause, pathsErr, fmt.Errorf("%w: %w", errRollback, err))
 	}
 	if after != before {
-		return errors.Join(cause, fmt.Errorf("aborting the merge left %s at %s, not %s", target, short(after), short(before)))
+		return errors.Join(cause, pathsErr, fmt.Errorf("%w: %s is at %s (expected %s)", errRollback, target, short(after), short(before)))
 	}
-	if paths := strings.Fields(unmerged); len(paths) > 0 {
-		return &ConflictError{Branch: target, Source: opts.Branch, Mode: opts.Mode, Paths: paths, Err: cause}
+	if paths, _ := strings.CutSuffix(unmerged, "\x00"); paths != "" {
+		return &AbortedError{Err: &ConflictError{Branch: target, Source: opts.Branch, Mode: opts.Mode, Paths: strings.Split(paths, "\x00"), Err: cause}}
 	}
-	return fmt.Errorf("%s merge of %s onto %s: %w", opts.Mode, opts.Branch, target, cause)
+	return &AbortedError{Err: fmt.Errorf("%s merge of %s onto %s: %w", opts.Mode, opts.Branch, target, errors.Join(cause, pathsErr))}
 }
 
 func rollback(opts Options, before string) error {

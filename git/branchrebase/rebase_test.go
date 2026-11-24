@@ -73,6 +73,72 @@ var _ = Describe("Rebase and keep", func() {
 		Expect(git(worktree, "branch", "--show-current")).To(Equal("topic"))
 	})
 
+	It("lists the primary checkout's branch first, then origin/main, then the other local branches", func() {
+		git(repo, "branch", "extra")
+		state, err := branchrebase.Inspect(context.Background(), worktree)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Targets).To(Equal([]branchrebase.Target{
+			{Ref: "refs/heads/main", Label: "main (main checkout)"},
+			{Ref: "refs/remotes/origin/main", Label: "origin/main"},
+			{Ref: "refs/heads/extra", Label: "extra"},
+		}))
+	})
+
+	It("does not offer the primary checkout's branch when inspecting the primary checkout itself", func() {
+		state, err := branchrebase.Inspect(context.Background(), repo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Targets).To(Equal([]branchrebase.Target{
+			{Ref: "refs/remotes/origin/main", Label: "origin/main"},
+			{Ref: "refs/heads/topic", Label: "topic"},
+		}))
+	})
+
+	It("merges the target into the branch with a merge commit, keeping the branch's commit and saved edits", func() {
+		write(worktree, "local.txt", "local\n")
+		main := git(repo, "rev-parse", "HEAD")
+		opts.Strategy = branchrebase.StrategyMerge
+		result, err := branchrebase.Run(context.Background(), opts)
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{result.Phase, result.Strategy}).To(Equal([]any{"done", branchrebase.StrategyMerge}))
+		Expect(git(worktree, "rev-parse", "HEAD^1", "HEAD^2")).To(Equal(head + "\n" + main))
+		Expect(filepath.Join(worktree, "local.txt")).To(HaveContents("local\n"))
+	})
+
+	It("records a merge commit with noFastForward even when the branch could fast-forward", func() {
+		git(worktree, "reset", "-q", "--hard", git(repo, "rev-parse", "HEAD~1"))
+		opts.ExpectedHead = git(worktree, "rev-parse", "HEAD")
+		opts.Strategy, opts.NoFastForward = branchrebase.StrategyMerge, true
+		_, err := branchrebase.Run(context.Background(), opts)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(git(worktree, "rev-list", "--parents", "-n", "1", "HEAD")).To(HaveLen(3*40 + 2))
+	})
+
+	It("keeps a conflicting merge recoverable, then aborts it and restores the original commit and saved edits", func() {
+		opts.ExpectedHead = commit(worktree, "shared file.txt", "topic conflict\n")
+		commit(repo, "shared file.txt", "main conflict\n")
+		write(worktree, "local.txt", "local\n")
+		opts.Strategy = branchrebase.StrategyMerge
+		result, err := branchrebase.Run(context.Background(), opts)
+		Expect(err).To(HaveOccurred())
+		Expect(result.Conflicts).To(Equal([]string{"shared file.txt"}))
+		result, err = branchrebase.Run(context.Background(), branchrebase.Options{Action: "abort", Worktree: worktree, Operation: result.ID})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Phase).To(Equal("aborted"))
+		Expect(git(worktree, "rev-parse", "HEAD")).To(Equal(opts.ExpectedHead))
+		Expect(filepath.Join(worktree, "local.txt")).To(HaveContents("local\n"))
+	})
+
+	DescribeTable("rejects strategy options that do not apply before changing the worktree", func(strategy branchrebase.Strategy, rebaseMerges, noFastForward bool, message string) {
+		opts.Strategy, opts.RebaseMerges, opts.NoFastForward = strategy, rebaseMerges, noFastForward
+		_, err := branchrebase.Run(context.Background(), opts)
+		Expect(err).To(MatchError(ContainSubstring(message)))
+		Expect(git(worktree, "rev-parse", "HEAD")).To(Equal(head))
+	},
+		Entry("unknown strategy", branchrebase.Strategy("squash"), false, false, "strategy must be"),
+		Entry("rebaseMerges with merge", branchrebase.StrategyMerge, true, false, "rebaseMerges applies only"),
+		Entry("noFastForward with rebase", branchrebase.StrategyRebase, false, true, "noFastForward applies only"),
+	)
+
 	It("rejects a stale head before stashing or rebasing", func() {
 		commit(worktree, "new.txt", "new\n")
 		write(worktree, "local.txt", "local\n")
@@ -219,7 +285,7 @@ var _ = Describe("Rebase and keep", func() {
 		git(repo, "branch", "already-merged", head+"~1")
 		state, err := branchrebase.Inspect(context.Background(), worktree)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(state.Targets).To(ContainElements(branchrebase.Target{Ref: "refs/heads/main", Label: "main"}, branchrebase.Target{Ref: "refs/heads/already-merged", Label: "already-merged"}))
+		Expect(state.Targets).To(ContainElements(branchrebase.Target{Ref: "refs/heads/main", Label: "main (main checkout)"}, branchrebase.Target{Ref: "refs/heads/already-merged", Label: "already-merged"}))
 		opts.Target = "refs/remotes/origin/main"
 		result, err := branchrebase.Run(context.Background(), opts)
 		Expect(err).To(HaveOccurred())

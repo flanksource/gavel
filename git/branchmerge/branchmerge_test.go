@@ -27,6 +27,22 @@ var _ = Describe("Merge", func() {
 			Expect(git(f.repo, "log", "--format=%s", f.base+"..HEAD")).To(Equal("feat: add b\nfeat: add a"))
 		})
 
+		It("fast-forwards a rebased branch and restores staged edits outside the landed commit", func() {
+			Expect(os.WriteFile(filepath.Join(f.repo, "staged.txt"), []byte("local edit\n"), 0o644)).To(Succeed())
+			git(f.repo, "add", "staged.txt")
+
+			result, err := branchmerge.Merge(branchmerge.Options{
+				Repo: f.repo, Branch: featureBranch, Base: "main", Commits: f.commits,
+				Mode: branchmerge.Incremental, Autostash: true, FastForwardOnly: true,
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.LandedSHA).To(Equal(f.commits[1]))
+			Expect(git(f.repo, "status", "--porcelain")).To(Equal("A  staged.txt"))
+			Expect(git(f.repo, "show", ":staged.txt")).To(Equal("local edit"))
+			Expect(git(f.repo, "stash", "list")).To(BeEmpty())
+		})
+
 		It("aborts a conflicting cherry-pick and leaves the checkout where it was", func() {
 			before := commitFile(f.repo, "a.txt", "main's a\n", "chore: conflicting a")
 

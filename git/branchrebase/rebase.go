@@ -17,20 +17,44 @@ type Options struct {
 	ExpectedHead string `json:"expectedHead"`
 	Operation    string `json:"operation"`
 	Resolved     bool   `json:"resolved"`
+	// Strategy brings the branch up to date by rebasing onto the target
+	// (StrategyRebase, the default) or by merging the target in.
+	Strategy Strategy `json:"strategy"`
+	// RebaseMerges keeps the branch's merge commits when rebasing.
+	RebaseMerges bool `json:"rebaseMerges"`
+	// NoFastForward records a merge commit even when the branch could fast-forward.
+	NoFastForward bool `json:"noFastForward"`
+}
+
+type Strategy string
+
+const (
+	StrategyRebase Strategy = "rebase"
+	StrategyMerge  Strategy = "merge"
+)
+
+func validateStrategy(strategy Strategy) error {
+	if strategy != StrategyRebase && strategy != StrategyMerge {
+		return fmt.Errorf("strategy must be %q or %q, got %q", StrategyRebase, StrategyMerge, strategy)
+	}
+	return nil
 }
 
 type Operation struct {
-	ID           string   `json:"id"`
-	Worktree     string   `json:"worktree"`
-	Branch       string   `json:"branch"`
-	Target       string   `json:"target"`
-	TargetSHA    string   `json:"targetSha"`
-	OriginalHead string   `json:"originalHead"`
-	StashSHA     string   `json:"stashSha"`
-	Phase        string   `json:"phase"`
-	Error        string   `json:"error"`
-	Conflicts    []string `json:"conflicts"`
-	Aborted      bool     `json:"aborted"`
+	ID            string   `json:"id"`
+	Worktree      string   `json:"worktree"`
+	Branch        string   `json:"branch"`
+	Strategy      Strategy `json:"strategy"`
+	RebaseMerges  bool     `json:"rebaseMerges,omitempty"`
+	NoFastForward bool     `json:"noFastForward,omitempty"`
+	Target        string   `json:"target"`
+	TargetSHA     string   `json:"targetSha"`
+	OriginalHead  string   `json:"originalHead"`
+	StashSHA      string   `json:"stashSha"`
+	Phase         string   `json:"phase"`
+	Error         string   `json:"error"`
+	Conflicts     []string `json:"conflicts"`
+	Aborted       bool     `json:"aborted"`
 }
 
 type Target struct {
@@ -146,7 +170,23 @@ func prepare(ctx context.Context, opts Options) (*Operation, error) {
 	if opts.Target == "refs/heads/"+branch {
 		return nil, errors.New("cannot rebase a branch onto itself")
 	}
-	op := &Operation{ID: uuid.NewString(), Worktree: opts.Worktree, Branch: branch, Target: opts.Target, OriginalHead: head, Phase: "fetch", Conflicts: []string{}}
+	if opts.Strategy == "" {
+		opts.Strategy = StrategyRebase
+	}
+	if err := validateStrategy(opts.Strategy); err != nil {
+		return nil, err
+	}
+	if opts.RebaseMerges && opts.Strategy != StrategyRebase {
+		return nil, errors.New("rebaseMerges applies only to the rebase strategy")
+	}
+	if opts.NoFastForward && opts.Strategy != StrategyMerge {
+		return nil, errors.New("noFastForward applies only to the merge strategy")
+	}
+	op := &Operation{
+		ID: uuid.NewString(), Worktree: opts.Worktree, Branch: branch, Strategy: opts.Strategy,
+		RebaseMerges: opts.RebaseMerges, NoFastForward: opts.NoFastForward,
+		Target: opts.Target, OriginalHead: head, Phase: "fetch", Conflicts: []string{},
+	}
 	return op, save(op)
 }
 
@@ -220,8 +260,25 @@ func start(ctx context.Context, op *Operation) error {
 	if err := validateCommitID(op.TargetSHA); err != nil {
 		return err
 	}
-	if _, err := git(ctx, op.Worktree, "-c", "core.editor=true", "rebase", "--no-autostash", "--", op.TargetSHA); err != nil {
+	if _, err := git(ctx, op.Worktree, updateArgs(op)...); err != nil {
 		return err
 	}
 	return finish(ctx, op)
+}
+
+// updateArgs is the git command that brings the branch up to the pinned target
+// with the operation's strategy.
+func updateArgs(op *Operation) []string {
+	if op.Strategy == StrategyMerge {
+		args := []string{"-c", "core.editor=true", "merge", "--no-edit", "--no-autostash"}
+		if op.NoFastForward {
+			args = append(args, "--no-ff")
+		}
+		return append(args, "--", op.TargetSHA)
+	}
+	args := []string{"-c", "core.editor=true", "rebase", "--no-autostash"}
+	if op.RebaseMerges {
+		args = append(args, "--rebase-merges")
+	}
+	return append(args, "--", op.TargetSHA)
 }

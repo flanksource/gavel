@@ -32,12 +32,23 @@ func Inspect(ctx context.Context, dir string) (Context, error) {
 	if err != nil {
 		return Context{}, err
 	}
-	result := Context{Branch: branch, Head: head, Operation: op, Targets: []Target{{Ref: "refs/remotes/origin/main", Label: "origin/main"}}}
+	worktrees, err := gavelgit.ListWorktrees(root)
+	if err != nil {
+		return Context{}, err
+	}
+	result := Context{Branch: branch, Head: head, Operation: op}
+	// The branch the primary checkout has out leads the list: it is the local
+	// line of work a linked worktree is most often rebased onto.
+	primary := worktrees[0].Branch
+	if primary != "" && primary != branch {
+		result.Targets = append(result.Targets, Target{Ref: "refs/heads/" + primary, Label: primary + " (main checkout)"})
+	}
+	result.Targets = append(result.Targets, Target{Ref: "refs/remotes/origin/main", Label: "origin/main"})
 	if dirty != "" {
 		result.DirtyCount = len(strings.Split(dirty, "\n"))
 	}
 	for _, b := range branches {
-		if b.Name != branch {
+		if b.Name != branch && b.Name != primary {
 			result.Targets = append(result.Targets, Target{Ref: "refs/heads/" + b.Name, Label: b.Name})
 		}
 	}

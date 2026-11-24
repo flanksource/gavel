@@ -40,6 +40,9 @@ func abort(ctx context.Context, op *Operation) error {
 }
 
 func abortRebase(ctx context.Context, op *Operation) error {
+	if op.Strategy == StrategyMerge {
+		return abortMerge(ctx, op)
+	}
 	for _, name := range []string{"rebase-merge", "rebase-apply"} {
 		dir, err := git(ctx, op.Worktree, "rev-parse", "--path-format=absolute", "--git-path", name)
 		if err != nil {
@@ -63,6 +66,35 @@ func abortRebase(ctx context.Context, op *Operation) error {
 		return err
 	}
 	return idle(ctx, op.Worktree)
+}
+
+// abortMerge undoes the operation's own paused merge: MERGE_HEAD must be the
+// pinned target and ORIG_HEAD the branch's original commit.
+func abortMerge(ctx context.Context, op *Operation) error {
+	mergeHead, err := git(ctx, op.Worktree, "rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD")
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(mergeHead); errors.Is(err, os.ErrNotExist) {
+		return idle(ctx, op.Worktree)
+	} else if err != nil {
+		return err
+	}
+	for file, expected := range map[string]string{"MERGE_HEAD": op.TargetSHA, "ORIG_HEAD": op.OriginalHead} {
+		path, err := git(ctx, op.Worktree, "rev-parse", "--path-format=absolute", "--git-path", file)
+		if err != nil {
+			return err
+		}
+		actual, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(string(actual)) != expected {
+			return fmt.Errorf("refusing to abort an unrelated merge: %s does not match", file)
+		}
+	}
+	_, err = git(ctx, op.Worktree, "merge", "--abort")
+	return err
 }
 
 func recoverStash(ctx context.Context, op *Operation) error {

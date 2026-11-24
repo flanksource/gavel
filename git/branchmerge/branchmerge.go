@@ -64,6 +64,10 @@ type Options struct {
 	Message string
 	// Strategy, when set, resolves conflicting hunks toward one side.
 	Strategy Strategy
+	// Autostash temporarily saves the target checkout's local changes.
+	Autostash bool
+	// FastForwardOnly lands an already-rebased branch without rewriting its commits.
+	FastForwardOnly bool
 }
 
 // validated checks o and returns a copy built only from the checked values, so
@@ -76,7 +80,10 @@ func (o Options) validated() (Options, error) {
 	if err := gavelgit.ValidateBranchName(o.Branch); err != nil {
 		return Options{}, fmt.Errorf("%w: %w", ErrInvalidOptions, err)
 	}
-	out := Options{Repo: o.Repo, Branch: o.Branch, Mode: o.Mode, Message: o.Message}
+	out := Options{Repo: o.Repo, Branch: o.Branch, Mode: o.Mode, Message: o.Message, Autostash: o.Autostash, FastForwardOnly: o.FastForwardOnly}
+	if o.FastForwardOnly && (o.Mode != Incremental || o.Strategy != "") {
+		return Options{}, fmt.Errorf("%w: fast-forward only requires incremental mode without a conflict strategy", ErrInvalidOptions)
+	}
 	switch o.Strategy {
 	case "", StrategyOurs, StrategyTheirs:
 		out.Strategy = o.Strategy
@@ -138,12 +145,23 @@ func (e *ConflictError) Error() string {
 
 func (e *ConflictError) Unwrap() error { return e.Err }
 
+// AbortedError reports an attempted merge that rolled back and restored local edits.
+type AbortedError struct{ Err error }
+
+func (e *AbortedError) Error() string { return e.Err.Error() }
+func (e *AbortedError) Unwrap() error { return e.Err }
+
 // Merge lands opts.Branch onto the branch checked out in opts.Repo.
 func Merge(opts Options) (Result, error) {
 	opts, err := opts.validated()
 	if err != nil {
 		return Result{}, err
 	}
+	unlock, err := lockMerge(opts.Repo)
+	if err != nil {
+		return Result{}, err
+	}
+	defer unlock()
 	target, err := targetBranch(opts)
 	if err != nil {
 		return Result{}, err
@@ -152,8 +170,30 @@ func Merge(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	stash, err := saveTargetEdits(opts)
+	if err != nil {
+		return Result{}, err
+	}
+	result, mergeErr := merge(opts, target, before)
+	if mergeErr != nil && errors.Is(mergeErr, errRollback) && stash != "" {
+		return Result{}, errors.Join(mergeErr, fmt.Errorf("local changes are saved in stash %s", stash))
+	}
+	if err := restoreTargetEdits(opts.Repo, stash); err != nil {
+		if mergeErr != nil {
+			// Do not report a recoverable merge failure while edits still need recovery.
+			return Result{}, fmt.Errorf("%v\n%w", mergeErr, err)
+		}
+		return Result{}, fmt.Errorf("merged %s onto %s, but %w", opts.Branch, target, err)
+	}
+	return result, mergeErr
+}
+
+func merge(opts Options, target, before string) (Result, error) {
+	var err error
 	commits := len(opts.Commits)
-	if opts.Mode == Incremental {
+	if opts.FastForwardOnly {
+		err = fastForward(opts, target, before)
+	} else if opts.Mode == Incremental {
 		err = cherryPick(opts, target, before)
 	} else {
 		commits, err = mergeWhole(opts, target, before)
@@ -174,13 +214,15 @@ func targetBranch(opts Options) (string, error) {
 	if err := prcreate.RefuseInProgressOps(opts.Repo); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrCheckoutNotReady, err)
 	}
-	staged, err := captureGit(opts.Repo, "diff", "--cached", "--name-only")
-	if err != nil {
-		return "", err
-	}
-	if staged != "" {
-		return "", fmt.Errorf("%w: %s has staged changes (%s); commit or unstage them first",
-			ErrCheckoutNotReady, opts.Repo, strings.Join(strings.Fields(staged), ", "))
+	if !opts.Autostash {
+		staged, err := captureGit(opts.Repo, "diff", "--cached", "--name-only")
+		if err != nil {
+			return "", err
+		}
+		if staged != "" {
+			return "", fmt.Errorf("%w: %s has staged changes (%s); commit or unstage them first",
+				ErrCheckoutNotReady, opts.Repo, strings.Join(strings.Fields(staged), ", "))
+		}
 	}
 	branch, err := captureGit(opts.Repo, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil {

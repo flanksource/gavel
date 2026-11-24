@@ -88,6 +88,13 @@ func load(dir string) (*Operation, error) {
 	if err := validateTarget(op.Target); err != nil {
 		return nil, fmt.Errorf("invalid rebase recovery target: %w", err)
 	}
+	// Operations recorded before strategies existed were all rebases.
+	if op.Strategy == "" {
+		op.Strategy = StrategyRebase
+	}
+	if err := validateStrategy(op.Strategy); err != nil {
+		return nil, fmt.Errorf("invalid rebase recovery strategy: %w", err)
+	}
 	for _, sha := range []string{op.OriginalHead, op.TargetSHA, op.StashSHA} {
 		if sha == "" {
 			continue
