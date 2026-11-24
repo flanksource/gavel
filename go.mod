@@ -3,6 +3,7 @@ module github.com/flanksource/gavel
 go 1.27.4
 
 require (
+	cel.dev/cel-go v0.33.2
 	charm.land/bubbles/v2 v2.0.0
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
@@ -27,10 +28,10 @@ require (
 	github.com/flanksource/commons-db/cmd/query v0.1.73
 	github.com/flanksource/commons-db/recordstore v0.1.73
 	github.com/flanksource/commons-db/tracing v0.1.73
-	github.com/flanksource/deps v1.0.51
+	github.com/flanksource/deps v1.0.52-0.20261116192909-7d15f95777f7
 	github.com/flanksource/deps/start v0.0.0-20261103114210-92d640aba10a
 	github.com/flanksource/gavel/sdk v0.1.0
-	github.com/flanksource/gomplate/v3 v3.24.91
+	github.com/flanksource/gomplate/v4 v4.0.3
 	github.com/flanksource/incident-commander v0.0.2051
 	github.com/flanksource/repomap v0.4.1
 	github.com/flanksource/telltale/sdk v0.0.6
@@ -43,7 +44,6 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/gofrs/flock v0.13.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/google/cel-go v0.31.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
 	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
@@ -56,7 +56,7 @@ require (
 	github.com/lrstanley/bubblezone/v2 v2.0.0
 	github.com/mattbaird/jsonpatch v0.0.0-20240118010651-0ba75a80ca38
 	github.com/microsoft/go-mssqldb v1.10.0
-	github.com/onsi/ginkgo/v2 v2.33.1
+	github.com/onsi/ginkgo/v2 v2.34.0
 	github.com/onsi/gomega v1.44.0
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
@@ -95,7 +95,6 @@ require (
 
 require (
 	ariga.io/atlas v0.38.0 // indirect
-	cel.dev/cel-go v0.33.2 // indirect
 	cel.dev/expr v0.25.3 // indirect
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.20.0 // indirect
@@ -223,7 +222,6 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.13.1 // indirect
 	github.com/flanksource/clicky/valkey v1.21.94 // indirect
-	github.com/flanksource/gomplate/v4 v4.0.3 // indirect
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
@@ -268,6 +266,7 @@ require (
 	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/btree v1.1.3 // indirect
+	github.com/google/cel-go v0.31.0 // indirect
 	github.com/google/dotprompt/go v0.0.0-20260708220100-73beb993ac95 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect

@@ -13,8 +13,7 @@
   },
   "dependencies": {
     "@flanksource/clicky-ui": "^0.3.60",
-    "@flanksource/page-runtime": "0.0.0",
-    "@flanksource/react-grab": "0.1.50",
+    "@flanksource/page-runtime": "0.1.1",
     "@iconify-icons/ph": "1.2.5",
     "bippy": "0.6.1",
     "@mdxeditor/editor": "^4.0.4",
