@@ -650,6 +650,12 @@
         },
         "kubeconfig": {
           "$ref": "#/$defs/EnvVar"
+        },
+        "kubeconfigPath": {
+          "type": "string"
+        },
+        "kubecontext": {
+          "type": "string"
         }
       },
       "type": "object"

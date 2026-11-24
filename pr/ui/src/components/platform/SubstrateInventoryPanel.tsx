@@ -85,7 +85,7 @@ function Table({ title, headings, rows }: { title: string; headings: string[]; r
       <tbody>
         {rows.map(row => (
           <tr key={row.key} className="border-b border-border">
-            {row.cells.map((cell, i) => <td key={i} className={`px-2 py-1.5${i === 0 ? ' font-medium' : ''}`}>{cell}</td>)}
+            {headings.map((heading, i) => <td key={heading} className={`px-2 py-1.5${i === 0 ? ' font-medium' : ''}`}>{row.cells[i]}</td>)}
           </tr>
         ))}
       </tbody>

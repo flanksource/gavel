@@ -37,6 +37,9 @@ function used(spend: number, amount: number): string {
   return spend > amount ? `${percent}% · over budget` : `${percent}%`;
 }
 
+const headings = ['Rule', 'Window', 'Group', 'Spent', 'Budget', 'Used'];
+
+// Row is a table row: a cell under each of the headings, in their order.
 interface Row {
   key: string;
   cells: string[];
@@ -76,7 +79,7 @@ export function BudgetsPanel() {
         <table aria-label="Budgets" className="w-full border-collapse text-left text-xs">
           <thead className="text-muted-foreground">
             <tr>
-              {['Rule', 'Window', 'Group', 'Spent', 'Budget', 'Used'].map(heading => (
+              {headings.map(heading => (
                 <th key={heading} className="border-b border-border px-2 py-1.5 font-medium">{heading}</th>
               ))}
             </tr>
@@ -84,7 +87,7 @@ export function BudgetsPanel() {
           <tbody>
             {budgetRows(data).map(row => (
               <tr key={row.key} className="border-b border-border">
-                {row.cells.map((cell, i) => <td key={i} className={`px-2 py-1.5${i === 0 ? ' font-medium' : ''}`}>{cell}</td>)}
+                {headings.map((heading, i) => <td key={heading} className={`px-2 py-1.5${i === 0 ? ' font-medium' : ''}`}>{row.cells[i]}</td>)}
               </tr>
             ))}
           </tbody>

@@ -127,7 +127,7 @@ function ResourceTable({ label, error, empty, headings, rows }: {
       <tbody>
         {rows.map(row => (
           <tr key={row.id} className="border-b border-border">
-            {row.cells.map((cell, i) => <td key={i} className="px-2 py-1.5"><CellContent cell={cell} /></td>)}
+            {headings.map((heading, i) => <td key={heading} className="px-2 py-1.5"><CellContent cell={row.cells[i]} /></td>)}
           </tr>
         ))}
       </tbody>
