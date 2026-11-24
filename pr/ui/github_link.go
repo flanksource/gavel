@@ -34,12 +34,49 @@ type GitHubLink struct {
 // through GitHub's install page can take longer.
 func (l *GitHubLink) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/github/app", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, gitHubApp{Configured: true})
+	})
 	mux.HandleFunc("POST /api/github/install", l.install)
 	mux.HandleFunc("POST /api/github/setup", l.setup)
 	mux.HandleFunc("GET /api/github/installations", l.installations)
 	mux.HandleFunc("POST /api/github/installations/{id}/link", l.linkInstallation)
 	mux.HandleFunc("POST /api/github/sync", l.sync)
 	return mux
+}
+
+// gitHubApp says whether this gavel has a GitHub App, so the dashboard can say so before the
+// user tries to connect GitHub.
+type gitHubApp struct {
+	Configured bool `json:"configured"`
+}
+
+// The GitHub errors the dashboard recognizes by their code, and what each says.
+const (
+	gitHubNotConnected         = "github_not_connected"
+	gitHubAppNotConfigured     = "github_app_not_configured"
+	gitHubNotConnectedText     = "Your account isn't connected to GitHub. Connect GitHub in your account settings, then try again."
+	gitHubAppNotConfiguredText = "This gavel has no GitHub App configured; ask its operator to set one up."
+)
+
+// GitHubWithoutApp serves the GitHub routes of a gavel without a GitHub App: it says it has
+// none, and refuses every other route saying why.
+func GitHubWithoutApp() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/github/app", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, gitHubApp{Configured: false})
+	})
+	mux.HandleFunc("/api/github/", func(w http.ResponseWriter, _ *http.Request) {
+		writeCodedJSONError(w, http.StatusServiceUnavailable, gitHubAppNotConfigured, gitHubAppNotConfiguredText)
+	})
+	return mux
+}
+
+// writeCodedJSONError answers with message and a code the dashboard recognizes.
+func writeCodedJSONError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message, "code": code}) //nolint:errcheck
 }
 
 func (l *GitHubLink) install(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +196,10 @@ func (l *GitHubLink) reachable(w http.ResponseWriter, r *http.Request) ([]github
 		return nil, false
 	}
 	token, err := l.Clerk.GitHubToken(ctx, user.ClerkUserID)
+	if errors.Is(err, api.ErrNoGitHubConnection) {
+		writeCodedJSONError(w, http.StatusForbidden, gitHubNotConnected, gitHubNotConnectedText)
+		return nil, false
+	}
 	if err != nil {
 		writeJSONError(w, http.StatusForbidden, fmt.Errorf("read your GitHub connection from Clerk: %w", err))
 		return nil, false

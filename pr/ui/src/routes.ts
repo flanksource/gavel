@@ -8,10 +8,11 @@ export type ExportFormat = 'json' | 'md';
 
 // Tab is the top-level view, encoded as the first path segment. PRs, projects,
 // todos, sessions, tasks, prompts and sandbox runs carry their selection in the path;
-// filters only apply to PRs.
-export type Tab = 'prs' | 'projects' | 'processes' | 'todos' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs';
+// filters only apply to PRs. The platform tab is the hosted platform dashboard; its selection is
+// the organization it shows alone.
+export type Tab = 'prs' | 'projects' | 'processes' | 'todos' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs' | 'platform';
 
-const SPA_TABS: readonly Tab[] = ['projects', 'processes', 'todos', 'sessions', 'activity', 'tasks', 'prompts', 'runs'];
+const SPA_TABS: readonly Tab[] = ['projects', 'processes', 'todos', 'sessions', 'activity', 'tasks', 'prompts', 'runs', 'platform'];
 
 export interface RouteState {
   tab: Tab;
@@ -90,7 +91,7 @@ export function parseRoute(location: Location): RouteState {
   if (tab === 'projects' && segments.length > 1) {
     selectedPath = segments[1];
     if (segments.length === 4 && segments[2] === 'runs') projectRunId = segments[3];
-  } else if ((tab === 'prs' || tab === 'todos' || tab === 'sessions' || tab === 'tasks' || tab === 'prompts' || tab === 'runs') && segments.length > 1) {
+  } else if ((tab === 'prs' || tab === 'todos' || tab === 'sessions' || tab === 'tasks' || tab === 'prompts' || tab === 'runs' || tab === 'platform') && segments.length > 1) {
     selectedPath = segments.slice(1).join('/');
   }
 
@@ -121,7 +122,7 @@ export function buildRoute(state: RouteState): string {
   if (state.tab === 'projects' && state.selectedPath) {
     segments.push(encodeURIComponent(state.selectedPath));
     if (state.projectRunId) segments.push('runs', encodeURIComponent(state.projectRunId));
-  } else if ((state.tab === 'prs' || state.tab === 'todos' || state.tab === 'sessions' || state.tab === 'tasks' || state.tab === 'prompts' || state.tab === 'runs') && state.selectedPath) {
+  } else if ((state.tab === 'prs' || state.tab === 'todos' || state.tab === 'sessions' || state.tab === 'tasks' || state.tab === 'prompts' || state.tab === 'runs' || state.tab === 'platform') && state.selectedPath) {
     segments.push(...state.selectedPath.split('/').map(encodeURIComponent));
   }
 

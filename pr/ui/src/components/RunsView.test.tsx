@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryTestWrapper } from './todos/queryTestWrapper';
 import { RunsView, type SandboxRun } from './RunsView';
@@ -47,23 +47,32 @@ function renderRuns(props: Partial<React.ComponentProps<typeof RunsView>> = {}) 
 }
 
 describe('RunsView', () => {
-  it('lists the organization\'s runs with what ran, where, for whom and how it ended', async () => {
+  it('lists the organization\'s runs with what ran, where, how it ended and how long it took', async () => {
     renderRuns();
 
-    const rows = await screen.findAllByRole('row');
-    const [agent, push] = rows.slice(1);
+    const [agent, push] = await screen.findAllByRole('option');
     const pushRow = within(push);
     expect(pushRow.getByText('Push check')).toBeTruthy();
-    expect(pushRow.getByText('failed (exit 3)')).toBeTruthy();
     expect(pushRow.getByText('app')).toBeTruthy();
-    expect(pushRow.getByText('main')).toBeTruthy();
-    expect(pushRow.getByText('abc1234')).toBeTruthy();
-    expect(pushRow.getByText('Ada Lovelace')).toBeTruthy();
-    expect(pushRow.getByText('(1m 0s)')).toBeTruthy();
-    const agentRow = within(agent);
-    expect(agentRow.getByText('Agent run')).toBeTruthy();
-    expect(agentRow.getByText('running')).toBeTruthy();
-    expect(agentRow.getByText('Fix the build')).toBeTruthy();
+    expect(pushRow.getByText('main@abc1234')).toBeTruthy();
+    expect(push.textContent).toContain('failed (exit 3)');
+    expect(pushRow.getByText('1m 0s')).toBeTruthy();
+    expect(within(agent).getByText('Agent run')).toBeTruthy();
+    expect(agent.textContent).toContain('running');
+  });
+
+  it('says why a run waits or why it never ran', async () => {
+    runs = [
+      { ...agentRun, id: 'run-queued', status: 'queued', statusMessage: 'queued: this organization\'s runs hold 8 of its 8 concurrent cores, and no run is ahead of this one' },
+      { ...pushCheck, id: 'run-refused', status: 'failed', exitCode: undefined, statusMessage: 'budget used up: this organization has used $50.00 of its $50.00 model cost budget' },
+    ];
+    renderRuns({ selectedId: 'run-queued' });
+
+    expect(await screen.findByText('queued: this organization\'s runs hold 8 of its 8 concurrent cores, and no run is ahead of this one')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('option')[1]);
+    cleanup();
+    renderRuns({ selectedId: 'run-refused' });
+    expect(await screen.findByText('budget used up: this organization has used $50.00 of its $50.00 model cost budget')).toBeTruthy();
   });
 
   it('selects a run from its row', async () => {
@@ -79,13 +88,13 @@ describe('RunsView', () => {
     renderRuns({ selectedId: 'run-push' });
 
     const log = await screen.findByRole('log');
-    expect(log.textContent).toBe('checking\nexit 3\n');
+    expect(log.textContent).toContain('checking\nexit 3');
   });
 
   it('says why a selected run has no log', async () => {
     renderRuns({ selectedId: 'run-agent' });
 
-    expect(await screen.findByText('sandbox run run-agent has no stored log')).toBeTruthy();
+    expect(await screen.findByText(/sandbox run run-agent has no stored log/)).toBeTruthy();
   });
 
   it('says when the organization has no runs yet', async () => {

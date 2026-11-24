@@ -3,12 +3,15 @@
 package ui
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"time"
 
 	"github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/api"
 	"github.com/flanksource/gavel/api/clerktest"
 	"github.com/flanksource/gavel/internal/database"
@@ -199,7 +202,8 @@ var _ = Describe("hosted auth middleware", func() {
 		<-f.scopes
 	})
 
-	It("answers 503 when Clerk can't be asked", func() {
+	It("answers 503 when Clerk can't be asked, and warns", func() {
+		logged := captureLog()
 		token := f.clerk.SessionToken(authPublicURL, time.Now().Add(time.Hour))
 		f.clerk.Close()
 		req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
@@ -209,5 +213,26 @@ var _ = Describe("hosted auth middleware", func() {
 		code, message := authError(rec)
 		Expect(code).To(Equal("auth_unavailable"))
 		Expect(message).NotTo(BeEmpty())
+		Expect(logged.String()).To(ContainSubstring("authenticate GET /api/config"))
+	})
+
+	It("doesn't warn about a request its caller dropped", func() {
+		logged := captureLog()
+		token := f.clerk.SessionToken(authPublicURL, time.Now().Add(time.Hour))
+		dropped, drop := context.WithCancel(context.Background())
+		drop()
+		req := httptest.NewRequest(http.MethodGet, "/api/config", nil).WithContext(dropped)
+		req.Header.Set("Authorization", "Bearer "+token)
+		f.serve(req)
+		Expect(logged.String()).NotTo(ContainSubstring("authenticate"), "a browser leaving isn't a fault of gavel's or Clerk's")
 	})
 })
+
+// captureLog collects what gavel logs until the spec ends.
+func captureLog() *bytes.Buffer {
+	var logged bytes.Buffer
+	previous := logger.GetOutput()
+	logger.SetOutput(&logged)
+	DeferCleanup(func() { logger.SetOutput(previous) })
+	return &logged
+}

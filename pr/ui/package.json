@@ -26,6 +26,7 @@
     "monaco-editor": "catalog:",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "recharts": "catalog:",
     "streamdown": "catalog:",
     "strip-ansi": "catalog:"
   },

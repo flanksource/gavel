@@ -162,6 +162,22 @@ describe('sandbox run routes', () => {
   });
 });
 
+describe('platform dashboard route', () => {
+  it('round-trips the platform tab', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/platform') as unknown as Location);
+
+    expect(parsed).toEqual({ ...emptyRouteState(), tab: 'platform' });
+    expect(buildRoute(parsed)).toBe('/platform');
+  });
+
+  it('round-trips one organization of the platform dashboard', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/platform/0199f0aa-0000-7000-8000-00000000c0de') as unknown as Location);
+
+    expect(parsed).toEqual({ ...emptyRouteState(), tab: 'platform', selectedPath: '0199f0aa-0000-7000-8000-00000000c0de' });
+    expect(buildRoute(parsed)).toBe('/platform/0199f0aa-0000-7000-8000-00000000c0de');
+  });
+});
+
 describe('todo detail view routes', () => {
   const parse = (url: string) => parseRoute(new URL(`http://localhost:9092${url}`) as unknown as Location);
 

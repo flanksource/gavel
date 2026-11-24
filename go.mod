@@ -18,8 +18,8 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
-	github.com/flanksource/captain v0.0.83
-	github.com/flanksource/clicky v1.21.95
+	github.com/flanksource/captain v0.0.89
+	github.com/flanksource/clicky v1.21.98
 	github.com/flanksource/clicky/aichat v1.21.95
 	github.com/flanksource/commons v1.64.2
 	github.com/flanksource/commons-db v0.1.73
@@ -30,6 +30,7 @@ require (
 	github.com/flanksource/deps/start v0.0.0-20261103114210-92d640aba10a
 	github.com/flanksource/gavel/sdk v0.0.0-20261112084248-03d7d7223e26
 	github.com/flanksource/gomplate/v3 v3.24.91
+	github.com/flanksource/incident-commander v0.0.2051
 	github.com/flanksource/repomap v0.4.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ghodss/yaml v1.0.0
@@ -63,7 +64,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	github.com/timberio/go-datemath v0.1.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.16
-	github.com/xuri/excelize/v2 v2.11.1-0.20261029001137-c5fd73bde8f6
+	github.com/xuri/excelize/v2 v2.11.1
 	github.com/yuin/goldmark v1.7.17
 	github.com/zclconf/go-cty v1.18.1
 	gocloud.dev v0.46.0

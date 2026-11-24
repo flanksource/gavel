@@ -32,13 +32,18 @@ type fakeGitHubApp struct {
 	tokenExpires time.Time
 	repos        int
 	lastClaims   atomic.Value
+	// Installation 43's token is minted only once heldMint is closed; heldMintStarted is
+	// closed when that mint reaches GitHub.
+	heldMint        chan struct{}
+	heldMintStarted chan struct{}
 }
 
 func newFakeGitHubApp(t *testing.T, repos int) *fakeGitHubApp {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
-	f := &fakeGitHubApp{key: key, tokenExpires: time.Now().Add(time.Hour), repos: repos}
+	f := &fakeGitHubApp{key: key, tokenExpires: time.Now().Add(time.Hour), repos: repos,
+		heldMint: make(chan struct{}), heldMintStarted: make(chan struct{})}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Close)
 	t.Setenv("GITHUB_API_URL", f.URL)
@@ -78,12 +83,38 @@ func (f *fakeGitHubApp) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		n := f.tokenCalls.Add(1)
 		json.NewEncoder(w).Encode(map[string]any{"token": fmt.Sprintf("ghs_%d", n), "expires_at": f.tokenExpires.UTC().Format(time.RFC3339)}) //nolint:errcheck
+	case r.Method == http.MethodPost && r.URL.Path == "/app/installations/43/access_tokens":
+		close(f.heldMintStarted)
+		<-f.heldMint
+		json.NewEncoder(w).Encode(map[string]any{"token": "ghs_held", "expires_at": f.tokenExpires.UTC().Format(time.RFC3339)}) //nolint:errcheck
 	case r.Method == http.MethodGet && r.URL.Path == "/app/installations/42":
 		if !f.appJWT(r) {
 			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"id": 42, "account": map[string]any{"login": "acme", "id": 7, "type": "Organization"}}) //nolint:errcheck
+	case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+		if !f.appJWT(r) || r.URL.Query().Get("per_page") != "100" {
+			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+			return
+		}
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		installs := []map[string]any{}
+		for i := (page - 1) * 100; i < 130 && i < page*100; i++ {
+			install := map[string]any{"id": 6000 + i, "account": map[string]any{"login": fmt.Sprintf("org%d", i), "id": i, "type": "Organization"},
+				"created_at": "2026-10-01T09:00:00Z", "suspended_at": nil}
+			if i == 1 {
+				install["suspended_at"] = "2026-11-01T10:00:00Z"
+			}
+			installs = append(installs, install)
+		}
+		json.NewEncoder(w).Encode(installs) //nolint:errcheck
+	case r.Method == http.MethodGet && r.URL.Path == "/rate_limit":
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ghs_") {
+			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"resources": map[string]any{"core": map[string]any{"limit": 5000, "remaining": 4990, "used": 10, "reset": 1762780000}}}) //nolint:errcheck
 	case r.Method == http.MethodGet && r.URL.Path == "/user/installations":
 		if r.Header.Get("Authorization") != "Bearer ghu_ada" {
 			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
@@ -153,6 +184,38 @@ func TestAppInstallationToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "HTTP 404")
 }
 
+func TestAppInstallationTokenWhileAnotherMints(t *testing.T) {
+	fake := newFakeGitHubApp(t, 0)
+	app, err := LoadApp(123, "gavel", writeAppKey(t, fake.key))
+	require.NoError(t, err)
+	ctx := context.Background()
+	_, err = app.InstallationToken(ctx, 42)
+	require.NoError(t, err)
+
+	held := make(chan error, 1)
+	go func() {
+		_, err := app.InstallationToken(ctx, 43)
+		held <- err
+	}()
+	<-fake.heldMintStarted
+	t.Cleanup(func() {
+		close(fake.heldMint)
+		require.NoError(t, <-held)
+	})
+
+	cached := make(chan string, 1)
+	go func() {
+		token, _ := app.InstallationToken(ctx, 42)
+		cached <- token
+	}()
+	select {
+	case token := <-cached:
+		assert.Equal(t, "ghs_1", token)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a cached token waited for another installation's mint to finish")
+	}
+}
+
 func TestAppInstallationAndRepos(t *testing.T) {
 	fake := newFakeGitHubApp(t, 250)
 	app, err := LoadApp(123, "gavel", writeAppKey(t, fake.key))
@@ -168,6 +231,35 @@ func TestAppInstallationAndRepos(t *testing.T) {
 	require.Len(t, repos, 250, "every page is read")
 	assert.Equal(t, InstallationRepo{ID: 1000, FullName: "acme/repo-0", Private: true, DefaultBranch: "main"}, repos[0])
 	assert.Equal(t, "acme/repo-249", repos[249].FullName)
+}
+
+func TestAppInstallations(t *testing.T) {
+	fake := newFakeGitHubApp(t, 0)
+	app, err := LoadApp(123, "gavel", writeAppKey(t, fake.key))
+	require.NoError(t, err)
+
+	installations, err := app.Installations(context.Background())
+	require.NoError(t, err)
+	require.Len(t, installations, 130, "every page")
+	created := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	assert.Equal(t, AppInstallation{Installation: Installation{ID: 6000, Account: InstallationAccount{Login: "org0", ID: 0, Type: "Organization"}}, CreatedAt: created}, installations[0])
+	require.NotNil(t, installations[1].SuspendedAt, "a suspended installation")
+	assert.Equal(t, time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC), *installations[1].SuspendedAt)
+	assert.Equal(t, int64(6129), installations[129].ID)
+}
+
+func TestAppInstallationRateLimit(t *testing.T) {
+	fake := newFakeGitHubApp(t, 0)
+	app, err := LoadApp(123, "gavel", writeAppKey(t, fake.key))
+	require.NoError(t, err)
+
+	limit, err := app.InstallationRateLimit(context.Background(), 42)
+	require.NoError(t, err)
+	assert.Equal(t, RateLimit{Limit: 5000, Remaining: 4990, Used: 10, Reset: 1762780000, Resource: "core"}, limit)
+
+	_, err = app.InstallationRateLimit(context.Background(), 41)
+	require.Error(t, err, "no token for an unknown installation")
+	assert.Contains(t, err.Error(), "installation 41")
 }
 
 func TestLoadAppRejectsBadKeys(t *testing.T) {

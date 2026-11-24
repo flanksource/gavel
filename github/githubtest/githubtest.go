@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,8 +75,11 @@ func (s *Server) Searches() []Search {
 }
 
 type installation struct {
-	account github.InstallationAccount
-	repos   []github.InstallationRepo
+	account          github.InstallationAccount
+	repos            []github.InstallationRepo
+	created          time.Time
+	suspended        *time.Time
+	rateLimitFailing bool
 }
 
 // New starts the server for the test and points the GitHub client at it.
@@ -110,7 +114,25 @@ func (s *Server) App(t TB) *github.App {
 func (s *Server) Install(id int64, account github.InstallationAccount, repos ...github.InstallationRepo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.installations[id] = installation{account: account, repos: repos}
+	s.installations[id] = installation{account: account, repos: repos, created: time.Now().UTC().Truncate(time.Second)}
+}
+
+// Suspend marks installation id suspended at at, as GitHub lists it.
+func (s *Server) Suspend(id int64, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	install := s.installations[id]
+	install.suspended = &at
+	s.installations[id] = install
+}
+
+// FailRateLimit makes GET /rate_limit answer 500 for installation id's token.
+func (s *Server) FailRateLimit(id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	install := s.installations[id]
+	install.rateLimitFailing = true
+	s.installations[id] = install
 }
 
 // GrantUser lets a user token see installations, as GET /user/installations does.
@@ -142,6 +164,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, github.Installation{ID: id, Account: installation.account})
+	case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+		s.listInstallations(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/rate_limit":
+		id, _ := strconv.ParseInt(strings.TrimPrefix(bearer, "ghs_"), 10, 64)
+		install, ok := s.installations[id]
+		if !ok || install.rateLimitFailing {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]string{"message": "Server Error"})
+			return
+		}
+		writeJSON(w, map[string]any{"resources": map[string]any{"core": map[string]any{"limit": 5000, "remaining": 4999, "used": 1, "reset": time.Now().Add(time.Hour).Unix()}}})
 	case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
 		id, _ := strconv.ParseInt(strings.TrimPrefix(bearer, "ghs_"), 10, 64)
 		repos := s.installations[id].repos
@@ -197,6 +230,26 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, token string) {
 		})
 	}
 	writeJSON(w, map[string]any{"data": map[string]any{"search": map[string]any{"issueCount": len(nodes), "nodes": nodes}}})
+}
+
+// listInstallations pages the App's installations by ID, per_page at a time, like GitHub.
+func (s *Server) listInstallations(w http.ResponseWriter, r *http.Request) {
+	ids := make([]int64, 0, len(s.installations))
+	for id := range s.installations {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if perPage < 1 || page < 1 {
+		perPage, page = 30, 1
+	}
+	installs := []github.AppInstallation{}
+	for i := (page - 1) * perPage; i < len(ids) && i < page*perPage; i++ {
+		install := s.installations[ids[i]]
+		installs = append(installs, github.AppInstallation{Installation: github.Installation{ID: ids[i], Account: install.account}, CreatedAt: install.created, SuspendedAt: install.suspended})
+	}
+	writeJSON(w, installs)
 }
 
 func emptyIfNil(repos []github.InstallationRepo) []github.InstallationRepo {

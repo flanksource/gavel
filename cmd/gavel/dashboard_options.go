@@ -22,42 +22,50 @@ const (
 // only (withEnv), so they never appear in flags, shell history or process lists.
 type DashboardOptions struct {
 	PRListOptions
-	Auth                 string   `flag:"auth" help:"Authentication: none (local, single user) or clerk (hosted, one dashboard per Clerk organization)" default:"none"`
-	PublicURL            string   `flag:"public-url" help:"Origin users reach the dashboard at, e.g. https://gavel.example.com (required with --auth clerk)"`
-	ClerkIssuer          string   `flag:"clerk-issuer" help:"Clerk Frontend API URL (or GAVEL_CLERK_ISSUER)"`
-	ClerkPublishableKey  string   `flag:"clerk-publishable-key" help:"Clerk publishable key for the browser sign-in (or GAVEL_CLERK_PUBLISHABLE_KEY)"`
-	ClerkClientID        string   `flag:"clerk-client-id" help:"Clerk public OAuth client ID that gavel login uses (or GAVEL_CLERK_CLIENT_ID)"`
-	SSHAddr              string   `flag:"ssh-addr" help:"Address for the hosted git push server, e.g. :2222 (--auth clerk only; gavel ssh serve is the local one)"`
-	SSHHostKey           string   `flag:"ssh-host-key" help:"Push server host key file; created if missing (default <data-dir>/ssh_host_key)"`
-	DataDir              string   `flag:"data-dir" help:"Directory for hosted repositories" default:"/var/lib/gavel"`
-	GitHubAppID          string   `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
-	GitHubAppSlug        string   `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
-	GitHubAppPrivateKey  string   `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
-	Sandbox              string   `flag:"sandbox" help:"Run hosted push checks and agent runs in a sandbox: docker, podman, kubernetes or substrate (--auth clerk); empty runs none"`
-	SandboxImage         string   `flag:"sandbox-image" help:"Runner image sandbox jobs start from, e.g. ghcr.io/flanksource/gavel-runner:<version> (docker, podman, kubernetes)"`
-	SandboxNetwork       string   `flag:"sandbox-network" help:"Bridge network sandbox containers join (docker, podman); see docs/sandbox.md" default:"gavel-sandbox"`
-	SandboxServeAddr     string   `flag:"sandbox-serve-addr" help:"IP:port sandbox containers reach gavel serve at, the one private address the firewall allows (docker, podman)"`
-	SandboxNamespace     string   `flag:"sandbox-namespace" help:"Namespace sandbox Jobs run in (kubernetes)" default:"gavel-sandbox"`
-	ServePodSelector     string   `flag:"serve-pod-selector" help:"Labels of gavel serve's pods, which sandbox Jobs may reach (kubernetes)" default:"app.kubernetes.io/name=gavel"`
-	SandboxSecretEnv     []string `flag:"sandbox-secret-env" help:"Environment variables copied from gavel serve into every sandbox job's secrets, such as ANTHROPIC_API_KEY for agent runs; repeat for each"`
-	SandboxExtraDeny     []string `flag:"sandbox-extra-deny" help:"More CIDRs sandbox Jobs may not reach, such as cluster pod and service ranges outside RFC 1918 (kubernetes)"`
-	SubstrateEnvAPI      string   `flag:"substrate-env-api" help:"ate-env-api gRPC address sandbox environments are created through (substrate)" default:"ate-env-api.ate-env.svc.cluster.local:7777"`
-	SubstrateControl     string   `flag:"substrate-control" help:"ate-api-server gRPC address egress policies are set through (substrate)" default:"api.ate-system.svc.cluster.local:443"`
-	SubstrateTokenFile   string   `flag:"substrate-token-file" help:"Bearer token file for ate-api-server, such as a projected ServiceAccount token with the api.ate-system.svc audience (substrate)"`
-	SubstrateCAFile      string   `flag:"substrate-ca-file" help:"CA substrate's certificates chain to; without it or a client certificate, ate-api-server's isn't verified (substrate)"`
-	SubstrateClientCert  string   `flag:"substrate-client-cert" help:"Client certificate the ingress in front of a substrate in another cluster requires; with it both APIs are reached over verified TLS (substrate)"`
-	SubstrateClientKey   string   `flag:"substrate-client-key" help:"Key of --substrate-client-cert (substrate)"`
-	SubstrateAtespace    string   `flag:"substrate-atespace" help:"Atespace sandbox environments are created in (substrate)" default:"ate-env"`
-	SubstrateTemplate    string   `flag:"substrate-template" help:"Image template sandbox environments are created from, registered with ate-env manifest template --rootfs-image (substrate)"`
-	SubstrateEgress      []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides gavel serve, the Go, npm and Python registries and GitHub; repeat for each (substrate)"`
-	SubstrateGavelName   string   `flag:"substrate-gavel-name" help:"The name substrate's credential provider knows this gavel by, in each run's model key URI, e.g. beta (substrate)"`
-	SubstrateTrustBundle string   `flag:"substrate-trust-bundle" help:"Path in the environment of the egress gateway's CA, which jobs trust for hosts with an injected credential (substrate)"`
-	PropertiesFile       string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
+	Auth                        string   `flag:"auth" help:"Authentication: none (local, single user) or clerk (hosted, one dashboard per Clerk organization)" default:"none"`
+	PublicURL                   string   `flag:"public-url" help:"Origin users reach the dashboard at, e.g. https://gavel.example.com (required with --auth clerk)"`
+	ClerkIssuer                 string   `flag:"clerk-issuer" help:"Clerk Frontend API URL (or GAVEL_CLERK_ISSUER)"`
+	ClerkPublishableKey         string   `flag:"clerk-publishable-key" help:"Clerk publishable key for the browser sign-in (or GAVEL_CLERK_PUBLISHABLE_KEY)"`
+	ClerkClientID               string   `flag:"clerk-client-id" help:"Clerk public OAuth client ID that gavel login uses (or GAVEL_CLERK_CLIENT_ID)"`
+	SSHAddr                     string   `flag:"ssh-addr" help:"Address for the hosted git push server, e.g. :2222 (--auth clerk only; gavel ssh serve is the local one)"`
+	SSHHostKey                  string   `flag:"ssh-host-key" help:"Push server host key file; created if missing (default <data-dir>/ssh_host_key)"`
+	DataDir                     string   `flag:"data-dir" help:"Directory for hosted repositories" default:"/var/lib/gavel"`
+	GitHubAppID                 string   `flag:"github-app-id" help:"ID of the GitHub App organizations install to show their pull requests (--auth clerk)"`
+	GitHubAppSlug               string   `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
+	GitHubAppPrivateKey         string   `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
+	Sandbox                     string   `flag:"sandbox" help:"Run hosted push checks and agent runs in a sandbox: docker, podman, kubernetes or substrate (--auth clerk); empty runs none"`
+	SandboxImage                string   `flag:"sandbox-image" help:"Runner image sandbox jobs start from, e.g. ghcr.io/flanksource/gavel-runner:<version> (docker, podman, kubernetes)"`
+	SandboxNetwork              string   `flag:"sandbox-network" help:"Bridge network sandbox containers join (docker, podman); see docs/sandbox.md" default:"gavel-sandbox"`
+	SandboxServeAddr            string   `flag:"sandbox-serve-addr" help:"IP:port sandbox containers reach gavel serve at, the one private address the firewall allows (docker, podman)"`
+	SandboxNamespace            string   `flag:"sandbox-namespace" help:"Namespace sandbox Jobs run in (kubernetes)" default:"gavel-sandbox"`
+	ServePodSelector            string   `flag:"serve-pod-selector" help:"Labels of gavel serve's pods, which sandbox Jobs may reach (kubernetes)" default:"app.kubernetes.io/name=gavel"`
+	SandboxSecretEnv            []string `flag:"sandbox-secret-env" help:"Environment variables copied from gavel serve into every sandbox job's secrets, such as ANTHROPIC_API_KEY for agent runs; repeat for each"`
+	SandboxExtraDeny            []string `flag:"sandbox-extra-deny" help:"More CIDRs sandbox Jobs may not reach, such as cluster pod and service ranges outside RFC 1918 (kubernetes)"`
+	SubstrateEnvAPI             string   `flag:"substrate-env-api" help:"ate-env-api gRPC address sandbox environments are created through (substrate)" default:"ate-env-api.ate-env.svc.cluster.local:7777"`
+	SubstrateControl            string   `flag:"substrate-control" help:"ate-api-server gRPC address egress policies are set through (substrate)" default:"api.ate-system.svc.cluster.local:443"`
+	SubstrateTokenFile          string   `flag:"substrate-token-file" help:"Bearer token file for ate-api-server, such as a projected ServiceAccount token with the api.ate-system.svc audience (substrate)"`
+	SubstrateCAFile             string   `flag:"substrate-ca-file" help:"CA substrate's certificates chain to; without it or a client certificate, ate-api-server's isn't verified (substrate)"`
+	SubstrateClientCert         string   `flag:"substrate-client-cert" help:"Client certificate the ingress in front of a substrate in another cluster requires; with it both APIs are reached over verified TLS (substrate)"`
+	SubstrateClientKey          string   `flag:"substrate-client-key" help:"Key of --substrate-client-cert (substrate)"`
+	SubstrateAtespace           string   `flag:"substrate-atespace" help:"Atespace sandbox environments are created in (substrate)" default:"ate-env"`
+	SubstrateTemplate           string   `flag:"substrate-template" help:"Image template sandbox environments are created from, registered with ate-env manifest template --rootfs-image (substrate)"`
+	SubstrateCPU                string   `flag:"substrate-cpu" help:"CPU of an organization's sandbox environments unless a platform admin set its own, such as 2 or 500m; empty is --substrate-template's (substrate)"`
+	SubstrateMemory             string   `flag:"substrate-memory" help:"Memory of an organization's sandbox environments unless a platform admin set its own, such as 4Gi; empty is --substrate-template's (substrate)"`
+	SubstrateEgress             []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides gavel serve, the Go, npm and Python registries and GitHub; repeat for each (substrate)"`
+	SubstrateGavelName          string   `flag:"substrate-gavel-name" help:"The name substrate's credential provider knows this gavel by, in each run's model key URI, e.g. beta (substrate)"`
+	SubstrateTrustBundle        string   `flag:"substrate-trust-bundle" help:"Path in the environment of the egress gateway's CA, which jobs trust for hosts with an injected credential (substrate)"`
+	MissionControlURL           string   `flag:"mission-control-url" help:"Mission Control backend the platform dashboard reads gavel's infrastructure from, e.g. https://mc.example.com/api (or GAVEL_MISSION_CONTROL_URL; its token is GAVEL_MISSION_CONTROL_TOKEN; --auth clerk)"`
+	MissionControlInfra         string   `flag:"mission-control-infra" help:"Mission Control resource search selecting gavel's infrastructure for the platform dashboard, e.g. namespace=gavel"`
+	MissionControlSubstrateView string   `flag:"mission-control-substrate-view" help:"Mission Control View, as namespace/name, whose panels graph substrate's metrics on the platform dashboard"`
+	MissionControlOrgView       string   `flag:"mission-control-org-view" help:"Mission Control View, as namespace/name, whose panels measure one organization's CPU and memory from its variable org, the organization's ID, for platform admins and the organization's admins"`
+	PropertiesFile              string   `flag:"properties-file" help:"Properties file with retention.* windows such as retention.job_logs=60d (default /etc/gavel/gavel.properties when it exists)"`
 
 	clerkSecretKey string
 	secretKey      string
 	// credentialProviderToken authenticates the credential provider in substrate's cluster.
 	credentialProviderToken string
+	// missionControlToken is the Mission Control access token the platform dashboard reads with.
+	missionControlToken string
 }
 
 // withEnv fills settings left empty by flags from getenv, and reads the secrets.
@@ -70,6 +78,7 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 		{&o.ClerkPublishableKey, "GAVEL_CLERK_PUBLISHABLE_KEY"},
 		{&o.ClerkClientID, "GAVEL_CLERK_CLIENT_ID"},
 		{&o.GitHubAppPrivateKey, "GAVEL_GITHUB_APP_PRIVATE_KEY_FILE"},
+		{&o.MissionControlURL, "GAVEL_MISSION_CONTROL_URL"},
 	} {
 		if *setting.value == "" {
 			*setting.value = getenv(setting.env)
@@ -78,6 +87,7 @@ func (o DashboardOptions) withEnv(getenv func(string) string) DashboardOptions {
 	o.clerkSecretKey = getenv("CLERK_SECRET_KEY")
 	o.secretKey = getenv("GAVEL_SECRET_KEY")
 	o.credentialProviderToken = getenv("GAVEL_CREDENTIAL_PROVIDER_TOKEN")
+	o.missionControlToken = getenv("GAVEL_MISSION_CONTROL_TOKEN")
 	return o
 }
 
@@ -110,6 +120,9 @@ func (o DashboardOptions) Validate() error {
 		}
 		if githubApp {
 			add("--github-app-* flags serve hosted orgs and need --auth clerk")
+		}
+		if o.MissionControlURL != "" || o.MissionControlInfra != "" || o.MissionControlSubstrateView != "" || o.MissionControlOrgView != "" {
+			add("--mission-control-* flags serve the platform dashboard and need --auth clerk")
 		}
 	case authClerk:
 		if o.PublicURL == "" {
@@ -148,6 +161,7 @@ func (o DashboardOptions) Validate() error {
 		if o.ClerkClientID == "" {
 			add("--auth clerk requires --clerk-client-id or GAVEL_CLERK_CLIENT_ID")
 		}
+		o.validateMissionControl(add)
 		switch o.Sandbox {
 		case "":
 		case "substrate":
@@ -166,6 +180,9 @@ func (o DashboardOptions) Validate() error {
 			}
 		default:
 			add("--sandbox must be docker, podman, kubernetes or substrate, got %q", o.Sandbox)
+		}
+		if _, err := substrateSize(o); err != nil {
+			add("%v", err)
 		}
 		if o.Sandbox == "substrate" {
 			switch {
@@ -220,3 +237,37 @@ var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // envName is what an environment variable may be named.
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateMissionControl checks the Mission Control the platform dashboard reads: a URL
+// needs its token and the search selecting gavel's infrastructure.
+func (o DashboardOptions) validateMissionControl(add func(format string, args ...any)) {
+	views := []struct{ flag, view string }{
+		{"--mission-control-substrate-view", o.MissionControlSubstrateView},
+		{"--mission-control-org-view", o.MissionControlOrgView},
+	}
+	if o.MissionControlURL == "" {
+		if o.MissionControlInfra != "" {
+			add("--mission-control-infra needs --mission-control-url")
+		}
+		for _, v := range views {
+			if v.view != "" {
+				add("%s needs --mission-control-url", v.flag)
+			}
+		}
+		return
+	}
+	for _, v := range views {
+		if namespace, name, ok := strings.Cut(v.view, "/"); v.view != "" && (!ok || namespace == "" || name == "" || strings.Contains(name, "/")) {
+			add("%s must name a View as namespace/name, got %q", v.flag, v.view)
+		}
+	}
+	if u, err := url.Parse(o.MissionControlURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		add("--mission-control-url must be an http or https URL, got %q", o.MissionControlURL)
+	}
+	if o.missionControlToken == "" {
+		add("--mission-control-url requires the GAVEL_MISSION_CONTROL_TOKEN environment variable, a Mission Control access token with the viewer role")
+	}
+	if o.MissionControlInfra == "" {
+		add("--mission-control-url requires --mission-control-infra, the Mission Control search selecting gavel's infrastructure, e.g. namespace=gavel")
+	}
+}

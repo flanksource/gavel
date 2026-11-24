@@ -40,6 +40,8 @@ type MeUser struct {
 	Name        string `json:"name"`
 	Email       string `json:"email"`
 	GitHubLogin string `json:"githubLogin"`
+	// PlatformAdmin is set for a user who may open the platform dashboard.
+	PlatformAdmin bool `json:"platformAdmin,omitempty"`
 }
 
 // MeOrg is an organization the caller acts in, with their role in it.
@@ -115,7 +117,7 @@ func (s *Server) orgMember(r *http.Request, scope tenant.Scope) (MeResponse, err
 		return MeResponse{}, fmt.Errorf("read the user's organizations: %w", err)
 	}
 	me := MeResponse{
-		User: &MeUser{ID: user.ID.String(), Name: user.Name, Email: user.Email, GitHubLogin: user.Login},
+		User: &MeUser{ID: user.ID.String(), Name: user.Name, Email: user.Email, GitHubLogin: user.Login, PlatformAdmin: scope.PlatformAdmin},
 		Orgs: make([]MeOrg, 0, len(orgs)),
 	}
 	for _, org := range orgs {

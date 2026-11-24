@@ -10,6 +10,7 @@ import (
 
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/native"
@@ -301,6 +302,8 @@ func todoErrorStatus(fallback int, err error) int {
 		return http.StatusForbidden
 	case errors.Is(err, errAgentRunsNeedSubstrate):
 		return http.StatusNotImplemented
+	case errors.Is(err, sandbox.ErrBudgetUsedUp):
+		return http.StatusTooManyRequests
 	case errors.Is(err, native.ErrInvalidInput), errors.Is(err, native.ErrInvalidParent):
 		return http.StatusBadRequest
 	}

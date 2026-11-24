@@ -90,9 +90,9 @@ var (
 	}, []string{"op"})
 )
 
-func init() {
-	rangesComputed.WithLabelValues()
-}
+// The ranges counter has no labels, so its one series is created up front: a
+// scrape sees it at 0 before the first range is computed instead of missing it.
+func init() { rangesComputed.WithLabelValues() }
 
 // ResetMetrics clears recorded git activity without changing live tracker state.
 func ResetMetrics() {

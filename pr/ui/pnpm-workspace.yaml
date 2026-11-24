@@ -81,6 +81,7 @@ catalog:
   react: ^18.3.1
   react-dom: ^18.3.1
   react-grab: ^0.1.47
+  recharts: ^3.8.1
   shiki: ^1.24.0
   sonner: ^1.7.1
   storybook: ^8.6.18

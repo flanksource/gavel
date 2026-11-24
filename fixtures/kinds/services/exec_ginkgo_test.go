@@ -142,11 +142,13 @@ var _ = Describe("services kind: exec entries", func() {
 		dir := GinkgoT().TempDir()
 		childPIDFile := filepath.Join(dir, "child.pid")
 		readyFile := filepath.Join(dir, "child-ready")
+		// The child writes readyFile and the shell writes childPIDFile, in either order, so the
+		// service is ready only once both exist.
 		step := newStep("stack", fmt.Sprintf(`{"services": {"stubborn": {
 			"exec": "sh -c 'trap \"\" TERM; echo ready > %s; sleep 60' & echo $! > %s; wait",
-			"ready": {"exec": "test -s %s"},
+			"ready": {"exec": "test -s %s && test -s %s"},
 			"wait": {"interval": "50ms", "timeout": "5s"}
-		}}}`, readyFile, childPIDFile, readyFile))
+		}}}`, readyFile, childPIDFile, readyFile, childPIDFile))
 		outcome, err := execute(step)
 		Expect(err).NotTo(HaveOccurred())
 		pidText, err := os.ReadFile(childPIDFile)

@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -57,8 +58,8 @@ func TestGitHubToken(t *testing.T) {
 	backend := ClerkOrganizations{SecretKey: clerktest.SecretKey, HTTPClient: clerk.BackendClient()}
 	ctx := context.Background()
 
-	if _, err := backend.GitHubToken(ctx, "user_123"); err == nil {
-		t.Fatal("returned a token for a user without a GitHub connection")
+	if _, err := backend.GitHubToken(ctx, "user_123"); !errors.Is(err, ErrNoGitHubConnection) {
+		t.Fatalf("a user without a GitHub connection: %v", err)
 	}
 	clerk.GitHubToken = "gho_clerktest"
 	if token, err := backend.GitHubToken(ctx, "user_123"); err != nil || token != "gho_clerktest" {
@@ -94,5 +95,14 @@ func TestClerkUser(t *testing.T) {
 	clerk.User.GitHubLogin = ""
 	if got, err := backend.User(ctx, "user_123"); err != nil || got.GitHubLogin != "" {
 		t.Fatalf("user without GitHub: %+v, %v", got, err)
+	}
+
+	clerk.User.PublicMetadata = map[string]any{"gavel_role": "platform_admin"}
+	if got, err := backend.User(ctx, "user_123"); err != nil || !got.PlatformAdmin {
+		t.Fatalf("platform admin: %+v, %v", got, err)
+	}
+	clerk.User.PublicMetadata = map[string]any{"gavel_role": "viewer", "plan": "pro"}
+	if got, err := backend.User(ctx, "user_123"); err != nil || got.PlatformAdmin {
+		t.Fatalf("other gavel_role: %+v, %v", got, err)
 	}
 }

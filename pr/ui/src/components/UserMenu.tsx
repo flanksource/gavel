@@ -1,13 +1,16 @@
-// Shows who is signed in: Clerk's org switcher (with a model keys page) and user button (with an
-// SSH keys page) in clerk mode, or a badge with the local `gavel login` identity in none mode.
+// Shows who is signed in: Clerk's org switcher (with model keys, and usage and budgets pages) and user button
+// (with an SSH keys page) in clerk mode, or a badge with the local `gavel login` identity in none mode.
 import { OrganizationSwitcher, UserButton } from '@clerk/react';
 import { useQuery } from '@tanstack/react-query';
-import { UiKey, UiUser } from '@flanksource/clicky-ui/icons';
+import { UiChartBar, UiKey, UiUser } from '@flanksource/clicky-ui/icons';
 import { currentAuthMode } from '../query';
 import { ConnectGitHubButton } from './GitHubConnect';
 import { ModelKeysPanel } from './ModelKeysPanel';
+import { OrgBudgets } from './OrgBudgets';
+import { OwnMeasuredUsage } from './platform/MeasuredUsagePanel';
 import { meQuery } from './oneShotQueries';
 import { SSHKeysPanel } from './SSHKeysPanel';
+import { UsagePanel } from './UsagePanel';
 
 export function UserMenu() {
   if (currentAuthMode() === 'clerk') {
@@ -19,6 +22,13 @@ export function UserMenu() {
         <OrganizationSwitcher hidePersonal afterSelectOrganizationUrl="/">
           <OrganizationSwitcher.OrganizationProfilePage label="Model keys" url="model-keys" labelIcon={<UiKey />}>
             <ModelKeysPanel />
+          </OrganizationSwitcher.OrganizationProfilePage>
+          <OrganizationSwitcher.OrganizationProfilePage label="Usage and budgets" url="usage" labelIcon={<UiChartBar />}>
+            <div className="flex flex-col gap-6">
+              <UsagePanel />
+              <OwnMeasuredUsage />
+              <OrgBudgets />
+            </div>
           </OrganizationSwitcher.OrganizationProfilePage>
         </OrganizationSwitcher>
         <UserButton>

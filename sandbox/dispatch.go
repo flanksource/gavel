@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flanksource/captain/pkg/substrate"
@@ -60,6 +61,16 @@ type Dispatcher struct {
 	// brings the source into the job, and has the job's runner clone it from the checkout the job
 	// starts in.
 	Sources *Sources
+	// Templates, when set, creates each run's environment from its organization's substrate
+	// template, whose name and size the run records.
+	Templates *OrgTemplates
+	// Admission, when set with Templates, admits each run within its organization's budgets: a
+	// run is refused, or waits its turn, as they say, and Enforce stops running runs.
+	Admission *Admission
+
+	// active are the running runs Enforce can stop.
+	activeMu sync.Mutex
+	active   map[uuid.UUID]*activeRun
 }
 
 // ErrNoModelKey refuses an agent run whose organization has no model key.
@@ -106,9 +117,14 @@ func (d *Dispatcher) RunLifetime() time.Duration {
 
 // Run is a dispatched run.
 type Run struct {
-	ID     uuid.UUID
-	done   chan struct{}
-	handle Handle
+	ID   uuid.UUID
+	done chan struct{}
+
+	mu sync.Mutex
+	// handle is the run's job once it is submitted; stopWaiting takes it out of its
+	// organization's line while it waits for room.
+	handle      Handle
+	stopWaiting context.CancelFunc
 
 	result Result
 	err    error
@@ -124,12 +140,18 @@ func (r *Run) Wait(ctx context.Context) (Result, error) {
 	}
 }
 
-// Cancel stops the run's job.
+// Cancel stops the run's job, or, while the run waits for room, takes it out of line.
 func (r *Run) Cancel(ctx context.Context) error {
-	if r.handle == nil {
-		return nil
+	r.mu.Lock()
+	handle, stopWaiting := r.handle, r.stopWaiting
+	r.mu.Unlock()
+	if handle != nil {
+		return handle.Cancel(ctx)
 	}
-	return r.handle.Cancel(ctx)
+	if stopWaiting != nil {
+		stopWaiting()
+	}
+	return nil
 }
 
 // Start records a queued run, submits its job and follows it in the background. output, when
@@ -140,14 +162,74 @@ func (d *Dispatcher) Start(ctx context.Context, scope tenant.Scope, spec RunSpec
 }
 
 // StartRun is Start for a run whose ID the caller chose, so it can be ready for the run's
-// messages before its job starts.
+// messages before its job starts. A run its organization's budgets have no room for is refused;
+// one that must wait for room is returned queued, its job submitted once it has room, and output
+// is told why it waits.
 func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec, output io.Writer) (*Run, error) {
-	credentials, err := d.record(ctx, id, scope, spec)
+	recorded, err := d.record(ctx, id, scope, spec)
 	if err != nil {
 		return nil, err
 	}
 	run := &Run{ID: id, done: make(chan struct{})}
+	ticket, err := d.admit(ctx, id, scope.OrgID, Demand{Size: recorded.template.Size, ModelCalls: spec.Kind == "agent"})
+	if err != nil {
+		return run, err
+	}
+	if queued, reason := ticket.Queued(); queued {
+		d.setStatusMessage(context.WithoutCancel(ctx), id, reason)
+		waitCtx, stopWaiting := context.WithCancel(context.WithoutCancel(ctx))
+		run.stopWaiting = stopWaiting
+		go func() {
+			defer stopWaiting()
+			if err := d.waitForRoom(waitCtx, id, ticket, output); err != nil {
+				run.err = err
+				close(run.done)
+				return
+			}
+			if err := d.launch(ctx, run, scope, spec, recorded, ticket, output); err != nil {
+				run.err = err
+				close(run.done)
+			}
+		}()
+		return run, nil
+	}
+	return run, d.launch(ctx, run, scope, spec, recorded, ticket, output)
+}
 
+// admit admits run of org within the organization's budgets, recording why when it is refused.
+// Without Admission or Templates every run is admitted, holding nothing.
+func (d *Dispatcher) admit(ctx context.Context, run, org uuid.UUID, demand Demand) (*Ticket, error) {
+	if d.Admission == nil || d.Templates == nil {
+		return nil, nil
+	}
+	ticket, err := d.Admission.Enter(ctx, org, demand)
+	if err != nil {
+		d.finishWith(context.WithoutCancel(ctx), run, "failed", nil, err.Error())
+		return nil, fmt.Errorf("start sandbox run %s: %w", run, err)
+	}
+	return ticket, nil
+}
+
+// waitForRoom waits for ticket's run to have room, telling output what it waits for, and records
+// why when it never gets it.
+func (d *Dispatcher) waitForRoom(ctx context.Context, run uuid.UUID, ticket *Ticket, output io.Writer) error {
+	err := ticket.Wait(ctx, func(report string) {
+		if output != nil {
+			fmt.Fprintln(output, report)
+		}
+	})
+	switch {
+	case errors.Is(err, context.Canceled):
+		d.finishWith(context.WithoutCancel(ctx), run, "cancelled", nil, "cancelled while it waited for room")
+	case err != nil:
+		d.finishWith(context.WithoutCancel(ctx), run, "failed", nil, err.Error())
+	}
+	return err
+}
+
+// launch submits run's job, signing its token now, and follows it in the background, giving
+// back its ticket's room when it ends.
+func (d *Dispatcher) launch(ctx context.Context, run *Run, scope tenant.Scope, spec RunSpec, recorded recordedRun, ticket *Ticket, output io.Writer) error {
 	limits := d.Limits.withDefaults()
 	job := Job{
 		RunID:       run.ID,
@@ -156,8 +238,9 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 		Command:     []string{"gavel", "runner", "exec", "--run", run.ID.String()},
 		Env:         map[string]string{"GAVEL_SERVER": d.Server, "GAVEL_RUN_ID": run.ID.String(), "GAVEL_DB": "off", "CI": "1"},
 		SecretEnv:   map[string]string{"GAVEL_RUN_TOKEN": d.runToken(run.ID, scope.OrgID)},
-		Credentials: credentials,
+		Credentials: recorded.credentials,
 		Limits:      limits,
+		Template:    recorded.template.Name,
 	}
 	for key, value := range d.SecretEnv {
 		if key != "GAVEL_RUN_TOKEN" {
@@ -167,25 +250,38 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 	if d.Sources != nil {
 		source, err := d.jobSource(ctx, scope, spec)
 		if err != nil {
-			d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
-			return run, fmt.Errorf("start sandbox run %s: %w", run.ID, err)
+			ticket.Release()
+			// The run is not tracked until it is submitted, so nothing can have stopped it yet.
+			_ = d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
+			return fmt.Errorf("start sandbox run %s: %w", run.ID, err)
 		}
 		job.Source = source
 		job.Command = append(job.Command, "--source", ".")
 	}
 	handle, err := d.Executor.Submit(ctx, job)
 	if err != nil {
-		d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
-		return run, fmt.Errorf("start sandbox run %s: %w", run.ID, err)
+		ticket.Release()
+		// The run is not tracked until it is submitted, so nothing can have stopped it yet.
+		_ = d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
+		return fmt.Errorf("start sandbox run %s: %w", run.ID, err)
 	}
+	run.mu.Lock()
 	run.handle = handle
+	run.mu.Unlock()
+	d.track(run.ID, scope.OrgID, spec.Kind == "agent", func(reason error) {
+		d.setStatusMessage(context.WithoutCancel(ctx), run.ID, "stopped: "+reason.Error())
+		if err := handle.Cancel(context.WithoutCancel(ctx)); err != nil {
+			logger.Warnf("stop sandbox run %s: %v", run.ID, err)
+		}
+	})
 	logKey := "runs/" + run.ID.String() + "/log.txt"
-	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
+	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', status_message = '', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
 		handle.Ref(), logKey, run.ID).Error; err != nil {
 		logger.Warnf("record sandbox run %s as running: %v", run.ID, err)
 	}
 
 	follow := func(taskCtx commonscontext.Context, task *clickytask.Task) (Result, error) {
+		defer ticket.Release()
 		return d.follow(context.WithoutCancel(ctx), run.ID, scope.OrgID, handle, logKey, output, task)
 	}
 	go func() {
@@ -193,7 +289,7 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 		typed := clickytask.StartTask(fmt.Sprintf("Sandbox %s run %s", spec.Kind, run.ID.String()[:8]), follow)
 		run.result, run.err = typed.GetResult()
 	}()
-	return run, nil
+	return nil
 }
 
 // jobSource is where on serve the commit spec runs is.
@@ -213,29 +309,45 @@ func (d *Dispatcher) jobSource(ctx context.Context, scope tenant.Scope, spec Run
 	return &JobSource{GitDir: dir, Commit: commit}, nil
 }
 
-// record files run id as queued, with its organization's credentials, which it returns.
-func (d *Dispatcher) record(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec) ([]substrate.Credential, error) {
+// recordedRun is what a run is given when it is recorded: its organization's credentials, and
+// the template its environment is created from, which is empty without org templates.
+type recordedRun struct {
+	credentials []substrate.Credential
+	template    OrgTemplate
+}
+
+// record files run id as queued, with its organization's credentials and template.
+func (d *Dispatcher) record(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec) (recordedRun, error) {
 	if !contains(runKinds, spec.Kind) {
-		return nil, fmt.Errorf("sandbox run kind %q is not one of %s", spec.Kind, strings.Join(runKinds, ", "))
+		return recordedRun{}, fmt.Errorf("sandbox run kind %q is not one of %s", spec.Kind, strings.Join(runKinds, ", "))
 	}
 	credentials, err := d.credentials(ctx, id, scope.OrgID, spec.Kind)
 	if err != nil {
-		return nil, err
+		return recordedRun{}, err
+	}
+	recorded := recordedRun{credentials: credentials}
+	var cpu, memory *int64
+	if d.Templates != nil {
+		if recorded.template, err = d.Templates.Resolve(ctx, scope.OrgID); err != nil {
+			return recordedRun{}, fmt.Errorf("start sandbox run %s: %w", id, err)
+		}
+		cpu, memory = &recorded.template.Size.CPUMillicores, &recorded.template.Size.MemoryBytes
 	}
 	encoded, err := json.Marshal(spec)
 	if err != nil {
-		return nil, fmt.Errorf("encode the run spec: %w", err)
+		return recordedRun{}, fmt.Errorf("encode the run spec: %w", err)
 	}
 	var repo *uuid.UUID
 	if spec.RepoID != uuid.Nil {
 		repo = &spec.RepoID
 	}
-	if err := d.DB.WithContext(ctx).Exec(`INSERT INTO sandbox_runs (id, org_id, user_id, repo_id, kind, ref, sha, todo_id, status, backend, spec)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
-		id, scope.OrgID, scope.UserID, repo, spec.Kind, spec.Ref, spec.SHA, spec.TodoID, d.Executor.Name(), string(encoded)).Error; err != nil {
-		return nil, fmt.Errorf("record sandbox run: %w", err)
+	if err := d.DB.WithContext(ctx).Exec(`INSERT INTO sandbox_runs (id, org_id, user_id, repo_id, kind, ref, sha, todo_id, status, backend, spec, template, cpu_millicores, memory_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+		id, scope.OrgID, scope.UserID, repo, spec.Kind, spec.Ref, spec.SHA, spec.TodoID, d.Executor.Name(), string(encoded),
+		recorded.template.Name, cpu, memory).Error; err != nil {
+		return recordedRun{}, fmt.Errorf("record sandbox run: %w", err)
 	}
-	return credentials, nil
+	return recorded, nil
 }
 
 // runToken is the token run in org calls the run API with, good for the run's lifetime.
@@ -251,26 +363,35 @@ type RecordedRun struct {
 	Token string
 	// Credentials are its organization's model keys, which substrate's egress gateway injects.
 	Credentials []substrate.Credential
+	// Template is the substrate template its environment is created from, its organization's;
+	// empty is the backend's own.
+	Template string
 	// Log takes the run's output, which is stored as its log and shown on its task.
 	Log    io.Writer
+	ctx    context.Context
 	finish func(succeeded bool)
 }
+
+// Context ends when the dispatcher stops the run, with why as its cause; the run executes within it.
+func (r *RecordedRun) Context() context.Context { return r.ctx }
 
 // Finish stores the run's log and records whether it succeeded.
 func (r *RecordedRun) Finish(succeeded bool) { r.finish(succeeded) }
 
 // RecordRun files run id as running, for a run that executes elsewhere: it signs the run's token,
-// gives it its organization's credentials, and stores what is written to its Log as its log.
+// gives it its organization's credentials, and stores what is written to its Log as its log. A
+// run its organization's budgets have no room for is refused; one that must wait for room waits
+// here, saying why in its log.
 func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.Scope, spec RunSpec) (*RecordedRun, error) {
-	credentials, err := d.record(ctx, id, scope, spec)
+	recorded, err := d.record(ctx, id, scope, spec)
+	if err != nil {
+		return nil, err
+	}
+	ticket, err := d.admit(ctx, id, scope.OrgID, Demand{Size: recorded.template.Size, ModelCalls: spec.Kind == "agent"})
 	if err != nil {
 		return nil, err
 	}
 	logKey := "runs/" + id.String() + "/log.txt"
-	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
-		JobName(id), logKey, id).Error; err != nil {
-		logger.Warnf("record sandbox run %s as running: %v", id, err)
-	}
 	reader, writer := io.Pipe()
 	stored := make(chan struct{})
 	go func() {
@@ -281,14 +402,34 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 		})
 		_, _ = typed.GetResult()
 	}()
-	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: credentials, Log: writer, finish: func(succeeded bool) {
+	if queued, reason := ticket.Queued(); queued {
+		d.setStatusMessage(context.WithoutCancel(ctx), id, reason)
+		if err := d.waitForRoom(ctx, id, ticket, writer); err != nil {
+			_ = writer.Close()
+			<-stored
+			return nil, fmt.Errorf("start sandbox run %s: %w", id, err)
+		}
+	}
+	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', status_message = '', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
+		JobName(id), logKey, id).Error; err != nil {
+		logger.Warnf("record sandbox run %s as running: %v", id, err)
+	}
+	runCtx, stop := context.WithCancelCause(ctx)
+	d.track(id, scope.OrgID, spec.Kind == "agent", func(reason error) {
+		d.setStatusMessage(context.WithoutCancel(ctx), id, "stopped: "+reason.Error())
+		stop(reason)
+	})
+	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: recorded.credentials, Template: recorded.template.Name, Log: writer, ctx: runCtx, finish: func(succeeded bool) {
 		_ = writer.Close()
 		<-stored
+		ticket.Release()
+		defer stop(nil)
 		status := "succeeded"
 		if !succeeded {
 			status = "failed"
 		}
-		d.finish(context.WithoutCancel(ctx), id, status, nil)
+		// A stop has already recorded its reason on the run and cancelled the run's context with it.
+		_ = d.finish(context.WithoutCancel(ctx), id, status, nil)
 	}}, nil
 }
 
@@ -303,14 +444,18 @@ func (d *Dispatcher) follow(ctx context.Context, id, org uuid.UUID, handle Handl
 	}
 	result, err := handle.Wait(ctx)
 	if err != nil {
-		d.finish(ctx, id, "failed", nil)
+		if stopped := d.finish(ctx, id, "failed", nil); stopped != nil {
+			return Result{}, fmt.Errorf("sandbox run %s stopped: %w", id, stopped)
+		}
 		return Result{}, fmt.Errorf("sandbox run %s: %w", id, err)
 	}
 	status := "succeeded"
 	if result.ExitCode != 0 {
 		status = "failed"
 	}
-	d.finish(ctx, id, status, &result.ExitCode)
+	if stopped := d.finish(ctx, id, status, &result.ExitCode); stopped != nil {
+		return result, fmt.Errorf("sandbox run %s stopped: %w", id, stopped)
+	}
 	return result, nil
 }
 
@@ -334,11 +479,58 @@ func (d *Dispatcher) storeLog(ctx context.Context, id, org uuid.UUID, logKey str
 	}
 }
 
-func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, exitCode *int) {
+// finish records how run id ended, as cancelled when the dispatcher stopped it, and returns why it
+// was stopped: nil when it wasn't.
+func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, exitCode *int) (stopped error) {
+	stopped = d.untrack(id)
+	if stopped != nil {
+		status = "cancelled"
+	}
 	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = ?, exit_code = ?, finished_at = now() WHERE id = ?`,
 		status, exitCode, id).Error; err != nil {
 		logger.Warnf("record sandbox run %s as %s: %v", id, status, err)
 	}
+	return stopped
+}
+
+// finishWith records how run id ended, and why.
+func (d *Dispatcher) finishWith(ctx context.Context, id uuid.UUID, status string, exitCode *int, message string) {
+	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = ?, status_message = ?, exit_code = ?, finished_at = now() WHERE id = ?`,
+		status, message, exitCode, id).Error; err != nil {
+		logger.Warnf("record sandbox run %s as %s: %v", id, status, err)
+	}
+}
+
+// setStatusMessage records why run id is as it is, such as why it waits.
+func (d *Dispatcher) setStatusMessage(ctx context.Context, id uuid.UUID, message string) {
+	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status_message = ? WHERE id = ?`, message, id).Error; err != nil {
+		logger.Warnf("record why sandbox run %s is queued: %v", id, err)
+	}
+}
+
+// FailQueuedRuns fails the runs left waiting for room when serve stopped: their callers are gone
+// with it. It returns how many it failed.
+func (d *Dispatcher) FailQueuedRuns(ctx context.Context) (int64, error) {
+	result := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'failed', status_message = 'serve restarted while the run waited for room', finished_at = now()
+		WHERE status = 'queued'`)
+	if result.Error != nil {
+		return 0, fmt.Errorf("fail the sandbox runs left queued: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// FailExpiredRuns fails the runs still recorded as running past RunLifetime. No run lives that
+// long: its token has expired and the sweeper deletes its environment, so serve lost track of it,
+// by restarting while it ran or by its follow never returning. It returns how many it failed.
+func (d *Dispatcher) FailExpiredRuns(ctx context.Context) (int64, error) {
+	lifetime := d.RunLifetime().Seconds()
+	result := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'failed', status_message = 'serve lost track of the run: it did not end within its lifetime',
+		finished_at = started_at + ? * interval '1 second'
+		WHERE status = 'running' AND started_at < now() - ? * interval '1 second'`, lifetime, lifetime)
+	if result.Error != nil {
+		return 0, fmt.Errorf("fail the sandbox runs past their lifetime: %w", result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 // RunRecord is what the run API needs of a run: its organization, the user it runs for (nil

@@ -19,8 +19,11 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/sandbox/substraterun"
+	"github.com/flanksource/captain/pkg/substrate"
+	"github.com/flanksource/captain/pkg/substrate/substratetest"
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/budget"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/sandbox/runclient"
@@ -69,6 +72,8 @@ type environment struct {
 	prStatus  []byte
 	// deadline is when the run's context ends, as the sandbox was handed it.
 	deadline time.Time
+	// holds, when set, keeps the run going after its transcript until its context ends.
+	holds bool
 }
 
 func (e *environment) Kind() api.SandboxKind { return api.SandboxSubstrate }
@@ -85,6 +90,14 @@ func (e *environment) RunRemote(ctx context.Context, in promptrun.Input, started
 	_, err := io.WriteString(in.EnvironmentOutput, "the environment's output\n")
 	require.NoError(e.t, err)
 	in.OnTranscript("claude", "-tmp-captain-run-src/session-1.jsonl", []byte(`{"type":"user"}`+"\n"))
+	if e.holds {
+		select {
+		case <-ctx.Done():
+			return promptrun.Result{}, ctx.Err()
+		case <-time.After(10 * time.Second):
+			return promptrun.Result{}, errors.New("the run was never stopped")
+		}
+	}
 	// The step's PR hook reads its PR through the caller, as gavel's program does.
 	status, err := runclient.OverHostCall(func(name string, data json.RawMessage) (json.RawMessage, error) {
 		return in.HostCalls[name](context.Background(), data)
@@ -226,6 +239,85 @@ func TestSubstrateRunnerRunsAHostedStepOnSubstrate(t *testing.T) {
 
 	branch := sandbox.RunBranch(hosted.todo, id)
 	assert.Equal(t, result.Response.Workspace.Worktree.Head, gitRun(t, hosted.gitDir, "rev-parse", "refs/heads/"+branch), "the run's branch is the repository's")
+}
+
+func TestSubstrateRunnerCreatesTheRunsEnvironmentFromItsOrganizationsTemplate(t *testing.T) {
+	env := &environment{t: t}
+	hosted := newHostedRun(t, env)
+	server := substratetest.Start(t)
+	server.AddTemplate("ate-env", "gavel-runner", substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	client, err := substrate.Dial(server.Options())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	templates := &sandbox.OrgTemplates{DB: hosted.runner.Dispatcher.DB, Client: client, Atespace: "ate-env", Base: "gavel-runner"}
+	hosted.runner.Dispatcher.Templates = templates
+	hosted.runner.Backend["template"] = "gavel-runner"
+	want, err := templates.Resolve(t.Context(), hosted.org)
+	require.NoError(t, err)
+
+	_, err = hosted.runner.Run(t.Context(), step())
+	require.NoError(t, err)
+	assert.Equal(t, want.Name, env.selection.Options["template"], "the organization's template replaces the backend's")
+	assert.Equal(t, "gavel-runner", hosted.runner.Backend["template"], "the backend shared by every run keeps its own")
+}
+
+// budgetedRun is a hosted run whose organization's runs come from its own template and are
+// admitted within its budgets, with a model cost budget of 5 USD this month.
+func budgetedRun(t *testing.T, env *environment) *hostedRun {
+	t.Helper()
+	hosted := newHostedRun(t, env)
+	server := substratetest.Start(t)
+	server.AddTemplate("ate-env", "gavel-runner", substrate.Size{CPUMillicores: 2000, MemoryBytes: 4 << 30})
+	client, err := substrate.Dial(server.Options())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	d := hosted.runner.Dispatcher
+	d.Templates = &sandbox.OrgTemplates{DB: d.DB, Client: client, Atespace: "ate-env", Base: "gavel-runner"}
+	d.Admission = &sandbox.Admission{Budgets: budget.Store{DB: d.DB}, RunLifetime: d.RunLifetime(), Wait: time.Minute, Recheck: time.Minute}
+	_, err = d.Admission.Budgets.Set(t.Context(), hosted.org, nil, budget.Budget{Resource: budget.USD, Kind: budget.Cumulative, Amount: 5, Window: "now/M"})
+	require.NoError(t, err)
+	return hosted
+}
+
+func TestSubstrateRunnerCapsARunsSpendAtWhatItsModelCostBudgetLeaves(t *testing.T) {
+	env := &environment{t: t}
+	hosted := budgetedRun(t, env)
+
+	run := step()
+	_, err := hosted.runner.Run(t.Context(), run)
+	require.NoError(t, err)
+	assert.Equal(t, 5.0, env.in.Resolved.Spec.Budget.Cost, "a run's spend stops at what the organization's budget leaves")
+
+	run = step()
+	run.Input.Resolved.Spec.Budget.Cost = 2
+	_, err = hosted.runner.Run(t.Context(), run)
+	require.NoError(t, err)
+	assert.Equal(t, 2.0, env.in.Resolved.Spec.Budget.Cost, "a step's own lower ceiling stays")
+}
+
+func TestSubstrateRunnerStopsARunOnceItsModelCostBudgetIsUsedUp(t *testing.T) {
+	env := &environment{t: t, holds: true}
+	hosted := budgetedRun(t, env)
+	db := hosted.runner.Dispatcher.DB
+	keep := hosted.runner.Transcripts
+	// Ingesting the run's transcript files the model call that uses the budget up.
+	hosted.runner.Transcripts = func(ctx context.Context, run sandbox.RunRecord, source, name string, data io.Reader) error {
+		session, turn := uuid.New(), uuid.New()
+		require.NoError(t, db.Exec(`INSERT INTO captain_sessions (id, source) VALUES (?, 'test')`, session).Error)
+		require.NoError(t, db.Exec(`INSERT INTO session_owners (session_id, org_id) VALUES (?, ?)`, session, run.Org).Error)
+		require.NoError(t, db.Exec(`INSERT INTO captain_turns (id, session_id, turn_index, status) VALUES (?, ?, 0, 'ended')`, turn, session).Error)
+		require.NoError(t, db.Exec(`INSERT INTO captain_model_calls (id, turn_id, call_index, model, currency, input_tokens, input_cost, created_at)
+			VALUES (?, ?, 0, 'claude-sonnet', 'USD', 1000, 6, now())`, uuid.New(), turn).Error)
+		return keep(ctx, run, source, name, data)
+	}
+
+	_, err := hosted.runner.Run(t.Context(), step())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "budget used up: this organization has used $6.00 of its $5.00 model cost budget")
+	var row struct{ Status, StatusMessage string }
+	require.NoError(t, db.Raw(`SELECT status, status_message FROM sandbox_runs WHERE org_id = ?`, hosted.org).Scan(&row).Error)
+	assert.Equal(t, "cancelled", row.Status)
+	assert.Contains(t, row.StatusMessage, "stopped: budget used up")
 }
 
 func TestSubstrateRunnerBoundsARunByTheDispatchersTimeout(t *testing.T) {
