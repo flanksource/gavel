@@ -1,0 +1,19 @@
+// ../../../../../../../../../Volumes/ugreen/cache/pnpm/store/v11/links/@codemirror/legacy-modes/6.5.5/016bc79896894b8ba1a40f928f9bb248a78667ccdad19c4225df0f983f1ced27/node_modules/@codemirror/legacy-modes/mode/properties.js
+var e = {
+	name: "properties",
+	token: function(e, t) {
+		var n = e.sol() || t.afterSection, r = e.eol();
+		if (t.afterSection = !1, n && (t.nextMultiline ? (t.inMultiline = !0, t.nextMultiline = !1) : t.position = "def"), r && !t.nextMultiline && (t.inMultiline = !1, t.position = "def"), n) for (; e.eatSpace(););
+		var i = e.next();
+		return n && (i === "#" || i === "!" || i === ";") ? (t.position = "comment", e.skipToEnd(), "comment") : n && i === "[" ? (t.afterSection = !0, e.skipTo("]"), e.eat("]"), "header") : i === "=" || i === ":" ? (t.position = "quote", null) : (i === "\\" && t.position === "quote" && e.eol() && (t.nextMultiline = !0), t.position);
+	},
+	startState: function() {
+		return {
+			position: "def",
+			nextMultiline: !1,
+			inMultiline: !1,
+			afterSection: !1
+		};
+	}
+};
+export { e as properties };

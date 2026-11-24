@@ -1,0 +1,1 @@
+export{a as markdown}from"./dist-BcaA64sy.js";

@@ -1,0 +1,117 @@
+import { a as e } from "./rolldown-runtime-DUcC5eAW.js";
+import { n as t } from "./jsx-runtime-a1ZmknZu.js";
+// ../../../../../../../../../Volumes/ugreen/cache/pnpm/store/v11/links/@radix-ui/react-compose-refs/1.1.5/f0981e7d6b1191a765e1e20e43e06f1b2ede2f707d3244f959cd750b426bb06e/node_modules/@radix-ui/react-compose-refs/dist/index.mjs
+var n = /* @__PURE__ */ e(t(), 1), r = Object.defineProperty, i = (e, t) => r(e, "name", {
+	value: t,
+	configurable: !0
+});
+function a(e, t) {
+	if (typeof e == "function") return e(t);
+	e != null && (e.current = t);
+}
+i(a, "setRef");
+function o(...e) {
+	return (t) => {
+		let n = !1, r = e.map((e) => {
+			let r = a(e, t);
+			return !n && typeof r == "function" && (n = !0), r;
+		});
+		if (n) return () => {
+			for (let t = 0; t < r.length; t++) {
+				let n = r[t];
+				typeof n == "function" ? n() : a(e[t], null);
+			}
+		};
+	};
+}
+i(o, "composeRefs");
+function s(...e) {
+	return n.useCallback(o(...e), e);
+}
+i(s, "useComposedRefs");
+// ../../../../../../../../../Volumes/ugreen/cache/pnpm/store/v11/links/@radix-ui/react-slot/1.5.0/93edec35a6eb696638bba739ceeef7785f71416b0981a30c958962e8b23b74e9/node_modules/@radix-ui/react-slot/dist/index.mjs
+var c = Object.defineProperty, l = (e, t) => c(e, "name", {
+	value: t,
+	configurable: !0
+});
+// @__NO_SIDE_EFFECTS__
+function u(e) {
+	let t = n.forwardRef((t, r) => {
+		let { children: i, ...a } = t, o = null, c = !1, l = [];
+		i = x(i), n.Children.forEach(i, (e) => {
+			if (_(e)) {
+				c = !0;
+				let t = e, n = "child" in t.props ? t.props.child : t.props.children;
+				for (; y(n) && typeof T == "function";) n = T(n._payload);
+				o = m(t, n), l.push(o?.props?.children);
+			} else l.push(e);
+		}), o ? o = n.cloneElement(o, void 0, l) : !c && n.Children.count(i) === 1 && n.isValidElement(i) && (o = i);
+		let u = o ? g(o) : void 0, d = s(r, u);
+		if (!o) {
+			if (i || i === 0) throw Error(c ? w(e) : C(e));
+			return i;
+		}
+		let f = h(a, o.props ?? {});
+		return o.type !== n.Fragment && (f.ref = r ? d : u), n.cloneElement(o, f);
+	});
+	return t.displayName = `${e}.Slot`, t;
+}
+l(u, "createSlot");
+var d = /* @__PURE__ */ u("Slot"), f = Symbol.for("radix.slottable");
+// @__NO_SIDE_EFFECTS__
+function p(e) {
+	let t = /* @__PURE__ */ l((e) => "child" in e ? e.children(e.child) : e.children, "Slottable");
+	return t.displayName = `${e}.Slottable`, t.__radixId = f, t;
+}
+l(p, "createSlottable");
+var m = /* @__PURE__ */ l((e, t) => "child" in e.props ? n.isValidElement(t) ? n.cloneElement(t, void 0, e.props.children(t.props.children)) : null : n.isValidElement(t) ? t : null, "getSlottableElementFromSlottable");
+function h(e, t) {
+	let n = { ...t };
+	for (let r in t) {
+		let i = e[r], a = t[r];
+		/^on[A-Z]/.test(r) ? i && a ? n[r] = (...e) => {
+			let t = a(...e);
+			return i(...e), t;
+		} : i && (n[r] = i) : r === "style" ? n[r] = {
+			...i,
+			...a
+		} : r === "className" ? n[r] = [i, a].filter(Boolean).join(" ") : r === "aria-describedby" && (n[r] = S(a, i));
+	}
+	return {
+		...e,
+		...n
+	};
+}
+l(h, "mergeProps");
+function g(e) {
+	let t = Object.getOwnPropertyDescriptor(e.props, "ref")?.get, n = t && "isReactWarning" in t && t.isReactWarning;
+	return n ? e.ref : (t = Object.getOwnPropertyDescriptor(e, "ref")?.get, n = t && "isReactWarning" in t && t.isReactWarning, n ? e.props.ref : e.props.ref || e.ref);
+}
+l(g, "getElementRef");
+function _(e) {
+	return n.isValidElement(e) && typeof e.type == "function" && "__radixId" in e.type && e.type.__radixId === f;
+}
+l(_, "isSlottable");
+var v = Symbol.for("react.lazy");
+function y(e) {
+	return typeof e == "object" && !!e && "$$typeof" in e && e.$$typeof === v && "_payload" in e && b(e._payload);
+}
+l(y, "isLazyComponent");
+function b(e) {
+	return typeof e == "object" && !!e && "then" in e;
+}
+l(b, "isPromiseLike");
+function x(e) {
+	let t = e;
+	for (; y(t) && typeof T == "function";) t = T(t._payload);
+	return t;
+}
+l(x, "useUnwrappedLazy");
+function S(...e) {
+	let t = /* @__PURE__ */ new Set();
+	for (let n of e) if (typeof n == "string") for (let e of String(n).trim().split(/\s+/)) e && t.add(e);
+	return t.size > 0 ? Array.from(t).join(" ") : void 0;
+}
+l(S, "concatAriaDescribedby");
+var C = /* @__PURE__ */ l((e) => `${e} failed to slot onto its children. Expected a single React element child or \`Slottable\`.`, "createSlotError"), w = /* @__PURE__ */ l((e) => `${e} failed to slot onto its \`Slottable\`. Expected \`Slottable\` to receive a single React element child.`, "createSlottableError"), T = n.use;
+export { s as i, u as n, p as r, d as t };
