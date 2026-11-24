@@ -105,9 +105,12 @@ or dashboard prompt handler, use git add -f -- <paths>, then
 gavel commit --stage staged. --yes alone does not force-add ignored paths.
 
 The -i / -t flags open an interactive tree picker over every changed file
-(staged, unstaged, and untracked) — no need to git add first. Each row
-shows the file's language and repomap scope (e.g. Go · architecture,
-TypeScript · test) plus its line delta. Toggle individual files with
+(staged, unstaged, and untracked) — no need to git add first. Move the
+cursor or hover over a file to see its colored unified patch. Scroll
+with the mouse wheel or Page Up and Page Down. Hold Shift with the
+left or right arrow to pan long lines. Click a checkbox to toggle its
+selection. Each row shows the file's language and repomap scope
+(e.g. Go · architecture, TypeScript · test) plus its line delta. Toggle individual files with
 space, whole folders with 'a' (selecting a folder selects all its
 descendants), every Go file with 'g', or every test-scoped file with
 't'. Press '/' to filter the file tree by path, status, language, or

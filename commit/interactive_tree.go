@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,12 +10,13 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/repomap"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
+	zone "github.com/lrstanley/bubblezone/v2"
 )
 
 // Style strings reused from status/pretty.go so the tree picker colorizes
@@ -67,7 +69,13 @@ func runTreePicker(candidates []status.FileStatus, gitRoot string, summaryUpdate
 	}
 	defer tty.Close()
 
-	prog := tea.NewProgram(model, tea.WithInput(tty), tea.WithOutput(tty), tea.WithAltScreen())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model.preview = newTreePreview(ctx)
+	model.zones = zone.New()
+	defer model.zones.Close()
+
+	prog := tea.NewProgram(model, tea.WithInput(tty), tea.WithOutput(tty))
 	final, err := prog.Run()
 	if err != nil {
 		if errors.Is(err, tea.ErrInterrupted) {
@@ -117,6 +125,7 @@ type treeModel struct {
 	files           []status.FileStatus
 	visible         []*treeNode
 	cursor          int
+	treeOffset      int
 	width           int
 	height          int
 	filtering       bool
@@ -129,6 +138,8 @@ type treeModel struct {
 	statusLine      string
 	pendingRmCached []string
 	summaryUpdates  <-chan status.AISummaryUpdate
+	preview         *treePreview
+	zones           *zone.Manager
 }
 
 func newTreeModel(files []status.FileStatus) treeModel {
@@ -314,10 +325,25 @@ func waitForAISummaryUpdate(updates <-chan status.AISummaryUpdate) tea.Cmd {
 }
 
 // Init satisfies tea.Model.
-func (m treeModel) Init() tea.Cmd { return waitForAISummaryUpdate(m.summaryUpdates) }
+func (m treeModel) Init() tea.Cmd {
+	return tea.Batch(waitForAISummaryUpdate(m.summaryUpdates), m.refreshPreview())
+}
 
 func (m treeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := m.updateTree(msg)
+	if m.cancelled || m.submitted {
+		return m, cmd
+	}
+	m.treeOffset, _ = m.rowRange(m.layout().treeHeight)
+	return m, tea.Batch(cmd, m.refreshPreview())
+}
+
+func (m treeModel) updateTree(msg tea.Msg) (treeModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case treePatchMsg:
+		if m.preview != nil {
+			m.preview.apply(msg)
+		}
 	case aiSummaryUpdateMsg:
 		if !msg.open {
 			m.summaryUpdates = nil
@@ -330,15 +356,22 @@ func (m treeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.PasteMsg:
+		if m.filtering {
+			m.filterQuery += singleLine(msg.Content)
+			m.rebuildVisible()
+		}
+	case tea.MouseMsg:
+		m.handleMouse(msg)
 	}
 	return m, nil
 }
 
 // handleKey is split out so tests can call Update with synthetic
-// tea.KeyMsg values without spinning up a Program.
-func (m treeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// tea.KeyPressMsg values without spinning up a Program.
+func (m treeModel) handleKey(msg tea.KeyPressMsg) (treeModel, tea.Cmd) {
 	if m.ignorePrompt != nil {
 		return m.handleIgnoreKey(msg)
 	}
@@ -381,7 +414,7 @@ func (m treeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-	case " ":
+	case " ", "space":
 		if n := m.currentNode(); n != nil {
 			toggleNode(n)
 		}
@@ -401,35 +434,37 @@ func (m treeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ignorePrompt = &ignorePromptState{node: n}
 			m.statusLine = ""
 		}
+	case "pgup", "pgdown", "shift+left", "shift+right":
+		m.scrollPreview(msg)
 	}
 	return m, nil
 }
 
-func (m treeModel) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC:
+func (m treeModel) handleFilterKey(msg tea.KeyPressMsg) (treeModel, tea.Cmd) {
+	switch msg.Keystroke() {
+	case "ctrl+c":
 		m.cancelled = true
 		return m, tea.Quit
-	case tea.KeyEsc:
+	case "esc":
 		m.filtering = false
 		m.filterQuery = ""
 		m.rebuildVisible()
 		return m, nil
-	case tea.KeyEnter:
+	case "enter":
 		m.filtering = false
 		return m, nil
-	case tea.KeyBackspace:
+	case "backspace":
 		m.filterQuery = trimLastRune(m.filterQuery)
 		m.rebuildVisible()
 		return m, nil
-	case tea.KeyCtrlU:
+	case "ctrl+u":
 		m.filterQuery = ""
 		m.rebuildVisible()
 		return m, nil
 	}
 
-	if len(msg.Runes) > 0 {
-		m.filterQuery += string(msg.Runes)
+	if msg.Text != "" {
+		m.filterQuery += singleLine(msg.Text)
 		m.rebuildVisible()
 	}
 	return m, nil
@@ -454,7 +489,7 @@ func (m treeModel) currentNode() *treeNode {
 // the user's chosen action to {gitRoot}/.gitignore via m.appendGitIgnore,
 // removes the matched leaves from the tree, and closes the submenu. Esc or
 // any unrelated key cancels without writing.
-func (m treeModel) handleIgnoreKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m treeModel) handleIgnoreKey(msg tea.KeyPressMsg) (treeModel, tea.Cmd) {
 	node := m.ignorePrompt.node
 	m.ignorePrompt = nil
 	switch msg.String() {
@@ -525,7 +560,7 @@ func (m *treeModel) applyGitIgnoreEntry(entry string) {
 	}
 	written, err := m.appendGitIgnore(m.gitRoot, []string{entry})
 	if err != nil {
-		m.statusLine = styled(fmt.Sprintf("gitignore write failed: %v", err), styleDeleted)
+		m.statusLine = styled("gitignore write failed: "+singleLine(err.Error()), styleDeleted)
 		return
 	}
 
@@ -550,9 +585,9 @@ func (m *treeModel) applyGitIgnoreEntry(entry string) {
 
 	switch {
 	case len(written) == 0:
-		m.statusLine = styled(fmt.Sprintf("already ignored: %s (%d files removed from picker)", entry, len(matched)), styleHelp)
+		m.statusLine = styled(fmt.Sprintf("already ignored: %s (%d files removed from picker)", singleLine(entry), len(matched)), styleHelp)
 	default:
-		m.statusLine = styled(fmt.Sprintf("ignored: %s (%d files removed from picker)", entry, len(matched)), styleStaged)
+		m.statusLine = styled(fmt.Sprintf("ignored: %s (%d files removed from picker)", singleLine(entry), len(matched)), styleStaged)
 	}
 }
 
@@ -750,10 +785,7 @@ func (m treeModel) selectedPaths() []string {
 	return out
 }
 
-// View renders the tree as a single string with ANSI escape sequences
-// embedded inline (via clicky.Text(...).ANSI()). The styling matches
-// `gavel status` so users see consistent colors across both commands.
-func (m treeModel) View() string {
+func (m treeModel) renderHeader() string {
 	var b strings.Builder
 	selectedCount := len(m.selectedPaths())
 	totalLeaves := countLeaves(m.root)
@@ -781,28 +813,15 @@ func (m treeModel) View() string {
 			"  /=filter  space=toggle  a=toggle folder  g=toggle Go  t=toggle tests  ctrl+a=all  i=ignore  enter=confirm  esc=cancel",
 			styleHelp,
 		))
+		if m.preview != nil {
+			b.WriteByte('\n')
+			b.WriteString(styled("  PgUp/PgDn=scroll patch  Shift+←/→=pan patch", styleHelp))
+		}
 	}
 	if m.statusLine != "" {
 		b.WriteByte('\n')
 		b.WriteString("  ")
 		b.WriteString(m.statusLine)
-	}
-	b.WriteString("\n\n")
-
-	pageSize := max(m.height-5, 5)
-	start := 0
-	if m.cursor >= pageSize {
-		start = m.cursor - pageSize + 1
-	}
-	end := min(start+pageSize, len(m.visible))
-
-	for i := start; i < end; i++ {
-		b.WriteString(renderRow(m.visible[i], i == m.cursor, filterActive))
-		b.WriteByte('\n')
-	}
-	if len(m.visible) == 0 {
-		b.WriteString(styled("  No files match the current filter", styleHelp))
-		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -835,17 +854,17 @@ func renderIgnorePrompt(n *treeNode) string {
 	var parts []string
 	parts = append(parts, styled("ignore", styleHeader)+":")
 	if !n.IsDir {
-		parts = append(parts, styled(fmt.Sprintf("f=file (%s)", n.Path), styleHelp))
+		parts = append(parts, styled(fmt.Sprintf("f=file (%s)", singleLine(n.Path)), styleHelp))
 	} else {
 		parts = append(parts, styled("f=file (n/a — folder selected)", styleMuted))
 	}
 	if entry := folderIgnoreEntry(n); entry != "" {
-		parts = append(parts, styled(fmt.Sprintf("d=folder (%s)", entry), styleHelp))
+		parts = append(parts, styled(fmt.Sprintf("d=folder (%s)", singleLine(entry)), styleHelp))
 	} else {
 		parts = append(parts, styled("d=folder (n/a — top level)", styleMuted))
 	}
 	if ext := extensionGlob(n); ext != "" {
-		parts = append(parts, styled(fmt.Sprintf("e=ext (%s)", ext), styleHelp))
+		parts = append(parts, styled(fmt.Sprintf("e=ext (%s)", singleLine(ext)), styleHelp))
 	} else {
 		parts = append(parts, styled("e=ext (n/a — no extension)", styleMuted))
 	}
@@ -860,7 +879,7 @@ func renderRow(n *treeNode, isCursor bool, forceExpanded bool) string {
 	}
 	indent := strings.Repeat("  ", n.Depth-1)
 	check := checkboxFor(n)
-	name := n.Name
+	name := singleLine(n.Name)
 	if n.IsDir {
 		expand := "▾ "
 		if !forceExpanded && !n.Expanded {
@@ -929,7 +948,7 @@ func chipsFor(f status.FileStatus) string {
 
 func aiSummaryChip(f status.FileStatus) string {
 	if summary := strings.TrimSpace(f.AISummary); summary != "" {
-		return styled(summary, styleMuted)
+		return styled(singleLine(summary), styleMuted)
 	}
 
 	switch f.AIStatus {

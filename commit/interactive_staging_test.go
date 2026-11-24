@@ -10,7 +10,7 @@ import (
 
 	"github.com/flanksource/gavel/internal/safefs"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -359,41 +359,30 @@ func writeRepoFile(dir, name, content string) {
 }
 
 func updateKey(m treeModel, key string) (treeModel, tea.Cmd) {
-	msg := tea.KeyMsg{Runes: []rune(key)}
+	msg := tea.KeyPressMsg{Text: key}
 	switch key {
 	case "up":
-		msg.Type = tea.KeyUp
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
-		msg.Type = tea.KeyDown
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyDown}
 	case "left":
-		msg.Type = tea.KeyLeft
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyLeft}
 	case "right":
-		msg.Type = tea.KeyRight
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyRight}
 	case "enter":
-		msg.Type = tea.KeyEnter
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
-		msg.Type = tea.KeyEsc
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyEscape}
 	case "backspace":
-		msg.Type = tea.KeyBackspace
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyBackspace}
 	case "ctrl+u":
-		msg.Type = tea.KeyCtrlU
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
 	case "ctrl+c":
-		msg.Type = tea.KeyCtrlC
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	case " ":
-		msg.Type = tea.KeySpace
-	default:
-		msg.Type = tea.KeyRunes
+		msg.Code = tea.KeySpace
 	}
-	out, cmd := m.handleKey(msg)
+	out, cmd := m.Update(msg)
 	return out.(treeModel), cmd
 }
 
