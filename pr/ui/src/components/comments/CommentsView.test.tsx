@@ -1,9 +1,12 @@
+import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_INBOX_FILTERS, projectScope, type NativeListItem } from '@flanksource/clicky-ui/comments/gavel';
-import { CommentsView } from './CommentsView';
+import { CommentsDetailPane } from './CommentsView';
+import { CommentsSidebar } from './CommentsSidebar';
 import { CommentSession } from './CommentSession';
+import { useCommentListings } from './queries';
 
 const { openEventStream } = vi.hoisted(() => ({ openEventStream: vi.fn() }));
 vi.mock('../../eventHub', () => ({ openEventStream }));
@@ -27,15 +30,66 @@ function thread(id: string, scope: string): NativeListItem {
 
 function show({ local = false, selectedId = '', visible = false } = {}) {
   const query = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={query}>
-    <CommentsView projects={projects} scopedProjects={projects} projectsLoaded projectError="" local={local} visible={visible}
-      filters={EMPTY_INBOX_FILTERS} selectedId={selectedId} onSelect={vi.fn()} onFiltersChange={vi.fn()} />
-  </QueryClientProvider>);
+  function DashboardComments() {
+    const [selection, setSelection] = useState(selectedId);
+    const [filters, setFilters] = useState(EMPTY_INBOX_FILTERS);
+    const comments = useCommentListings(projects, true, visible);
+    return <>
+      <CommentsSidebar query={comments} projects={projects} projectsLoaded projectError=""
+        filters={filters} selectedId={selection} onSelect={setSelection} onFiltersChange={setFilters} />
+      <CommentsDetailPane query={comments} selectedId={selection} local={local} projectsLoaded projectError="" />
+    </>;
+  }
+  return render(<QueryClientProvider client={query}><DashboardComments /></QueryClientProvider>);
 }
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('dashboard comments', () => {
+  it('opens the selected thread in a separate pane and keeps it open when filtered out', async () => {
+    vi.stubGlobal('fetch', (input: string) => {
+      const url = new URL(input, 'http://localhost');
+      if (url.pathname.endsWith('/capabilities')) return Response.json({ actions: [] });
+      return Response.json({ data: url.searchParams.get('scope') === uiScope ? [thread('ui', uiScope)] : [] });
+    });
+    show();
+
+    const list = screen.getByRole('region', { name: 'Comment inbox' });
+    const row = await within(list).findByRole('button', { name: 'View Review ui' });
+    fireEvent.click(row);
+    expect(row.getAttribute('aria-current')).toBe('true');
+    const detail = screen.getByRole('region', { name: 'Comment thread' });
+    expect(await within(detail).findByText('Review ui')).toBeTruthy();
+    expect(within(list).queryByTestId('comment-card')).toBeNull();
+
+    fireEvent.change(within(list).getByRole('searchbox', { name: 'Search comments' }), { target: { value: 'missing' } });
+    expect(await within(list).findByText('No threads match these filters')).toBeTruthy();
+    expect(within(detail).getByText('Review ui')).toBeTruthy();
+  });
+
+  it('marks the target read even when its unread thread is filtered out', async () => {
+    const unread = { ...thread('unread', uiScope), unread: true };
+    const readTarget = vi.fn();
+    vi.stubGlobal('fetch', (input: string, init?: RequestInit) => {
+      const url = new URL(input, 'http://localhost');
+      if (url.pathname.endsWith('/read')) {
+        readTarget(JSON.parse(String(init?.body)));
+        return Response.json({ marked: 1 });
+      }
+      const rows = [thread('matching', uiScope), { ...unread, unread: readTarget.mock.calls.length === 0 }];
+      return Response.json({ data: url.searchParams.get('scope') === uiScope ? rows : [] });
+    });
+    show();
+
+    await screen.findByRole('button', { name: 'View Review unread' });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search comments' }), { target: { value: 'matching' } });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'View Review unread' })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Mark README.md read' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Mark README.md read' })).toBeNull());
+    expect(readTarget.mock.calls).toEqual([[{ target: { scopeUri: uiScope, uri: unread.target.uri } }]]);
+  });
+
   it.each([
     { capability: 'update', kind: 'root', original: 'Review ui' },
     { capability: 'edit-reply', kind: 'reply', original: 'Reply to review' },

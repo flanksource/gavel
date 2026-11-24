@@ -1,28 +1,15 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CommentInbox, type InboxFilters, type InboxItem } from '@flanksource/clicky-ui/comments/gavel';
+import type { InboxItem } from '@flanksource/clicky-ui/comments/gavel';
 import { Button, Modal } from '@flanksource/clicky-ui/components';
 import { ActionError } from '@flanksource/clicky-ui/data';
+import { UiChatDots } from '@flanksource/clicky-ui/icons';
 import { fetchJSON, mutationJSON } from '../../query';
-import type { Project } from '../../types';
 import { projectApiUrl } from '../projectApiUrl';
 import { projectEditorsQueryKey } from '../projectMutations';
 import type { ProjectEditor } from '../projectStage';
-import { capabilitiesQuery, commentClient, commentListKey, useCommentListings } from './queries';
+import { commentListKey, type CommentListings } from './queries';
 import { CommentDetails } from './CommentDetails';
-
-interface CommentsViewProps {
-  projects: Project[];
-  scopedProjects: Project[];
-  projectsLoaded: boolean;
-  projectError: string;
-  local: boolean;
-  visible: boolean;
-  filters: InboxFilters;
-  selectedId: string;
-  onSelect: (id: string | undefined) => void;
-  onFiltersChange: (filters: InboxFilters) => void;
-}
 
 function externalTarget(item: InboxItem): URL | null {
   const address = item.thread.content?.page?.url ?? (item.uri.startsWith(`${item.scope}/pages/`) ? item.label : item.uri);
@@ -36,58 +23,51 @@ function filePath(item: InboxItem): string | null {
   return item.uri.startsWith(prefix) ? item.uri.slice(prefix.length) : null;
 }
 
-export function CommentsView({ projects, scopedProjects, projectsLoaded, projectError, local, visible, filters, selectedId, onSelect, onFiltersChange }: CommentsViewProps) {
-  const { listings, errors } = useCommentListings(scopedProjects, projectsLoaded && (projects.length > 0 || !projectError), visible);
-  const [opening, setOpening] = useState<InboxItem>();
-  const [readError, setReadError] = useState('');
-  const cache = useQueryClient();
-  const refresh = (scope: string) => cache.invalidateQueries({ queryKey: commentListKey(scope) });
-
-  async function review(item: InboxItem, action: 'close' | 'reopen', feedback?: string) {
-    try {
-      const actions = await cache.fetchQuery(capabilitiesQuery(item.thread.id, item.thread.version));
-      if (!actions.includes(action)) throw new Error(`This thread cannot be ${action === 'close' ? 'closed' : 'reopened'}`);
-      await commentClient(item.scope).act({ id: item.thread.id, version: item.thread.version, action, ...(feedback ? { bodyMarkdown: feedback } : {}) });
-    } finally {
-      await refresh(item.scope);
-    }
-  }
-
-  async function markRead({ scope, uri }: { scope: string; uri: string }) {
-    setReadError('');
-    try {
-      await commentClient(scope).markRead(uri);
-    } catch (cause) {
-      setReadError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      await refresh(scope);
-    }
-  }
+export function CommentsDetailPane({ query, selectedId, local, projectsLoaded, projectError }: {
+  query: CommentListings;
+  selectedId: string;
+  local: boolean;
+  projectsLoaded: boolean;
+  projectError: string;
+}) {
+  const item = query.items.find(candidate => candidate.thread.id === selectedId);
+  if (item) return <SelectedComment key={item.thread.id} item={item} local={local} />;
+  const error = [projectError, ...query.errors].filter(Boolean).join(' · ');
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {readError && <p role="alert" className="px-3 text-sm text-destructive">{readError}</p>}
-      <CommentInbox
-        listings={listings}
-        error={[projectError, ...errors].filter(Boolean).join(' · ') || null}
-        filters={filters}
-        onFiltersChange={onFiltersChange}
-        projectOptions={projects.map(({ name }) => ({ value: name, label: name }))}
-        baseUrl={window.location.origin}
-        expandedThreadId={selectedId || undefined}
-        onExpandedThreadChange={onSelect}
-        canOpen={(item) => Boolean(externalTarget(item) || (local && filePath(item)))}
-        onOpen={(item) => {
-          const url = externalTarget(item);
-          if (url) window.open(url.href, '_blank', 'noopener,noreferrer');
-          else setOpening(item);
-        }}
-        canReview={(item) => item.thread.phase === 'awaiting_outcome'}
-        actions={{ onClose: item => review(item, 'close'), onReopenWithFeedback: (item, feedback) => review(item, 'reopen', feedback), onMarkRead: markRead }}
-        renderThread={(item) => <CommentDetails key={item.thread.id} item={item} local={local} refresh={() => refresh(item.scope)} />}
-      />
-      {opening && <OpenCommentFile item={opening} onClose={() => setOpening(undefined)} />}
+    <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-sm text-muted-foreground">
+      <UiChatDots className="size-8" />
+      {!selectedId ? <p>Select a comment to view its thread</p>
+        : !projectsLoaded || query.pending ? <p role="status">Loading comment…</p>
+        : error ? <p role="alert">Could not load this comment. {error}</p>
+        : <p>Comment not found in this project scope.</p>}
     </div>
+  );
+}
+
+function SelectedComment({ item, local }: { item: InboxItem; local: boolean }) {
+  const [opening, setOpening] = useState(false);
+  const cache = useQueryClient();
+  const url = externalTarget(item);
+  const target = item.line === undefined ? item.label : `${item.label}:${item.line}`;
+  return (
+    <section aria-label="Comment thread" className="flex h-full min-h-0 min-w-0 flex-col">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-border px-4 py-2">
+        <div className="min-w-0 flex-1 basis-36">
+          <div className="truncate text-xs text-muted-foreground" title={item.project}>{item.project}</div>
+          <h1 className="truncate font-mono text-sm font-medium" title={target}>{target}</h1>
+        </div>
+        {url ? <Button asChild variant="outline" size="sm">
+          <a href={url.href} target="_blank" rel="noopener noreferrer" aria-label={`Open ${target}`}>Open target</a>
+        </Button> : local && filePath(item) ? (
+          <Button variant="outline" size="sm" aria-label={`Open ${target}`} onClick={() => setOpening(true)}>Open in editor</Button>
+        ) : null}
+      </header>
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3 [overflow-wrap:anywhere] sm:p-4">
+        <CommentDetails item={item} local={local} refresh={() => cache.invalidateQueries({ queryKey: commentListKey(item.scope) })} />
+      </div>
+      {opening && <OpenCommentFile item={item} onClose={() => setOpening(false)} />}
+    </section>
   );
 }
 

@@ -3,9 +3,9 @@ import { buildRoute, emptyRouteState, parseRoute } from './routes';
 
 describe('comments routes', () => {
   it('restores a thread, project scope and inbox filters after a reload', () => {
-    const location = new URL('http://localhost:9092/comments?project=My+project&thread=thread-1&q=retry+logic&status=open&phase=active&author=ada&kind=file&unread=true');
+    const location = new URL('http://localhost:9092/comments?project=My+project&thread=thread-1&q=retry+logic&status=resolved&phase=awaiting_outcome&author=ada&kind=file&unread=true&review=true');
     const route = parseRoute(location as unknown as Location);
-    expect(route).toMatchObject({ tab: 'comments', selectedPath: 'thread-1', scopeProject: 'My project', commentFilters: { q: 'retry logic', status: 'open', phase: 'active', author: 'ada', kind: 'file', unread: true } });
+    expect(route).toMatchObject({ tab: 'comments', selectedPath: 'thread-1', scopeProject: 'My project', commentFilters: { q: 'retry logic', status: 'resolved', phase: 'awaiting_outcome', author: 'ada', kind: 'file', unread: true, review: true } });
     expect(buildRoute(route)).toBe(location.pathname + location.search);
   });
 });

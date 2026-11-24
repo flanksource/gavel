@@ -3,7 +3,7 @@ import type { PRItem } from './types';
 import { emptyFilters, type Filters, type FilterMode } from './components/FilterBar';
 import { isProjectRefParam } from './projectRef';
 import { isTodoDetailTab, type TodoDetailTabKey } from './components/todos/TodoDetailTabs';
-import type { InboxFilters } from '@flanksource/clicky-ui/comments/gavel';
+import { EMPTY_INBOX_FILTERS, type InboxFilters } from '@flanksource/clicky-ui/comments/gavel';
 
 export type ExportFormat = 'json' | 'md';
 
@@ -16,7 +16,8 @@ export type Tab = 'prs' | 'projects' | 'processes' | 'todos' | 'comments' | 'ses
 const SPA_TABS: readonly Tab[] = ['projects', 'processes', 'todos', 'comments', 'sessions', 'activity', 'tasks', 'prompts', 'runs', 'platform'];
 const commentFilterKeys = ['q', 'status', 'phase', 'author', 'kind'] as const;
 export type CommentFilters = Omit<InboxFilters, 'project'>;
-export const emptyCommentFilters: CommentFilters = { q: '', status: '', phase: '', author: '', kind: '', unread: false };
+const { project: _project, ...emptyCommentFilters } = EMPTY_INBOX_FILTERS;
+export { emptyCommentFilters };
 
 export interface RouteState {
   tab: Tab;
@@ -117,6 +118,7 @@ export function parseRoute(location: Location): RouteState {
     ...(tab === 'comments' ? { commentFilters: {
       q: params.get('q') ?? '', status: params.get('status') ?? '', phase: params.get('phase') ?? '',
       author: params.get('author') ?? '', kind: params.get('kind') ?? '', unread: params.get('unread') === 'true',
+      review: params.get('review') === 'true',
     } } : {}),
     ...(tab === 'tasks' && (params.has('from') || params.has('to'))
       ? { taskTimeRange: { from: params.get('from') ?? '', to: params.get('to') ?? '' } }
@@ -163,6 +165,7 @@ export function buildRoute(state: RouteState): string {
     const filters = state.commentFilters ?? emptyCommentFilters;
     for (const key of commentFilterKeys) if (filters[key]) params.set(key, filters[key]);
     if (filters.unread) params.set('unread', 'true');
+    if (filters.review) params.set('review', 'true');
   } else if (state.tab === 'tasks' && state.taskTimeRange) {
     const { from, to } = state.taskTimeRange;
     if (from || !to) params.set('from', from);

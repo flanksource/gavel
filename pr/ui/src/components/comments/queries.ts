@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { queryOptions, useQueries, useQueryClient } from '@tanstack/react-query';
-import { createGavelCommentsClient, projectScope } from '@flanksource/clicky-ui/comments/gavel';
+import { createGavelCommentsClient, inboxItems, projectScope } from '@flanksource/clicky-ui/comments/gavel';
 import { openEventStream } from '../../eventHub';
 import { dashboardFetch, fetchJSON } from '../../query';
 import type { Project } from '../../types';
@@ -34,11 +34,10 @@ export function commentSessionsQuery(scope: string) {
 export function useCommentListings(projects: Project[], enabled: boolean, visible: boolean) {
   const query = useQueryClient();
   const [eventErrors, setEventErrors] = useState<Record<string, string>>({});
-  const sources = useMemo(() => projects.map(({ name }) => ({ scope: projectScope(name), project: name })), [projects]);
+  const sources = useMemo(() => enabled ? projects.map(({ name }) => ({ scope: projectScope(name), project: name })) : [], [projects, enabled]);
   const results = useQueries({ queries: sources.map(source => ({
     queryKey: commentListKey(source.scope),
     queryFn: async ({ signal }) => ({ ...source, threads: await commentClient(source.scope, signal).list() }),
-    enabled,
     staleTime: 15_000,
   })) });
 
@@ -76,5 +75,7 @@ export function useCommentListings(projects: Project[], enabled: boolean, visibl
     const message = result.error?.message || (source && eventErrors[source.scope]);
     return source && message ? [`${source.project}: ${message}`] : [];
   });
-  return { listings: enabled && (listings.length > 0 || sources.length === 0) ? listings : undefined, errors };
+  return { items: inboxItems(listings), listings, errors, pending: results.some(result => result.isPending) };
 }
+
+export type CommentListings = ReturnType<typeof useCommentListings>;

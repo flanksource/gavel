@@ -7,7 +7,9 @@ import { AppShell, Button, SplitButton } from '@flanksource/clicky-ui/components
 import { TaskManager, TaskManagerButton } from '@flanksource/clicky-ui/data';
 import { ChatButton } from '@flanksource/clicky-ui/ai';
 import { ActivityView } from './components/ActivityView';
-import { CommentsView } from './components/comments/CommentsView';
+import { CommentsDetailPane } from './components/comments/CommentsView';
+import { CommentsSidebar } from './components/comments/CommentsSidebar';
+import { useCommentListings } from './components/comments/queries';
 import { TodoNewButton, TodoNavbarDensityPicker, TodoNavbarLayoutPicker, TodoWorkspaceList, TodoDetailPane, TodoFullPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { PlanReviewBar, TodoReviewButton, useReviewMode } from './components/todos/PlanReview';
@@ -73,7 +75,7 @@ const PlatformView = lazy(() => import('./components/platform/PlatformView').the
 // Percentage width of the AppShell body sidebar per tab. A PR row carries title,
 // repo, checks and badges so it wants half the body; a project is just a name and
 // a run list, so its list is narrow.
-const bodySplitByTab: Partial<Record<Tab, number>> = { prs: 50, projects: 22, todos: 38, sessions: 32 };
+const bodySplitByTab: Partial<Record<Tab, number>> = { prs: 50, projects: 22, todos: 38, comments: 38, sessions: 32 };
 
 function prFromRoutePath(path: string): PRItem | null {
   const parts = path.split('/').filter(Boolean);
@@ -627,6 +629,9 @@ export function App() {
   const agentSessions = useAgentSessions({
     enabled: (isMenubar ? menubarTab === 'sessions' : activeTab === 'sessions') && streamsActive,
   });
+  const commentsEnabled = !isMenubar && !settingsScope && activeTab === 'comments' && projectsLoaded && (visibleProjects.length > 0 || !projectError);
+  const comments = useCommentListings(scopedProjects, commentsEnabled, visible);
+  const navigateComment = (id: string) => commitRoute({ ...routeState, selectedPath: id });
   const projectSidebar = <ProjectsSidebar
     catalog={projectCatalog}
     gitSummary={projectGitSummary}
@@ -770,6 +775,7 @@ export function App() {
     prs: { selected: selected !== null, onBack: closeSelectedPR, label: 'Back to pull requests' },
     projects: { selected: selectedPath !== '', onBack: () => navigateProject(''), label: 'Back to projects' },
     todos: { selected: selectedPath !== '', onBack: () => navigateTodo(''), label: 'Back to todos' },
+    comments: { selected: selectedPath !== '', onBack: () => navigateComment(''), label: 'Back to comments' },
     sessions: { selected: selectedPath !== '', onBack: () => navigateSession(''), label: 'Back to sessions' },
   };
   const bodyBack = settingsPage || (activeTab === 'todos' && todosFullWidth) ? undefined : bodyBackByTab[activeTab];
@@ -865,6 +871,13 @@ export function App() {
             projectSidebar
           ) : activeTab === 'todos' && !todosFullWidth ? (
             <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} />
+          ) : activeTab === 'comments' ? (
+            <CommentsSidebar query={comments} projects={visibleProjects} projectsLoaded={projectsLoaded} projectError={projectError}
+              filters={{ ...(commentFilters ?? emptyCommentFilters), project: scopeProject }} selectedId={selectedPath} onSelect={navigateComment}
+              onFiltersChange={({ project, ...next }) => commitRoute({
+                ...routeState, scopeProject: project, commentFilters: next,
+                selectedPath: project === scopeProject ? selectedPath : '',
+              }, 'replace')} />
           ) : activeTab === 'sessions' ? (
             <SessionsSidebar query={agentSessions} selectedId={selectedPath} scopeProject={scopeProject} onSelect={navigateSession} />
           ) : undefined
@@ -877,7 +890,7 @@ export function App() {
         // table wants the whole viewport, but the detail wants the contained
         // measure so markdown and session logs stay readable. Every other tab
         // passes a body sidebar, which AppShell already forces to full width.
-        contentWidth={settingsPage || activeTab === 'comments' ? 'full' : todosFullWidth ? (todos.selected ? 'contained' : 'full') : undefined}
+        contentWidth={settingsPage ? 'full' : todosFullWidth ? (todos.selected ? 'contained' : 'full') : undefined}
         contentClassName="overflow-hidden"
       >
         {settingsPage ? settingsPage : activeTab === 'prs' ? (
@@ -912,21 +925,7 @@ export function App() {
             </div>
           </div>
         ) : activeTab === 'comments' ? (
-          <CommentsView
-            projects={visibleProjects}
-            scopedProjects={scopedProjects}
-            projectsLoaded={projectsLoaded}
-            projectError={projectError}
-            local={hostControls}
-            visible={visible}
-            filters={{ ...(commentFilters ?? emptyCommentFilters), project: scopeProject }}
-            selectedId={selectedPath}
-            onSelect={(id) => commitRoute({ ...routeState, selectedPath: id ?? '' })}
-            onFiltersChange={({ project, ...next }) => commitRoute({
-              ...routeState, scopeProject: project, commentFilters: next,
-              selectedPath: project === scopeProject ? selectedPath : '',
-            }, 'replace')}
-          />
+          <CommentsDetailPane query={comments} selectedId={selectedPath} local={hostControls} projectsLoaded={projectsLoaded} projectError={projectError} />
         ) : activeTab === 'sessions' ? (
           <SessionsDetailPane query={agentSessions} selectedId={selectedPath} onOpenTodo={navigateTodo} onOpenWorktree={navigateSessionWorktree} />
         ) : activeTab === 'tasks' ? (
