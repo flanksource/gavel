@@ -103,6 +103,15 @@ func ExtractFailedLintTargets(results []*linters.LinterResult) (linterNames []st
 			linterNames = append(linterNames, r.Linter)
 		}
 		for _, v := range r.Violations {
+			if inputs := r.Sources[v.File].Inputs; len(inputs) > 0 {
+				for _, input := range inputs {
+					if !seenFiles[input] {
+						seenFiles[input] = true
+						files = append(files, input)
+					}
+				}
+				continue
+			}
 			file := v.File
 			if r.WorkDir != "" && filepath.IsAbs(file) {
 				if rel, err := filepath.Rel(r.WorkDir, file); err == nil {

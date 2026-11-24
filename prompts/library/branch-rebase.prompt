@@ -39,6 +39,7 @@ permissions:
     Bash(git rebase --continue:*): allow
     Bash(git rebase --skip:*): allow
     Bash(git -c core.editor=true rebase --continue:*): allow
+    Bash(git -c core.editor=true merge --continue:*): allow
     "Bash({{shq gavelExecutable}} git rebase start:*)": allow
     "Bash({{shq gavelExecutable}} git rebase check:*)": allow
     "Bash({{shq gavelExecutable}} git rebase finish:*)": allow
@@ -83,7 +84,7 @@ The failed attempt reported:
 - `{{this}}`
 {{/each}}
 
-1. Inspect the live Git status. If a rebase is paused, resolve its current conflicts, stage only the resolved paths, and run `git -c core.editor=true rebase --continue`. Repeat for every stopped commit. Skip a commit only when its entire change is already present and it has become empty. Do not restart the rebase over a paused operation.
+1. Inspect the live Git status. If a rebase is paused, resolve its current conflicts, stage only the resolved paths, and run `git -c core.editor=true rebase --continue`. Repeat for every stopped commit. Skip a commit only when its entire change is already present and it has become empty. Do not restart the rebase over a paused operation. If the operation merges the target in instead (Git reports a merge in progress), resolve the conflicts, stage only the resolved paths, run `git -c core.editor=true merge --continue` once, then retry the operation with `{{shq gavelExecutable}} git rebase start --worktree {{shq worktree}} --operation {{shq operation}}` so gavel finalizes it.
 2. If preparation or fetching failed before the rebase began, retry the same operation with `{{shq gavelExecutable}} git rebase start --worktree {{shq worktree}} --operation {{shq operation}}`. This retains its original target and saved edits. Explain missing credentials or inaccessible remotes if they cannot be fixed within the existing configuration.
 3. If saved-edit restoration failed, inspect the retained stash and the live index and files. Git can refuse `stash apply --index` without creating unmerged paths: do not assume an empty conflict list means the edits were restored. Reconstruct all saved tracked and untracked edits, preserve staging where possible, and keep them uncommitted. Only after confirming the complete restoration, run `{{shq gavelExecutable}} git rebase finish --resolved --worktree {{shq worktree}} --operation {{shq operation}}`. This acknowledgement is also required when restoration was interrupted.
 4. For a finished rebase, run the project's focused tests and build. Do not commit test fixes or saved edits. Report any remaining failure rather than landing or publishing the branch. Gavel's verification hook checks the operation, then its finalization hook restores saved edits. A restoration failure keeps the stash and is reported as a failed run for another recovery attempt.

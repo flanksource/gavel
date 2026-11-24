@@ -40,6 +40,31 @@ var _ = Describe("embedded project action schemas", func() {
 		Expect(captured.Args).To(Equal([]string{"one.go"}))
 	})
 
+	It("serializes Open PR options into gavel commit push flags the real binder accepts", func() {
+		args, err := provider.Args("open-pr", map[string]any{"push": "branch", "target": "zim/main:feat/x", "auto-merge": true, "merge-type": "squash"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(args).To(Equal([]string{"--push=branch", "--target=zim/main:feat/x", "--auto-merge=true", "--merge-type=squash"}))
+		var captured CommitOptions
+		root := &cobra.Command{Use: "probe", SilenceErrors: true, SilenceUsage: true}
+		registerCommitCommand(root, func(options CommitOptions) (any, error) { captured = options; return nil, nil })
+		root.SetArgs(append([]string{"commit", "--dry-run"}, args...))
+		Expect(root.Execute()).To(Succeed())
+		Expect([]any{captured.Push, captured.Target, captured.AutoMerge, captured.MergeType}).To(Equal([]any{"branch", "zim/main:feat/x", true, "squash"}))
+	})
+
+	It("types every Open PR option like its gavel commit flag", func() {
+		definition, err := provider.Schema("open-pr")
+		Expect(err).NotTo(HaveOccurred())
+		command, err := schemaCommand("commit")
+		Expect(err).NotTo(HaveOccurred())
+		for name, raw := range definition.Schema["properties"].(map[string]any) {
+			flag := command.Flags().Lookup(name)
+			Expect(flag).NotTo(BeNil(), "commit --%s", name)
+			expected := map[string]string{"bool": "boolean", "string": "string"}
+			Expect(raw.(map[string]any)["type"]).To(Equal(expected[flag.Value.Type()]), "commit --%s", name)
+		}
+	})
+
 	DescribeTable("rejects invalid options before execution", func(action string, options map[string]any, field string) {
 		_, err := provider.Args(action, options)
 		Expect(err).To(HaveOccurred())

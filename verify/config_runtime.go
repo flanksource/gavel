@@ -148,7 +148,7 @@ func (c GavelConfig) validateRuntime() error {
 	return nil
 }
 
-var BuiltinLinterNames = []string{"golangci-lint", "ruff", "eslint", "oxlint", "react-doctor", "pyright", "tsc", "markdownlint", "vale", "jscpd", "betterleaks", "uir", "json", "github"}
+var BuiltinLinterNames = []string{"golangci-lint", "ruff", "eslint", "oxlint", "react-doctor", "pyright", "tsc", "markdownlint", "vale", "jscpd", "betterleaks", "uir", "sql", "json", "github"}
 
 func RuntimeConfigDirectory(executionDir, invocationDir string) string {
 	if invocationDir == "" {

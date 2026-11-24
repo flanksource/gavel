@@ -18,7 +18,24 @@ var _ = Describe("Embedded action documents", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(document.Schema["$id"]).To(Equal("urn:gavel:project-action:" + action + ":v2"))
 		Expect(document.Validate(map[string]any{"unexpected": true})).To(HaveOccurred())
-	}, Entry("commit", "commit"), Entry("lint", "lint"), Entry("test", "test"))
+	}, Entry("commit", "commit"), Entry("open-pr", "open-pr"), Entry("lint", "lint"), Entry("test", "test"))
+
+	DescribeTable("validates Open PR push options", func(options map[string]any, valid bool) {
+		document, err := Load("open-pr")
+		Expect(err).NotTo(HaveOccurred())
+		if valid {
+			Expect(document.Validate(options)).To(Succeed())
+		} else {
+			Expect(document.Validate(options)).NotTo(Succeed())
+		}
+	},
+		Entry("whole branch with auto-merge", map[string]any{"push": "branch", "auto-merge": true, "merge-type": "squash"}, true),
+		Entry("remote target with topic", map[string]any{"target": "zim/main:feat/new-topic"}, true),
+		Entry("unknown push mode", map[string]any{"push": "force"}, false),
+		Entry("unknown merge method", map[string]any{"merge-type": "octopus"}, false),
+		Entry("option-like target", map[string]any{"target": "--upload-pack=x"}, false),
+		Entry("commit option", map[string]any{"message": "feat: x"}, false),
+	)
 
 	It("rejects unknown schema names", func() {
 		_, err := Load("../commit")

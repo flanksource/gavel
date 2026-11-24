@@ -22,7 +22,7 @@ table "comment_operations" {
  index "comment_operations_active" {
   unique = true
   columns = [column.tenant_id, column.comment_id]
-  where = "state IN ('pending','inflight')"
+  where = "state = ANY (ARRAY['pending'::text, 'inflight'::text])"
  }
  foreign_key "comment_operations_root" {
   columns = [column.tenant_id, column.comment_id]

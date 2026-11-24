@@ -40,6 +40,7 @@ func init() {
 	}
 	rootCmd.AddCommand(gitCmd)
 	gitCmd.AddCommand(newGitRebaseCommand())
+	gitCmd.AddCommand(newGitMergeCommand())
 
 	clicky.AddCommand(gitCmd, git.HistoryOptions{}, func(filter git.HistoryOptions) (any, error) {
 		commits, err := git.GetCommitHistory(filter)

@@ -35,6 +35,7 @@ require (
 	github.com/flanksource/repomap v0.4.1
 	github.com/flanksource/telltale/sdk v0.0.6
 	github.com/flanksource/telltale/sdk/commonsdb v0.0.6
+	github.com/flanksource/uir v1.13.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ghodss/yaml v1.0.0
 	github.com/gliderlabs/ssh v0.3.8
@@ -131,6 +132,7 @@ require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b // indirect
 	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
+	github.com/alecthomas/participle/v2 v2.1.4 // indirect
 	github.com/alpkeskin/gotoon v0.1.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/antchfx/xmlquery v1.5.2 // indirect
@@ -232,7 +234,7 @@ require (
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.9 // indirect
-	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
+	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
