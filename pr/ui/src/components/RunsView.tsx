@@ -183,7 +183,6 @@ function RunTime({ run }: { run: SandboxRun }) {
   let caption = '';
   if (run.lost) caption = `Still recorded as running ${formatSeconds(worked - timeout)} past its ${formatSeconds(timeout)} timeout. Its job is gone and can no longer report how it ended.`;
   else if (run.status === 'running' && timeout) caption = `${formatSeconds(worked)} of ${formatSeconds(timeout)} used. Stopped at ${new Date(new Date(run.startedAt!).getTime() + timeout * 1000).toLocaleTimeString()} if still running.`;
-  else if (run.startedAt && run.finishedAt && timeout) caption = `Used ${Math.max(1, Math.round((worked / timeout) * 100))}% of its ${formatSeconds(timeout)} timeout.`;
 
   return (
     <div className="flex flex-col gap-1">
@@ -230,7 +229,7 @@ function formatSize(run: SandboxRun): string {
     run.cpuMillicores ? `${run.cpuMillicores / 1000} CPU` : '',
     run.memoryBytes ? `${+(run.memoryBytes / 2 ** 30).toFixed(1)} GiB` : '',
   ].filter(Boolean);
-  return [run.template, parts.join(' · ')].filter(Boolean).join(' · ');
+  return parts.join(' · ');
 }
 
 const errorLine = /\b(error|err|fail(ed|ure)?|panic|fatal)\b|^--- FAIL|exit status [1-9]/i;
@@ -309,6 +308,7 @@ function RunDetail({ run }: { run: SandboxRun }) {
           { label: 'Started', value: run.startedAt ? <Timestamp value={run.startedAt} format="short" /> : '—' },
           { label: 'Finished', value: run.finishedAt ? <Timestamp value={run.finishedAt} format="short" /> : '—' },
           { label: 'Size', value: formatSize(run) },
+          { label: 'Template', value: run.template, mono: true },
           { label: 'Backend', value: run.backend },
           { label: 'Job', value: run.backendRef, mono: true },
           { label: 'Args', value: args, mono: true },
@@ -318,7 +318,7 @@ function RunDetail({ run }: { run: SandboxRun }) {
         ].filter(item => item.value).map(item => (
           <div key={item.label} className="min-w-0">
             <dt className="text-muted-foreground">{item.label}</dt>
-            <dd className={`truncate ${item.mono ? 'font-mono' : ''}`}>{item.value}</dd>
+            <dd className={`truncate ${item.mono ? 'font-mono' : ''}`} title={typeof item.value === 'string' ? item.value : undefined}>{item.value}</dd>
           </div>
         ))}
       </dl>
