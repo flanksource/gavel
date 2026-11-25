@@ -25,6 +25,7 @@ var hostedPassThrough = []string{
 	"GET /api/events", "POST /api/events/{conn}/subs", "DELETE /api/events/{conn}/subs/{id}",
 	"/api/status", "GET /api/auth/config", "GET /api/me",
 	"GET /api/ssh-keys", "POST /api/ssh-keys", "DELETE /api/ssh-keys/{id}",
+	"GET /api/commit-identity", "PUT /api/commit-identity",
 	"GET /api/model-keys", "PUT /api/model-keys/{provider}", "DELETE /api/model-keys/{provider}",
 	"GET /api/sandbox-runs", "GET /api/sandbox-runs/{id}/log", "GET /api/usage", "GET /api/usage/measured",
 	"GET /api/budgets", "PUT /api/budgets/{resource}/{kind}", "DELETE /api/budgets/{resource}/{kind}",
