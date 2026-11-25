@@ -96,7 +96,7 @@ sandbox:
     size:
       cpu: ""
       memory: ""
-    # Hosts environments may reach besides gavel serve, the Go, npm and Python registries and GitHub.
+    # Hosts environments may reach besides the Go, npm and Python registries and GitHub.
     egress: []
     # The name substrate's credential provider knows this gavel by, in each run's model key URI,
     # e.g. beta. Organizations' own model keys are injected into their runs' requests.

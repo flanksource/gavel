@@ -181,8 +181,8 @@ created from the runner image. The environment is deleted once the job exits or 
 - **Versions.** gavel speaks Substrate 1.0.0-rc.2 and env `56424de` or later.
 - **Egress.** Substrate denies every destination an actor's egress policy doesn't allow. gavel
   gives each environment, a job's or an agent run's, a policy that allows proxy.golang.org,
-  sum.golang.org, registry.npmjs.org, pypi.org, files.pythonhosted.org, github.com,
-  codeload.github.com and objects.githubusercontent.com, plus any `--substrate-egress` hosts,
+  sum.golang.org, storage.googleapis.com, registry.npmjs.org, pypi.org, files.pythonhosted.org,
+  github.com, codeload.github.com, objects.githubusercontent.com and api.github.com, plus any `--substrate-egress` hosts,
   over TLS on 443, and never gavel serve, which a run asks over its own channel.
 - **Model keys.** Each organization sets its own under Model keys in its settings; they never
   enter the environment, and `--sandbox-secret-env` is refused. Substrate's egress gateway
