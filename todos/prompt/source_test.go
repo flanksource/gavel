@@ -82,3 +82,29 @@ func TestReadSourceLines_EdgeOfFile(t *testing.T) {
 	assert.Contains(t, result, "line 1 content")
 	assert.Contains(t, result, "line 5 content")
 }
+
+func TestReadSourceLines_AbsolutePathInsideWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestFile(t, dir, "pkg/code.go", 5)
+
+	result, err := ReadSourceLines(dir, types.PathRef{File: path})
+	require.NoError(t, err)
+	assert.Contains(t, result, "line 5 content")
+}
+
+// A todo's path refs come from its frontmatter, which a hosted todo's author writes, so a ref
+// names only a file in the todo's repository: anything else would put another file serve can
+// read into the prompt.
+func TestReadSourceLines_RefusesAFileOutsideWorkDir(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "repo")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	outside := writeTestFile(t, parent, "secret.txt", 3)
+	require.NoError(t, os.Symlink(outside, filepath.Join(dir, "link.txt")))
+
+	for _, ref := range []string{"../secret.txt", outside, "link.txt"} {
+		result, err := ReadSourceLines(dir, types.PathRef{File: ref})
+		assert.ErrorContains(t, err, "escapes", ref)
+		assert.Empty(t, result, ref)
+	}
+}
