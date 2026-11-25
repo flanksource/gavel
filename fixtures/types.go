@@ -20,7 +20,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/testrunner/parsers"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // FixtureTest represents a single test case parsed from a markdown table.
@@ -299,23 +299,17 @@ func (e ExecFixtureBase) Template(data map[string]any, env map[string]string) (E
 	copy(origArgs, e.Args)
 
 	e.Exec = ExpandVars(e.Exec, vars)
-	if e.Exec, err = gomplate.RunTemplate(data, gomplate.Template{
-		Template: e.Exec,
-	}); err != nil {
+	if e.Exec, err = gomplate.RunTemplate(data, gomplate.Template{Template: e.Exec, Strict: true}); err != nil {
 		return ExecFixtureBase{}, err
 	}
 
 	e.Build = ExpandVars(e.Build, data)
-	if e.Build, err = gomplate.RunTemplate(data, gomplate.Template{
-		Template: e.Build,
-	}); err != nil {
+	if e.Build, err = gomplate.RunTemplate(data, gomplate.Template{Template: e.Build, Strict: true}); err != nil {
 		return ExecFixtureBase{}, err
 	}
 
 	e.Daemon = ExpandVars(e.Daemon, data)
-	if e.Daemon, err = gomplate.RunTemplate(data, gomplate.Template{
-		Template: e.Daemon,
-	}); err != nil {
+	if e.Daemon, err = gomplate.RunTemplate(data, gomplate.Template{Template: e.Daemon, Strict: true}); err != nil {
 		return ExecFixtureBase{}, err
 	}
 
@@ -334,9 +328,7 @@ func (e ExecFixtureBase) Template(data map[string]any, env map[string]string) (E
 		} else {
 			e.Args[i] = ExpandVars(e.Args[i], vars)
 		}
-		e.Args[i], err = gomplate.RunTemplate(data, gomplate.Template{
-			Template: e.Args[i],
-		})
+		e.Args[i], err = gomplate.RunTemplate(data, gomplate.Template{Template: e.Args[i], Strict: true})
 		if err != nil {
 			return ExecFixtureBase{}, err
 		}

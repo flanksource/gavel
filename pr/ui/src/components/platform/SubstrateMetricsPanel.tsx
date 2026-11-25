@@ -1,12 +1,12 @@
 // The platform dashboard's substrate metrics panel, and MetricsViewPanel, which draws any Mission
 // Control View gavel serves: timeseries as line charts and single values as figures.
-import type { ReactNode } from 'react';
+import { Suspense, use, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { StatStrip } from '@flanksource/clicky-ui/data';
 import { fetchJSON, queryKeys } from '../../query';
 import { PanelHeading } from './PanelHeading';
 import { formatDateTime } from './dates';
+import { loadRecharts } from './recharts';
 
 export interface MetricPoint {
   time: string;
@@ -71,13 +71,39 @@ function figure(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
+// Column is a series as the chart and table show it: its values are under key in each time row.
+interface Column {
+  key: string;
+  label: string;
+}
+
+// LinesChart draws columns, each in the --series-* slot of its place.
+function LinesChart({ rows, columns }: { rows: TimeRow[]; columns: Column[] }) {
+  const { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } = use(loadRecharts());
+  const labels = Object.fromEntries(columns.map(column => [column.key, column.label]));
+  return (
+    // initialDimension sizes the first render, before the container is measured.
+    <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 480, height: 192 }}>
+      <LineChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.15} />
+        <XAxis dataKey="time" tickFormatter={clock} minTickGap={32} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
+        <YAxis width={40} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
+        <Tooltip labelFormatter={label => clock(String(label))} formatter={(value, key) => [figure(Number(value)), labels[String(key)]]} />
+        {columns.length > 1 && <Legend formatter={(key: string) => <span className="text-xs text-foreground">{labels[key]}</span>} iconSize={8} />}
+        {columns.map((column, index) => (
+          <Line key={column.key} dataKey={column.key} stroke={`var(--series-${index + 1})`} strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
 // SeriesLines draws a timeseries panel's first seriesSlots series, each in its --series-* slot,
 // with every series' numbers as a table: three of the colors are faint on the light surface.
 function SeriesLines({ panel }: { panel: MetricPanel }) {
   const series = panel.series ?? [];
-  const labels = series.map(line => seriesLabel(line.labels, panel.name));
+  const columns = series.map((line, index) => ({ key: `s${index}`, label: seriesLabel(line.labels, panel.name) }));
   const rows = timeRows(series);
-  const drawn = series.slice(0, seriesSlots);
   return (
     <figure className="flex flex-col gap-1">
       <figcaption className="text-xs text-muted-foreground">
@@ -88,19 +114,9 @@ function SeriesLines({ panel }: { panel: MetricPanel }) {
         <p className="text-xs text-muted-foreground">No samples in the view's range.</p>
       ) : (
         <div className="h-48 text-muted-foreground">
-          {/* initialDimension sizes the first render, before the container is measured. */}
-          <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 480, height: 192 }}>
-            <LineChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.15} />
-              <XAxis dataKey="time" tickFormatter={clock} minTickGap={32} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
-              <YAxis width={40} tick={{ fill: 'currentColor', fontSize: 11 }} tickLine={false} axisLine={false} />
-              <Tooltip labelFormatter={label => clock(String(label))} formatter={(value, key) => [figure(Number(value)), labels[Number(String(key).slice(1))]]} />
-              {drawn.length > 1 && <Legend formatter={(key: string) => <span className="text-xs text-foreground">{labels[Number(key.slice(1))]}</span>} iconSize={8} />}
-              {drawn.map((_, index) => (
-                <Line key={index} dataKey={`s${index}`} stroke={`var(--series-${index + 1})`} strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
+          <Suspense fallback={null}>
+            <LinesChart rows={rows} columns={columns.slice(0, seriesSlots)} />
+          </Suspense>
         </div>
       )}
       {series.length > seriesSlots && (
@@ -112,8 +128,9 @@ function SeriesLines({ panel }: { panel: MetricPanel }) {
           <table aria-label={panel.name} className="mt-1 w-full border-collapse text-left">
             <thead className="text-muted-foreground">
               <tr>
-                {['Time', ...labels].map((heading, index) => (
-                  <th key={index} className="border-b border-border px-2 py-1 font-medium">{heading}</th>
+                <th className="border-b border-border px-2 py-1 font-medium">Time</th>
+                {columns.map(column => (
+                  <th key={column.key} className="border-b border-border px-2 py-1 font-medium">{column.label}</th>
                 ))}
               </tr>
             </thead>
@@ -121,9 +138,9 @@ function SeriesLines({ panel }: { panel: MetricPanel }) {
               {rows.map(row => (
                 <tr key={row.time} className="border-b border-border">
                   <td className="px-2 py-1 font-mono">{formatDateTime(row.time)}</td>
-                  {series.map((_, index) => {
-                    const value = row[`s${index}`];
-                    return <td key={index} className="px-2 py-1">{typeof value === 'number' ? figure(value) : '—'}</td>;
+                  {columns.map(column => {
+                    const value = row[column.key];
+                    return <td key={column.key} className="px-2 py-1">{typeof value === 'number' ? figure(value) : '—'}</td>;
                   })}
                 </tr>
               ))}

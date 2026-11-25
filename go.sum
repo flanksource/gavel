@@ -398,8 +398,8 @@ github.com/flanksource/commons-db/recordstore v0.1.73 h1:l1jZE8VEXz/bV+JKZKKdYtV
 github.com/flanksource/commons-db/recordstore v0.1.73/go.mod h1:6DUdDRLqCxz2lNFUPDlSbqyMIIetbmQFvdP6nVsYUfw=
 github.com/flanksource/commons-db/tracing v0.1.73 h1:A06MPIuy/CXjamUtrPSz7X1USP0BpNPlUX7KUv4DlsY=
 github.com/flanksource/commons-db/tracing v0.1.73/go.mod h1:Fu9JZOh/BSm2f+WEYTlWgB7cv67WS/GHfIDOGdkm+8Y=
-github.com/flanksource/deps v1.0.51 h1:i5iOzDTVTLdvXfMfan0tNZQAtaYxcipk0nJwE9FhMEk=
-github.com/flanksource/deps v1.0.51/go.mod h1:/AdWJJhDH/Phs+NxR2RLiwM3sHgBzb+LNgqAwtcyYgU=
+github.com/flanksource/deps v1.0.52-0.20261116192909-7d15f95777f7 h1:e+UVCq3g1x15qlDq2yqUoTLSByjZXX6fO4QKOcfZFV0=
+github.com/flanksource/deps v1.0.52-0.20261116192909-7d15f95777f7/go.mod h1:DenwXYIS6Im8YpZjUwWmwHJ1WnNMQULmqEM12/TsOD0=
 github.com/flanksource/deps/start v0.0.0-20261103114210-92d640aba10a h1:gJ2Ngheips7UQeJTEHcyUE7dcbIW0I0s2+z9HFA5UVg=
 github.com/flanksource/deps/start v0.0.0-20261103114210-92d640aba10a/go.mod h1:2di5Ubu3eec1O3dAjFm2UgdRdomLw8WP7jMS3D0wjxI=
 github.com/flanksource/duty v1.0.1419 h1:FEf3uuLS5D/5dCJ+Ex1aGHQ8HWmEygfdmF15bUyUtfM=

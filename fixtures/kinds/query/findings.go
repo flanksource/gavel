@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/task"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/linters"

@@ -72,12 +72,11 @@ export function OrgBudgets() {
     queryKey: queryKeys.budgets(),
     queryFn: ({ signal }) => fetchJSON<Budgets>({ url: '/api/budgets', signal, context: 'load the organization\'s budgets' }),
   });
-  const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.budgets() });
   const remove = useMutation({
     mutationFn: (budget: BudgetStatus) => mutationJSON<unknown>({
       url: `/api/budgets/${budget.resource}/${budget.kind}`, method: 'DELETE', context: `remove the ${budgetName(budget)} budget`,
     }),
-    onSuccess: refresh,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.budgets() }),
   });
   const data = budgets.data;
   const error = budgets.error ?? remove.error;
@@ -109,13 +108,14 @@ export function OrgBudgets() {
         </div>
       ))}
       {data && !data.canEdit && <p className="text-muted-foreground">Only an organization admin can change budgets; ask one to set them.</p>}
-      {data?.canEdit && <BudgetForm onSet={refresh} />}
+      {data?.canEdit && <BudgetForm />}
       {error && <p role="alert" className="text-destructive">{errorText(error)}</p>}
     </section>
   );
 }
 
-function BudgetForm({ onSet }: { onSet: () => Promise<void> }) {
+function BudgetForm() {
+  const queryClient = useQueryClient();
   const [resource, setResource] = useState<Resource>('cpu');
   const [chosenKind, setKind] = useState<Kind>('cumulative');
   const [amount, setAmount] = useState('');
@@ -129,7 +129,7 @@ function BudgetForm({ onSet }: { onSet: () => Promise<void> }) {
     }),
     onSuccess: () => {
       setAmount('');
-      return onSet();
+      return queryClient.invalidateQueries({ queryKey: queryKeys.budgets() });
     },
   });
 

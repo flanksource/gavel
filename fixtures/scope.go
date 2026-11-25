@@ -12,7 +12,7 @@ import (
 
 	"github.com/flanksource/gavel/internal/safefs"
 
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // StepScope is the state one fixture run shares across its steps: the
@@ -284,7 +284,7 @@ func renderGoTemplate(text string, vars map[string]any) (string, error) {
 	if !strings.Contains(text, "{{") {
 		return text, nil
 	}
-	out, err := gomplate.RunTemplate(vars, gomplate.Template{Template: text})
+	out, err := gomplate.RunTemplate(vars, gomplate.Template{Template: text, Strict: true})
 	if err != nil {
 		return "", fmt.Errorf("render %q: %w", text, err)
 	}

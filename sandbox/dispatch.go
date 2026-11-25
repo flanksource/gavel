@@ -286,7 +286,11 @@ func (d *Dispatcher) launch(ctx context.Context, run *Run, scope tenant.Scope, s
 	}
 	go func() {
 		defer close(run.done)
-		typed := clickytask.StartTask(fmt.Sprintf("Sandbox %s run %s", spec.Kind, run.ID.String()[:8]), follow)
+		// A job ends once: following it again would wait on the ended job, finding its run already
+		// untracked and losing why the dispatcher stopped it. Clicky's default policy retries any
+		// error whose text holds a pattern such as "429", which a run's ID can.
+		typed := clickytask.StartTask(fmt.Sprintf("Sandbox %s run %s", spec.Kind, run.ID.String()[:8]), follow,
+			clickytask.WithRetryConfig(clickytask.RetryConfig{Retryable: func(error) bool { return false }}))
 		run.result, run.err = typed.GetResult()
 	}()
 	return nil

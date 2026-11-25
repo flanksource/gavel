@@ -39,9 +39,14 @@ const usageWindowDays = 30;
 
 // runKinds are the kinds of sandbox run, in the fixed order that assigns their colors.
 const runKinds = ['test', 'lint', 'push-check', 'agent'] as const;
+type RunKind = (typeof runKinds)[number];
+const knownKinds: ReadonlySet<string> = new Set(runKinds);
 
+function isRunKind(kind: string): kind is RunKind {
+  return knownKinds.has(kind);
+}
 
-export type KindTotals = { day: string } & Record<(typeof runKinds)[number], number>;
+export type KindTotals = { day: string } & Record<RunKind, number>;
 
 // perDay totals value(row) per UTC day and kind for the days days before now and now's day,
 // keeping days without runs so the axis shows them.
@@ -50,8 +55,7 @@ export function perDay(rows: SandboxDay[], days: number, now: Date, value: (row:
   for (const day of windowDays(days, now)) totals.set(day, { day, test: 0, lint: 0, 'push-check': 0, agent: 0 });
   for (const row of rows) {
     const bucket = totals.get(row.day);
-    const kind = runKinds.find(k => k === row.kind);
-    if (bucket && kind) bucket[kind] += value(row);
+    if (bucket && isRunKind(row.kind)) bucket[row.kind] += value(row);
   }
   return [...totals.values()];
 }
