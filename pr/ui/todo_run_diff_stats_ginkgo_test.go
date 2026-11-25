@@ -95,6 +95,20 @@ var _ = Describe("runDiffStats", func() {
 		Expect(computeRunDiffStats(tracked.ctx, tracked.tracker, links, overviews, nil)).To(Equal(want))
 	})
 
+	It("measures a hosted run in serve's copy of the repository, once", func() {
+		issue, run := uuid.New(), uuid.New()
+		setup := commit("base.txt", "base\n", "chore: base")
+		head := commit("a.txt", "a1\na2\n", "feat: a")
+		links := map[uuid.UUID][]native.PromptRunLink{issue: {runLink(issue, run, time.Now())}}
+		// The sandbox recorded its own path; the run's commits came back to repo.
+		overviews := []captaindb.PromptRunOverview{overview(run, &api.WorktreeState{Repo: "/workspace/src", Setup: setup, Head: head})}
+		want := map[string]gavelgit.DiffStat{issue.String(): {Commits: 1, Files: 1, Adds: 2}}
+
+		Expect(hostedRunDiffStats(repo, links, overviews, nil)).To(Equal(want))
+		withoutGit()
+		Expect(hostedRunDiffStats(repo, links, overviews, nil)).To(Equal(want), "a range's footprint never changes")
+	})
+
 	It("gives no stats to an issue whose runs recorded no worktree range", func() {
 		issue, inCheckout, noWorkspace := uuid.New(), uuid.New(), uuid.New()
 		t0 := time.Now()

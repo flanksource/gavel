@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/commons/logger"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/git/gitstate"
 	"github.com/flanksource/gavel/todos"
@@ -26,8 +27,9 @@ type runDiffStatProvider interface {
 // runDiffStats returns each todo's diff footprint, keyed by issue id: the
 // Setup..Head range of its latest `run` step that recorded a worktree. A
 // provider without native run storage has recorded no runs, so it has no
-// stats.
-func (s *Server) runDiffStats(ctx context.Context, provider todos.Provider) (map[string]gavelgit.DiffStat, error) {
+// stats. A hosted workspace's runs are measured in serve's copy of its
+// repository.
+func (s *Server) runDiffStats(ctx context.Context, provider todos.Provider, hosted *HostedWorkspace) (map[string]gavelgit.DiffStat, error) {
 	source, ok := provider.(runDiffStatProvider)
 	if !ok || source.Captain() == nil || source.Repository() == nil || source.Workspace() == nil {
 		return map[string]gavelgit.DiffStat{}, nil
@@ -55,11 +57,75 @@ func (s *Server) runDiffStats(ctx context.Context, provider todos.Provider) (map
 	if err != nil {
 		return nil, fmt.Errorf("load run landings for diff stats: %w", err)
 	}
+	if hosted != nil {
+		return hostedRunDiffStats(s.workspaces.Sources.LocalGitDir(hosted.Repo), links, overviews, landings)
+	}
 	tracker, err := s.context().GitTracker()
 	if err != nil {
 		return nil, fmt.Errorf("run diff stats: %w", err)
 	}
 	return computeRunDiffStats(ctx, tracker, links, overviews, landings)
+}
+
+// todoDiffStats is runDiffStats for a list or detail of source's todos, which
+// shows them without their diff stats, logging why, when those can't be
+// measured.
+func (s *Server) todoDiffStats(ctx context.Context, provider todos.Provider, source todoSource) map[string]gavelgit.DiffStat {
+	stats, err := s.runDiffStats(ctx, provider, source.Hosted)
+	if err != nil {
+		logger.Warnf("todos in %s are shown without their diff stats: %v", source.Dir, err)
+		return nil
+	}
+	return stats
+}
+
+// hostedRunDiffStats measures each issue's latest recorded run in dir, serve's
+// git directory of the organization's repository: a sandbox run's commits come
+// back there, while its worktree recorded the sandbox's own path. A range's
+// footprint never changes, so each is measured once per process.
+func hostedRunDiffStats(
+	dir string,
+	links map[uuid.UUID][]native.PromptRunLink,
+	overviews []captaindb.PromptRunOverview,
+	landings map[uuid.UUID]native.RunLanding,
+) (map[string]gavelgit.DiffStat, error) {
+	byRepo, err := runRanges(links, overviews, landings, dir)
+	if err != nil {
+		return nil, err
+	}
+	stats := map[string]gavelgit.DiffStat{}
+	for _, ranges := range byRepo {
+		for _, r := range ranges {
+			stat, err := hostedRangeStat(dir, r.key)
+			if err != nil {
+				return nil, fmt.Errorf("diff stats for todo %s (%s): %w", r.issue, r.branch, err)
+			}
+			stats[r.issue.String()] = stat
+		}
+	}
+	return stats, nil
+}
+
+// hostedRangeStats memoizes each hosted range's footprint by its git directory
+// and commits.
+var hostedRangeStats sync.Map
+
+type hostedRangeKey struct {
+	dir string
+	key gitstate.RangeKey
+}
+
+func hostedRangeStat(dir string, key gitstate.RangeKey) (gavelgit.DiffStat, error) {
+	memo := hostedRangeKey{dir: dir, key: key}
+	if stat, ok := hostedRangeStats.Load(memo); ok {
+		return stat.(gavelgit.DiffStat), nil
+	}
+	compared, err := gavelgit.CompareRange(dir, key.Base, key.Head)
+	if err != nil {
+		return gavelgit.DiffStat{}, err
+	}
+	hostedRangeStats.Store(memo, compared.Diff)
+	return compared.Diff, nil
 }
 
 // issueRange is the range an issue's diff footprint is measured over.
@@ -90,7 +156,7 @@ func computeRunDiffStats(
 	overviews []captaindb.PromptRunOverview,
 	landings map[uuid.UUID]native.RunLanding,
 ) (map[string]gavelgit.DiffStat, error) {
-	byRepo, err := runRanges(links, overviews, landings)
+	byRepo, err := runRanges(links, overviews, landings, "")
 	if err != nil {
 		return nil, err
 	}
@@ -103,11 +169,13 @@ func computeRunDiffStats(
 	return stats, nil
 }
 
-// runRanges resolves every issue's run range, grouped by repository.
+// runRanges resolves every issue's run range, grouped by repository: the one
+// each run recorded, or repoDir when it is set.
 func runRanges(
 	links map[uuid.UUID][]native.PromptRunLink,
 	overviews []captaindb.PromptRunOverview,
 	landings map[uuid.UUID]native.RunLanding,
+	repoDir string,
 ) (map[string][]issueRange, error) {
 	workspaces := make(map[uuid.UUID]*api.WorkspaceRecord, len(overviews))
 	for index := range overviews {
@@ -126,9 +194,13 @@ func runRanges(
 		if !landed && worktree.Setup == worktree.Head {
 			continue
 		}
+		repo := worktree.Repo
+		if repoDir != "" {
+			repo = repoDir
+		}
 		key := gitstate.RangeKey{Base: worktree.Setup, Head: worktree.Head}
 		if landed {
-			base, err := landedBase(worktree.Repo, landing.LandedSHA, landing.CommitCount)
+			base, err := landedBase(repo, landing.LandedSHA, landing.CommitCount)
 			if errors.Is(err, gavelgit.ErrCommitNotFound) {
 				continue
 			}
@@ -137,7 +209,7 @@ func runRanges(
 			}
 			key = gitstate.RangeKey{Base: base, Head: landing.LandedSHA}
 		}
-		byRepo[worktree.Repo] = append(byRepo[worktree.Repo], issueRange{issue: issueID, branch: worktree.Branch, key: key})
+		byRepo[repo] = append(byRepo[repo], issueRange{issue: issueID, branch: worktree.Branch, key: key})
 	}
 	return byRepo, nil
 }
