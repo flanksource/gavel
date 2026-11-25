@@ -1,7 +1,11 @@
+// Reads the source lines a todo's path refs name into its prompt, from files inside the
+// todo's working directory only.
 package prompt
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,14 +18,13 @@ const (
 	contextRadius     = 10
 )
 
+// ReadSourceLines returns the lines ref names, numbered, from a file inside workDir. A todo's
+// path refs come from its frontmatter, which a hosted todo's author writes, so a ref that leads
+// outside workDir — by "..", an absolute path, or a symlink — is refused instead of read.
 func ReadSourceLines(workDir string, ref types.PathRef) (string, error) {
-	path := ref.File
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workDir, path)
-	}
-	data, err := os.ReadFile(path)
+	data, err := readWithin(workDir, ref.File)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
 		}
 		return "", err
@@ -41,6 +44,30 @@ func ReadSourceLines(workDir string, ref types.PathRef) (string, error) {
 	start := clamp(ref.Line-1-contextRadius, 0, len(lines))
 	end := clamp(ref.Line+contextRadius, 0, len(lines))
 	return formatLines(lines[start:end], start+1), nil
+}
+
+// readWithin reads name, relative to workDir or absolute, through an os.Root at workDir, which
+// refuses any path or symlink that resolves outside it.
+func readWithin(workDir, name string) ([]byte, error) {
+	if filepath.IsAbs(name) {
+		abs, err := filepath.Abs(workDir)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: resolve %s: %w", name, workDir, err)
+		}
+		if name, err = filepath.Rel(abs, name); err != nil {
+			return nil, fmt.Errorf("read %s: it escapes %s: %w", name, workDir, err)
+		}
+	}
+	root, err := os.OpenRoot(workDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close() //nolint:errcheck
+	data, err := root.ReadFile(name)
+	if err != nil {
+		return nil, fmt.Errorf("read %s within %s: %w", name, workDir, err)
+	}
+	return data, nil
 }
 
 func formatLines(lines []string, startLine int) string {
