@@ -10,6 +10,13 @@ permissions:
   packages: write
   id-token: write
 
+# One release at a time: runs for merges close together would otherwise all compute the same next
+# tag, and all but the first fail to push it. A waiting run gives way to a newer one, whose commit
+# includes its own.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   GO_VERSION: "1.27"
   NODE_VERSION: "22"
