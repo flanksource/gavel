@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -34,6 +35,7 @@ const prSearchQuery = `query($query: String!, $first: Int!) {
         repository {
           nameWithOwner
           homepageUrl
+          defaultBranchRef { name }
           owner { avatarUrl }
         }
       }
@@ -60,6 +62,7 @@ const prSearchQueryWithStatus = `query($query: String!, $first: Int!) {
         repository {
           nameWithOwner
           homepageUrl
+          defaultBranchRef { name }
           owner { avatarUrl }
         }
         commits(last: 1) {
@@ -225,26 +228,31 @@ type searchPRNode struct {
 		Owner         struct {
 			AvatarURL string `json:"avatarUrl"`
 		} `json:"owner"`
+		DefaultBranchRef struct {
+			Name string `json:"name"`
+		} `json:"defaultBranchRef"`
 	} `json:"repository"`
 	Commits graphQLCommits `json:"commits"`
 }
 
 type PRListItem struct {
-	Number          int       `json:"number"`
-	Title           string    `json:"title"`
-	Author          string    `json:"author"`
-	AuthorAvatarURL string    `json:"authorAvatarUrl,omitempty"`
-	Repo            string    `json:"repo"`
-	RepoAvatarURL   string    `json:"repoAvatarUrl,omitempty"`
-	RepoHomepageURL string    `json:"repoHomepageUrl,omitempty"`
-	Source          string    `json:"source"`
-	Target          string    `json:"target"`
-	State           string    `json:"state"`
-	IsDraft         bool      `json:"isDraft"`
-	ReviewDecision  string    `json:"reviewDecision,omitempty"`
-	Mergeable       string    `json:"mergeable,omitempty"`
-	URL             string    `json:"url"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	Number          int    `json:"number"`
+	Title           string `json:"title"`
+	Author          string `json:"author"`
+	AuthorAvatarURL string `json:"authorAvatarUrl,omitempty"`
+	Repo            string `json:"repo"`
+	RepoAvatarURL   string `json:"repoAvatarUrl,omitempty"`
+	RepoHomepageURL string `json:"repoHomepageUrl,omitempty"`
+	// RepoDefaultBranch lets a row leave out a target that is just the default.
+	RepoDefaultBranch string    `json:"repoDefaultBranch,omitempty"`
+	Source            string    `json:"source"`
+	Target            string    `json:"target"`
+	State             string    `json:"state"`
+	IsDraft           bool      `json:"isDraft"`
+	ReviewDecision    string    `json:"reviewDecision,omitempty"`
+	Mergeable         string    `json:"mergeable,omitempty"`
+	URL               string    `json:"url"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 	// AuthorIsApp is true when the author is a GitHub App bot (GraphQL
 	// __typename "Bot"), whose login lacks the "[bot]" suffix that the search
 	// API needs to match it. Lets callers build a correct `-author:` exclusion.
@@ -417,7 +425,7 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 	}
 
 	logger.Tracef("searching PRs via GraphQL: %s", queryString)
-	respBody, rl, err := postGraphQL(token, graphqlEndpoint(), activity.KindSearch, query, map[string]any{
+	respBody, rl, err := postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindSearch, query, map[string]any{
 		"query": queryString,
 		"first": limit,
 	})
@@ -433,22 +441,23 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 	var items PRSearchResults
 	for _, node := range result.Data.Search.Nodes {
 		item := PRListItem{
-			Number:          node.Number,
-			Title:           node.Title,
-			Author:          node.Author.Login,
-			AuthorAvatarURL: node.Author.AvatarURL,
-			AuthorIsApp:     node.Author.TypeName == "Bot",
-			Repo:            node.Repository.NameWithOwner,
-			RepoAvatarURL:   node.Repository.Owner.AvatarURL,
-			RepoHomepageURL: node.Repository.HomepageURL,
-			Source:          node.HeadRefName,
-			Target:          node.BaseRefName,
-			State:           node.State,
-			IsDraft:         node.IsDraft,
-			ReviewDecision:  node.ReviewDecision,
-			Mergeable:       node.Mergeable,
-			URL:             node.URL,
-			UpdatedAt:       node.UpdatedAt,
+			Number:            node.Number,
+			Title:             node.Title,
+			Author:            node.Author.Login,
+			AuthorAvatarURL:   node.Author.AvatarURL,
+			AuthorIsApp:       node.Author.TypeName == "Bot",
+			Repo:              node.Repository.NameWithOwner,
+			RepoAvatarURL:     node.Repository.Owner.AvatarURL,
+			RepoHomepageURL:   node.Repository.HomepageURL,
+			RepoDefaultBranch: node.Repository.DefaultBranchRef.Name,
+			Source:            node.HeadRefName,
+			Target:            node.BaseRefName,
+			State:             node.State,
+			IsDraft:           node.IsDraft,
+			ReviewDecision:    node.ReviewDecision,
+			Mergeable:         node.Mergeable,
+			URL:               node.URL,
+			UpdatedAt:         node.UpdatedAt,
 		}
 		if searchOpts.Status {
 			item.CheckStatus = computeCheckSummary(node)
@@ -477,6 +486,10 @@ func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 		if items[i].CheckStatus == nil {
 			continue
 		}
+		checks := make(model.StatusChecks, len(items[i].CheckStatus.Failures))
+		for j, failure := range items[i].CheckStatus.Failures {
+			checks[j] = model.StatusCheck{Status: "COMPLETED", DetailsURL: failure.DetailsURL}
+		}
 		for j := range items[i].CheckStatus.Failures {
 			f := &items[i].CheckStatus.Failures[j]
 			if f.DetailsURL == "" {
@@ -488,7 +501,7 @@ func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 			}
 			run, ok := runCache[runID]
 			if !ok {
-				run, err = FetchRunJobs(opts, runID, RunLogOptions{FetchLogs: fetchLogs, TailLines: 20})
+				run, err = FetchRunJobs(opts, runID, RunLogOptions{FetchLogs: fetchLogs, TailLines: 20, Checks: checks})
 				if err != nil {
 					logger.Warnf("failed to fetch run %d: %v", runID, err)
 					runCache[runID] = nil

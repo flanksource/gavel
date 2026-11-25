@@ -28,6 +28,11 @@ func expandFixtureTreeForFiles(root *FixtureNode, frontMatter *FrontMatter, sour
 func expandFixtureTreeChildren(node *FixtureNode, matches []string, sourceDir string) {
 	expanded := make([]*FixtureNode, 0, len(node.Children)*len(matches))
 	for _, child := range node.Children {
+		// A typed step (the `params:` form) runs once per file, not per match.
+		if child.Test != nil && child.Test.Step != nil {
+			expanded = append(expanded, child)
+			continue
+		}
 		if child.Test != nil {
 			for _, matchedFile := range matches {
 				clone := *child

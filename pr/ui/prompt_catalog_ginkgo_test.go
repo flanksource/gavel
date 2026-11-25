@@ -32,13 +32,13 @@ func seedCatalogLayers(home, dir string) {
 	global := verify.GavelConfig{}
 	global.AI = api.Spec{Model: api.Model{Name: catalogHomeModel}}
 	global.Commit.Message = verify.PromptSpec{Spec: api.Spec{Model: api.Model{Name: catalogCommitModel}}}
-	Expect(verify.SaveGavelConfig(home, global)).To(Succeed())
+	Expect(verify.SaveGavelConfig(filepath.Join(home, verify.GavelConfigFileName), global)).To(Succeed())
 
 	Expect(os.MkdirAll(filepath.Join(dir, filepath.Dir(catalogRunPromptFile)), 0o755)).To(Succeed())
 	Expect(os.WriteFile(filepath.Join(dir, catalogRunPromptFile), []byte(catalogRunPrompt), 0o644)).To(Succeed())
 	project := verify.GavelConfig{}
 	project.Todos.Run = verify.PromptSpec{File: catalogRunPromptFile}
-	Expect(verify.SaveGavelConfig(dir, project)).To(Succeed())
+	Expect(verify.SaveGavelConfig(filepath.Join(dir, verify.GavelConfigFileName), project)).To(Succeed())
 }
 
 func catalogCall(query string) []promptCatalogEntry {

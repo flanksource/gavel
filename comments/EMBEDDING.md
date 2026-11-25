@@ -1,0 +1,112 @@
+# Embedding the comments service
+
+Import `github.com/flanksource/gavel/comments` for the core, `comments/postgres` for PostgreSQL, `comments/clicky` for CLI/HTTP/tools, `comments/lint` for Gavel lint prompts and `comments/providers` for native PR adapters. Importing and constructing these packages never performs DDL or external dispatch.
+
+## Host ports
+
+`comments.New` takes these explicit options:
+
+- `Store` uses the host's connection pool. `postgres.New(db)` does not close or provision it.
+- `Access` supplies authenticated tenant/actor identity and authorizes every target/action. Scope list permission covers all records/counts in that scope; each returned comment is authorized again. Request bodies cannot choose their tenant or author.
+- `Targets` validates ownership, supported selector schemas and captured revisions. A host can namespace templates, DOM surfaces and code without adopting Gavel's project catalog. Preserve original captures when current anchor resolution changes.
+- `Workflows` declares status phases/transitions. `HumanReview()` keeps proposed resolution separate from human closure; `NativePR()` has final native resolution.
+- `Blobs` and `AttachmentLimit` optionally configure attachments with an explicit positive byte limit. The Postgres store implements `Blobs`. `comments/blob.Store` adapts Gavel's configured filesystem/object store.
+- `Providers` optionally supplies GitHub/Azure adapters with per-principal credential resolvers. Bind credentials to the request's tenant and repository.
+- `Delivery` optionally opts the host into agent delivery. Build it with `comments/agents.Delivery(agents.Options{Bridge, Groups, Workdir})`: `Bridge` reaches Captain (`agents.Captain{}` in-process, or a fake such as `agents/agentstest.Bridge` in tests), `Groups` is the Postgres store (it records the session each delivery group reuses), and `Workdir` resolves the directory a target's managed sessions run in and that a scope's session listing is narrowed to. Optional `BaseURL` (an absolute origin such as `http://127.0.0.1:8080`) makes the attachment links in a delivered thread absolute; without it they are `/api/v1/comments/{id}/attachments/{attachment}` paths.
+- `Routes` optionally delivers new human-authored roots automatically: a `comments.RouteResolver` whose `RouteFor(ctx, comment) (Route, bool, error)` answers the route configured for the root's target. `agents.ProjectRoutes(catalog, settings)` serves `gavel://project` scopes and `agents.WebRoutes(catalog, settings)` serves web-project scopes, both reading `comments.agents` from the target's settings layers. Routes require `Delivery`.
+
+`CodeSelector` validates version 1, relative paths, inclusive line ranges, code revisions, and both diff commits plus the selected side. Other selector kinds are host-defined JSON. Structured root/reply content and capture metadata round-trip without a Gavel-specific presentation schema.
+
+The comments tables are part of Gavel's database schema (`internal/database/schema/comment*.hcl`). `gavel serve` migrates them with every other Gavel table, and in-module hosts call `database.Migrate(ctx, dsn)`. The playground consumes the comments API through its host projection without importing old JSON comments.
+
+## Gavel host
+
+Gavel registers comments on its CLI, generated API/catalog and assistant tool surface. It resolves the pool and tenant per request and authorizes targets against registered projects. Project scopes are `gavel://project/<URL-escaped-project-name>`; local targets can be namespaced beneath that URI. Native PR URLs must belong to the project's repository inventory.
+
+`gavel edit` threads live under the project holding the file, as `gavel://project/<name>/files/<path>`. An agent replies as itself by exporting `GAVEL_COMMENT_ACTOR` (base64url JSON `{kind, id, label}`), which only the local tenant honours.
+
+```sh
+gavel comments list --scope 'gavel://project/demo' --limit 50
+GAVEL_COMMENT_ACTOR=<actor> gavel comments reply <id> --expectedVersion <version> --bodyMarkdown 'Done'
+gavel comments dispatch
+```
+
+Dispatch is an explicit local CLI operation. The hosted API uses organization/user identity and its repository inventory. Hosted Azure credentials and lint execution against host files are refused until the host supplies the corresponding authorized integration.
+
+## Generated API
+
+Creation accepts `target`, `bodyMarkdown`, `workflowId`, `requestId`, optional `content` and `links`. The target includes `uri`, `scopeUri`, `kind`, optional `revision`, `label` and JSON `selector`. A link has `relation` and `uri`. Actor/tenant fields are host-derived.
+
+Mutations require `expectedVersion`; stale writes return 409. `reply` accepts an optional same-root `parentId`; `assign` accepts an actor or null; `resolve`/`close` accept `summary` and `evidence`. Root create request IDs are tenant-scoped and conflicting reuse is rejected.
+
+Listing accepts `scope`, optional `target`, `phase`, `unread`, `limit` and `offset`. The API reports pagination totals and row-level `readVersion`/`unread`. `read` monotonically advances the current actor's observed version and rejects future versions. `capabilities` reports workflow/actions, providers/bindings and attachment limits.
+
+Mount `Stream(resolve)` at `GET <prefix>/comments/events?scope=...`; use `after` or `Last-Event-ID` to resume commit-ordered events. Mount attachment handlers at `POST <prefix>/comments/{id}/attachments` and `GET <prefix>/comments/{id}/attachments/{attachment}`. Upload raw bytes with `name`, `expectedVersion` and optional `messageId` query parameters plus `Content-Type`. An attachment only appends and is checked against the latest thread, so `expectedVersion` is the version the uploader last saw: changes made since (such as an automatic agent delivery assigning the new thread) do not conflict, while a final thread or a version the thread has not reached answers 409. A client can attach to a comment it just created with the create's version. Downloads authorize the root and use attachment disposition. Failed aggregate admission removes the unlinked blob. Use `OpenAPI(handler, prefix)` around the generated document to include these routes.
+
+## Agent delivery and comment agents
+
+`Handler(resolve)` mounts these routes; a host mounting the generated routes itself calls `RegisterDeliveryRoutes(router, resolve)`. A host without `Delivery` answers them 501.
+
+- `GET <prefix>/comments/agent-sessions[?scope=<scopeUri>][&all=1]` lists live sessions as `[{id, source, title, model, cwd, status, inCmux, managed?, resumable?}]`. With `scope` and without `all=1`, only sessions whose cwd holds, or is inside, the scope's workdir are listed. With `scope` (with or without `all=1`) the scope's managed sessions, those the host launched for its threads, are listed too: a live one once, as its live record with `managed:true`; an ended one with `status:"ended"`, `managed:true`, `resumable:true`, its recorded cwd, and titled by the first line of the thread it started for.
+- Delivering to `{kind:"session", sessionId}` of an ended managed session of the thread's scope resumes it: its recorded prompt and run options launch again, resuming that session with the new thread. A run target whose `groupKey`'s session has ended resumes it too, unless `fresh`. Any other session that is not live fails the delivery.
+- `POST <prefix>/comments/deliver` with `{requestId, target, threads:[{id, expectedVersion}]}` delivers several threads of one scope in one message, to one live session, one resumed managed session, or one new run, and returns their updated comments in request order, each with the same `agentRun`. Every thread is checked first, so one stale thread answers 409 and a closed thread, no threads, a repeated thread or threads of different scopes answer 400, with nothing delivered. It is one operation on the first thread, idempotent by `requestId` like a single delivery.
+- `POST <prefix>/comments/{id}/deliver` with `{expectedVersion, requestId, target}` delivers the thread and returns the updated comment, whose `content.agentRun` records the hand-off. A stale version answers 409; a delivery that ran and failed answers 502 with the error, which is also recorded as `agentRun.state:"error"`. Malformed `runOptions`, and `fresh` on a session target, answer 400 before anything is queued. To retry a hand-off that errored (or start over after one that went through), POST again with the thread's latest version and a new `requestId`: the earlier operation is finished, so nothing blocks the new one, and its `agentRun` replaces the previous one.
+- A run target with `fresh:true` always launches a new managed session, never reusing its `groupKey`'s; the new session is recorded as the group's, so the group's later non-fresh deliveries go to it.
+- `POST <prefix>/comments/{id}/deliver/preview` with `{target}` (a run target) renders the run without claiming the thread or launching: `{model, mode, resolution, validationError?, warnings?, tools:[{name, description, source}]}`.
+Automatic delivery is configured as `comments.agents` (a `default` agent plus a `pages` map keyed by path relative to the layer's directory) in the settings layers of the root's target: the `.gavel.yaml` file and `.gavel.<name>.yaml` snippets of each directory in its chain, plus layers authored in the database (`gavel_settings`) at positions with no file. An agent is `{enabled?, assign?, prompt?, presets?, spec?, variables?, instructions?, group?}`; `group` is the delivery group key its runs use (`DeliverTarget.GroupKey`). Layers merge field by field, ancestors first, and within a layer its `default` then its page entry for the file; `enabled:false` opts the file out of an agent inherited from further up.
+
+- `GET <prefix>/comments/agent?scope=<scopeUri>&uri=<targetUri>` answers the target's comment agent: `{settings, agent}`, the target's `settings.Resolved` (layers, positions, merged config, provenance) and its `verify.ResolvedCommentAgent` (`{agent, provenance, found}`).
+- `PUT <prefix>/comments/agent` with `{target: {scopeUri, uri}, layer, page, agent}` saves `agent` (null removes the entry) at `layer` (`settings.Ref`) of the target's chain, as its default or with `page` its entry for the target, and answers the same shape. Only a human principal (`Actor.Kind == "user"`) may save: others answer 403.
+
+Both authorize the target's scope through the host's `Access` and delegate to its `RouteResolver` when it also implements `comments.CommentAgents` (`agents.SettingsRoutes` does); a host whose routes do not answers 501, and a target its settings do not cover answers 400. `agents.ProjectRoutes` covers a project scope's files (`<scope>/files/<path>`) and dashboard pages (`<scope>/pages/<page key>`, kept in the project's database layers as the key `pages/<page key>`); `agents.WebRoutes` covers every path beneath a web project's scope.
+
+The editor reads a file's layers and resolved agent, each field traced to its layer, at `GET /api/file/{id}/settings`, and saves an agent at a layer with `PUT /api/file/{id}/settings/agent` (`{layer, page, agent}`; a null agent removes the entry). The CLI is `gavel comments agents get|set|delete`.
+
+A new human-authored root whose target resolves to an enabled agent is delivered through the host's `RouteResolver`, as a managed run of the agent's prompt. With `assign`, the thread is first assigned to `RouteAgent(route)`, whose actor id is `route:<layer label>`, until the session the delivery reaches claims it. Routed delivery runs in the background after the create responds and works on the thread's latest version: it queues against it, and each of its own changes (assign, acknowledge, `agentRun`) re-reads the thread and retries when a concurrent write, such as the creator's screenshot upload, moved it. A delivery that cannot be queued after bounded retries is recorded as `agentRun.state:"error"`.
+
+A delivered thread (the live-session message, and the managed session's `message` variable) carries where it is (`content.page.url`, else `content.playground.element.pageUrl`, else the file or target), its anchor, and, when present, `content.page.title`, the element's component and source (`content.playground.element`), its locators and HTML (the selector's `locators`/`html`, else the element's; HTML trimmed to 4 KB), links to the thread's attachments, then the root and each reply. Every field is optional; a known field of the wrong JSON shape fails the delivery.
+
+`runOptions` is `{presets?, spec?, variables?, instructions?}`. A run's host variables (`dir`, `scope`, `target`, `actor`, `gavelExecutable`, `message`) override its own, and every managed session gets the `list_threads`, `reply_to_thread` and `resolve_thread` tools for threads on its target.
+
+```sh
+gavel comments deliver <id> --session <session-id>
+gavel comments deliver <id> --prompt editor-comments --group page:home --run-options '{"instructions":"Keep it short"}'
+gavel comments deliver <id> --prompt editor-comments --group page:home --fresh
+gavel comments agents set slides/16-security.mdx --layer slides --file .gavel.agents.yaml --page --prompt editor-comments --enabled
+gavel comments agents get slides/16-security.mdx
+gavel comments agents delete slides/16-security.mdx --layer slides --file .gavel.agents.yaml --page
+```
+
+The dashboard (`gavel serve`), `gavel launch serve` and `gavel edit` all opt in with the in-process Captain bridge. `comments/testhost` serves the API with a fake bridge whose one live session is `fake-session`.
+
+## Native publication
+
+Drafts and materialized lint findings remain local. `publish`, `publish-reply`, `resolve-native` and `reopen-native` explicitly admit captured snapshots. Include `provider`, `requestId`, `expectedVersion` and, for replies, `messageId`. Inspect the admitted operation through `operation`. `sync` only reads native state and deduplicates bindings.
+
+GitHub supports general PR comments and review threads; replies target the root review thread. Azure preserves native parent relationships, thread status and iteration/change-tracking context. Native bindings retain payloads and remote-to-local reply identities. Native lifecycle is independent of the current provider account's resolve permission.
+
+Call `Service.ProcessProvider` from a host-controlled worker with an explicit tenant context. Delivery errors and expired in-flight leases become `unknown` and are never replayed automatically. Receipts survive confirmation failures. Reconcile unknown deliveries before creating a new request; remote APIs do not provide an exactly-once guarantee.
+
+## Native lint prompts
+
+`Discover`, `Inspect`, `Prepare`, `Preview` and `RunRecorded` use Gavel's Captain-backed lint pipeline. Preparation and preview validate prompt identity/version, variables and file scope without calling a model. `RunRecorded` explicitly executes the model through Captain's runtime/approval seam.
+
+Optionally register `comments/lint.Register(APIOptions)` to generate `comment-lint` discovery, inspection, preview, execution, detail and materialization operations. The host supplies an authorized directory resolver; an HTTP caller cannot redirect execution to a different directory.
+
+Lint records retain selection, prompt version, native run/session references and findings. Captain owns execution state. Repeating an admitted request returns its record with a conflict instead of launching again. `Materialize` explicitly creates selected findings, idempotently by run/finding identity, with an execution link. Publishing remains separate.
+
+## Runnable host
+
+The [example](../examples/comments/main.go) uses a loopback listener, fixed demonstration identity and a host-owned target namespace. Supply a disposable Postgres database; `--migrate` applies Gavel's schema to it:
+
+```sh
+go run ./examples/comments --db "$COMMENTS_EXAMPLE_DSN" --migrate --port 8099
+```
+
+Create a template comment:
+
+```sh
+curl --fail-with-body -X POST http://127.0.0.1:8099/api/v1/comments -H 'Content-Type: application/json' -d '{"target":{"uri":"example://workspace/templates/invoice","scopeUri":"example://workspace","kind":"template","revision":"v1"},"bodyMarkdown":"Clarify the final outcome","workflowId":"human-review","requestId":"example-template-1"}'
+```
+
+Replace the example's identity/authorization and target resolver with those of the embedding tool. Reuse its pool, blob storage, runtime configuration and credentials. A separate comments daemon is unnecessary.

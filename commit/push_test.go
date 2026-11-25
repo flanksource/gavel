@@ -62,7 +62,7 @@ var _ = Describe("findAncestorPRs", func() {
 			{Number: 6, Source: "does-not-exist"},
 		}
 
-		out := findAncestorPRs(workDir, prs, gitIsAncestor)
+		out := findAncestorPRs(Options{WorkDir: workDir}, prs, gitIsAncestor)
 
 		var nums []int
 		for _, pr := range out {
@@ -78,7 +78,7 @@ func TestChoosePRReturnsSelectedPR(t *testing.T) {
 		if title != "Pick a PR" {
 			t.Fatalf("unexpected title: %q", title)
 		}
-		if len(options) != 2 {
+		if len(options) != 3 {
 			t.Fatalf("unexpected option count: %d", len(options))
 		}
 		return options[1], true
@@ -92,16 +92,16 @@ func TestChoosePRReturnsSelectedPR(t *testing.T) {
 		{Number: 23, Title: "Second", Source: "feat/b", Target: "main"},
 	}
 
-	selected, err := choosePR("Pick a PR", prs)
+	selected, err := choosePR(t.Context(), "Pick a PR", prs)
 	if err != nil {
 		t.Fatalf("choosePR returned error: %v", err)
 	}
-	if selected == nil || selected.Number != 23 {
+	if selected.kind != pushTargetAncestorPR || selected.pr == nil || selected.pr.Number != 23 {
 		t.Fatalf("expected PR #23, got %#v", selected)
 	}
 }
 
-func TestChoosePRReturnsNilWhenCancelled(t *testing.T) {
+func TestChoosePRReturnsNoneWhenCancelled(t *testing.T) {
 	previous := promptSelectFunc
 	promptSelectFunc = func(_ context.Context, options []promptSelectOption, title string) (promptSelectOption, bool) {
 		return promptSelectOption{}, false
@@ -110,14 +110,13 @@ func TestChoosePRReturnsNilWhenCancelled(t *testing.T) {
 		promptSelectFunc = previous
 	}()
 
-	selected, err := choosePR("Pick a PR", []github.PRListItem{
-		{Number: 17, Title: "First", Source: "feat/a", Target: "main"},
-	})
+	selected, err := choosePR(t.Context(), "Pick a PR", []github.PRListItem{{Number: 17, Title: "First", Source: "feat/a", Target: "main"}})
+
 	if err != nil {
 		t.Fatalf("choosePR returned error: %v", err)
 	}
-	if selected != nil {
-		t.Fatalf("expected nil selection, got %#v", selected)
+	if selected.kind != pushTargetNone || selected.pr != nil {
+		t.Fatalf("expected cancelled selection, got %#v", selected)
 	}
 }
 
@@ -126,7 +125,7 @@ var _ = Describe("decidePushTarget", func() {
 	otherOpenPR := github.PRListItem{Number: 17, Source: "feat/bar", Target: "main"}
 
 	newDeps := func(prs []github.PRListItem, ancestors map[string]bool) pushDeps {
-		d := defaultPushDeps()
+		d := defaultPushDeps(GinkgoT().Context(), Options{})
 		d.searchPRs = func(_ github.Options, _ github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error) {
 			return prs, nil, nil
 		}
@@ -136,7 +135,7 @@ var _ = Describe("decidePushTarget", func() {
 
 	It("picks branch-match when an open PR's head equals current branch", func() {
 		deps := newDeps([]github.PRListItem{otherOpenPR, branchMatchPR}, nil)
-		tgt, cands, err := decidePushTarget(context.Background(), github.Options{}, "feat/foo", deps)
+		tgt, cands, err := decidePushTarget(Options{}, github.Options{}, "feat/foo", deps)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tgt.kind).To(Equal(pushTargetBranchMatch))
 		Expect(tgt.pr.Number).To(Equal(42))
@@ -145,7 +144,7 @@ var _ = Describe("decidePushTarget", func() {
 
 	It("returns newPR when no PR matches and none are ancestors", func() {
 		deps := newDeps([]github.PRListItem{otherOpenPR}, map[string]bool{})
-		tgt, cands, err := decidePushTarget(context.Background(), github.Options{}, "feat/new", deps)
+		tgt, cands, err := decidePushTarget(Options{}, github.Options{}, "feat/new", deps)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tgt.kind).To(Equal(pushTargetNewPR))
 		Expect(cands).To(BeEmpty())
@@ -153,7 +152,7 @@ var _ = Describe("decidePushTarget", func() {
 
 	It("returns ancestor-match with a single candidate when exactly one PR head is ancestor", func() {
 		deps := newDeps([]github.PRListItem{otherOpenPR}, map[string]bool{"origin/feat/bar": true})
-		tgt, cands, err := decidePushTarget(context.Background(), github.Options{}, "feat/new", deps)
+		tgt, cands, err := decidePushTarget(Options{}, github.Options{}, "feat/new", deps)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tgt.kind).To(Equal(pushTargetAncestorPR))
 		Expect(tgt.pr.Number).To(Equal(17))
@@ -166,7 +165,7 @@ var _ = Describe("decidePushTarget", func() {
 			"origin/feat/bar": true,
 			"origin/feat/baz": true,
 		})
-		tgt, cands, err := decidePushTarget(context.Background(), github.Options{}, "feat/new", deps)
+		tgt, cands, err := decidePushTarget(Options{}, github.Options{}, "feat/new", deps)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tgt.kind).To(Equal(pushTargetAncestorPR))
 		Expect(tgt.pr).To(BeNil(), "caller must prompt when >1 candidate")
@@ -174,11 +173,11 @@ var _ = Describe("decidePushTarget", func() {
 	})
 
 	It("surfaces search errors", func() {
-		deps := defaultPushDeps()
+		deps := defaultPushDeps(GinkgoT().Context(), Options{})
 		deps.searchPRs = func(_ github.Options, _ github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error) {
 			return nil, nil, errors.New("boom")
 		}
-		_, _, err := decidePushTarget(context.Background(), github.Options{}, "feat/new", deps)
+		_, _, err := decidePushTarget(Options{}, github.Options{}, "feat/new", deps)
 		Expect(err).To(MatchError(ContainSubstring("boom")))
 	})
 })

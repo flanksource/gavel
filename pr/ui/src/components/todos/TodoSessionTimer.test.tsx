@@ -1,16 +1,16 @@
 import type React from 'react';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CmuxSessionButton, cmuxSurfaceLabel, useSessionStats } from './TodoSessionTimer';
+import { CmuxSessionSection, cmuxSurfaceLabel, useSessionStats } from './TodoSessionTimer';
 import { queryTestWrapper } from './queryTestWrapper';
 import { setAuthMode } from '../../query';
 
-// DropdownMenu is mocked to render its trigger and menu content inline and to
-// report itself open (so the lazy cmux-surface fetch runs), letting the test
-// exercise the menu items without driving the floating-ui open/close machinery.
+const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
+
+// The cmux section reports a focus failure by toast, since its menu has closed.
 vi.mock('@flanksource/clicky-ui/components', async () => {
-  const React = await import('react');
   return {
+    useToast: () => ({ toast }),
     Button: ({
       children,
       variant: _variant,
@@ -22,25 +22,6 @@ vi.mock('@flanksource/clicky-ui/components', async () => {
         {children}
       </button>
     ),
-    DropdownMenu: ({
-      trigger,
-      children,
-      onOpenChange,
-    }: {
-      trigger: React.ReactNode;
-      children: (close: () => void) => React.ReactNode;
-      onOpenChange?: (open: boolean) => void;
-    }) => {
-      React.useEffect(() => {
-        onOpenChange?.(true);
-      }, [onOpenChange]);
-      return (
-        <div>
-          {trigger}
-          {children(() => {})}
-        </div>
-      );
-    },
   };
 });
 
@@ -94,7 +75,7 @@ describe('useSessionStats', () => {
     unmount();
   });
 
-  it('continues the live clock across server polls', async () => {
+  it('advances the live clock without recurring server reads', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-13T12:00:00Z'));
     const durations = [30_000, 32_000];
@@ -137,7 +118,7 @@ describe('useSessionStats', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.current.elapsedMs).toBeGreaterThanOrEqual(32_000);
     unmount();
   });
@@ -154,13 +135,13 @@ describe('cmuxSurfaceLabel', () => {
   });
 });
 
-describe('CmuxSessionButton', () => {
+describe('CmuxSessionSection', () => {
   it('offers a hosted org no cmux terminal, which is the host\'s', () => {
     setAuthMode('clerk', vi.fn());
     try {
       const fetchMock = vi.fn();
       vi.stubGlobal('fetch', fetchMock);
-      const { container } = render(<CmuxSessionButton dir="repo:1" sessionId="sess-1" agent="claude" />, { wrapper: queryTestWrapper() });
+      const { container } = render(<CmuxSessionSection dir="repo:1" sessionId="sess-1" agent="claude" close={vi.fn()} />, { wrapper: queryTestWrapper() });
       expect(container.textContent).toBe('');
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
@@ -176,7 +157,7 @@ describe('CmuxSessionButton', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(
-      <CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" onResume={vi.fn()} />,
+      <CmuxSessionSection dir="/repo" sessionId="sess-1234" agent="claude" close={vi.fn()} onResume={vi.fn()} />,
       { wrapper: queryTestWrapper() },
     );
 
@@ -188,6 +169,10 @@ describe('CmuxSessionButton', () => {
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/todos/session/focus'))).toBe(true),
     );
+	for (const path of ['/api/todos/session/cmux', '/api/todos/session/focus']) {
+	  const call = fetchMock.mock.calls.find(([url]) => String(url).includes(path));
+	  expect(new URL(String(call?.[0]), 'http://localhost').searchParams.get('sessionId')).toBe('sess-1234');
+	}
   });
 
   it('resumes via the supplied handler and hides Resume without one', async () => {
@@ -196,14 +181,14 @@ describe('CmuxSessionButton', () => {
     const onResume = vi.fn();
 
     const { rerender } = render(
-      <CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" onResume={onResume} />,
+      <CmuxSessionSection dir="/repo" sessionId="sess-1234" agent="claude" close={vi.fn()} onResume={onResume} />,
       { wrapper: queryTestWrapper() },
     );
 
     fireEvent.click(await screen.findByRole('button', { name: /Resume in cmux/ }));
     expect(onResume).toHaveBeenCalledTimes(1);
 
-    rerender(<CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" />);
+    rerender(<CmuxSessionSection dir="/repo" sessionId="sess-1234" agent="claude" close={vi.fn()} />);
     expect(screen.queryByRole('button', { name: /Resume in cmux/ })).toBeNull();
   });
 
@@ -213,7 +198,7 @@ describe('CmuxSessionButton', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CmuxSessionButton dir="/repo" sessionId="sess-9" agent="claude" onResume={vi.fn()} />, {
+    render(<CmuxSessionSection dir="/repo" sessionId="sess-9" agent="claude" close={vi.fn()} onResume={vi.fn()} />, {
       wrapper: queryTestWrapper(),
     });
 
@@ -224,7 +209,7 @@ describe('CmuxSessionButton', () => {
     expect((screen.getByRole('button', { name: /Resume in cmux/ }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('surfaces the contextual server error when focus fails', async () => {
+  it('closes the menu and toasts the contextual server error when focus fails', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/session/cmux')) {
@@ -242,11 +227,16 @@ describe('CmuxSessionButton', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" />, {
+    const close = vi.fn();
+    render(<CmuxSessionSection dir="/repo" sessionId="sess-1234" agent="claude" close={close} />, {
       wrapper: queryTestWrapper(),
     });
     fireEvent.click(await screen.findByRole('button', { name: /Focus in cmux/ }));
 
-    expect(await screen.findByText(/could not focus cmux session.*cmux socket is unavailable/i)).toBeTruthy();
+    expect(close).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringMatching(/could not focus cmux session.*cmux socket is unavailable/i),
+      tone: 'danger',
+    })));
   });
 });

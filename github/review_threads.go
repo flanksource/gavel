@@ -1,14 +1,17 @@
 package github
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/flanksource/gavel/github/activity"
 )
 
 type graphQLPageInfo struct {
-	HasNextPage bool   `json:"hasNextPage"`
-	EndCursor   string `json:"endCursor"`
+	HasNextPage     bool   `json:"hasNextPage"`
+	EndCursor       string `json:"endCursor"`
+	HasPreviousPage bool   `json:"hasPreviousPage"`
+	StartCursor     string `json:"startCursor"`
 }
 
 const reviewThreadFields = `id viewerCanResolve isResolved isOutdated
@@ -35,7 +38,7 @@ const threadCommentsQuery = `query($id: ID!, $after: String!) {
   } }
 }`
 
-func completeReviewThreads(token string, pr *graphQLPR) error {
+func completeReviewThreads(ctx context.Context, token string, pr *graphQLPR) error {
 	page := pr.ReviewThreads.PageInfo
 	for page.HasNextPage {
 		var result struct {
@@ -45,7 +48,7 @@ func completeReviewThreads(token string, pr *graphQLPR) error {
 				} `json:"node"`
 			} `json:"data"`
 		}
-		if err := fetchReviewPage(token, reviewThreadsQuery, pr.ID, page, &result); err != nil {
+		if err := fetchReviewPage(ctx, token, reviewThreadsQuery, pr.ID, page, &result); err != nil {
 			return err
 		}
 		if result.Data.Node == nil {
@@ -59,14 +62,14 @@ func completeReviewThreads(token string, pr *graphQLPR) error {
 		page = next.PageInfo
 	}
 	for i := range pr.ReviewThreads.Nodes {
-		if err := completeThreadComments(token, &pr.ReviewThreads.Nodes[i]); err != nil {
+		if err := completeThreadComments(ctx, token, &pr.ReviewThreads.Nodes[i]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func completeThreadComments(token string, thread *graphQLReviewThreadNode) error {
+func completeThreadComments(ctx context.Context, token string, thread *graphQLReviewThreadNode) error {
 	page := thread.Comments.PageInfo
 	for page.HasNextPage {
 		var result struct {
@@ -74,7 +77,7 @@ func completeThreadComments(token string, thread *graphQLReviewThreadNode) error
 				Node *graphQLReviewThreadNode `json:"node"`
 			} `json:"data"`
 		}
-		if err := fetchReviewPage(token, threadCommentsQuery, thread.ID, page, &result); err != nil {
+		if err := fetchReviewPage(ctx, token, threadCommentsQuery, thread.ID, page, &result); err != nil {
 			return err
 		}
 		if result.Data.Node == nil {
@@ -90,11 +93,11 @@ func completeThreadComments(token string, thread *graphQLReviewThreadNode) error
 	return nil
 }
 
-func fetchReviewPage(token, query, id string, page graphQLPageInfo, result any) error {
+func fetchReviewPage(ctx context.Context, token, query, id string, page graphQLPageInfo, result any) error {
 	if id == "" || page.EndCursor == "" {
 		return fmt.Errorf("review pagination requires a native node ID and cursor")
 	}
-	data, _, err := postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, query, map[string]any{"id": id, "after": page.EndCursor})
+	data, _, err := postGraphQL(ctx, token, graphqlEndpoint(), activity.KindGraphQL, query, map[string]any{"id": id, "after": page.EndCursor})
 	if err != nil {
 		return err
 	}
@@ -109,7 +112,7 @@ func ResolveReviewThread(opts Options, threadID string) error {
 	if err != nil {
 		return err
 	}
-	data, _, err := postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL,
+	data, _, err := postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindGraphQL,
 		`mutation($input: ResolveReviewThreadInput!) { resolveReviewThread(input: $input) { thread { id isResolved } } }`, map[string]any{"input": map[string]any{"threadId": threadID}})
 	if err != nil {
 		return err

@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/gavel/azuredevops"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/pr/blame"
 	"github.com/flanksource/gavel/pr/model"
 )
 
@@ -32,6 +33,7 @@ type Client interface {
 	Status(context.Context, int, model.StatusOptions) (*model.StatusSnapshot, error)
 	ResolveThread(context.Context, int, string) error
 	MergePR(context.Context, int, model.MergeInput) error
+	RecommendReviewers(blame.Request) (*blame.Recommendations, error)
 }
 
 // Resolve is the PR client for opts' repository. Inside a sandbox job, it is the job's: serve

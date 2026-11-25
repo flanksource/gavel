@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/sandbox"
@@ -39,12 +41,16 @@ type todoListResponse struct {
 }
 
 type todoSummary struct {
-	PR             *types.PR      `json:"pr,omitempty"`
-	Ref            string         `json:"ref"`
-	ID             string         `json:"id,omitempty"`
-	ShortID        string         `json:"shortId,omitempty"`
-	Version        int64          `json:"version,omitempty"`
-	WorkspaceID    string         `json:"workspaceId,omitempty"`
+	SessionSummary *types.SessionSummary `json:"sessionSummary,omitempty"`
+	PR             *types.PR             `json:"pr,omitempty"`
+	Ref            string                `json:"ref"`
+	ID             string                `json:"id,omitempty"`
+	ShortID        string                `json:"shortId,omitempty"`
+	Version        int64                 `json:"version,omitempty"`
+	WorkspaceID    string                `json:"workspaceId,omitempty"`
+	// Dir is the todo's workspace, as the projects list names it: set on the flat
+	// list of every workspace's todos, which the dashboard groups by it.
+	Dir            string         `json:"dir,omitempty"`
 	ParentID       string         `json:"parentId,omitempty"`
 	ExecutionState string         `json:"executionState,omitempty"`
 	Title          string         `json:"title"`
@@ -156,6 +162,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		LastRun:        todo.LastRun,
 		ExternalIssue:  todo.ExternalIssue,
 		Phases:         todo.PhaseRuns,
+		SessionSummary: todo.SessionSummary,
 	}
 	if todo.LLM != nil {
 		out.SessionID = todo.LLM.SessionId
@@ -243,7 +250,7 @@ type todoCountsResult struct {
 // directory has no workspace and counts zero without touching the database. A
 // failure that prevents counting at all is reported on every project that
 // needed counting, so the list still renders.
-func countProjectsTodos(ctx context.Context, projects []Project) []todoCountsResult {
+func countProjectsTodos(ctx context.Context, projects []projects.Project) []todoCountsResult {
 	out := make([]todoCountsResult, len(projects))
 	var options []todoruntime.WorkspaceOptions
 	var indexes []int
@@ -283,7 +290,7 @@ func todoErrorStatus(fallback int, err error) int {
 	switch {
 	case errors.As(err, &configuration):
 		return http.StatusInternalServerError
-	case errors.Is(err, ErrProjectNotFound), errors.Is(err, errNoHostedWorkspaces):
+	case errors.Is(err, projects.ErrNotFound), errors.Is(err, errNoHostedWorkspaces):
 		return http.StatusNotFound
 	case errors.Is(err, database.ErrUnavailable):
 		return http.StatusServiceUnavailable

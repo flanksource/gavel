@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/formatters"
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -104,7 +105,7 @@ func runBenchRun(cmd *cobra.Command, args []string) error {
 		if srv != nil {
 			srv.SetVersion(version)
 			srv.SetRunArgs(snapshotArgs(opts))
-			srv.SetGitInfo(snapshotGitInfo(opts.WorkDir))
+			srv.SetGitInfo(snapshots.GitInfo(opts.WorkDir))
 			srv.SetStopFunc(standaloneUIStop(cancelRun))
 			srv.SetRunProcess(os.Getpid(), "gavel bench run")
 			srv.SetRunFrameworks([]string{"go"})

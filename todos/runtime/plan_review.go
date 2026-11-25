@@ -99,7 +99,10 @@ func (p *Provider) SavePlanRevision(ctx context.Context, todo *types.TODO, markd
 		input.Plan = captaindb.CreatePlanInput{
 			Title: issue.Title, Variant: "primary", SpecProfile: "gavel.todo.plan",
 		}
-		input.RootSession, input.Session = p.suppliedPlanSessions(issue)
+		input.RootSession, input.Session, err = p.suppliedPlanSessions(ctx, issue)
+		if err != nil {
+			return nil, err
+		}
 	}
 	persisted, err := p.coordinator.PersistAndSelectPlan(ctx, input)
 	if err != nil {

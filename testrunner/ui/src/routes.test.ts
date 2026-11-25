@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildExportRoute, buildRoute, defaultStatusFilter, parseRoute, type RouteState } from './routes';
+import { buildExportRoute, buildRoute, parseRoute, type RouteState } from './routes';
 
 const at = (url: string) => parseRoute(new URL(`http://example.test${url}`));
 
@@ -22,8 +22,9 @@ describe('lint route grouping', () => {
     const baseState: Omit<RouteState, 'lintGrouping'> = {
       tab: 'lint',
       selectedPath: '',
-      filters: { status: defaultStatusFilter(), framework: new Map() },
+      filters: { status: new Map(), framework: new Map() },
       lintFilters: { severity: new Map(), linter: new Map() },
+      problemFilters: { severity: new Map(), type: new Map() },
     };
 
     expect(buildRoute({ ...baseState, lintGrouping: 'linter-rule-file' })).toBe('/lint');
@@ -41,18 +42,11 @@ describe('lint route grouping', () => {
 });
 
 describe('test status route', () => {
-  it('defaults to the failing-only filter and omits it from the URL', () => {
+  it('filters no status by default and omits it from the URL', () => {
     const route = at('/tests/pkg/test-foo');
     expect(route.selectedPath).toBe('pkg/test-foo');
-    expect(route.filters.status.get('passed')).toBe('exclude');
-    expect(route.filters.status.get('skipped')).toBe('exclude');
-    expect(buildRoute(route)).toBe('/tests/pkg/test-foo');
-  });
-
-  it('writes status=all for no filter and reads it back as no filter', () => {
-    const route = at('/tests?status=all');
     expect(route.filters.status.size).toBe(0);
-    expect(buildRoute(route)).toBe('/tests?status=all');
+    expect(buildRoute(route)).toBe('/tests/pkg/test-foo');
   });
 
   it('round trips an explicit status and framework filter', () => {
@@ -61,7 +55,7 @@ describe('test status route', () => {
   });
 
   it('builds the export URL for the same view with the format as the extension', () => {
-    expect(buildExportRoute(at('/tests/pkg?status=all'), 'md')).toBe('/tests/pkg.md?status=all');
+    expect(buildExportRoute(at('/tests/pkg?status=failed'), 'md')).toBe('/tests/pkg.md?status=failed');
   });
 });
 
@@ -70,6 +64,68 @@ describe('fixture profile sample route', () => {
     const route = at('/bench?sample=3');
     expect(route.sampleIndex).toBe(3);
     expect(buildRoute(route)).toBe('/bench?sample=3');
+  });
+});
+
+describe('files route', () => {
+  const workDir = '/Users/dev/my repo';
+  const file = 'docs/getting started/intro.md';
+  // URLSearchParams form-encodes: "/" as %2F and a space as "+".
+  const DIR_PARAM = '%2FUsers%2Fdev%2Fmy+repo';
+
+  it('round trips the work dir, a relative file with spaces, the view and the line', () => {
+    const url = `/files/docs/getting%20started/intro.md?dir=${DIR_PARAM}&view=source&line=42`;
+    const route = at(url);
+    expect(route.tab).toBe('files');
+    expect(route.selectedPath).toBe(file);
+    expect(route.workDir).toBe(workDir);
+    expect(route.view).toBe('source');
+    expect(route.line).toBe(42);
+    expect(buildRoute(route)).toBe(url);
+  });
+
+  it('defaults to the preview and omits it and an absent line from the URL', () => {
+    const route = at(`/files/a.go?dir=${DIR_PARAM}`);
+    expect(route.view).toBe('preview');
+    expect(route.line).toBeUndefined();
+    expect(buildRoute(route)).toBe(`/files/a.go?dir=${DIR_PARAM}`);
+  });
+
+  it('ignores a line that is not a positive integer, and keeps any view id for host tabs', () => {
+    expect(at('/files/a.go?line=0').line).toBeUndefined();
+    expect(at('/files/a.go?line=x').line).toBeUndefined();
+    expect(at('/files/a.go?view=owners').view).toBe('owners');
+    expect(at('/files/a.go?view=').view).toBe('preview');
+    expect(at('/files/a.go?view=problems').view).toBe('problems');
+  });
+
+  it('round trips an open folder, including the root folder of a work dir', () => {
+    const folder = at(`/files/pkg/server?dir=${DIR_PARAM}&kind=folder`);
+    const root = at(`/files?dir=${DIR_PARAM}&kind=folder`);
+    expect({
+      folder: { path: folder.selectedPath, folder: folder.folder, url: buildRoute(folder) },
+      root: { path: root.selectedPath, folder: root.folder, url: buildRoute(root) },
+      file: at('/files/a.go').folder,
+    }).toEqual({
+      folder: { path: 'pkg/server', folder: true, url: `/files/pkg/server?dir=${DIR_PARAM}&kind=folder` },
+      root: { path: '', folder: true, url: `/files?dir=${DIR_PARAM}&kind=folder` },
+      file: undefined,
+    });
+  });
+
+  it('round trips the Problems severity and issue-type filters with their include/exclude marks', () => {
+    const url = '/files/XMLData.xml?view=problems&problemSeverity=%21info&problemType=transaction.copybook.missing%2C%21transaction.eval.no-activity';
+    const route = at(url);
+    expect({ severity: Object.fromEntries(route.problemFilters.severity), type: Object.fromEntries(route.problemFilters.type) }).toEqual({
+      severity: { info: 'exclude' },
+      type: { 'transaction.copybook.missing': 'include', 'transaction.eval.no-activity': 'exclude' },
+    });
+    expect(buildRoute(route)).toBe(url);
+  });
+
+  it('does not carry the file query onto other tabs', () => {
+    const route = { ...at(`/files/a.go?dir=${DIR_PARAM}&line=3&problemSeverity=error`), tab: 'lint' as const, selectedPath: '' };
+    expect(buildRoute(route)).toBe('/lint');
   });
 });
 

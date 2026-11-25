@@ -73,4 +73,10 @@ describe('mergeSnapshot', () => {
 
     expect(mergeSnapshot(current, incoming)).toBe(current);
   });
+
+  it('drops a gavel badge the server no longer reports', () => {
+    const current = cached({ gavelResults: { 'acme/gavel#1': { testsFailed: 1 } } } as unknown as Partial<Snapshot>);
+
+    expect(mergeSnapshot(current, snapshot()).gavelResults).toBeUndefined();
+  });
 });

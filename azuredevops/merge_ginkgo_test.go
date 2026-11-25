@@ -34,6 +34,22 @@ var _ = Describe("Azure PR merge actions", func() {
 		}))
 	}, Entry("rebase", "rebase", "rebase"), Entry("squash", "squash", "squash"), Entry("merge commit", "merge", "noFastForward"), Entry("normalized method", " REBASE ", "rebase"))
 
+	It("sends the squash commit message the user wrote", func() {
+		var payload map[string]any
+		c := testClient(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
+			if !strings.Contains(r.URL.Path, "/pullrequests/") {
+				fmt.Fprint(w, fixtureRepository)
+				return
+			}
+			Expect(json.NewDecoder(r.Body).Decode(&payload)).To(Succeed())
+			fmt.Fprint(w, `{"pullRequestId":27,"status":"completed"}`)
+		})
+		input := model.MergeInput{Method: "squash", HeadSHA: "reviewed-head", CommitTitle: "Add widgets (#27)", CommitBody: "* add widget\n* test widget"}
+		Expect(c.MergePR(context.Background(), 27, input)).To(Succeed())
+		Expect(payload["completionOptions"]).To(HaveKeyWithValue("mergeCommitMessage", "Add widgets (#27)\n\n* add widget\n* test widget"))
+	})
+
 	It("rejects missing revision, unsupported methods and auto-merge before making requests", func() {
 		c := testClient(func(http.ResponseWriter, *http.Request) { Fail("invalid action reached Azure") })
 		for _, input := range []model.MergeInput{{Method: "rebase"}, {Method: "invalid", HeadSHA: "head"}, {Method: "merge", HeadSHA: "head", Auto: true}} {

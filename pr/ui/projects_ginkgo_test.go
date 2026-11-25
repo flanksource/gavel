@@ -9,36 +9,35 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/projects"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("project catalog resolution", func() {
-	var originalPath string
 
 	BeforeEach(func() {
-		originalPath = projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 	})
 
 	AfterEach(func() {
-		projectsPath = originalPath
 	})
 
 	It("names the catalog file when a project cannot be found", func() {
-		_, err := GetProject("config-db")
+		_, err := getProject(context.Background(), "config-db")
 
 		Expect(err).To(MatchError(And(
 			ContainSubstring(`unknown project: "config-db"`),
 			ContainSubstring(projectsPath),
 		)))
-		Expect(errors.Is(err, ErrProjectNotFound)).To(BeTrue())
+		Expect(errors.Is(err, projects.ErrNotFound)).To(BeTrue())
 	})
 
 	It("returns malformed catalog errors with the catalog path", func() {
 		Expect(os.WriteFile(projectsPath, []byte("{"), 0o600)).To(Succeed())
 
-		_, err := LoadProjects(LoadProjectsOptions{})
+		_, err := loadProjects(context.Background())
 
 		Expect(err).To(MatchError(ContainSubstring(projectsPath)))
 	})
@@ -48,27 +47,54 @@ var _ = Describe("project catalog resolution", func() {
 		parent := filepath.Join(root, "workspace")
 		child := filepath.Join(parent, "services", "config-db")
 		Expect(os.MkdirAll(filepath.Join(child, "internal"), 0o755)).To(Succeed())
-		Expect(SaveProjects([]Project{
+		Expect(seedProjects([]projects.Project{
 			{Name: "workspace", Dir: parent},
 			{Name: "config-db", Dir: child, Repos: []string{"flanksource/config-db"}},
 		})).To(Succeed())
 
-		project, err := ProjectForDir(filepath.Join(child, "internal"))
+		project, err := projectForDir(context.Background(), filepath.Join(child, "internal"))
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(project.Name).To(Equal("config-db"))
 	})
 
-	It("names the catalog file when no configured project contains a directory", func() {
-		Expect(SaveProjects([]Project{{Name: "other", Dir: GinkgoT().TempDir()}})).To(Succeed())
+	DescribeTable("matches a directory and a project root that name the same place through a symlink",
+		func(registerLink, lookUpLink bool) {
+			root := GinkgoT().TempDir()
+			real := filepath.Join(root, "volume", "envs", "base")
+			Expect(os.MkdirAll(filepath.Join(real, "schemas"), 0o755)).To(Succeed())
+			link := filepath.Join(root, "home", "envs")
+			Expect(os.MkdirAll(filepath.Dir(link), 0o755)).To(Succeed())
+			Expect(os.Symlink(filepath.Dir(real), link)).To(Succeed())
+			viaLink := filepath.Join(link, "base")
+			registered, lookedUp := real, filepath.Join(real, "schemas")
+			if registerLink {
+				registered = viaLink
+			}
+			if lookUpLink {
+				lookedUp = filepath.Join(viaLink, "schemas")
+			}
+			Expect(seedProjects([]projects.Project{{Name: "base", Dir: registered}})).To(Succeed())
 
-		_, err := ProjectForDir(GinkgoT().TempDir())
+			project, err := projectForDir(context.Background(), lookedUp)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(project.Name).To(Equal("base"))
+		},
+		Entry("project registered at its real path, directory reached through the link", false, true),
+		Entry("project registered through the link, directory at its real path", true, false),
+	)
+
+	It("names the catalog file when no configured project contains a directory", func() {
+		Expect(seedProjects([]projects.Project{{Name: "other", Dir: GinkgoT().TempDir()}})).To(Succeed())
+
+		_, err := projectForDir(context.Background(), GinkgoT().TempDir())
 
 		Expect(err).To(MatchError(And(
 			ContainSubstring("project for directory"),
 			ContainSubstring(projectsPath),
 		)))
-		Expect(errors.Is(err, ErrProjectNotFound)).To(BeTrue())
+		Expect(errors.Is(err, projects.ErrNotFound)).To(BeTrue())
 	})
 })
 
@@ -78,23 +104,20 @@ var _ = Describe("project catalog resolution", func() {
 // on `project.repos[0]`. These specs assert the raw bytes on both sides of the
 // catalog, because unmarshalling erases the null/[] distinction.
 var _ = Describe("project repos are never null", func() {
-	var originalPath string
 
 	BeforeEach(func() {
-		originalPath = projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 		originalCounts := projectsTodoCounts
-		projectsTodoCounts = func(_ context.Context, projects []Project) []todoCountsResult {
+		projectsTodoCounts = func(_ context.Context, projects []projects.Project) []todoCountsResult {
 			return make([]todoCountsResult, len(projects))
 		}
 		DeferCleanup(func() {
-			projectsPath = originalPath
 			projectsTodoCounts = originalCounts
 		})
 	})
 
 	It("persists an empty list rather than null for a project with no repos", func() {
-		Expect(SaveProjects([]Project{{Name: "time-kiosk", Dir: GinkgoT().TempDir()}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: "time-kiosk", Dir: GinkgoT().TempDir()}})).To(Succeed())
 
 		stored, err := os.ReadFile(projectsPath)
 
@@ -106,7 +129,7 @@ var _ = Describe("project repos are never null", func() {
 	It("heals a catalog written by an older gavel that stored repos as null", func() {
 		Expect(os.WriteFile(projectsPath, []byte(`[{"name":"time-kiosk","dir":"/tmp/time-kiosk","repos":null}]`), 0o600)).To(Succeed())
 
-		projects, err := LoadProjects(LoadProjectsOptions{})
+		projects, err := loadProjects(context.Background())
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(projects).To(HaveLen(1))

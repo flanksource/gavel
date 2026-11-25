@@ -126,10 +126,10 @@ var _ = Describe("--test-timeout in a go test batch", Serial, func() {
 		GinkgoT().Setenv("GOFLAGS", "-p=1")
 
 		o := &TestOrchestrator{
-			RunOptions: RunOptions{WorkDir: workDir, TestTimeout: 5 * time.Second},
+			RunOptions: RunOptions{WorkDir: workDir, TestTimeout: 5 * time.Second, Frameworks: []string{"go"}, StartingPaths: []string{"./a", "./b", "./c", "./hang"}},
 			registry:   DefaultRegistry(workDir),
 		}
-		results, err := o.detectAndRun([]Framework{parsers.GoTest}, []string{"./a", "./b", "./c", "./hang"}, nil)
+		results, err := o.Run()
 		Expect(err).NotTo(HaveOccurred())
 
 		for _, pkg := range []string{"a", "b", "c"} {
@@ -168,10 +168,10 @@ var _ = Describe("a Go test package that times out", Ordered, func() {
 		store := serveStore(host)
 
 		o := &TestOrchestrator{
-			RunOptions: RunOptions{WorkDir: workDir, TestTimeout: 6 * time.Second, ProcessTrace: trace},
+			RunOptions: RunOptions{WorkDir: workDir, TestTimeout: 6 * time.Second, ProcessTrace: trace, Frameworks: []string{"go"}, StartingPaths: []string{hangPackage}},
 			registry:   DefaultRegistry(workDir),
 		}
-		results, err := o.detectAndRun([]Framework{parsers.GoTest}, []string{hangPackage}, nil)
+		results, err := o.Run()
 		Expect(err).NotTo(HaveOccurred())
 
 		hang := findTest(results, "TestHang")
@@ -208,13 +208,13 @@ var _ = Describe("a Go test package that times out", Ordered, func() {
 		store := serveStore(host)
 
 		o := &TestOrchestrator{
-			RunOptions: RunOptions{WorkDir: workDir, TestTimeout: time.Minute, ProcessTrace: trace, SigquitDumper: dumper},
+			RunOptions: RunOptions{WorkDir: workDir, TestTimeout: time.Minute, ProcessTrace: trace, SigquitDumper: dumper, Frameworks: []string{"go"}, StartingPaths: []string{hangPackage}},
 			registry:   DefaultRegistry(workDir),
 		}
 		ran := make(chan parsers.TestSuiteResults, 1)
 		go func() {
 			defer GinkgoRecover()
-			results, err := o.detectAndRun([]Framework{parsers.GoTest}, []string{hangPackage}, nil)
+			results, err := o.Run()
 			Expect(err).NotTo(HaveOccurred())
 			ran <- results
 		}()

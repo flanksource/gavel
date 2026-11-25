@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/github/activity"
 	"github.com/flanksource/gavel/procfile"
@@ -55,11 +57,9 @@ var _ = Describe("activity stream", func() {
 var _ = Describe("test runs stream", func() {
 	It("sends the grouped runs once, then only pings while they are unchanged", func() {
 		const projectName = "widgets"
-		original := projectsPath
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		DeferCleanup(func() { projectsPath = original })
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
 		dir := GinkgoT().TempDir()
-		Expect(SaveProjects([]Project{{Name: projectName, Dir: dir, Repos: []string{"acme/widgets"}}})).To(Succeed())
+		Expect(seedProjects([]projects.Project{{Name: projectName, Dir: dir, Repos: []string{"acme/widgets"}}})).To(Succeed())
 		useStreamInterval(&testRunsStreamInterval, fastStreamCadence)
 
 		frames := serveStream((&Server{}).handleTestRunsStream, "/api/tests/stream")

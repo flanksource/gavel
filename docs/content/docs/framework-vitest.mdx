@@ -1,0 +1,60 @@
+---
+title: Vitest
+description: Vitest projects, workspaces, and focused tests.
+parent: test-execution
+order: 4
+---
+
+import { SchemaViewer } from "@flanksource/clicky-ui/data";
+import Prerequisites from "../../src/components/site/Prerequisites";
+import schema from "../../../gavel.schema.json";
+
+## Discovery and prerequisites
+
+<Prerequisites>
+
+Install Node.js and your project's dependencies, including Vitest, using the project's package manager.
+
+</Prerequisites>
+
+Detection recognizes `vitest.config.*`, `vitest.workspace.*`, or a Vitest dependency alongside test files.
+
+## Execute and focus
+
+```bash
+gavel test vitest --dry-run .
+gavel test vitest .
+gavel test vitest ./web -- --testNamePattern parser
+```
+
+Replace example paths and test names with your project. Arguments after `--` go to the selected framework. Gavel runs Vitest once with the detected package manager and records its native report under `.vitest/`. Test environments and setup files remain in Vitest configuration.
+
+## Configure the adapter
+
+```yaml
+test:
+  frameworks:
+    vitest:
+      runtime:
+        timeout: 5m
+        mem: 2GiB
+```
+
+`test.frameworks.vitest.args` supplies native runner arguments; nonempty lists replace inherited lists. Global execution and reporting options are covered by [Test execution](/docs/test-execution) and [Reporting](/docs/reporting).
+
+## Results
+
+The adapter executes `vitest run --reporter=json` with Gavel's report settings, then converts native results into the shared test tree. Use `--failed <snapshot>` to verify a repair, and `--show-passed` to expose successful tests. A package deadline is separate from the whole-run deadline.
+
+### Live progress
+
+Alongside the JSON reporter, Gavel adds its own reporter (written to `.vitest/gavel-reporter-<hash>.mjs`). It streams each test's start and result while the package is still running, so the test UI shows tests changing from running to passed or failed in real time. The JSON report remains the final result. Live progress needs Vitest 3 or later. Older versions still produce final results, but show no per-test progress during the run.
+
+## Framework configuration reference
+
+The fields below are the configuration for `test.frameworks.vitest`. Native framework configuration remains in its own project files.
+
+<div id="framework-vitest">
+  <SchemaViewer schema={schema.properties.test.properties.frameworks.additionalProperties} />
+</div>
+

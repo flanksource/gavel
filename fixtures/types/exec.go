@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	osExec "os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -17,13 +18,19 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
 	"github.com/flanksource/gomplate/v4"
 	"github.com/flanksource/repomap"
 )
 
 // ExecFixture runs a command fixture: a markdown fence or table row, or a
 // YAML/JSON `kind: exec` step once its config is applied (see execKind).
-type ExecFixture struct{}
+type ExecFixture struct {
+	// Stdout and Stderr, when set, receive the command's output as it runs
+	// (a step's StepContext.Stdout/Stderr, which keep it and stream it live);
+	// a PTY run, whose output is one terminal stream, streams to neither.
+	Stdout, Stderr io.Writer
+}
 
 // Run executes the command test with gomplate template support
 func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
@@ -177,15 +184,36 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if len(exec.Input) > 0 && exec.Terminal != "pty" && terminalTrace == nil {
 		return result.Errorf(fmt.Errorf("input needs terminal: pty"), "prepare terminal input")
 	}
+	lease, err := slots.Acquire(ctx, slots.Request{Limits: opts.ProcessRuntime.Slots, WorkDir: workDir, Command: strings.Join(append([]string{exec.Exec}, exec.Args...), " ")})
+	if err != nil {
+		return result.Errorf(err, "fixture slots")
+	}
+	defer func() {
+		if err := lease.Close(); err != nil {
+			logger.Errorf("release fixture slots: %v", err)
+		}
+	}()
+	maps.Copy(childEnv, lease.Env())
 	var p *clickyExec.ExecResult
 	if exec.Terminal == "pty" || terminalTrace != nil {
-		p = runWithPTY(ctx, ptyRun{exec: exec, workDir: workDir, env: childEnv, terminal: terminalTrace, runtime: opts.ProcessRuntime})
+		p = runWithPTY(ctx, ptyRun{exec: exec, workDir: workDir, env: childEnv, terminal: terminalTrace, runtime: opts.ProcessRuntime, output: e.Stdout})
 	} else {
 		process := clickyExec.NewExec(exec.Exec, exec.Args...).WithCwd(workDir).WithProcessGroup().WithExactEnv(childEnv)
+		if e.Stdout != nil && e.Stderr != nil {
+			process = process.Stream(e.Stdout, e.Stderr)
+		}
 		if err := opts.ProcessRuntime.Apply(process); err != nil {
 			return result.Errorf(err, "fixture runtime")
 		}
 		p = process.WithEnv(stringEnv(exec.Env)).WithContext(ctx).Run().Result()
+	}
+	if err := lease.Close(); err != nil {
+		return result.Errorf(err, "release fixture slots")
+	}
+	// The step's StepContext streams applied the workflow commands; what the
+	// command printed, its expectations and CEL see without them.
+	if p != nil {
+		p.Stdout, p.Stderr = fixtures.StripWorkflowCommands(p.Stdout), fixtures.StripWorkflowCommands(p.Stderr)
 	}
 
 	result.Actual = p
@@ -242,7 +270,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	// to the markdown that asserts them. A worktree is disposable, so writing
 	// an updated golden into one would discard it on cleanup. The command moves;
 	// its expectations do not.
-	if err := processLaunchError(p); err != nil {
+	if err := processError(p); err != nil {
 		result.Stdout = p.Stdout
 		result.Stderr = p.Stderr
 		result.ExitCode = p.ExitCode
@@ -285,30 +313,37 @@ const (
 	ptyHeight = 40
 )
 
-// processLaunchError reports context and command start failures.
-// Ordinary non-zero exits stay with Evaluate so fixtures can still assert them.
-func processLaunchError(p *clickyExec.ExecResult) error {
+// processError reports a command that did not start, or that was stopped: by
+// its context, its runtime timeout or a resource limit. A stopped command may
+// still exit 0, so its exit code says nothing. Ordinary non-zero exits stay
+// with Evaluate so fixtures can still assert them.
+func processError(p *clickyExec.ExecResult) error {
 	if p == nil {
 		return fmt.Errorf("command produced no result")
 	}
 	if p.Error == nil {
 		return nil
 	}
-	if errors.Is(p.Error, context.Canceled) || errors.Is(p.Error, context.DeadlineExceeded) || p.PID == 0 {
-		return p.Error
+	var exit *osExec.ExitError
+	// clicky replaces the exit error of a shell that could not run its command.
+	shellFailure := p.ExitCode == 126 || p.ExitCode == 127
+	if p.PID != 0 && (errors.As(p.Error, &exit) || shellFailure) {
+		return nil
 	}
-	return nil
+	return p.Error
 }
 
 // ptyRun is one command run under a pseudo-terminal: the fixture's command,
-// where and with which environment it runs, and the terminal trace its output
-// feeds, nil when none is armed.
+// where and with which environment it runs, the terminal trace its output
+// feeds, nil when none is armed, and the stream its output is copied to as it
+// is read, nil for none.
 type ptyRun struct {
 	exec     fixtures.ExecFixtureBase
 	workDir  string
 	env      map[string]string
 	terminal *fixtures.TerminalTrace
 	runtime  processruntime.Options
+	output   io.Writer
 }
 
 // runWithPTY runs the command under a pseudo-terminal, of the terminal trace's
@@ -342,6 +377,14 @@ func runWithPTY(ctx context.Context, run ptyRun) *clickyExec.ExecResult {
 		}
 		opts.Output = feed
 	}
+	if run.output != nil {
+		// The feed goes first: a failed feed fails the command, the step's
+		// stream never fails a write.
+		opts.Output = run.output
+		if feed != nil {
+			opts.Output = io.MultiWriter(feed, run.output)
+		}
+	}
 	capture, err := fixtures.CaptureANSI(opts)
 	if err != nil {
 		return failed(errors.Join(fmt.Errorf("failed to start PTY: %w", err), closeTerminalFeed(run.terminal, feed, -1)))
@@ -359,7 +402,7 @@ func runWithPTY(ctx context.Context, run ptyRun) *clickyExec.ExecResult {
 		Command:  run.exec.Exec,
 		Args:     run.exec.Args,
 	}
-	result.Error = errors.Join(ctx.Err(), closeTerminalFeed(run.terminal, feed, capture.ExitCode))
+	result.Error = errors.Join(ctx.Err(), capture.TimeoutError(), closeTerminalFeed(run.terminal, feed, capture.ExitCode))
 	return result
 }
 

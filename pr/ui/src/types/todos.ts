@@ -65,6 +65,9 @@ export interface TodoItem {
   status: TodoStatus;
   priority: TodoPriority;
   cwd?: string;
+  // Root of the workspace the todo belongs to. Set on every item of the flat
+  // all-workspace list, which is grouped client-side by it.
+  dir?: string;
   // The user who created a hosted org's todo; absent locally.
   createdBy?: string;
   // Who in a hosted org sees the todo: only its creator (private, the default) or
@@ -81,6 +84,7 @@ export interface TodoItem {
   // Agent session id of the most recent run, used to follow the session live
   // and to resume it. Recorded in the native issue execution state.
   sessionId?: string;
+  sessionSummary?: { found: boolean; inProgress: boolean; state: string; durationMs: number; costUsd: number; updatedAt: string };
   // Present only when this detail was resolved from a session UUID. It selects
   // that exact historical transcript while sessionId continues to identify the
   // Todo's active/latest run for lifecycle actions.

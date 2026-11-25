@@ -35,6 +35,7 @@ type GavelResultsSummary struct {
 	CommentID        int64         `json:"-"`
 	ArtifactID       int64         `json:"artifactId"`
 	ArtifactURL      string        `json:"artifactUrl"`
+	Outdated         bool          `json:"outdated,omitempty"` // the run is not one of the PR head's
 	TestsPassed      int           `json:"testsPassed"`
 	TestsFailed      int           `json:"testsFailed"`
 	TestsTimedOut    int           `json:"testsTimedOut,omitempty"` // subset of TestsFailed

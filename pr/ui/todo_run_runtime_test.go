@@ -152,8 +152,8 @@ func TestDashboardRunRuntimeFromSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("codex cmux runtime: %v", err)
 	}
-	if providerKey(spec.Model) != "openai" || spec.Name != resolvedName(t, api.Model{Name: "codex", Mode: api.ModeCmux}) || spec.Mode != api.ModeCmux {
-		t.Fatalf("got provider=%q model=%q mode=%q", providerKey(spec.Model), spec.Name, spec.Mode)
+	if run.ProviderKey(spec.Model) != "openai" || spec.Name != resolvedName(t, api.Model{Name: "codex", Mode: api.ModeCmux}) || spec.Mode != api.ModeCmux {
+		t.Fatalf("got provider=%q model=%q mode=%q", run.ProviderKey(spec.Model), spec.Name, spec.Mode)
 	}
 }
 
@@ -279,7 +279,7 @@ func TestTodoRunContextListsCaptainRuntimeModes(t *testing.T) {
 
 // TestNormalizeTodoRunOptionsCaptainRuntime pins the (provider, mode) each
 // payload normalizes to. The provider follows from the model name, so it is
-// asserted through providerKey rather than read off the spec.
+// asserted through run.ProviderKey rather than read off the spec.
 func TestDashboardRunCaptainRuntime(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
 	configureAutomaticPlanToolPolicies(t, dir)
@@ -287,7 +287,7 @@ func TestDashboardRunCaptainRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude cli runtime: %v", err)
 	}
-	if spec.Mode != api.ModeCLI || providerKey(spec.Model) != "anthropic" || spec.Effort != "xhigh" {
+	if spec.Mode != api.ModeCLI || run.ProviderKey(spec.Model) != "anthropic" || spec.Effort != "xhigh" {
 		t.Fatalf("unexpected claude cli spec: %+v", spec.Model)
 	}
 
@@ -295,7 +295,7 @@ func TestDashboardRunCaptainRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default codex runtime: %v", err)
 	}
-	if spec.Mode != api.ModeAgent || providerKey(spec.Model) != "openai" {
+	if spec.Mode != api.ModeAgent || run.ProviderKey(spec.Model) != "openai" {
 		t.Fatalf("unexpected codex agent defaults: %+v", spec.Model)
 	}
 
@@ -303,7 +303,7 @@ func TestDashboardRunCaptainRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the model's mode should override the driver: %v", err)
 	}
-	if spec.Mode != api.ModeCLI || providerKey(spec.Model) != "openai" {
+	if spec.Mode != api.ModeCLI || run.ProviderKey(spec.Model) != "openai" {
 		t.Fatalf("the model's mode did not take precedence: %+v", spec.Model)
 	}
 

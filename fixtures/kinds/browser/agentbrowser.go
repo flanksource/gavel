@@ -72,6 +72,7 @@ func (AgentBrowser) Execute(ctx context.Context, step *fixtures.StepContext) (fi
 	var snapshot string
 	results := make([]map[string]any, 0, len(cfg.Commands))
 	for _, command := range cfg.Commands {
+		step.SetCommand(session.binary+" "+command, "")
 		run, err := session.run(ctx, step, command)
 		if err != nil {
 			if owns {
@@ -84,10 +85,12 @@ func (AgentBrowser) Execute(ctx context.Context, step *fixtures.StepContext) (fi
 		}
 		results = append(results, run.asMap())
 		stdout.WriteString(run.Stdout)
+		fmt.Fprint(step.Stdout(), run.Stdout)
+		fmt.Fprint(step.Stderr(), run.Stderr)
 		if isSnapshot(run.Cmd) {
 			snapshot = run.Stdout
 		}
-		result.Command = session.binary + " " + run.Cmd
+		step.SetCommand(session.binary+" "+run.Cmd, "")
 		if run.ExitCode != 0 {
 			result = result.Failf("agent-browser %s exited %d: %s", run.Cmd, run.ExitCode, strings.TrimSpace(run.Stderr+"\n"+run.Stdout))
 			break

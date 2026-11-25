@@ -2,7 +2,10 @@ import { Component, type ReactNode } from 'react';
 import { UiError } from '@flanksource/clicky-ui/icons';
 
 // React error boundaries must be class components; there is no hook equivalent.
-export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+export class ErrorBoundary extends Component<{
+  children: ReactNode;
+  fallback?: (error: Error) => ReactNode;
+}, { error: Error | null }> {
   state = { error: null as Error | null };
 
   static getDerivedStateFromError(error: Error) {
@@ -11,6 +14,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
 
   render() {
     if (!this.state.error) return this.props.children;
+    if (this.props.fallback) return this.props.fallback(this.state.error);
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-sm">
         <UiError className="text-2xl text-red-500" />

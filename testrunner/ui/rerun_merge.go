@@ -4,13 +4,13 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
-// mergeRerunTests overlays rerun results on top of the existing tree.
+// MergeRerunTests overlays rerun results on top of the existing tree.
 // Identity is (framework, package_path, suite path, name). Matching tests
 // have their top-level flags refreshed to reflect the new attempt, and the
 // incoming Attempts slice is appended onto the preserved tree's Attempts.
 // Tests that only exist in the incoming snapshot are appended; tests only
 // in the preserved tree keep their prior state.
-func mergeRerunTests(existing, incoming []parsers.Test) []parsers.Test {
+func MergeRerunTests(existing, incoming []parsers.Test) []parsers.Test {
 	if len(existing) == 0 {
 		return incoming
 	}
@@ -37,8 +37,9 @@ func mergeRerunTests(existing, incoming []parsers.Test) []parsers.Test {
 }
 
 // mergeTestNode merges a single incoming test into an existing one.
-// Top-level state (pass/fail/skip/pending/timedout/duration/stdout/stderr)
-// adopts the most recent attempt's values so existing filters keep working.
+// Top-level state (status flags, duration, output, detail) adopts the most
+// recent attempt's values, so existing filters keep working and a retry from a
+// fixture step reuses what its steps last recorded.
 // Attempts from the incoming test are appended to the existing Attempts so
 // history survives.
 func mergeTestNode(existing, incoming parsers.Test) parsers.Test {
@@ -65,21 +66,31 @@ func mergeTestNode(existing, incoming parsers.Test) parsers.Test {
 	merged.Skipped = incoming.Skipped
 	merged.Pending = incoming.Pending
 	merged.TimedOut = incoming.TimedOut
+	merged.Warned = incoming.Warned
+	merged.Aborted = incoming.Aborted
+	merged.Running = incoming.Running
+	merged.Waiting = incoming.Waiting
+	merged.Started = incoming.Started
+	merged.Progress = incoming.Progress
+	merged.Context = incoming.Context
+	merged.Detail = incoming.Detail
+	merged.FailureDetail = incoming.FailureDetail
 	merged.Duration = incoming.Duration
 	merged.Message = incoming.Message
 	merged.Stdout = incoming.Stdout
 	merged.Stderr = incoming.Stderr
+	merged.Log = incoming.Log
 	merged.Command = incoming.Command
 	merged.Summary = incoming.Summary
 
 	// Children: recurse with the same key-based merge.
-	merged.Children = mergeRerunTests(existing.Children, incoming.Children)
+	merged.Children = MergeRerunTests(existing.Children, incoming.Children)
 	return merged
 }
 
 func testMergeKey(t parsers.Test) string {
 	// Framework + package path + name uniquely identifies a leaf in practice.
-	// Children get their own merge via recursive mergeRerunTests, so suite
+	// Children get their own merge via recursive MergeRerunTests, so suite
 	// path is not needed here.
 	return string(t.Framework) + "\x00" + t.PackagePath + "\x00" + t.Name
 }

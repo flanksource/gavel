@@ -6,10 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/sdk/status"
 	ghodss "github.com/ghodss/yaml"
 	"gorm.io/gorm"
 )
@@ -34,18 +35,82 @@ import (
 // name and nest rather than inline, so `connections:` would silently mis-decode.
 // goccy honours the BytesUnmarshaler/BytesMarshaler interfaces, which is the seam
 // this uses to hand the raw bytes to a decoder that reads json tags.
+//
+// A setup that reads `{{.params.…}}` or holds a `{$cel: …}` value is also kept
+// as authored (raw): it is rendered once the params form answered. Under
+// `connections:`, a string names that connection kind's reference
+// (`kubernetes: connection://acme`), and a null leaves it unconfigured.
 type SetupSpec struct {
 	shell.Setup `json:",inline" yaml:",inline"`
+	raw         json.RawMessage
 }
 
 // UnmarshalYAML implements goccy's BytesUnmarshaler.
 func (s *SetupSpec) UnmarshalYAML(data []byte) error {
-	return ghodss.Unmarshal(data, &s.Setup)
+	encoded, err := ghodss.YAMLToJSON(data)
+	if err != nil {
+		return fmt.Errorf("setup: %w", err)
+	}
+	return s.UnmarshalJSON(encoded)
+}
+
+// UnmarshalJSON strictly decodes the setup, keeping it as authored when its
+// values come from the params form.
+func (s *SetupSpec) UnmarshalJSON(data []byte) error {
+	tree, err := decodeOrderedJSON(data)
+	if err != nil {
+		return fmt.Errorf("setup: %w", err)
+	}
+	tree = expandConnectionShorthand(tree)
+	encoded, err := encodeOrderedJSON(tree)
+	if err != nil {
+		return fmt.Errorf("setup: %w", err)
+	}
+	shape := tree
+	if isDeferredSetup(tree, encoded) {
+		s.raw = encoded
+		shape = withoutDeferredValues(tree)
+	}
+	if s.Setup, err = decodeSetup(shape); err != nil {
+		return fmt.Errorf("setup: %w", err)
+	}
+	return nil
+}
+
+// MarshalJSON is the setup as authored when it is rendered from the params
+// form, so a worker it is handed to renders the same setup.
+func (s SetupSpec) MarshalJSON() ([]byte, error) {
+	if s.raw != nil {
+		return s.raw, nil
+	}
+	return json.Marshal(s.Setup)
 }
 
 // MarshalYAML implements goccy's BytesMarshaler.
 func (s SetupSpec) MarshalYAML() ([]byte, error) {
-	return ghodss.Marshal(s.Setup)
+	encoded, err := s.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return ghodss.JSONToYAML(encoded)
+}
+
+// declares reports whether the authored setup sets any of keys at its top level.
+func (s *SetupSpec) declares(keys ...string) (bool, error) {
+	if s.raw == nil {
+		return false, nil
+	}
+	tree, err := decodeOrderedJSON(s.raw)
+	if err != nil {
+		return false, err
+	}
+	root, _ := tree.(orderedObject)
+	for _, member := range root {
+		if member.Value != nil && slices.Contains(keys, member.Key) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // applyWorktreeDefaults fills in the worktree defaults a fixture didn't spell out
@@ -125,84 +190,11 @@ func (p *PreparedSetup) Cleanup() error {
 // nothing. It is a hook so this package never imports internal/database.
 var SetupDBProvider func(context.Context) *gorm.DB
 
-// prepareSetups prepares each markdown file's `setup:` block, once, keyed on the
-// file that declared it.
-//
-// It runs before `build:` deliberately: a setup can relocate the run into a
-// worktree, and a build that ran in the original repo would build tree A while
-// the tests exercise tree B — and pass.
-//
-// A file whose tests were all filtered out contributes no node to walk and so
-// gets no setup prepared, which is the behaviour you want: `--filter` should not
-// clone a repo it has no tests for.
-func (r *Runner) prepareSetups(ctx flanksourceContext.Context) error {
-	for _, file := range r.tree.Children {
-		spec, mdPath, sourceDir := fileSetup(file)
-		if spec == nil {
-			continue
-		}
-		prepared, err := prepareSetup(ctx, mdPath, sourceDir, spec)
-		if err != nil {
-			return err
-		}
-		if r.setups == nil {
-			r.setups = make(map[string]*PreparedSetup)
-		}
-		r.setups[mdPath] = prepared
-	}
-	return nil
-}
-
-func (r *Runner) cleanupSetups() error {
-	var cleanupErr error
-	for file, prepared := range r.setups {
-		if err := prepared.Cleanup(); err != nil {
-			logger.Warnf("%s: setup cleanup failed: %v", file, err)
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%s: setup cleanup: %w", file, err))
-		}
-	}
-	return cleanupErr
-}
-
-// envForNode returns the per-file runtime environment a node executes in.
-// fixtureEnv is the per-file runtime environment a fixture executes in: the
-// file it came from, its prepared `setup:` and the step scope its steps share.
-type fixtureEnv struct {
-	file  string
-	setup *PreparedSetup
-	scope *StepScope
-}
-
-func (r *Runner) envForNode(node *FixtureNode) fixtureEnv {
-	if node == nil || node.Origin == nil {
-		return fixtureEnv{}
-	}
-	return fixtureEnv{file: node.Origin.File, setup: r.setups[node.Origin.File]}
-}
-
-// fileSetup finds the `setup:` a file declared, along with the markdown path to
-// key it on and the directory to anchor its relative paths against.
-//
-// Frontmatter is file-level, so it is reachable only through the tests that
-// carry it — FixtureNode has no frontmatter of its own. The first test wins
-// because every test in a file shares the same parsed frontmatter.
-func fileSetup(file *FixtureNode) (spec *SetupSpec, mdPath, sourceDir string) {
-	file.Walk(func(node *FixtureNode) {
-		if spec != nil || node.Test == nil || node.Test.Setup == nil {
-			return
-		}
-		spec = node.Test.Setup
-		sourceDir = node.Test.SourceDir
-		if node.Origin != nil {
-			mdPath = node.Origin.File
-		}
-	})
-	return spec, mdPath, sourceDir
-}
-
 // prepareSetup resolves one file's setup against the directory its markdown
-// lives in and hands it to commons-db.
-func prepareSetup(ctx flanksourceContext.Context, mdPath, sourceDir string, spec *SetupSpec) (*PreparedSetup, error) {
+// lives in and hands it to commons-db. A non-nil catalog resolves the setup's
+// connection references (a params-reading setup, see StepConnectionCatalog);
+// nil resolves them against the process database.
+func prepareSetup(ctx flanksourceContext.Context, mdPath, sourceDir string, spec *SetupSpec, catalog *dbcontext.Context) (*PreparedSetup, error) {
 	resolved, err := spec.Resolve(sourceDir)
 	if err != nil {
 		return nil, fmt.Errorf("%s: setup: resolve: %w", mdPath, err)
@@ -225,6 +217,9 @@ func prepareSetup(ctx flanksourceContext.Context, mdPath, sourceDir string, spec
 		logger.Warnf("%s: setup: %s", mdPath, warning)
 	}
 
+	if catalog != nil {
+		return finishSetup(mdPath, &resolved, *catalog)
+	}
 	dbCtx := dbcontext.NewContext(ctx)
 	var db *gorm.DB
 	if SetupDBProvider != nil {
@@ -236,7 +231,15 @@ func prepareSetup(ctx flanksourceContext.Context, mdPath, sourceDir string, spec
 		return nil, fmt.Errorf("%s: setup: resolving a connection:// reference needs a database, but none is configured", mdPath)
 	}
 
-	result, err := shell.Prepare(dbCtx, &resolved)
+	if SetupConnectionResolver != nil {
+		dbCtx = dbCtx.WithConnectionResolver(SetupConnectionResolver)
+	}
+	return finishSetup(mdPath, &resolved, dbCtx)
+}
+
+// finishSetup prepares a resolved setup in dbCtx and registers its teardown.
+func finishSetup(mdPath string, resolved *shell.Setup, dbCtx dbcontext.Context) (*PreparedSetup, error) {
+	result, err := shell.Prepare(dbCtx, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("%s: setup: prepare: %w", mdPath, err)
 	}
@@ -265,7 +268,7 @@ func prepareSetup(ctx flanksourceContext.Context, mdPath, sourceDir string, spec
 // directory on the markdown path keeps concurrent files off each other's
 // worktrees while staying stable across runs of the same file.
 func setupBaseDir(mdPath string) (string, error) {
-	cache, err := os.UserCacheDir()
+	cache, err := status.CacheDir()
 	if err != nil {
 		return "", err
 	}
@@ -274,7 +277,7 @@ func setupBaseDir(mdPath string) (string, error) {
 		return "", err
 	}
 	sum := sha256.Sum256([]byte(abs))
-	return filepath.Join(cache, "gavel", "fixtures", hex.EncodeToString(sum[:8])), nil
+	return filepath.Join(cache, "fixtures", hex.EncodeToString(sum[:8])), nil
 }
 
 // setupReferencesConnection reports whether the setup names a stored connection
@@ -305,4 +308,18 @@ func splitEnv(env []string) map[string]string {
 		}
 	}
 	return out
+}
+
+// fixtureEnv is the per-file runtime environment a fixture executes in: the
+// file it came from, its prepared `setup:` and the step scope its steps share.
+type fixtureEnv struct {
+	file  string
+	setup *PreparedSetup
+	scope *StepScope
+}
+
+// envForNode returns the per-file runtime environment a node executes in.
+func (r *Runner) envForNode(node *FixtureNode) fixtureEnv {
+	file := nodeFile(node)
+	return fixtureEnv{file: file, setup: r.setups.get(file)}
 }

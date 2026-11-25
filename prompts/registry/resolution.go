@@ -99,6 +99,18 @@ func configFieldSource(trace verify.GavelConfigTrace, configPath string, source 
 		return source, nil
 	}
 	if len(trace.Sources) > 0 {
+		defaults := verify.DefaultGavelConfig().AI
+		if source.LayerID != "ai" {
+			op, err := promptSpecAt(verify.DefaultGavelConfig(), configPath)
+			if err != nil {
+				return api.FieldSource{}, err
+			}
+			defaults = op.Spec
+		}
+		if defaults.Fields().Has(field) {
+			source.Name, source.LayerID = "built-in Gavel configuration", "default"
+			return source, nil
+		}
 		return api.FieldSource{}, fmt.Errorf("no authored config source for %s field %s", configPath, field)
 	}
 	return source, nil

@@ -1,0 +1,136 @@
+---
+name: go-code-review-jev
+description: Judge a Go change against gavel's go-code-review checklist with Jev, one pass/fail/na verdict per rule.
+model: jev-latest
+mode: api
+output:
+  schemaType: typesafe-schema
+  schema:
+    CMD-1:
+      type: choice
+      instructions: Is every cobra.Command or AddCommand in the change defined inside cmd/ or a main package?
+      criteria: &verdict
+        pass: The change satisfies the rule.
+        fail: An added or changed line in the change violates the rule.
+        na: The change touches nothing this rule is about.
+    CMD-2:
+      type: choice
+      instructions: Is every command thin? RunE only parses flags, builds one options struct, calls one provider/service/store function and renders the result. Loops over domain data, DB/HTTP/exec calls, business branching or result aggregation in RunE fail.
+      criteria: *verdict
+    CMD-3:
+      type: choice
+      instructions: Does the change keep domain types, view types and conversion/formatting helpers out of cmd/, beside the provider?
+      criteria: *verdict
+    CMD-4:
+      type: choice
+      instructions: Are flags forwarded as an options struct rather than read from package-level flag vars deep inside logic?
+      criteria: *verdict
+    PKG-1:
+      type: choice
+      instructions: Does the change avoid adding a new prefixed or tiny (<150 lines) file to a package where no file is 1000 lines or more? Use the package inventory line counts.
+      criteria: *verdict
+    PKG-2:
+      type: choice
+      instructions: Where 3 or more files share a prefix and one is 1000 lines or more, does the change move toward a subpackage rather than adding another prefixed file?
+      criteria: *verdict
+    PKG-3:
+      type: choice
+      instructions: Does every touched file stay at or under 1000 lines (hard limit 2000), or get split by domain responsibility into a subpackage?
+      criteria: *verdict
+    PKG-4:
+      type: choice
+      instructions: Does the change avoid giving a package a cluster of 4 or more top-level funcs, vars or types sharing a prefix? Use the package inventory symbols.
+      criteria: *verdict
+    PKG-5:
+      type: choice
+      instructions: Does the change extend existing registries, providers, clients, wrappers and interfaces instead of adding a parallel one?
+      criteria: *verdict
+    PKG-6:
+      type: choice
+      instructions: Do new names reuse the package's existing domain vocabulary (no Job beside Task, no Fetch beside Get)?
+      criteria: *verdict
+    PKG-7:
+      type: choice
+      instructions: Does the change avoid hardcoded lists of kinds, names or IDs that duplicate an existing catalog or enum?
+      criteria: *verdict
+    API-1:
+      type: choice
+      instructions: Does the change avoid Foo plus FooWithX/FooV2 variants, using one function with an options struct?
+      criteria: *verdict
+    API-2:
+      type: choice
+      instructions: Does the change avoid keeping deprecated, legacy or compat shims for callers in the same module?
+      criteria: *verdict
+    API-3:
+      type: choice
+      instructions: Does every new or changed function take at most 2 same-typed positional params and no bool flag params?
+      criteria: *verdict
+    API-4:
+      type: choice
+      instructions: Do exported signatures avoid leaking third-party internal types?
+      criteria: *verdict
+    ERR-1:
+      type: choice
+      instructions: Does invalid input or missing config fail loudly, with no zero, empty or default value returned to keep working?
+      criteria: *verdict
+    ERR-2:
+      type: choice
+      instructions: Does the change avoid keeping an old code path as a fallback for the new one?
+      criteria: *verdict
+    ERR-3:
+      type: choice
+      instructions: Do clicky task callbacks return errors without panic, Fatal or os.Exit, and log via t.Infof/t.Errorf rather than fmt?
+      criteria: *verdict
+    WA-1:
+      type: choice
+      instructions: Does every workaround carry a WORKAROUND(reason), Correct fix and Ref comment block, with no workaround hidden behind innocuous names like safeGet, tryParse or withFallback?
+      criteria: *verdict
+    WA-2:
+      type: choice
+      instructions: Is the change free of TODO-fix-later notes, commented-out code, skipped tests and hardcoded expected values?
+      criteria: *verdict
+    WA-3:
+      type: choice
+      instructions: Do fixes land in the shared wrapper or seam rather than as a guard patched into one call site?
+      criteria: *verdict
+    FN-1:
+      type: choice
+      instructions: Does every new helper have more than one call site, a test, or a clear readability need?
+      criteria: *verdict
+    FN-2:
+      type: choice
+      instructions: Is every new function distinct from existing ones rather than a near-duplicate?
+      criteria: *verdict
+    FN-3:
+      type: choice
+      instructions: Do new comments state caveats or why, rather than narrate what the code does?
+      criteria: *verdict
+    CONC-1:
+      type: choice
+      instructions: Does work orchestration use clicky.StartTask/StartGroup instead of raw go func with sync.WaitGroup or result channels?
+      criteria: *verdict
+    OUT-1:
+      type: choice
+      instructions: Does user-facing CLI output return clicky Pretty/api.Text instead of fmt.Print or string concatenation, choosing the format only at the output boundary?
+      criteria: *verdict
+    TEST-1:
+      type: choice
+      instructions: Do new Go tests use Ginkgo/Gomega rather than testing.T asserts or testify?
+      criteria: *verdict
+    TEST-2:
+      type: choice
+      instructions: Do test assertions compare against independent expectations, with no trivial asserts, no reuse of the code-under-test's output as the oracle and no unexplained literals?
+      criteria: *verdict
+    TEST-3:
+      type: choice
+      instructions: Does each It/Describe description match what its final Expect verifies?
+      criteria: *verdict
+    TEST-4:
+      type: choice
+      instructions: Do pure unit tests avoid the DB and network, without mocking SQL or redis where an integration test belongs?
+      criteria: *verdict
+---
+{{role "system"}}
+You review a Go change against Flanksource's structural and design rules, the ones linters cannot check. Judge only added and changed lines and new files; pre-existing code is out of scope. Ignore generated files (dist/, *.pb.go, zz_generated*). The package inventory lists line counts and top-level symbols for every package the change touches.
+{{role "user"}}
+{{{change}}}

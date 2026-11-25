@@ -1,9 +1,9 @@
 import type { ComponentType } from 'react';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo, useEffect, useState } from 'react';
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { UiAdd, UiBeaker, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiListTree, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
-import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoLayout, TodoPriority, TodoStatus } from '../../types';
+import type { TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoLayout, TodoPriority, TodoStatus } from '../../types';
 import { TODO_PHASES } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
 import type { FacetModes } from '../../utils';
@@ -12,8 +12,8 @@ import { ISSUE_ICONS, StatusAsk, StatusBlocked, StatusClosed, StatusInProgress, 
 import { DENSITY_OPTIONS } from './todoDensity';
 import { LAYOUT_OPTIONS } from './todoLayout';
 import { TodoPhaseStrip } from './TodoPhaseCell';
-import { isStatusShown } from './todoFilter';
-import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
+import { isStatusFocused, isStatusShown } from './todoFilter';
+import { formatCost, formatDuration } from './TodoSessionTimer';
 import { TodoTagRow } from './TodoTag';
 import { todoVisibleLabels, type TagIndex } from './tagResolve';
 import { TodoPRBadge } from './TodoPRBadge';
@@ -237,7 +237,7 @@ interface SessionBadgeView {
 // end settles to Done (green), anything else to Ended (neutral), so the row
 // mirrors the real session state instead of a perpetual blue spinner. Before the
 // log appears (found=false) the session is still starting, so it stays live.
-function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
+function sessionBadgeView(stats: TodoItem['sessionSummary'] | null): SessionBadgeView {
   if (stats?.state === 'ask') {
     return { className: statusClass('skipped'), icon: UiComment, label: 'Awaiting input' };
   }
@@ -273,17 +273,37 @@ export function isLiveRun(todo: TodoItem): boolean {
 // spinning forever. Until the session resolves there is nothing to report, so a
 // settled todo falls back to its own status icon and only a live run claims to be
 // in progress. Render it only for a row that has a session id.
-export function SessionBadge({ dir, sessionId, status, live }: {
-  dir: string;
-  sessionId: string;
+//
+// `variant="meta"` is the phone row's form: the row already leads with its status
+// icon, so the run contributes only its elapsed time and cost to the meta line,
+// and nothing until the session has reported.
+export function SessionBadge({ stats, status, live, variant = 'badge' }: {
+  stats?: TodoItem['sessionSummary'];
   status: TodoStatus | string;
   live: boolean;
+  variant?: 'badge' | 'meta';
 }) {
-  const { stats, elapsedMs } = useSessionStats({ dir, sessionId, active: true, expectLive: live });
-  if (!stats?.found && !live) return <StatusIcon status={status} />;
-  const view = sessionBadgeView(stats);
-  const ViewIcon = view.icon;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!stats?.inProgress) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [stats?.inProgress]);
+  const elapsedMs = stats ? stats.durationMs + (stats.inProgress ? Math.max(0, now - Date.parse(stats.updatedAt)) : 0) : 0;
   const cost = stats ? formatCost(stats.costUsd) : '';
+  if (variant === 'meta') {
+    if (!stats?.found) return null;
+    const duration = formatDuration(elapsedMs);
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 tabular-nums" title={`Agent run: ${duration}${cost ? `, ${cost}` : ''}`}>
+        {duration}
+        {cost && <span className="opacity-80">{cost}</span>}
+      </span>
+    );
+  }
+  if (!stats?.found && !live) return <StatusIcon status={status} />;
+  const view = sessionBadgeView(stats ?? null);
+  const ViewIcon = view.icon;
   return (
     <span
       className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium tabular-nums ${view.className}`}
@@ -306,6 +326,9 @@ function CountBadge({ icon: Icon, value, label, className = 'text-muted-foregrou
   onToggle?: (status: TodoStatus) => void;
 }) {
   if (!value) return null;
+  // The visible content is a glyph and a number; the label is what says which
+  // status the number counts.
+  const name = `${value} ${label.toLowerCase()}`;
   const content = (
     <>
       <Icon className="text-[12px]" />
@@ -324,6 +347,7 @@ function CountBadge({ icon: Icon, value, label, className = 'text-muted-foregrou
         type="button"
         onClick={() => onToggle(status)}
         aria-pressed={active}
+        aria-label={name}
         title={active ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
         className={`-mx-0.5 inline-flex h-auto items-center gap-1 rounded px-0.5 text-xs tabular-nums transition-colors hover:bg-muted ${active ? className : 'text-muted-foreground opacity-40 hover:opacity-100'}`}
       >
@@ -332,9 +356,53 @@ function CountBadge({ icon: Icon, value, label, className = 'text-muted-foregrou
     );
   }
   return (
-    <span className={`inline-flex items-center gap-1 text-xs tabular-nums ${className}`} title={label}>
+    <span className={`inline-flex items-center gap-1 text-xs tabular-nums ${className}`} title={label} aria-label={name}>
       {content}
     </span>
+  );
+}
+
+// The statuses a phone's group header counts: the ones that wait on a person.
+// Every other status is still counted in the Filters sheet's Status facet.
+// `hover` keeps the chip's own tone under the ghost Button's hover, which on a
+// touch screen sticks after the tap and would otherwise grey the chip out.
+const ACTION_COUNTS: { status: TodoStatus; count: (counts: TodoCounts) => number; noun: (value: number) => string; icon: ComponentType<IconProps>; hover: string }[] = [
+  { status: 'failed', count: c => c.failed, noun: () => 'failed', icon: UiError, hover: 'hover:bg-red-500/20 hover:text-red-600' },
+  { status: 'ask', count: c => c.ask ?? 0, noun: n => (n === 1 ? 'needs input' : 'need input'), icon: UiQuestion, hover: 'hover:bg-purple-500/20 hover:text-purple-700 dark:hover:text-purple-400' },
+  { status: 'review', count: c => c.review ?? 0, noun: n => (n === 1 ? 'needs review' : 'need review'), icon: UiEye, hover: 'hover:bg-amber-500/20 hover:text-amber-700 dark:hover:text-amber-400' },
+];
+
+// TodoActionCounts is the phone's group-header summary: at most three chips, one
+// per status that needs action, each a tap target that shows only that status
+// (and, tapped again, clears it).
+export function TodoActionCounts({ counts, statusFilter, onFocus }: {
+  counts: TodoCounts;
+  statusFilter: FacetModes;
+  onFocus: (status: TodoStatus) => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      {ACTION_COUNTS.map(({ status, count, noun, icon: Icon, hover }) => {
+        const value = count(counts);
+        if (!value) return null;
+        const focused = isStatusFocused(statusFilter, status);
+        return (
+          <Button
+            key={status}
+            variant="ghost"
+            type="button"
+            onClick={() => onFocus(status)}
+            aria-pressed={focused}
+            aria-label={`${value} ${noun(value)}`}
+            title={focused ? 'Show every status' : `Show only ${statusLabel(status)}`}
+            className={`inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-full border px-2 text-xs tabular-nums ${statusClass(status)} ${hover} ${focused ? 'ring-1 ring-current' : ''}`}
+          >
+            <Icon className="text-[12px]" />
+            {value}
+          </Button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -417,18 +485,38 @@ export function TodoVerificationIndicator() {
 // TodoAges shows the todo's created age and, when it differs, its last-activity
 // age. Absolute times sit in the tooltips. A todo with neither timestamp (some
 // incomplete records) renders nothing. `short` collapses both ages into a single
-// compact 'X' token (no "ago") for the single-line compact density.
-export function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) {
+// compact 'X' token (no "ago") for the single-line compact density; `anchor`
+// picks which age that token is. The phone anchors on the last activity — the
+// same "updated" the Updated sort reads — and lists both times in the tooltip.
+export function TodoAges({ todo, short = false, anchor = 'created' }: {
+  todo: TodoItem;
+  short?: boolean;
+  anchor?: 'created' | 'updated';
+}) {
+  if (short && anchor === 'updated') {
+    const updated = todo.lastRun ?? todo.created;
+    if (!updated) return null;
+    const title = [
+      todo.lastRun && `Updated ${new Date(todo.lastRun).toLocaleString()}`,
+      todo.created && `Created ${new Date(todo.created).toLocaleString()}`,
+    ].filter(Boolean).join('\n');
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 tabular-nums" title={title}>
+        <UiHistory className="text-[11px]" />
+        {ageShort(updated)}
+      </span>
+    );
+  }
   if (short) {
-    const anchor = todo.created ?? todo.lastRun;
-    if (!anchor) return null;
+    const at = todo.created ?? todo.lastRun;
+    if (!at) return null;
     return (
       <span
         className="inline-flex shrink-0 items-center gap-1 tabular-nums"
         title={todo.created ? `Created ${new Date(todo.created).toLocaleString()}` : `Last activity ${new Date(todo.lastRun!).toLocaleString()}`}
       >
         <UiClock className="text-[11px]" />
-        {ageShort(anchor)}
+        {ageShort(at)}
       </span>
     );
   }
@@ -479,8 +567,13 @@ export interface TodoRowTarget {
 // the memo below can actually hold — a per-row `() => onSelect(ref)` in the
 // parent would hand every row a new function on every parent render and defeat
 // it entirely.
-function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, tags, childDone, childTotal }: {
+//
+// `mobile` is the phone row: one status indicator (the icon, no severity edge),
+// the title first after it, and a single compact last-activity age with the
+// run's duration and cost moved down to the meta line.
+function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, tags, childDone, childTotal, mobile = false }: {
   todo: TodoItem;
+  mobile?: boolean;
   active: boolean;
   onSelect: (target: TodoRowTarget) => void;
   density?: TodoDensity;
@@ -505,17 +598,18 @@ function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectab
   // Memoised so the row's style prop keeps one identity: a fresh object literal
   // here re-renders ListMenuItem (and commits DOM) on every parent render.
   const style = useMemo(() => ({ borderLeftColor: severityColor(todo.priority) }), [todo.priority]);
-  // Any todo carrying a session shows that run's duration and cost, whatever
-  // lifecycle status it settled into. Only a live run keeps polling (see
-  // sessionStatsQueryOptions), so a long list of finished todos reads its totals
-  // once instead of firing a request storm.
+  // Session summaries arrive with the workspace batch; rows never fetch them.
   const sessionId = dir ? todo.sessionId : undefined;
+  const ages = mobile ? <TodoAges todo={todo} short anchor="updated" /> : <TodoAges todo={todo} short={compact} />;
+  const run = mobile && sessionId
+    ? <SessionBadge stats={todo.sessionSummary} status={todo.status} live={isLiveRun(todo)} variant="meta" />
+    : null;
   return (
     <ListMenuItem
       active={active}
       selected={selected}
       className="flex items-stretch"
-      style={style}
+      style={mobile ? undefined : style}
     >
       {selectable && (
         <label className="flex shrink-0 cursor-pointer items-center pl-3" title="Select for batch run">
@@ -542,8 +636,8 @@ function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectab
         className={`flex min-w-0 flex-1 flex-col items-stretch justify-start overflow-hidden px-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${compact ? 'py-1' : 'py-2'}`}
       >
         <div className="flex min-w-0 max-w-full items-center gap-2 overflow-hidden">
-          {sessionId ? (
-            <SessionBadge dir={dir!} sessionId={sessionId} status={todo.status} live={isLiveRun(todo)} />
+          {sessionId && !mobile ? (
+            <SessionBadge stats={todo.sessionSummary} status={todo.status} live={isLiveRun(todo)} />
           ) : (
             <StatusIcon status={todo.status} />
           )}
@@ -552,7 +646,8 @@ function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectab
           {childTotal ? <TodoChildCountBadge done={childDone ?? 0} total={childTotal} /> : null}
           {compact && (
             <span className="flex min-w-0 max-w-[55%] items-center gap-2 overflow-hidden text-xs text-muted-foreground">
-              <TodoAges todo={todo} short />
+              {ages}
+              {run}
               {workspace && <span className="min-w-0 max-w-[8rem] truncate" title={workspace}>{workspace}</span>}
               <TodoPhaseStrip todo={todo} phases={TODO_PHASES} />
               {todo.hasPlan && !todo.phases?.plan && <TodoPlanIndicator />}
@@ -572,7 +667,8 @@ function TodoRowImpl({ todo, active, onSelect, density = 'comfortable', selectab
                 <span className="truncate">{workspace}</span>
               </span>
             )}
-            <TodoAges todo={todo} />
+            {ages}
+            {run}
             <TodoPhaseStrip todo={todo} phases={TODO_PHASES} />
             {todo.hasPlan && !todo.phases?.plan && <TodoPlanIndicator />}
             {todo.hasVerification && !todo.phases?.verify && <TodoVerificationIndicator />}

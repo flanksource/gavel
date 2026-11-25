@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/internal/database"
-	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -87,8 +88,8 @@ func TestRunTodosListAllAggregatesRegisteredProjects(t *testing.T) {
 	firstDir := seedProjectTodos(t, "First pending", "First done")
 	secondDir := seedProjectTodos(t, "Second pending", "Second done")
 	oldLoad := loadTodoProjects
-	loadTodoProjects = func(ui.LoadProjectsOptions) ([]ui.Project, error) {
-		return []ui.Project{
+	loadTodoProjects = func(context.Context) ([]projects.Project, error) {
+		return []projects.Project{
 			{Name: "first", Dir: firstDir},
 			{Name: "second", Dir: secondDir},
 			{Name: "duplicate", Dir: firstDir},
@@ -143,8 +144,8 @@ func TestRunTodosListAllReturnsEveryDatabaseOpenAndListFailure(t *testing.T) {
 			return nil, nil
 		}
 	}
-	loadTodoProjects = func(ui.LoadProjectsOptions) ([]ui.Project, error) {
-		return []ui.Project{
+	loadTodoProjects = func(context.Context) ([]projects.Project, error) {
+		return []projects.Project{
 			{Name: "open project", Dir: openDir},
 			{Name: "list project", Dir: listDir},
 		}, nil

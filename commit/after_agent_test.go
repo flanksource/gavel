@@ -1,8 +1,12 @@
 package commit
 
 import (
+	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/flanksource/clicky/prompt"
 )
 
 func TestResolveAgentCommitDir(t *testing.T) {
@@ -25,5 +29,23 @@ func TestResolveAgentCommitDir(t *testing.T) {
 				t.Fatalf("resolveAgentCommitDir(%q, %q) = %q, want %q", tc.workDir, tc.cwd, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAgentPromptScopeKeepsTheRunningTaskLabel(t *testing.T) {
+	const taskID, issueID, sessionID = "task-1", "issue-1", "session-1"
+	inTask := prompt.WithScope(context.Background(), prompt.Scope{Labels: map[string]string{prompt.TaskLabel: taskID}})
+
+	got := prompt.ScopeFrom(agentPromptScope(inTask, AgentRunMetadata{IssueID: issueID, SessionID: sessionID}))
+
+	want := prompt.Scope{Owner: issueID, Kind: "commit", Labels: map[string]string{prompt.TaskLabel: taskID, "session": sessionID}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("agentPromptScope() = %+v, want %+v", got, want)
+	}
+}
+
+func TestAgentPromptScopeLeavesAnUnidentifiedRunUnscoped(t *testing.T) {
+	if got := prompt.ScopeFrom(agentPromptScope(context.Background(), AgentRunMetadata{})); !got.IsZero() {
+		t.Fatalf("agentPromptScope() without issue or session = %+v, want the zero scope", got)
 	}
 }

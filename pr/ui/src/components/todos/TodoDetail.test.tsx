@@ -1,5 +1,5 @@
 import type React from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunContext } from './providers';
 import type { TodoItem } from '../../types';
@@ -13,6 +13,7 @@ import { setAuthMode } from '../../query';
 // TodoDetail coverage — so every tab-gated or unconditionally-rendered sibling
 // is stubbed to keep the surface narrow.
 vi.mock('./TodoTimeline', () => ({ TodoTimeline: () => null }));
+vi.mock('./CreateTodoDialog', () => ({ useOpenCreateTodo: () => vi.fn() }));
 vi.mock('./TodoRunBranch', () => ({ TodoRunBranch: () => null }));
 vi.mock('./TodoSession', () => ({
   TodoSession: ({ sessionId }: { sessionId?: string }) => <div data-testid="session-viewer">{sessionId}</div>,
@@ -24,7 +25,7 @@ vi.mock('./TodoCompose', () => ({
   TodoBodyEditor: () => null,
   TodoCommentBox: () => null,
 }));
-vi.mock('./planActions', () => ({ TodoReviewBanner: () => null }));
+vi.mock('./planActions', async importOriginal => ({ ...(await importOriginal<object>()), TodoReviewBanner: () => null }));
 
 // Only the polling hook is stubbed; the formatters stay real so the running
 // strip renders the same elapsed/cost/context strings the session header does.
@@ -33,7 +34,10 @@ vi.mock('./TodoSessionTimer', async (importOriginal) => ({
   useSessionStats: vi.fn(() => ({ stats: null, elapsedMs: 0, error: '' })),
 }));
 
+const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
+
 vi.mock('@flanksource/clicky-ui/components', () => ({
+  useToast: () => ({ toast }),
   Button: ({
     children,
     variant: _variant,
@@ -184,7 +188,14 @@ const baseTodo: TodoItem = {
   lifecycle: LIFECYCLE_MOCK_DRAFT,
 };
 
-async function renderDetail(todo: TodoItem) {
+async function renderDetail(todo: TodoItem, { mobile = false } = {}) {
+  if (mobile) {
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation(query => ({
+      ...matchMedia(query),
+      matches: query === '(max-width: 767px)',
+    }));
+  }
   render(
     <StatefulTodoDetail
       todo={todo}
@@ -225,12 +236,13 @@ afterEach(() => {
 });
 
 describe('TodoDetail Resume/Run/Plan guard', () => {
-  it('shows the linked PR above the tabs without fetching status until requested', async () => {
+  it('shows the linked PR as a header badge only, leaving status and actions to the overview', async () => {
     const pr = { number: 27, url: 'https://github.com/acme/service/pull/27' };
     await renderDetail({ ...baseTodo, pr });
     fireEvent.click(screen.getByText('Session').closest('button')!);
-    expect(screen.getByRole('link', { name: 'PR #27' }).getAttribute('href')).toBe(pr.url);
-    expect(screen.getByRole('button', { name: 'PR status and actions' })).toBeTruthy();
+    const heading = screen.getByRole('heading', { name: baseTodo.title });
+    expect(within(heading.parentElement!).getByRole('link', { name: 'PR #27' }).getAttribute('href')).toBe(pr.url);
+    expect(screen.queryByRole('button', { name: 'PR status and actions' })).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).startsWith('/api/prs/linked'))).toBe(false);
   });
   it('adopts the admitted Captain session id as soon as a run starts', async () => {
@@ -292,6 +304,9 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
       status: 'in_progress',
       sessionId: admissionSession,
     })));
+    // The launch is confirmed by toast, not by a line under the header.
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Todo run started', tone: 'success' }));
+    expect(screen.queryByText('Todo run started')).toBeNull();
   });
 
   // The header's one primary control renders whatever step the server names
@@ -366,7 +381,9 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(labelRequests()).toEqual([]);
 
     rerender(<StatefulTodoDetail todo={baseTodo} dir="/repo" {...props} loading={false} />);
-    await waitFor(() => expect(labelRequests()).toEqual(['/api/todos/labels?dir=%2Frepo']));
+    await waitFor(() => expect(labelRequests()).toEqual(['/api/todos/labels/batch']));
+    const request = vi.mocked(fetch).mock.calls.find(([url]) => url === '/api/todos/labels/batch');
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ dirs: ['/repo'] });
   });
 
   it('opens the exact historical Session tab resolved from a session UUID', async () => {
@@ -380,8 +397,8 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(screen.getByTestId('session-viewer').textContent).toBe(historicalSession);
   });
 
-  it('keeps Resume, Run, and Plan enabled for a pending todo', async () => {
-    await renderDetail({ ...baseTodo, status: 'pending' });
+  it('keeps Resume, Run, and Plan enabled in the mobile menu for a pending todo', async () => {
+    await renderDetail({ ...baseTodo, status: 'pending' }, { mobile: true });
 
     for (const label of ['Resume session', 'Run todo', 'Plan todo']) {
       const item = screen.getByText(label).closest('button');
@@ -391,8 +408,8 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(screen.queryByText(RESOLVE_MESSAGE)).toBeNull();
   });
 
-  it('disables Resume, Run, and Plan while a todo awaits plan review', async () => {
-    await renderDetail({ ...baseTodo, status: 'review' });
+  it('disables Resume, Run, and Plan in the mobile menu while a todo awaits plan review', async () => {
+    await renderDetail({ ...baseTodo, status: 'review' }, { mobile: true });
 
     for (const label of ['Resume session', 'Run todo', 'Plan todo']) {
       const item = screen.getByText(label).closest('button');
@@ -401,8 +418,8 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(screen.getAllByText(RESOLVE_MESSAGE).length).toBeGreaterThan(0);
   });
 
-  it('disables Resume, Run, and Plan while a todo awaits an answer', async () => {
-    await renderDetail({ ...baseTodo, status: 'ask' });
+  it('disables Resume, Run, and Plan in the mobile menu while a todo awaits an answer', async () => {
+    await renderDetail({ ...baseTodo, status: 'ask' }, { mobile: true });
 
     for (const label of ['Resume session', 'Run todo', 'Plan todo']) {
       const item = screen.getByText(label).closest('button');

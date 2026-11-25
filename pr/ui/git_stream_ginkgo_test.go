@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	gavelctx "github.com/flanksource/gavel/context"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -114,7 +116,7 @@ var _ = Describe("git change push", func() {
 	Describe("proc status git changes", func() {
 		It("counts the primary checkout's uncommitted files from the stored state, without git once tracked", func() {
 			Expect(os.WriteFile(filepath.Join(f.repo, "untracked.txt"), []byte("x\n"), 0o644)).To(Succeed())
-			projects := []Project{{Name: "acme", Dir: f.repo}, {Name: "plain", Dir: GinkgoT().TempDir()}}
+			projects := []projects.Project{{Name: "acme", Dir: f.repo}, {Name: "plain", Dir: GinkgoT().TempDir()}}
 			ctx := tracked.server.context()
 
 			Expect(gitChangeCounts(ctx, projects)).To(Equal(map[string]int{f.repo: 1}), "a directory that is no git work tree has no count")

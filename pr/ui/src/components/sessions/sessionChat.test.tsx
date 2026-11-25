@@ -95,16 +95,16 @@ afterEach(() => {
 });
 
 describe('postSessionMessage', () => {
-  it('POSTs {text, messageId} to the Captain session message route with the id URL-encoded', async () => {
+  it('POSTs the text to the Captain session message route with the session ID URL-encoded', async () => {
     fetchMock.mockResolvedValue(jsonResponse(RUN_RESPONSE));
 
-    const response = await postSessionMessage({ sessionId: 'a/b c', text: 'keep going', messageId: 'm-9' });
+    const response = await postSessionMessage({ sessionId: 'a/b c', text: 'keep going' });
 
     expect(sessionMessageUrl('a/b c')).toBe('/api/captain/sessions/a%2Fb%20c/message');
     expect(fetchMock).toHaveBeenCalledWith('/api/captain/sessions/a%2Fb%20c/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: 'keep going', messageId: 'm-9' }),
+      body: JSON.stringify({ text: 'keep going' }),
     });
     expect(response).toEqual(RUN_RESPONSE);
   });
@@ -112,7 +112,7 @@ describe('postSessionMessage', () => {
   it('surfaces the server error text instead of swallowing it', async () => {
     fetchMock.mockResolvedValue(new Response('session id is ambiguous', { status: 409 }));
 
-    await expect(postSessionMessage({ sessionId: SESSION_ID, text: 'hi', messageId: 'm' }))
+    await expect(postSessionMessage({ sessionId: SESSION_ID, text: 'hi' }))
       .rejects.toThrow('Send session message: session id is ambiguous');
   });
 
@@ -123,7 +123,7 @@ describe('postSessionMessage', () => {
   ])('rejects a malformed response with %s', async (_label, body) => {
     fetchMock.mockResolvedValue(jsonResponse(body));
 
-    await expect(postSessionMessage({ sessionId: SESSION_ID, text: 'hi', messageId: 'm' }))
+    await expect(postSessionMessage({ sessionId: SESSION_ID, text: 'hi' }))
       .rejects.toThrow('Send session message: invalid response');
   });
 });
@@ -142,7 +142,8 @@ describe('useSessionMessageComposer', () => {
     expect(live.result.current).toMatchObject({ status: 'running', follow: true, capabilities: { resume: false, followUp: true } });
   });
 
-  it('posts the text, adopts the response capabilities, keeps following, and refreshes the sessions list', async () => {
+  it('continues without crypto.randomUUID, adopts the response capabilities, and refreshes the sessions list', async () => {
+    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) });
     routeFetch({ message: () => jsonResponse(RUN_RESPONSE) });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     const { result } = renderHook(() => useSessionMessageComposer(session()), { wrapper });
@@ -150,7 +151,7 @@ describe('useSessionMessageComposer', () => {
     act(() => result.current.send('please continue'));
 
     await waitFor(() => expect(result.current.follow).toBe(true));
-    expect(JSON.parse(callsTo('/message')[0]![1]!.body as string)).toMatchObject({ text: 'please continue' });
+    expect(callsTo('/message')[0]?.[1]?.body).toBe(JSON.stringify({ text: 'please continue' }));
     expect(result.current.capabilities).toEqual(RUN_RESPONSE.capabilities);
     expect(result.current.error).toBeUndefined();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.agentSessions() });

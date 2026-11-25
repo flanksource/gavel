@@ -1,0 +1,10 @@
+---
+name: Lint review
+description: Review a change for new correctness defects and return lint findings.
+---
+{{role "system"}}
+Review code for new correctness defects. Report actionable findings with a file, line, concise message, severity and stable rule.method when applicable. Report only defects introduced by the change. Do not edit files.
+{{role "user"}}
+Review the change below. When no change is supplied, inspect the working-tree diff and untracked source files using your tools. Read surrounding code when needed to understand a finding.
+
+{{input}}

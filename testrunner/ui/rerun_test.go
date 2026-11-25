@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/utils"
 )
 
 func newTestServer(t *testing.T) (*testui.Server, http.Handler) {
@@ -126,6 +128,43 @@ func TestRerunBadJSON(t *testing.T) {
 	}
 }
 
+func TestRerunStreamCarriesTheCommandsRun(t *testing.T) {
+	srv, handler := newTestServer(t)
+	argv := []string{"go", "test", "-run", "^TestX$", "./pkg/foo"}
+	srv.SetRerunFunc(func(_ testui.RerunRequest, output *testui.RerunOutputBuffer) error {
+		utils.AnnounceCommand(output.StdoutWriter(), "/my repo", argv)
+		_, err := output.StdoutWriter().Write([]byte("ok\n"))
+		return err
+	})
+	body, _ := json.Marshal(testui.RerunRequest{PackagePaths: []string{"./pkg/foo"}, TestName: "TestX", Framework: "go"})
+	if resp := doRequest(t, handler, http.MethodPost, "/api/rerun", bytes.NewReader(body)); resp.Code != http.StatusAccepted {
+		t.Fatalf("rerun status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+
+	stream := doRequest(t, handler, http.MethodGet, "/api/rerun/stream", nil)
+	first, _, _ := strings.Cut(strings.TrimPrefix(stream.Body.String(), "data: "), "\n\n")
+	var frame struct {
+		Commands []testui.RerunCommand `json:"commands"`
+		Lines    []testui.OutputLine   `json:"lines"`
+		Status   string                `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(first), &frame); err != nil {
+		t.Fatalf("decode first frame %q: %v", first, err)
+	}
+	want := []testui.RerunCommand{{
+		Cwd: "/my repo", Argv: argv,
+		Line:  "go test -run '^TestX$' ./pkg/foo",
+		Shell: "cd '/my repo' && go test -run '^TestX$' ./pkg/foo",
+	}}
+	if !reflect.DeepEqual(frame.Commands, want) {
+		t.Errorf("commands = %+v, want %+v", frame.Commands, want)
+	}
+	wantLines := []testui.OutputLine{{Text: "▶ go test -run '^TestX$' ./pkg/foo\n", Stream: "stdout"}, {Text: "ok\n", Stream: "stdout"}}
+	if frame.Status != "success" || !reflect.DeepEqual(frame.Lines, wantLines) {
+		t.Errorf("frame = %+v, want status success and lines %+v", frame, wantLines)
+	}
+}
+
 func TestRerunSuccessAndPayload(t *testing.T) {
 	srv, handler := newTestServer(t)
 	var got testui.RerunRequest
@@ -146,6 +185,44 @@ func TestRerunSuccessAndPayload(t *testing.T) {
 	}
 	if got.TestName != "TestX" || got.Framework != "ginkgo" || len(got.Suite) != 2 {
 		t.Errorf("rerun callback received %+v", got)
+	}
+}
+
+func TestRerunFromFixtureStepPayload(t *testing.T) {
+	srv, handler := newTestServer(t)
+	var got testui.RerunRequest
+	srv.SetRerunFunc(func(req testui.RerunRequest, _ *testui.RerunOutputBuffer) error {
+		got = req
+		return nil
+	})
+	const fixture, step = "checks/purge.fixture.yaml", "stage"
+
+	body := `{"fixture":"` + fixture + `","from_step":"` + step + `","work_dir":"/workspace"}`
+	resp := doRequest(t, handler, http.MethodPost, "/api/rerun", strings.NewReader(body))
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+	want := testui.RerunRequest{Fixture: fixture, FromStep: step, WorkDir: "/workspace"}
+	if got.Fixture != want.Fixture || got.FromStep != want.FromStep || got.WorkDir != want.WorkDir {
+		t.Errorf("rerun callback received %+v, want %+v", got, want)
+	}
+}
+
+func TestRerunRefusalReturns400WithReason(t *testing.T) {
+	srv, handler := newTestServer(t)
+	const reason = `step "stage" was not in the last run of purge.fixture.yaml`
+	srv.SetRerunFunc(func(testui.RerunRequest, *testui.RerunOutputBuffer) error {
+		return testui.BadRerunRequest{Reason: reason}
+	})
+
+	resp := doRequest(t, handler, http.MethodPost, "/api/rerun", strings.NewReader(`{"fixture":"purge.fixture.yaml","from_step":"stage"}`))
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.Code)
+	}
+	if got := strings.TrimSpace(resp.Body.String()); got != reason {
+		t.Errorf("body = %q, want %q", got, reason)
 	}
 }
 
@@ -346,6 +423,58 @@ func TestLintIgnoreAllowsFileOnlyFolderRule(t *testing.T) {
 	}
 }
 
+func TestLintIgnoreOccurrenceFiltersOnlyThatLine(t *testing.T) {
+	srv, handler := newTestServer(t)
+
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create repo .git: %v", err)
+	}
+
+	msg := "error return value is not checked"
+	violation := func(line int) models.Violation {
+		return models.Violation{File: "foo.go", Line: line, Severity: models.SeverityError, Source: "golangci-lint", Rule: &models.Rule{Method: "errcheck"}, Message: &msg}
+	}
+	srv.SetLintResults([]*linters.LinterResult{{
+		Linter:     "golangci-lint",
+		WorkDir:    repo,
+		Violations: []models.Violation{violation(12), violation(30)},
+	}})
+
+	body, _ := json.Marshal(testui.IgnoreRequest{Source: "golangci-lint", Rule: "errcheck", File: "foo.go", Line: 12, WorkDir: repo})
+	resp := doRequest(t, handler, http.MethodPost, "/api/lint/ignore", bytes.NewReader(body))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+
+	var got testui.IgnoreResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, ".gavel.yaml"))
+	if err != nil {
+		t.Fatalf("read .gavel.yaml: %v", err)
+	}
+	if got.Filtered != 1 || !strings.Contains(string(data), "line: 12") {
+		t.Fatalf("want one filtered violation and a line-scoped rule, got filtered=%d:\n%s", got.Filtered, string(data))
+	}
+}
+
+func TestLintIgnoreRejectsLineWithoutFile(t *testing.T) {
+	srv, handler := newTestServer(t)
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create repo .git: %v", err)
+	}
+	srv.SetLintResults([]*linters.LinterResult{{Linter: "golangci-lint", WorkDir: repo}})
+
+	body, _ := json.Marshal(testui.IgnoreRequest{Rule: "errcheck", Line: 12, WorkDir: repo})
+	resp := doRequest(t, handler, http.MethodPost, "/api/lint/ignore", bytes.NewReader(body))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 	clicky.ClearGlobalTasks()
 	t.Cleanup(clicky.ClearGlobalTasks)
@@ -394,7 +523,7 @@ func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 	for _, child := range virtualGroup.Children {
 		if child.Framework == parsers.Framework("task") && child.Command == "go test -json ./pkg/foo" {
 			foundTask = true
-			if !child.Pending {
+			if !child.Pending && !child.Running {
 				t.Fatalf("child task should be pending/running: %+v", child)
 			}
 			if child.TaskID == "" {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/flanksource/gavel/internal/linecounts"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -20,6 +21,7 @@ func ParsePatch(patch string) ([]models.CommitChange, error) {
 	var adds, dels int
 	var changeType models.SourceChangeType
 	var currentLine int
+	var countLines bool
 
 	// Pre-allocate linesChanged with upper bound to avoid reallocations
 	linesChanged := make([]int, 0, len(lines))
@@ -39,23 +41,9 @@ func ParsePatch(patch string) ([]models.CommitChange, error) {
 				changes = append(changes, change)
 			}
 
-			// Extract file path from "diff --git a/<path> b/<path>"
-			// Handle both quoted and unquoted paths
-			idx := strings.Index(line, ` "b/`)
-			if idx != -1 {
-				// Quoted path: extract between "b/ and closing "
-				path := line[idx+4:] // +4 to skip ` "b/`
-				if endQuote := strings.Index(path, `"`); endQuote != -1 {
-					currentFile = path[:endQuote]
-				}
-			} else {
-				// Unquoted path: extract after b/ to end of line
-				idx = strings.Index(line, " b/")
-				if idx != -1 {
-					currentFile = line[idx+3:] // +3 to skip " b/"
-				}
-			}
+			_, currentFile = diffGitPaths(line)
 			adds, dels = 0, 0
+			countLines = linecounts.Supported(currentFile)
 			linesChanged = linesChanged[:0] // Reset length while keeping capacity
 			currentLine = 0
 			changeType = models.SourceChangeTypeModified
@@ -65,6 +53,10 @@ func ParsePatch(patch string) ([]models.CommitChange, error) {
 			changeType = models.SourceChangeTypeDeleted
 		} else if strings.HasPrefix(line, "rename from") {
 			changeType = models.SourceChangeTypeRenamed
+		} else if strings.HasPrefix(line, "Binary files ") || line == "GIT binary patch" {
+			countLines = false
+		} else if !countLines {
+			continue
 		} else if strings.HasPrefix(line, "@@") {
 			// Parse hunk header to get starting line number
 			// Format: @@ -old_start,old_count +new_start,new_count @@

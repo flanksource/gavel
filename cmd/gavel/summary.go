@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/flanksource/gavel/report"
+	"github.com/flanksource/gavel/snapshots"
 )
 
 type summaryOptions struct {
@@ -40,7 +41,7 @@ func runSummary(opts summaryOptions) error {
 	if opts.InputPath == "" {
 		return fmt.Errorf("--input is required")
 	}
-	raw, err := os.ReadFile(opts.InputPath)
+	raw, err := snapshots.ReadFile(opts.InputPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", opts.InputPath, err)
 	}

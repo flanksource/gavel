@@ -131,6 +131,35 @@ var _ = Describe("linked PR UI endpoints", func() {
 		}
 	})
 
+	DescribeTable("reports GitHub's merge refusal as a known rejection", func(method, refusal string, status int, rebaseNotAllowed bool) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
+			var body struct {
+				Query string `json:"query"`
+			}
+			Expect(json.NewDecoder(r.Body).Decode(&body)).To(Succeed())
+			if !strings.HasPrefix(body.Query, "mutation") {
+				fmt.Fprint(w, linkedPRFixture)
+				return
+			}
+			fmt.Fprintf(w, `{"errors":[{"message":%q}]}`, refusal)
+		}))
+		DeferCleanup(upstream.Close)
+		GinkgoT().Setenv("GITHUB_API_URL", upstream.URL)
+		s := &Server{ghOpts: github.Options{Token: "fixture-token"}, refreshCh: make(chan struct{}, 1)}
+		response := httptest.NewRecorder()
+		s.handlePRMerge(response, httptest.NewRequest("POST", "/api/prs/merge", strings.NewReader(`{"url":"https://github.com/acme/service/pull/27","method":"`+method+`","headSha":"reviewed-head"}`)))
+		var got prMergeRefusal
+		Expect(json.Unmarshal(response.Body.Bytes(), &got)).To(Succeed())
+		Expect(response.Code).To(Equal(status))
+		Expect(got.RebaseNotAllowed).To(Equal(rebaseNotAllowed))
+		Expect(got.Detail).To(ContainSubstring(refusal))
+		Expect(s.refreshCh).To(BeEmpty())
+	},
+		Entry("rebase refused offers squash or merge", "rebase", "This branch can't be rebased", http.StatusConflict, true),
+		Entry("other refusal", "squash", "Required status check \"build\" is expected.", http.StatusUnprocessableEntity, false),
+	)
+
 	It("merges by the linked PR identity and reviewed revision, then requests refresh", func() {
 		mutations := 0
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

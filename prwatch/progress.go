@@ -18,6 +18,13 @@ import (
 // the frame again — the frame is printed once, at the end, by the caller, which
 // is also what a verify hook's feedback tail keeps.
 func followProgressLine(result *PRWatchResult, interval time.Duration) string {
+	if result.PR == nil {
+		var parts []string
+		for _, run := range sortedRuns(result.Runs) {
+			parts = append(parts, fmt.Sprintf("run %d: %s", run.DatabaseID, run.Status))
+		}
+		return strings.Join(parts, ", ") + fmt.Sprintf(" — next poll in %s", interval)
+	}
 	complete, failed, running := 0, 0, 0
 	for _, check := range result.PR.StatusCheckRollup {
 		switch {

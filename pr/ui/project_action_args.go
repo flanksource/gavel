@@ -54,8 +54,6 @@ func (s *Server) projectActionArgs(dir string, request projectActionRequest) ([]
 		}
 		base := []string{string(request.Action), "--work-dir", dir}
 		switch request.Action {
-		case projectActionCommit:
-			base = append(base, "--precommit=fail")
 		case projectActionTest:
 			base = append(base, projectTestWatchArgs...)
 		}
@@ -69,7 +67,7 @@ func (s *Server) projectActionArgs(dir string, request projectActionRequest) ([]
 		if err := validateProjectActionFiles(dir, request.Files); err != nil {
 			return nil, err
 		}
-		return append([]string{"commit", "--work-dir", dir, "--precommit=fail"}, request.Files...), nil
+		return append([]string{"commit", "--work-dir", dir}, request.Files...), nil
 	case projectActionLint:
 		if len(request.Files) > 0 {
 			if err := validateProjectActionFiles(dir, request.Files); err != nil {

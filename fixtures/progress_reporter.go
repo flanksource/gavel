@@ -1,6 +1,9 @@
 package fixtures
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 type progressSinkContextKey struct{}
 
@@ -53,6 +56,22 @@ func (r *ExecutionReporter) UpdateFixture(ctx context.Context, node *FixtureNode
 		return nil
 	}
 	return r.tracker.Update(ctx, node, done, total)
+}
+
+func (r *ExecutionReporter) SetFixtureWaiting(ctx context.Context, node *FixtureNode, waiting bool) error {
+	if r == nil {
+		return nil
+	}
+	return r.tracker.SetWaiting(ctx, node, waiting)
+}
+
+// OutputWriter is the stream node's live output lands on (see
+// executionTracker.OutputWriter).
+func (r *ExecutionReporter) OutputWriter(ctx context.Context, node *FixtureNode) io.Writer {
+	if r == nil {
+		return io.Discard
+	}
+	return r.tracker.OutputWriter(ctx, node)
 }
 
 func (r *ExecutionReporter) CompleteFixture(ctx context.Context, node *FixtureNode, result FixtureResult) error {

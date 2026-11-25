@@ -1,0 +1,75 @@
+---
+title: Browser editor
+description: Edit local Markdown, MDX, TSX, JSX, JSON and YAML files with live browser previews, schema forms and manual lint.
+---
+
+Run `gavel edit` with one or more existing files or folders. Gavel starts a local server, prints its URL, and opens the browser. Stop it with Ctrl+C.
+
+```sh
+gavel edit docs configs/settings.yaml
+gavel edit configs --schema ./schemas/settings.json
+gavel edit README.md --port 9095 --no-open
+```
+
+Folders are searched recursively for `.md`, `.mdx`, `.tsx`, `.jsx`, `.json`, `.yaml`, and `.yml` files and images, respecting Git ignores. Explicitly named files are included even when ignored. Cmd+K or Ctrl+K searches names and paths. The selected file is kept in the URL.
+
+### Choosing which files are listed
+
+`--ext` replaces the listed extensions, and `--include-ignored` lists files that `.gitignore` excludes. Both flags can be repeated. An extension with no richer view, such as `.go` or `.txt`, opens as plain source. An include pattern is relative to each opened folder; a bare directory such as `.tmp` includes everything below it.
+
+```sh
+gavel edit . --ext .md --ext .go
+gavel edit docs --include-ignored .tmp --include-ignored "dist/**/*.md"
+```
+
+The same settings can be kept in the folder's `.gavel.yaml`. A flag overrides its key; an unset flag uses the configuration.
+
+```yaml
+edit:
+  extensions: [.md, .mdx, .go]
+  includeIgnored: [.tmp]
+```
+
+**View options** in the editor's menu changes both lists for the open folders. **Apply** rescans immediately; **Save to .gavel.yaml** also writes the `edit:` section of the first opened folder.
+
+### Switching projects
+
+The project picker in the top bar lists the projects registered with `gavel projects`. Choosing one replaces the open folders with that project's directory, using the project's own `edit:` settings unless a flag overrides them. Unsaved drafts must be saved or discarded first. A project folder without workspace access opens the workspace access dialog.
+
+MDX, TSX and JSX offer a Facet **Preview** using the browser page runtime. Source changes render after 300 milliseconds, independently of autosave. The preview stays mounted when switching tabs and retains its last successful output while compiling. Import relative components and CSS from the page's package directory; supporting modules are readable by the runtime, while only selected files can be edited. Node-only imports cannot render in the browser.
+
+If a preview needs files from a package folder outside the current workspace access, the Preview tab shows the required path. **Approve access** saves a workspace grant and retries the preview in place. The grant allows reading, editing, and running local tools under that folder across Gavel sessions. Use **Workspace access** to review or revoke saved grants. **Open folder** adds a granted folder to the file tree.
+
+JSON and YAML documents offer a **Preview** when they name a TSX, JSX or MDX component that renders them. The component receives the parsed document as `data` (and as spread props), and typing in the source re-renders it with the new data without recompiling. The first declaration found wins:
+
+1. A YAML `# gavel: preview=./Preview.tsx` line among the file's leading comments, beside any `# yaml-language-server: $schema=` line.
+2. A top-level `"$preview": "./Preview.tsx"` key, in JSON or YAML. It is removed from the data the component receives. A schema with `additionalProperties: false` must allow `$preview`, as it must `$schema`.
+3. `"x-clicky-preview": { "ref": "./Preview.tsx" }` on the document's root schema, which shares one preview across every file using that schema.
+
+The file's own declarations are relative to the file, and `x-clicky-preview` is relative to the schema that declares it. The component must live in the document's package directory (its nearest `package.json`, else the git root). A component outside it, over HTTP, missing, or of another type is reported rather than skipped. See `editor/testdata/page-preview/release.yaml` and `release.json`.
+
+A floating status button at the top right of Preview shows the render state. Its menu shows the Facet and Clicky UI versions, lets you choose a **Facet runtime**, starts **Comment on element**, and exports the page. Gavel discovers the same installed builds as `facet runtime list` when the editor starts and defaults to the most recently built one. The choice is saved per file and in the URL without changing package manifests. Restart the editor to pick up newly built runtimes.
+
+When there are no installed builds, Gavel uses the project dependency by default, and Facet's peer dependency selects a compatible Clicky UI version. Runtime-equipped npm packages are downloaded without installation scripts, checked against npm integrity metadata, and cached under Gavel's cache directory. Cached metadata and packages remain usable offline; uncached packages require network access. Releases without `dist/runtime/importmap.json` and `barrels.json` report an error.
+
+Export is available once the preview is ready. **Download HTML** creates a standalone document named after the file. **Save PDF…** opens the browser's native print dialog; choose Save as PDF there. Printing uses one continuous page and does not provide multipage pagination or a headless PDF download service.
+
+Pin previews for an editor session with `gavel edit Report.tsx --facet-runtime facet@1.2.0`. Build and list named runtimes with `facet runtime build` and `facet runtime list`. The flag also accepts a bare name for the latest successful build or a built runtime folder such as `./report-runtime`. The preview status menu shows the selected named runtime’s build time, Git commit and working tree state when recorded, and package versions.
+
+For local runtime development, run `gavel edit --dev editor/testdata/page-preview` from the Gavel checkout. This uses the editor Vite server and sibling Facet and Clicky UI runtime builds. Build those libraries and `@flanksource/page-runtime` first. Gavel snapshots the library runtimes when it starts; restart the editor after rebuilding a library. Missing or stale local runtime builds fail explicitly; dev mode does not substitute npm versions. Production rendering requires neither Node nor an installed Facet CLI.
+
+Source edits autosave after 600 milliseconds, including incomplete syntax. Save status and errors stay visible. Conflicting disk edits stop autosave until you reload or explicitly replace the disk content with your draft. Closing the page with pending or failed saves prompts before leaving.
+
+Markdown and MDX offer rich text editing alongside source mode. JSON/YAML files and Markdown frontmatter offer a schema form when a schema is available. For Markdown, the frontmatter form also sits in a collapsible **Properties** panel above the rich text body, so a page's properties and content are edited together; editing a property on a page without frontmatter adds the `---` block. Schemas resolve as for the [json linter](/docs/linter-json): `--schema` overrides declarations; otherwise a `$schema` key or YAML language-server header, then the file's [`lint.schemas`](/docs/configuration-reference#lint) glob, then gavel's built-in schema for fixture files. `--schema` resolves local paths from the command's working directory. Local and HTTP(S) references are loaded by Gavel. Schema failures remain visible and source editing remains available. Structured edits retain unknown fields, YAML comments, anchors, and aliases. Editing an anchored value updates its aliases; editing an alias independently detaches that occurrence. Cyclic aliases cannot be represented in a form and require source editing. Opening a form does not apply schema defaults or save changes.
+
+The editor opens with the problems the workspace's recorded runs (`.gavel/run-*.json`) hold for the selected files: lint violations and failed tests, such as a failing fixture step in a Markdown file. Each file's lint violations come, per linter, from the newest run that linted it, so linting one file replaces only that file's results. Current `.gavel.yaml` ignore rules apply. A file changed after the run that checked it, or edited in the editor, is marked stale.
+
+Use **Lint file**, **Lint folder** or **Lint all files** to run applicable Gavel linters with the selected repositories' configuration. Pending saves finish before lint starts. The run is saved to `.gavel` like a `gavel lint` run limited to those files, so `gavel ui serve`, `gavel lint --failed` and the next `gavel edit` see it. Findings include file locations and execution failures. Editing and autosaving do not start lint, and the editor does not automatically fix findings.
+
+Create, rename and delete files from the tree. **New file…** sits in a folder's actions menu, which creates the file in that folder, and in the all-files actions menu, which creates it at the root. Pick a template: a Markdown document, Markdown with frontmatter, a gavel fixture (Markdown or YAML), a Facet MDX report, a Facet TSX or JSX page, a JSON document, a JSON Schema, or a YAML document. The template fixes the file's ending, for example `.fixture.md`, so the file keeps its schema and preview. Missing folders are created. A file's actions menu offers **Rename…**, which also moves the file when the new path has other folders, and **Delete…**, which asks for confirmation first. New and renamed files must stay inside the folders `gavel edit` was started with, or the folder of a file named on the command line. An existing file is never overwritten. A file changed on disk since the editor read it is not renamed or deleted until you reload it. Comment threads stay on the file's old path.
+
+When Claude Code or Codex starts `gavel edit`, comments go back to that session. Captain finds the live session the editor runs inside, and gavel prints it under the editor URL. Each new comment is assigned to the session and delivered to it, even when the file has a [comment agent](/docs/comments) configured. The page's **Send to page agent** button sends to the same session until you choose something else in the robot menu in the top bar, which names the page's agent, lists the live sessions to hand threads to, and opens the page agent settings. If the editor runs inside an agent session that captain does not list as live, it fails to start. Pass `--session <id>` to send comments to a different live session, or `--session=none` to use the files' comment agents.
+
+While the editor is open, `gavel test` and `gavel lint` runs started in the same workspace show their progress in the status line, and the problems reload when they finish.
+
+The server binds to loopback and only touches files inside the selected folders. It does not require the PR dashboard, PostgreSQL, or GitHub authentication. Remote hosting is outside this command.

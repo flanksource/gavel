@@ -152,7 +152,7 @@ func TestSaveAfterLayeredLoad_DoesNotLeakHomeIntoRepo(t *testing.T) {
 	repoCfg, err := LoadSingleGavelConfig(repoPath)
 	require.NoError(t, err)
 	repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, LintIgnoreRule{File: "new.go"})
-	require.NoError(t, SaveGavelConfig(repo, repoCfg))
+	require.NoError(t, SaveGavelConfig(filepath.Join(repo, GavelConfigFileName), repoCfg))
 
 	written, err := os.ReadFile(repoPath)
 	require.NoError(t, err)
@@ -189,7 +189,7 @@ commit:
 
 	cfg, err := LoadSingleGavelConfig(path)
 	require.NoError(t, err)
-	require.NoError(t, SaveGavelConfig(dir, cfg))
+	require.NoError(t, SaveGavelConfig(filepath.Join(dir, GavelConfigFileName), cfg))
 
 	written, err := os.ReadFile(path)
 	require.NoError(t, err)

@@ -287,7 +287,7 @@ func RunFileSizeCheck(ctx context.Context, p FileSizeParams) (CheckOutcome, erro
 		}
 	}
 
-	return applyFileSizePlan(p, plan)
+	return applyFileSizePlan(ctx, p, plan)
 }
 
 type fileSizePlan struct {
@@ -319,7 +319,7 @@ func (v *FileSizeViolation) withFolderSiblings(rest []FileSizeViolation, decided
 	v.folderSiblings = n
 }
 
-func applyFileSizePlan(p FileSizeParams, plan fileSizePlan) (CheckOutcome, error) {
+func applyFileSizePlan(ctx context.Context, p FileSizeParams, plan fileSizePlan) (CheckOutcome, error) {
 	var outcome CheckOutcome
 
 	gitRoot := p.GitRoot
@@ -332,7 +332,7 @@ func applyFileSizePlan(p FileSizeParams, plan fileSizePlan) (CheckOutcome, error
 		if err != nil {
 			return CheckOutcome{}, fmt.Errorf("append .gitignore: %w", err)
 		}
-		if err := resetFiles(p.WorkDir, plan.unstage); err != nil {
+		if err := resetFiles(ctx, p.WorkDir, plan.unstage); err != nil {
 			return CheckOutcome{}, fmt.Errorf("unstage: %w", err)
 		}
 		outcome.Unstaged = plan.unstage
@@ -567,7 +567,7 @@ type lsEntry struct {
 func lsFilesStage(workDir string, files []string) ([]lsEntry, error) {
 	args := append([]string{"ls-files", "-s", "-z", "--"}, files...)
 	cmd := exec.Command("git", args...)
-	cmd.Dir = workDir
+	cmd.Dir, cmd.Env = workDir, gitIndexEnv(workDir)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

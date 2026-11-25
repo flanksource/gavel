@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/entity"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
@@ -46,21 +48,21 @@ func registerProjectEntity() {
 }
 
 // loadProjectsTracked reads the project catalog, timed as file work.
-func loadProjectsTracked(ctx context.Context, opts LoadProjectsOptions) ([]Project, error) {
+func loadProjectsTracked(ctx context.Context) ([]projects.Project, error) {
 	stopFile := rpchttp.Track(ctx, "file")
 	defer stopFile()
-	return LoadProjects(opts)
+	return loadProjects(ctx)
 }
 
-// listProjects resolves every registered project's wire shape, hidden ones
-// included so the project picker can offer to show them again. A project whose
+// listProjects resolves every registered project's wire shape, the hidden ones
+// marked so the project picker can offer to show them again. A project whose
 // TODO counts cannot be loaded carries the failure on its own row.
-func listProjects(ctx context.Context) ([]projectInfo, error) {
-	ps, err := loadProjectsTracked(ctx, LoadProjectsOptions{IncludeHidden: true})
+func listProjects(ctx context.Context, hidden workspaceSet) ([]projectInfo, error) {
+	ps, err := loadProjectsTracked(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return listProjectInfos(ctx, ps), nil
+	return listProjectInfos(ctx, ps, hidden), nil
 }
 
 // listProjectEntities is listProjects for the surfaces that address a project
@@ -69,24 +71,24 @@ func listProjects(ctx context.Context) ([]projectInfo, error) {
 // /api/projects keeps listing such a catalog, so the projects bar stays usable
 // while the clash is fixed.
 func listProjectEntities(ctx context.Context) ([]projectInfo, error) {
-	ps, err := loadProjectsTracked(ctx, LoadProjectsOptions{})
+	ps, err := visibleProjects(ctx, entityServer(ctx))
 	if err != nil {
 		return nil, err
 	}
-	if _, err := query.IndexByShortName(TodoWorkspaces(ps)); err != nil {
+	if _, err := query.IndexByShortName(projects.TodoWorkspaces(ps)); err != nil {
 		return nil, err
 	}
-	return listProjectInfos(ctx, ps), nil
+	return listProjectInfos(ctx, ps, workspaceSet{}), nil
 }
 
-// getProjectInfo resolves one registered project by its short name. An unknown
-// name is a 404 rather than a server fault.
+// getProjectInfo resolves one visible registered project by its short name. An
+// unknown name is a 404 rather than a server fault.
 func getProjectInfo(ctx context.Context, short string) (projectInfo, error) {
-	ps, err := loadProjectsTracked(ctx, LoadProjectsOptions{})
+	ps, err := visibleProjects(ctx, entityServer(ctx))
 	if err != nil {
 		return projectInfo{}, err
 	}
-	byShort, err := query.IndexByShortName(TodoWorkspaces(ps))
+	byShort, err := query.IndexByShortName(projects.TodoWorkspaces(ps))
 	if err != nil {
 		return projectInfo{}, err
 	}
@@ -95,6 +97,6 @@ func getProjectInfo(ctx context.Context, short string) (projectInfo, error) {
 		return projectInfo{}, entity.NewStatusError(http.StatusNotFound, "not_found",
 			fmt.Sprintf("no registered project has the short name %q", short))
 	}
-	p, _ := projectByName(ps, ws.Name)
-	return listProjectInfos(ctx, []Project{p})[0], nil
+	p, _ := projects.ByName(ps, ws.Name)
+	return listProjectInfos(ctx, []projects.Project{p}, workspaceSet{})[0], nil
 }

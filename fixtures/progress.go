@@ -2,7 +2,9 @@ package fixtures
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -20,6 +22,9 @@ type executionTracker struct {
 	byKey     map[string]*ExecutionNode
 	sink      ProgressSink
 	iteration int64
+	// outputErr is the first failure each fixture's output stream met,
+	// returned by its Complete.
+	outputErr map[*FixtureNode]error
 }
 
 func newExecutionTracker(root *FixtureNode, workDir string, steps []ExecutionStep, sink ProgressSink) *executionTracker {
@@ -45,6 +50,12 @@ func newExecutionTracker(root *FixtureNode, workDir string, steps []ExecutionSte
 func (t *executionTracker) fromFixture(source *FixtureNode, parentKey, workDir string, ordinal int) *ExecutionNode {
 	key := executionKey(source, parentKey, workDir, ordinal)
 	node := &ExecutionNode{Key: key, Name: source.Name, Kind: executionKind(source), State: ExecutionQueued, Origin: cloneOrigin(source.Origin)}
+	if source.Origin != nil {
+		if span := (parsers.SourceRange{File: source.Origin.File, Line: source.Origin.Line, EndLine: source.Origin.EndLine}); span.Valid() {
+			snippet := span.Read()
+			node.Source = &snippet
+		}
+	}
 	t.fixture[source] = node
 	t.byKey[key] = node
 	for i, child := range source.Children {
@@ -74,7 +85,13 @@ func (t *executionTracker) Start(ctx context.Context, fixture *FixtureNode) erro
 	})
 }
 
+// Complete lands fixture's result on its node, and fails with any error
+// streaming its output met (see outputStream).
 func (t *executionTracker) Complete(ctx context.Context, fixture *FixtureNode, result FixtureResult) error {
+	return errors.Join(t.complete(ctx, fixture, result), t.takeOutputError(fixture))
+}
+
+func (t *executionTracker) complete(ctx context.Context, fixture *FixtureNode, result FixtureResult) error {
 	return t.mutateAndPublish(ctx, func(now time.Time) error {
 		node, ok := t.fixture[fixture]
 		if !ok {
@@ -82,8 +99,41 @@ func (t *executionTracker) Complete(ctx context.Context, fixture *FixtureNode, r
 		}
 		completeNode(node, executionState(result), result.Error, result.Duration, now)
 		node.Traces = slices.Clone(result.Traces)
+		node.Result = progressResult(fixture, result)
+		node.Output, node.OutputTruncated, node.Metadata = "", false, nil
 		return nil
 	})
+}
+
+// progressResult is the copy of a finished fixture's result its node keeps,
+// stamped with its source as the tree's is: the runner goes on to own and
+// stamp the original's metadata, and a snapshot is marshalled concurrently.
+func progressResult(fixture *FixtureNode, result FixtureResult) *FixtureResult {
+	copied := cloneResult(result)
+	stampSource(fixture, copied)
+	return copied
+}
+
+// cloneResult copies result down through its child nodes, which the runner
+// re-parents and rolls stats up on after the fixture finished.
+func cloneResult(result FixtureResult) *FixtureResult {
+	result.Metadata = maps.Clone(result.Metadata)
+	result.Children = cloneResultNodes(result.Children)
+	return &result
+}
+
+func cloneResultNodes(nodes []*FixtureNode) []*FixtureNode {
+	var clones []*FixtureNode
+	for _, node := range nodes {
+		clone := *node
+		clone.Parent, clone.Stats = nil, nil
+		if node.Results != nil {
+			clone.Results = cloneResult(*node.Results)
+		}
+		clone.Children = cloneResultNodes(node.Children)
+		clones = append(clones, &clone)
+	}
+	return clones
 }
 
 func (t *executionTracker) Update(ctx context.Context, fixture *FixtureNode, done, total int) error {
@@ -97,6 +147,24 @@ func (t *executionTracker) Update(ctx context.Context, fixture *FixtureNode, don
 		}
 		node.Done = done
 		node.Total = total
+		return nil
+	})
+}
+
+// SetWaiting moves a running fixture to waiting (blocked on a person) and back.
+func (t *executionTracker) SetWaiting(ctx context.Context, fixture *FixtureNode, waiting bool) error {
+	return t.mutateAndPublish(ctx, func(now time.Time) error {
+		node, ok := t.fixture[fixture]
+		if !ok {
+			return fmt.Errorf("fixture progress node not found: %q", fixture.Name)
+		}
+		if node.State == ExecutionQueued {
+			startNode(node, now)
+		}
+		node.State = ExecutionRunning
+		if waiting {
+			node.State = ExecutionWaiting
+		}
 		return nil
 	})
 }
@@ -309,6 +377,9 @@ func rollupExecutionNode(node *ExecutionNode) ExecutionState {
 }
 
 func rolledState(states []ExecutionState) ExecutionState {
+	if containsExecutionState(states, ExecutionWaiting) && !containsExecutionState(states, ExecutionRunning) {
+		return ExecutionWaiting
+	}
 	if containsExecutionState(states, ExecutionRunning) ||
 		(containsTerminalState(states) && containsExecutionState(states, ExecutionQueued)) {
 		return ExecutionRunning
@@ -362,6 +433,8 @@ func summarizeExecution(root *ExecutionNode) ExecutionSummary {
 			summary.Queued++
 		case ExecutionRunning:
 			summary.Running++
+		case ExecutionWaiting:
+			summary.Waiting++
 		case ExecutionPassed:
 			summary.Passed++
 		case ExecutionFailed:
@@ -387,7 +460,7 @@ func isWorkNode(node *ExecutionNode) bool {
 
 func containsTerminalState(states []ExecutionState) bool {
 	for _, state := range states {
-		if state != ExecutionQueued && state != ExecutionRunning {
+		if state != ExecutionQueued && state != ExecutionRunning && state != ExecutionWaiting {
 			return true
 		}
 	}
@@ -429,6 +502,7 @@ func cloneExecutionNode(node *ExecutionNode) *ExecutionNode {
 	clone.FinishedAt = cloneTime(node.FinishedAt)
 	clone.PIDs = slices.Clone(node.PIDs)
 	clone.Traces = slices.Clone(node.Traces)
+	clone.Metadata = maps.Clone(node.Metadata)
 	clone.Children = make([]*ExecutionNode, len(node.Children))
 	for i, child := range node.Children {
 		clone.Children[i] = cloneExecutionNode(child)

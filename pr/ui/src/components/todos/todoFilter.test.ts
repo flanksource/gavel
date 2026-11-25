@@ -5,7 +5,9 @@ import {
   defaultTodoFilters,
   externalKey,
   isChildTodo,
+  focusStatusFilter,
   isEntryVisible,
+  isStatusFocused,
   isStatusShown,
   isTodoVisible,
   isWorkspaceShown,
@@ -184,6 +186,25 @@ describe('the workspace facet', () => {
     // The workspace matches but the status facet does not: both must pass.
     const closedInGavel: TodoEntry = { todo: item({ ref: 'g2', status: 'completed' }), workspace: gavel };
     expect(isEntryVisible(closedInGavel, onlyGavel)).toBe(false);
+  });
+});
+
+describe('focusStatusFilter', () => {
+  it('narrows the status facet to the tapped status alone', () => {
+    expect(focusStatusFilter({ completed: 'exclude' }, 'failed')).toEqual({ failed: 'include' });
+  });
+
+  it('switches from one focused status to another', () => {
+    expect(focusStatusFilter({ ask: 'include' }, 'failed')).toEqual({ failed: 'include' });
+  });
+
+  it('restores the default status facet when the focused status is tapped again', () => {
+    expect(focusStatusFilter({ failed: 'include' }, 'failed')).toEqual(defaultTodoFilters().statuses);
+  });
+
+  it('does not treat a wider include set as focused', () => {
+    expect(isStatusFocused({ failed: 'include', ask: 'include' }, 'failed')).toBe(false);
+    expect(isStatusFocused({ failed: 'exclude' }, 'failed')).toBe(false);
   });
 });
 

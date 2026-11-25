@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/internal/cache"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/slots"
 )
 
 // RunnerV2 orchestrates execution of multiple linters with intelligent debouncing
@@ -111,7 +112,11 @@ func (r *RunnerV2) RunWithIntelligentDebounce(ctx context.Context, linterName st
 
 	// Apply per-linter timeout
 	timeout := config.GetTimeout()
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	resolved, err := (RunOptions{WorkDir: r.workDir}).resolveRuntime(linterName)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := slots.Timeout(ctx, slots.TimeoutOptions{Limits: resolved.Runtime.Slots, Duration: timeout})
 	defer cancel()
 
 	// Check intelligent debounce first

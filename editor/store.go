@@ -1,0 +1,386 @@
+package editor
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"github.com/flanksource/gavel/workspaceaccess"
+	"os"
+	"path"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/bmatcuk/doublestar/v4"
+	"github.com/flanksource/gavel/internal/fileread"
+	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/verify"
+)
+
+var ErrConflict = errors.New("file changed on disk; compare or reload before saving")
+
+const (
+	KindDocument = "document"
+	KindImage    = "image"
+)
+
+var documentExtensions = []string{".md", ".mdx", ".tsx", ".jsx", ".json", ".yaml", ".yml"}
+
+type File struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+	// Kind is KindDocument for editable source or KindImage for an image; an svg
+	// image also has an editable text source.
+	Kind string `json:"kind"`
+}
+type Document struct {
+	File
+	Source   string `json:"source"`
+	Revision string `json:"revision"`
+}
+type entry struct {
+	File
+	root string
+	name string
+}
+type Store struct {
+	Access *workspaceaccess.Service
+	mu     sync.Mutex
+	files  map[string]entry
+	// roots are the directories files may be created in or moved within: each
+	// selected folder, and the folder of each selected file.
+	roots []editRoot
+	// listing is which files the folders list: their extensions, and the
+	// gitignored files listed anyway.
+	listing verify.EditConfig
+	// paths are the selected files and folders, listed again on a Relist.
+	paths []string
+}
+
+// StoreOptions are the files and folders a Store edits, and which files the
+// folders list.
+type StoreOptions struct {
+	Paths   []string
+	Listing verify.EditConfig
+}
+
+func NewStore(opts StoreOptions) (*Store, error) {
+	return newStore(opts, false)
+}
+func newStore(opts StoreOptions, allowEmpty bool) (*Store, error) {
+	if len(opts.Paths) == 0 {
+		return nil, fmt.Errorf("provide at least one file or folder")
+	}
+	listing, err := opts.Listing.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{files: map[string]entry{}, listing: listing, paths: slices.Clone(opts.Paths)}
+	for _, path := range opts.Paths {
+		display, err := filepath.Abs(path)
+		if err != nil {
+			return nil, err
+		}
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil, err
+		}
+		canonical, err = filepath.Abs(canonical)
+		if err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(canonical)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			// A file named outright opens whether or not the folders list its extension.
+			kind, ok := kindIn(canonical, append(s.extensions(), builtinExtensions()...))
+			if !ok {
+				return nil, fmt.Errorf("unsupported file: %s", path)
+			}
+			s.add(entry{File: File{Path: display, Kind: kind}, root: filepath.Dir(canonical), name: filepath.Base(canonical)})
+			if err := s.addRoot(filepath.Dir(display)); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := s.addRoot(display); err != nil {
+			return nil, err
+		}
+		matches, err := utils.GlobFilesBounded(canonical, s.globs())
+		if err != nil {
+			return nil, err
+		}
+		ignored, err := s.includeIgnored(canonical)
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range append(matches, ignored...) {
+			real, err := filepath.EvalSymlinks(match)
+			if err != nil {
+				return nil, err
+			}
+			rel, err := filepath.Rel(canonical, real)
+			if err != nil {
+				return nil, err
+			}
+			if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			kind, ok := s.kindOf(rel)
+			if !ok {
+				return nil, fmt.Errorf("glob matched an unsupported file: %s", match)
+			}
+			s.add(entry{File: File{Path: filepath.Join(display, rel), Kind: kind}, root: canonical, name: rel})
+		}
+	}
+	if len(s.files) == 0 && !allowEmpty {
+		return nil, fmt.Errorf("no supported files found")
+	}
+	return s, nil
+}
+
+// add lists file under the id of its canonical path, keeping an entry already
+// listed there, and returns the id.
+func (s *Store) add(file entry) string {
+	id := fmt.Sprintf("%x", sha256.Sum256([]byte(filepath.Join(file.root, file.name))))
+	if _, ok := s.files[id]; !ok {
+		file.ID = id
+		s.files[id] = file
+	}
+	return id
+}
+
+// extensions are the extensions the folders list: the configured ones, or the
+// built-in documents and images.
+func (s *Store) extensions() []string {
+	if len(s.listing.Extensions) > 0 {
+		return s.listing.Extensions
+	}
+	return builtinExtensions()
+}
+
+// builtinExtensions are the editable documents and the images.
+func builtinExtensions() []string {
+	return append(slices.Clone(documentExtensions), fileread.ImageExtensions()...)
+}
+
+// kindOf classifies path by extension, and is false for an extension the
+// folders do not list.
+func (s *Store) kindOf(path string) (string, bool) {
+	return kindIn(path, s.extensions())
+}
+
+// kindIn classifies path among extensions: an image, or else a document.
+func kindIn(path string, extensions []string) (string, bool) {
+	if !slices.Contains(extensions, strings.ToLower(filepath.Ext(path))) {
+		return "", false
+	}
+	if _, ok := fileread.ContentType(path); ok {
+		return KindImage, true
+	}
+	return KindDocument, true
+}
+
+func (s *Store) globs() []string {
+	globs := []string{}
+	for _, ext := range s.extensions() {
+		globs = append(globs, "**/*"+ext)
+	}
+	return globs
+}
+
+// includeIgnored are the listed files under root that the listing's
+// includeIgnored patterns match, gitignored or not; a pattern naming a
+// directory matches everything below it.
+func (s *Store) includeIgnored(root string) ([]string, error) {
+	files := []string{}
+	for _, pattern := range s.listing.IncludeIgnored {
+		patterns := []string{pattern}
+		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(pattern))); err == nil && info.IsDir() {
+			patterns = []string{pattern + "/**"}
+		}
+		for _, pattern := range patterns {
+			matches, err := doublestar.Glob(os.DirFS(root), pattern, doublestar.WithFilesOnly())
+			if err != nil {
+				return nil, fmt.Errorf("edit.includeIgnored %q: %w", pattern, err)
+			}
+			for _, match := range matches {
+				if _, ok := s.kindOf(match); ok {
+					files = append(files, filepath.Join(root, filepath.FromSlash(match)))
+				}
+			}
+		}
+	}
+	return files, nil
+}
+func (s *Store) Files() []File {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	files := make([]File, 0, len(s.files))
+	for _, e := range s.files {
+		files = append(files, e.File)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files
+}
+
+// Paths maps each file id to its canonical (symlink-resolved) absolute path.
+func (s *Store) Paths() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	paths := make(map[string]string, len(s.files))
+	for id, e := range s.files {
+		paths[id] = filepath.Join(e.root, e.name)
+	}
+	return paths
+}
+func revision(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }
+
+// entry looks up id and confirms its selected path still resolves to the file
+// discovered at startup, so a swapped symlink cannot redirect reads.
+func (s *Store) entry(id string) (entry, error) {
+	e, ok := s.files[id]
+	if !ok {
+		return entry{}, os.ErrNotExist
+	}
+	if s.Access != nil {
+		if _, err := s.Access.Authorize(context.Background(), e.root); err != nil {
+			return entry{}, err
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(e.Path)
+	if err != nil {
+		return entry{}, err
+	}
+	if resolved != filepath.Join(e.root, e.name) {
+		return entry{}, fmt.Errorf("selected path changed its symlink target: %s", e.Path)
+	}
+	return e, nil
+}
+
+// Image returns the root-relative name and bytes of an image for id: the entry
+// itself when rel is empty, or the image at rel relative to the entry's
+// directory, confined to the entry's root.
+func (s *Store) Image(id, rel string) (string, []byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, err := s.entry(id)
+	if err != nil {
+		return "", nil, err
+	}
+	name := filepath.ToSlash(e.name)
+	if rel != "" {
+		name = path.Join(path.Dir(name), rel)
+	} else if e.Kind != KindImage {
+		return "", nil, fmt.Errorf("%s is not an image; pass the path of an image relative to it", e.Path)
+	}
+	data, err := fileread.Read(e.root, filepath.FromSlash(name), fileread.Options{Image: true})
+	return name, data, err
+}
+func (s *Store) Read(id string) (Document, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.read(id)
+}
+
+// commentable reads what a comment pins to: a document's source and revision,
+// or the revision alone of an image with no text source.
+func (s *Store) commentable(id string) (Document, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, err := s.entry(id)
+	if err != nil {
+		return Document{}, err
+	}
+	if e.Kind != KindImage || strings.EqualFold(filepath.Ext(e.name), ".svg") {
+		return s.read(id)
+	}
+	data, err := fileread.Read(e.root, e.name, fileread.Options{Image: true})
+	if err != nil {
+		return Document{}, err
+	}
+	return Document{File: e.File, Revision: revision(data)}, nil
+}
+func (s *Store) read(id string) (Document, error) {
+	e, err := s.entry(id)
+	if err != nil {
+		return Document{}, err
+	}
+	// An svg is an image with a text source; every other image is preview-only.
+	if e.Kind == KindImage && !strings.EqualFold(filepath.Ext(e.name), ".svg") {
+		return Document{}, fmt.Errorf("%s is an image; it has no editable source", e.Path)
+	}
+	root, err := os.OpenRoot(e.root)
+	if err != nil {
+		return Document{}, err
+	}
+	defer root.Close()
+	info, err := root.Stat(e.name)
+	if err != nil {
+		return Document{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return Document{}, fmt.Errorf("not a regular file: %s", e.Path)
+	}
+	data, err := root.ReadFile(e.name)
+	if err != nil {
+		return Document{}, err
+	}
+	return Document{File: e.File, Source: string(data), Revision: revision(data)}, nil
+}
+func (s *Store) Write(doc Document) (result Document, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, err := s.read(doc.ID)
+	if err != nil {
+		return Document{}, err
+	}
+	if current.Revision != doc.Revision {
+		return Document{}, ErrConflict
+	}
+	e := s.files[doc.ID]
+	root, err := os.OpenRoot(e.root)
+	if err != nil {
+		return Document{}, err
+	}
+	defer root.Close()
+	info, err := root.Stat(e.name)
+	if err != nil {
+		return Document{}, err
+	}
+	temp := filepath.Join(filepath.Dir(e.name), ".gavel-edit-"+revision([]byte(doc.Source)))
+	file, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	if err != nil {
+		return Document{}, err
+	}
+	defer func() {
+		cleanupErr := root.Remove(temp)
+		if !errors.Is(cleanupErr, os.ErrNotExist) {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+	if err := file.Chmod(info.Mode().Perm()); err != nil {
+		return Document{}, errors.Join(err, file.Close())
+	}
+	_, writeErr := file.WriteString(doc.Source)
+	if err := errors.Join(writeErr, file.Sync(), file.Close()); err != nil {
+		return Document{}, err
+	}
+	// Check again after preparing the replacement so external edits are not knowingly overwritten.
+	current, err = s.read(doc.ID)
+	if err != nil {
+		return Document{}, err
+	}
+	if current.Revision != doc.Revision {
+		return Document{}, ErrConflict
+	}
+	if err := root.Rename(temp, e.name); err != nil {
+		return Document{}, err
+	}
+	return s.read(doc.ID)
+}

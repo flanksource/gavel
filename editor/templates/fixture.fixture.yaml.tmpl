@@ -1,0 +1,8 @@
+kind: Fixture
+name: Fixture
+steps:
+  - id: greet
+    name: echo prints its argument
+    kind: exec
+    script: echo hello
+    cel: exitCode == 0 && stdout.contains('hello')

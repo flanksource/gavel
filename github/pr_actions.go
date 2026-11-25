@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -8,14 +9,34 @@ import (
 	"github.com/flanksource/gavel/github/activity"
 )
 
-const mergePullRequestMutation = `mutation($prId: ID!, $method: PullRequestMergeMethod!, $head: GitObjectID) {
-  mergePullRequest(input: {pullRequestId: $prId, mergeMethod: $method, expectedHeadOid: $head}) {
+const mergePullRequestMutation = `mutation($prId: ID!, $method: PullRequestMergeMethod!, $head: GitObjectID, $headline: String, $body: String) {
+  mergePullRequest(input: {pullRequestId: $prId, mergeMethod: $method, expectedHeadOid: $head, commitHeadline: $headline, commitBody: $body}) {
     pullRequest { number state }
   }
 }`
 
 type MergeOptions struct {
 	NodeID, Method, HeadSHA string
+	// CommitHeadline and CommitBody are the squash or merge commit's message;
+	// empty leaves GitHub's default. GitHub ignores them for a rebase.
+	CommitHeadline, CommitBody string
+}
+
+// ErrRebaseNotAllowed marks a rebase-merge GitHub refused because the PR's
+// commits cannot be replayed onto the base, e.g. the branch holds merge
+// commits or a commit conflicts; a squash or merge commit can still land it.
+var ErrRebaseNotAllowed = errors.New("GitHub can't rebase this branch onto its base")
+
+// mergeVariables builds the variables shared by the merge and auto-merge
+// mutations, sending only the optional inputs the caller set.
+func mergeVariables(input MergeOptions, method string) map[string]any {
+	variables := map[string]any{"prId": input.NodeID, "method": method}
+	for name, value := range map[string]string{"head": input.HeadSHA, "headline": input.CommitHeadline, "body": input.CommitBody} {
+		if value != "" {
+			variables[name] = value
+		}
+	}
+	return variables
 }
 
 // MergePullRequest merges the pull request identified by its GraphQL node ID
@@ -38,18 +59,16 @@ func MergePullRequest(opts Options, input MergeOptions) error {
 		return err
 	}
 
-	variables := map[string]any{
-		"prId":   input.NodeID,
-		"method": method,
-	}
-	if input.HeadSHA != "" {
-		variables["head"] = input.HeadSHA
-	}
-	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, mergePullRequestMutation, variables)
-	if err != nil {
+	_, _, err = postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindGraphQL, mergePullRequestMutation, mergeVariables(input, method))
+	var rejected *GraphQLError
+	switch {
+	case err == nil:
+		return nil
+	case method == "REBASE" && errors.As(err, &rejected) && strings.Contains(strings.ToLower(err.Error()), "can't be rebased"):
+		return fmt.Errorf("merge pull request (%s): %w: %w", method, ErrRebaseNotAllowed, err)
+	default:
 		return fmt.Errorf("merge pull request (%s): %w", method, err)
 	}
-	return nil
 }
 
 const approvePullRequestMutation = `mutation($prId: ID!, $body: String) {
@@ -71,7 +90,7 @@ func ApprovePullRequest(opts Options, prNodeID, body string) error {
 		return err
 	}
 
-	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, approvePullRequestMutation, map[string]any{
+	_, _, err = postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindGraphQL, approvePullRequestMutation, map[string]any{
 		"prId": prNodeID,
 		"body": body,
 	})
@@ -116,7 +135,7 @@ func UpdatePullRequestBranch(opts Options, input UpdateBranchOptions) error {
 	if input.HeadSHA != "" {
 		variables["head"] = input.HeadSHA
 	}
-	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, updatePullRequestBranchMutation, variables)
+	_, _, err = postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindGraphQL, updatePullRequestBranchMutation, variables)
 	if err == nil {
 		return nil
 	}
@@ -146,7 +165,7 @@ func ClosePullRequest(opts Options, prNodeID string) error {
 		return err
 	}
 
-	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, closePullRequestMutation, map[string]any{
+	_, _, err = postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindGraphQL, closePullRequestMutation, map[string]any{
 		"prId": prNodeID,
 	})
 	if err != nil {
@@ -177,7 +196,7 @@ func CommentOnPullRequest(opts Options, prNodeID, body string) error {
 		return err
 	}
 
-	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, addCommentMutation, map[string]any{
+	_, _, err = postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindGraphQL, addCommentMutation, map[string]any{
 		"subjectId": prNodeID,
 		"body":      body,
 	})

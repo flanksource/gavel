@@ -67,15 +67,9 @@ func TestFixturesHelpIncludesArgumentAndFlagReference(t *testing.T) {
 		"--show-stderr",
 		"--update-golden",
 		"--schema",
-		"FLAGS",
-		"--update-golden",
-		"--show-passed",
-		"--show-stdout",
-		"--show-stderr",
-		"--schema",
-		"GLOBAL FLAGS",
+		"Command flags",
 		"--cwd",
-		"-v, --loglevel",
+		globalHelpHint,
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("fixtures help missing %q:\n%s", want, help)

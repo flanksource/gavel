@@ -2,7 +2,7 @@ import type { ComponentProps, ReactNode } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { PromptRunEditorProps, RuntimePreset } from '@flanksource/clicky-ui/ai';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoRunOptions } from '../../types';
 import { TodoRunAdvancedDialog } from './TodoRunAdvancedDialog';
@@ -21,6 +21,10 @@ const contextVersion = vi.hoisted(() => ({ current: 0 }));
 // a fresh identity on every render would re-run the dialog's preview effect on
 // every render and never settle.
 const contextsByVersion = vi.hoisted(() => new Map<number, unknown>());
+const approval = vi.hoisted(() => ({ approve: vi.fn(), reset: vi.fn(), busy: false, error: '' }));
+const plan = vi.hoisted(() => ({ data: { found: true, content: 'Selected implementation plan' }, isPending: false, error: null }));
+vi.mock('./planActions', () => ({ usePlanActions: () => approval }));
+vi.mock('./PlanTldr', () => ({ usePlanQuery: () => plan, PlanTldrCallout: () => null }));
 
 // The run dialog's step picker now lists whatever the project's lifecycle
 // declares — including a custom, non-built-in step — rather than a hardcoded
@@ -128,6 +132,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
 
 vi.mock('@flanksource/clicky-ui/data', () => ({
   CodeBlock: () => null,
+  Markdown: ({ text }: { text: string }) => <div>{text}</div>,
 }));
 
 vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
@@ -153,6 +158,9 @@ beforeEach(() => {
   contextVersion.current = 0;
   contextsByVersion.clear();
   localStorage.clear();
+  approval.approve.mockReset();
+  approval.error = '';
+  plan.data = { found: true, content: 'Selected implementation plan' };
 });
 
 afterEach(() => {
@@ -420,5 +428,58 @@ describe('TodoRunAdvancedDialog branch choice', () => {
     setup({ initialMode: 'plan', branchChoice });
     expect(screen.queryByRole('radio')).toBeNull();
     expect(preview.mock.lastCall?.[0].body.reuseBranch).toBeUndefined();
+  });
+});
+
+describe('TodoRunAdvancedDialog plan approval', () => {
+  it('shows the selected plan and approves without launching', async () => {
+    const onChanged = vi.fn();
+    const onLaunch = vi.fn();
+    const result = { todo: { ref: 'todo-1', status: 'pending' } };
+    approval.approve.mockResolvedValue(result);
+    const { onClose, onRun } = setup({ initialMode: 'run', reviewRequired: true, onChanged, onLaunch });
+    expect(screen.getByText('Selected implementation plan')).toBeTruthy();
+    expect(footer().queryByRole('button', { name: 'Run' })).toBeNull();
+    fireEvent.click(footer().getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(result.todo));
+    expect(approval.approve).toHaveBeenCalledWith('todo-1', { run: false, options: undefined });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onRun).not.toHaveBeenCalled();
+    expect(onLaunch).not.toHaveBeenCalled();
+  });
+
+  it('approves and launches once using the chosen runtime and presets', async () => {
+    const onLaunch = vi.fn();
+    approval.approve.mockResolvedValue({ todo: { ref: 'todo-1', status: 'in_progress' } });
+    const { onRun, onClose } = setup({ initialMode: 'run', reviewRequired: true, onLaunch, branchChoice: { branch: 'review/implementation', unresolved: 1 } });
+    fireEvent.click(screen.getByRole('button', { name: 'Change model' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review preset' }));
+    fireEvent.click(footer().getByRole('button', { name: 'Approve & Run' }));
+    await waitFor(() => expect(onLaunch).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(JSON.stringify(approval.approve.mock.lastCall))).toEqual(['todo-1', { run: true, options: { step: 'run', presets: ['review-preset'], spec: { model: 'operator-model' }, reuseBranch: true } }]);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it('keeps the dialog open and surfaces a rejected approval', async () => {
+    approval.error = 'Plan revision changed; review it again';
+    approval.approve.mockResolvedValue(null);
+    const { onClose, onRun } = setup({ initialMode: 'run', reviewRequired: true });
+    fireEvent.click(footer().getByRole('button', { name: 'Approve & Run' }));
+    await waitFor(() => expect(approval.approve).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('alert').textContent).toContain(approval.error);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it('requires a readable plan before approval, while allowing a new planning run', () => {
+    plan.data = { found: false, content: '' };
+    const { onRun } = setup({ initialMode: 'run', reviewRequired: true });
+    expect(footer().getByRole<HTMLButtonElement>('button', { name: 'Approve & Run' }).disabled).toBe(true);
+    expect(screen.getByRole('alert').textContent).toContain('selected plan');
+    fireEvent.click(picker().getByRole('button', { name: 'Plan' }));
+    fireEvent.click(footer().getByRole('button', { name: 'Plan' }));
+    expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ step: 'plan' }));
+    expect(approval.approve).not.toHaveBeenCalled();
   });
 });

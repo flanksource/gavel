@@ -34,7 +34,7 @@ func TestFilterViolationsByGitIgnore(t *testing.T) {
 			mkViolation(filepath.Join(root, "debug.log")),
 		}
 
-		result, err := FilterViolationsByGitIgnore(violations, root)
+		result, err := FilterViolationsByGitIgnore(violations, root, nil)
 		assert.NoError(t, err)
 		assert.Len(t, result, 1)
 		assert.Equal(t, filepath.Join(root, "main.go"), result[0].File)
@@ -47,7 +47,7 @@ func TestFilterViolationsByGitIgnore(t *testing.T) {
 			mkViolation(filepath.Join(root, "b.go")),
 		}
 
-		result, err := FilterViolationsByGitIgnore(violations, root)
+		result, err := FilterViolationsByGitIgnore(violations, root, nil)
 		assert.NoError(t, err)
 		assert.Len(t, result, 2)
 	})
@@ -62,13 +62,13 @@ func TestFilterViolationsByGitIgnore(t *testing.T) {
 			mkViolation(filepath.Join(root, "main.go")),
 		}
 
-		result, err := FilterViolationsByGitIgnore(violations, root)
+		result, err := FilterViolationsByGitIgnore(violations, root, nil)
 		assert.NoError(t, err)
 		assert.Len(t, result, 2)
 	})
 
 	t.Run("returns empty input unchanged", func(t *testing.T) {
-		result, err := FilterViolationsByGitIgnore(nil, t.TempDir())
+		result, err := FilterViolationsByGitIgnore(nil, t.TempDir(), nil)
 		assert.NoError(t, err)
 		assert.Nil(t, result)
 	})
@@ -85,11 +85,40 @@ func TestFilterViolationsByGitIgnore(t *testing.T) {
 			mkViolation(filepath.Join(root, "debug.log")),
 		}
 
-		result, err := FilterViolationsByGitIgnore(violations, root)
+		result, err := FilterViolationsByGitIgnore(violations, root, nil)
 		assert.NoError(t, err)
 		assert.Len(t, result, 2)
 		assert.Equal(t, file, result[0].File)
 		assert.Equal(t, file, result[1].File)
+	})
+
+	t.Run("keeps violations in an explicitly named gitignored file", func(t *testing.T) {
+		root := t.TempDir()
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("pages/\n"), 0644)
+		named := filepath.Join(root, "pages", "review.md")
+
+		violations := []models.Violation{
+			mkViolation(named),
+			mkViolation("pages/review.md"),
+			mkViolation(filepath.Join(root, "pages", "other.md")),
+		}
+
+		result, err := FilterViolationsByGitIgnore(violations, root, map[string]struct{}{named: {}})
+		assert.NoError(t, err)
+		assert.Equal(t, []models.Violation{mkViolation(named), mkViolation("pages/review.md")}, result)
+	})
+
+	t.Run("a named directory does not exempt the gitignored files under it", func(t *testing.T) {
+		root := t.TempDir()
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("pages/\n"), 0644)
+
+		violations := []models.Violation{mkViolation(filepath.Join(root, "pages", "review.md"))}
+
+		result, err := FilterViolationsByGitIgnore(violations, root, map[string]struct{}{filepath.Join(root, "pages"): {}})
+		assert.NoError(t, err)
+		assert.Empty(t, result)
 	})
 }
 
@@ -127,7 +156,7 @@ func TestFilterViolationsByGitIgnoreInResults(t *testing.T) {
 			},
 		}
 
-		filtered, err := FilterViolationsByGitIgnoreInResults(results)
+		filtered, err := FilterViolationsByGitIgnoreInResults(results, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, filtered)
 		assert.Len(t, results[0].Violations, 1)
@@ -137,13 +166,13 @@ func TestFilterViolationsByGitIgnoreInResults(t *testing.T) {
 	})
 
 	t.Run("returns 0 for nil and empty results", func(t *testing.T) {
-		filtered, err := FilterViolationsByGitIgnoreInResults(nil)
+		filtered, err := FilterViolationsByGitIgnoreInResults(nil, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, filtered)
-		filtered, err = FilterViolationsByGitIgnoreInResults([]*LinterResult{})
+		filtered, err = FilterViolationsByGitIgnoreInResults([]*LinterResult{}, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, filtered)
-		filtered, err = FilterViolationsByGitIgnoreInResults([]*LinterResult{nil})
+		filtered, err = FilterViolationsByGitIgnoreInResults([]*LinterResult{nil}, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, filtered)
 	})
@@ -156,7 +185,7 @@ func TestFilterViolationsByGitIgnoreInResults(t *testing.T) {
 		results := []*LinterResult{
 			{Linter: "empty", WorkDir: root, Violations: nil},
 		}
-		filtered, err := FilterViolationsByGitIgnoreInResults(results)
+		filtered, err := FilterViolationsByGitIgnoreInResults(results, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, filtered)
 	})

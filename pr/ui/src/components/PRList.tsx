@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { IconButton, ListMenu, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
 import { useProcStatus } from '../procStatusQuery';
-import type { PRItem, PRSyncStatus, GavelResultsSummary, Project } from '../types';
+import type { PRItem, PRSyncStatus, GavelResultsSummary, Project, TodoCounts } from '../types';
 import { PRRow } from './PRRow';
 import { ProcControl } from './ProcControl';
 import { groupByOrg, prKey, computeCounts, type RepoGroup } from '../utils';
 import { Avatar } from './Avatar';
-import { UiChevronDown, UiChevronRight, UiError, UiGitPr } from '@flanksource/clicky-ui/icons';
+import { UiChevronDown, UiChevronRight, UiCircleXFilled, UiError, UiGitMerge, UiGitPr } from '@flanksource/clicky-ui/icons';
 import { RepoIcon } from './RepoIcon';
 import { TodoBadge } from './TodoBadge';
 import { GitChangesBadge } from './GitChangesBadge';
@@ -20,6 +20,46 @@ interface Props {
   gavelResults?: Record<string, GavelResultsSummary>;
   projectsByRepo?: Record<string, Project>;
   onProcChanged?: () => void;
+  // The signed-in GitHub login, so rows leave out the viewer's own avatar.
+  viewer?: string;
+  // Phone layout: headers keep one action count, rows keep one status icon.
+  mobile?: boolean;
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+function conflictCount(items: PRItem[]): number {
+  return items.filter(pr => !pr.isDraft && pr.mergeable === 'CONFLICTING').length;
+}
+
+// groupSummary is a group header's full breakdown, its title tooltip.
+function groupSummary(items: PRItem[], todos?: TodoCounts, gitChanges?: number): string {
+  const c = computeCounts(items);
+  const conflicts = conflictCount(items);
+  return [
+    plural(items.length, 'pull request'),
+    c.open > 0 && `${c.open} open`,
+    c.failing > 0 && `${c.failing} failing`,
+    conflicts > 0 && `${conflicts} conflicting`,
+    todos && todos.open > 0 && `${plural(todos.open, 'open todo')}${todos.inProgress > 0 ? `, ${todos.inProgress} in progress` : ''}`,
+    gitChanges && gitChanges > 0 && plural(gitChanges, 'uncommitted change'),
+  ].filter(Boolean).join(' · ');
+}
+
+// ActionCount is a phone header's single counter: the failing-check count, or
+// when nothing fails, the merge-conflict count.
+function ActionCount({ items }: { items: PRItem[] }) {
+  const failing = computeCounts(items).failing;
+  const conflicts = conflictCount(items);
+  if (failing === 0 && conflicts === 0) return null;
+  const [Icon, count, label] = failing > 0
+    ? [UiCircleXFilled, failing, `${failing} failing`]
+    : [UiGitMerge, conflicts, `${conflicts} conflicting`];
+  return (
+    <span role="img" aria-label={label} className="inline-flex shrink-0 items-center gap-0.5 text-xs font-normal tabular-nums text-red-600">
+      <Icon />{count}
+    </span>
+  );
 }
 
 // GroupCounts shows per-group open (green) and failing (red) totals on the
@@ -43,7 +83,7 @@ function GroupCounts({ items }: { items: PRItem[] }) {
   );
 }
 
-export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged }: Props) {
+export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged, viewer, mobile }: Props) {
   if (prs.length === 0) {
     return (
       <div className="p-6 text-center text-muted-foreground">
@@ -60,7 +100,7 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
       {orgs.map(og => (
         <ListMenuSection key={og.org || '_'}>
           {og.org && (
-            <ListMenuHeader className="z-20">
+            <ListMenuHeader className="z-20" title={groupSummary(og.repos.flatMap(r => r.items))}>
               <Avatar
                 src={og.orgAvatarUrl}
                 alt={og.org}
@@ -71,7 +111,9 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                 colorKey={og.org}
               />
               <span className="text-sm font-semibold text-foreground truncate min-w-0 flex-1">{og.org}</span>
-              <GroupCounts items={og.repos.flatMap(r => r.items)} />
+              {mobile
+                ? <ActionCount items={og.repos.flatMap(r => r.items)} />
+                : <GroupCounts items={og.repos.flatMap(r => r.items)} />}
             </ListMenuHeader>
           )}
           {og.repos.map(group => (
@@ -85,6 +127,8 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
               gavelResults={gavelResults}
               projectsByRepo={projectsByRepo}
               onProcChanged={onProcChanged}
+              viewer={viewer}
+              mobile={mobile}
             />
           ))}
         </ListMenuSection>
@@ -97,12 +141,14 @@ type RepoSectionProps = Omit<Props, 'prs'> & { group: RepoGroup };
 
 // RepoSection is one repository's header and pull requests; the arrow beside the
 // repository hides its pull requests, keeping the header and counts.
-function RepoSection({ group, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged }: RepoSectionProps) {
+function RepoSection({ group, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, onProcChanged, viewer, mobile }: RepoSectionProps) {
   const procStatus = useProcStatus();
   const [open, setOpen] = useState(true);
+  const todoCounts = projectsByRepo?.[group.repo]?.todoCounts;
+  const gitChanges = procStatus?.[group.repo]?.gitChanges;
   return (
     <div>
-      <ListMenuHeader className="top-9 z-10 pl-2">
+      <ListMenuHeader className="top-9 z-10 pl-2" title={groupSummary(group.items, todoCounts, gitChanges)}>
         <IconButton
           icon={open ? UiChevronDown : UiChevronRight}
           label={`${open ? 'Collapse' : 'Expand'} ${group.repo}`}
@@ -138,14 +184,22 @@ function RepoSection({ group, selected, onSelect, unread, syncStatus, gavelResul
             onChanged={onProcChanged}
           />
         )}
-        <TodoBadge counts={projectsByRepo?.[group.repo]?.todoCounts} />
-        <GitChangesBadge count={procStatus?.[group.repo]?.gitChanges} />
-        <GroupCounts items={group.items} />
+        {mobile ? (
+          <ActionCount items={group.items} />
+        ) : (
+          <>
+            <TodoBadge counts={todoCounts} />
+            <GitChangesBadge count={gitChanges} />
+            <GroupCounts items={group.items} />
+          </>
+        )}
       </ListMenuHeader>
       {open && group.items.map(pr => (
         <PRRow
           key={prKey(pr)}
           pr={pr}
+          viewer={viewer}
+          mobile={mobile}
           selected={selected?.repo === pr.repo && selected?.number === pr.number}
           unread={!!unread?.[prKey(pr)]}
           syncStatus={syncStatus?.[prKey(pr)]}

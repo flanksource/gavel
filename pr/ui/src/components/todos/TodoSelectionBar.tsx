@@ -1,4 +1,6 @@
 import { SelectionActionBar } from '@flanksource/clicky-ui/data';
+import { cn } from '@flanksource/clicky-ui/utils';
+import { useIsMobile } from '../../useIsMobile';
 import { useTodoBulkContext, useTodoBulkToolbar } from './todoActions';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
 
@@ -40,20 +42,26 @@ function SelectionBar({ todos, onApplied }: {
     onApplied,
   });
 
+  // FilterBar's overlay cell does not inherit the bar's own horizontal padding,
+  // so the count and the actions sit in a padded row of their own. A phone keeps
+  // it to one row that scrolls sideways rather than wrapping over the list.
+  const mobile = useIsMobile();
   return (
-    <SelectionActionBar
-      actions={actions}
-      context={{
-        selectedRowIds: [...selection.selection],
-        // The sidebar renders its own rows, so the bar is given the ids it
-        // acts on and nothing else; nothing in these descriptors reads rows.
-        selectedRows: [],
-        clearSelection: selection.clearSelection,
-      }}
-      // Without this the count is a block element above the buttons rather
-      // than beside them: SelectionActionBar renders a fragment, so the row is
-      // the caller's to declare.
-      className="flex flex-wrap items-center gap-density-2"
-    />
+    <div className={cn('flex min-w-0 items-center gap-density-2 px-2', mobile ? 'overflow-x-auto' : 'flex-wrap')}>
+      <SelectionActionBar
+        actions={actions}
+        context={{
+          selectedRowIds: [...selection.selection],
+          // The sidebar renders its own rows, so the bar is given the ids it
+          // acts on and nothing else; nothing in these descriptors reads rows.
+          selectedRows: [],
+          clearSelection: selection.clearSelection,
+        }}
+        // Without this the count is a block element above the buttons rather
+        // than beside them: SelectionActionBar renders a fragment, so the row is
+        // the caller's to declare.
+        className={cn('flex items-center gap-density-2', mobile ? 'shrink-0' : 'flex-wrap')}
+      />
+    </div>
   );
 }

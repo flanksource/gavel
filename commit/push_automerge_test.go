@@ -33,7 +33,7 @@ var _ = Describe("commit -p --auto-merge", func() {
 		DeferCleanup(func() { newAgentFunc = previousAgent })
 	})
 
-	newPRDeps := func(autoMerge func(github.Options, string, string) error) pushDeps {
+	newPRDeps := func(autoMerge func(github.Options, *model.CreatePRResult, string) error) pushDeps {
 		return pushDeps{
 			searchPRs: func(github.Options, github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error) {
 				return github.PRSearchResults{}, nil, nil
@@ -60,9 +60,9 @@ var _ = Describe("commit -p --auto-merge", func() {
 		)
 		err := pushAfterCommitForTest(context.Background(), opts, &Result{
 			Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}},
-		}, newPRDeps(func(_ github.Options, nodeID, method string) error {
+		}, newPRDeps(func(_ github.Options, pr *model.CreatePRResult, method string) error {
 			calls++
-			gotNodeID = nodeID
+			gotNodeID = pr.NodeID
 			gotMethod = method
 			return nil
 		}))
@@ -75,7 +75,7 @@ var _ = Describe("commit -p --auto-merge", func() {
 	It("propagates an error when enabling auto-merge fails", func() {
 		err := pushAfterCommitForTest(context.Background(), opts, &Result{
 			Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}},
-		}, newPRDeps(func(github.Options, string, string) error {
+		}, newPRDeps(func(github.Options, *model.CreatePRResult, string) error {
 			return errors.New("auto merge is not allowed for this repository")
 		}))
 		Expect(err).To(MatchError(ContainSubstring("enable auto-merge on PR #7")))
@@ -87,7 +87,7 @@ var _ = Describe("commit -p --auto-merge", func() {
 		dryOpts.DryRun = true
 		err := pushAfterCommitForTest(context.Background(), dryOpts, &Result{
 			Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}},
-		}, newPRDeps(func(github.Options, string, string) error {
+		}, newPRDeps(func(github.Options, *model.CreatePRResult, string) error {
 			Fail("enableAutoMerge must not be called in dry-run")
 			return nil
 		}))
@@ -101,14 +101,28 @@ var _ = Describe("commit -p --auto-merge", func() {
 			},
 			rebaseOnto: func(_, _ string) error { return nil },
 			gitPush:    func(_, _ string) error { return nil },
-			enableAutoMerge: func(github.Options, string, string) error {
+			enableAutoMerge: func(github.Options, *model.CreatePRResult, string) error {
 				Fail("enableAutoMerge must not be called for an existing PR")
 				return nil
 			},
 		}
-		err := pushAfterCommitForTest(context.Background(), opts, &Result{
-			Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}},
-		}, deps)
+		result := &Result{Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}}}
+		err := pushAfterCommitForTest(context.Background(), opts, result, deps)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(result.PR).To(Equal(&PushedPR{Number: 3, URL: "http://x/3", Branch: "feat/topic"}))
+	})
+
+	It("records the newly opened PR on the result", func() {
+		result := &Result{Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}}}
+		Expect(pushAfterCommitForTest(context.Background(), opts, result, newPRDeps(func(github.Options, *model.CreatePRResult, string) error { return nil }))).To(Succeed())
+		Expect(result.PR).To(Equal(&PushedPR{Number: 7, URL: "http://x/7", Title: "feat: work", Base: "main", Branch: "feat/topic", Created: true}))
+	})
+
+	It("records no PR for a dry run", func() {
+		dryOpts := opts
+		dryOpts.DryRun = true
+		result := &Result{Commits: []CommitResult{{Message: "feat: work", Hash: "abc123"}}}
+		Expect(pushAfterCommitForTest(context.Background(), dryOpts, result, newPRDeps(nil))).To(Succeed())
+		Expect(result.PR).To(BeNil())
 	})
 })

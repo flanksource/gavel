@@ -3,15 +3,47 @@ package testrunner
 import (
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/testrunner/runners"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
+const overlayFixture = "./testrunner/runners/testdata/overlayfixture"
+
 var _ = Describe("unified Go runner", func() {
+	It("reports missing metadata as a package failure while keeping other packages", func() {
+		workDir, err := filepath.Abs("..")
+		Expect(err).NotTo(HaveOccurred())
+		const missing = "./testrunner/runners/testdata/overlaymissing"
+		o := &TestOrchestrator{
+			RunOptions: RunOptions{WorkDir: workDir, Recursive: false, Frameworks: []string{"go", "ginkgo"}, StartingPaths: []string{
+				missing,
+				"./testrunner/runners/testdata/overlayplain",
+				"./testrunner/runners/testdata/overlayfixture",
+			}},
+			registry: DefaultRegistry(workDir),
+		}
+		results, err := o.Run()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results.All()).To(ContainElement(And(HaveField("Name", "TestPlain"), HaveField("Passed", true))))
+		Expect(results.All()).To(ContainElement(And(HaveField("Name", "reports metadata"), HaveField("Passed", true))))
+		failures := results.Failed()
+		Expect(failures).To(HaveLen(1))
+		Expect(failures[0].PackagePath).To(Equal(missing))
+		Expect(failures[0].Framework).To(Equal(parsers.Ginkgo))
+		Expect(failures[0].Message).To(ContainSubstring("without Ginkgo metadata"))
+		Expect(failures[0].Attempts).To(HaveLen(1))
+		Expect(failures[0].Attempts[0].ExitCode).To(HaveValue(Equal(1)))
+	})
+
 	It("uses a recursive selector for an unfocused mixed run", func() {
-		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: ".", Recursive: true}}
+		root := GinkgoT().TempDir()
+		Expect(os.Mkdir(filepath.Join(root, "plain"), 0o755)).To(Succeed())
+		Expect(os.Mkdir(filepath.Join(root, "specs"), 0o755)).To(Succeed())
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: root, Recursive: true}}
 		plans, err := o.planGoBatches(map[Framework][]string{
 			parsers.GoTest: {"./plain"},
 			parsers.Ginkgo: {"./specs"},
@@ -23,7 +55,10 @@ var _ = Describe("unified Go runner", func() {
 	})
 
 	It("uses explicit packages for a focused run", func() {
-		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: ".", Recursive: true}}
+		root := GinkgoT().TempDir()
+		Expect(os.Mkdir(filepath.Join(root, "plain"), 0o755)).To(Succeed())
+		Expect(os.Mkdir(filepath.Join(root, "specs"), 0o755)).To(Succeed())
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: root, Recursive: true}}
 		plans, err := o.planGoBatches(map[Framework][]string{
 			parsers.GoTest: {"./plain"},
 			parsers.Ginkgo: {"./specs"},
@@ -44,7 +79,8 @@ var _ = Describe("unified Go runner", func() {
 		Expect(plans).To(HaveLen(2))
 		Expect(plans[0].targets).To(Equal([]string{"./..."}))
 		Expect(plans[1].targets).To(Equal([]string{"./testrunner/runners/testdata/overlaybench"}))
-		Expect(plans[1].args).To(ContainElements("-bench=.", "-run=^$"))
+		Expect(plans[1].opts.Bench).To(Equal("."))
+		Expect(plans[1].opts.Focus).To(Equal(runners.FileSelection{Regex: []string{"^$"}}))
 	})
 
 	It("maps packages without discovered tests in a recursive run", func() {
@@ -65,10 +101,10 @@ var _ = Describe("unified Go runner", func() {
 		plainPkg := "./testrunner/runners/testdata/overlayplain"
 		for run := 0; run < 2; run++ {
 			o := &TestOrchestrator{
-				RunOptions: RunOptions{WorkDir: workDir, Recursive: false},
+				RunOptions: RunOptions{WorkDir: workDir, Recursive: false, Frameworks: []string{"go", "ginkgo"}, StartingPaths: []string{pkg, plainPkg}},
 				registry:   DefaultRegistry(workDir),
 			}
-			results, err := o.detectAndRun([]Framework{parsers.GoTest, parsers.Ginkgo}, []string{pkg, plainPkg}, nil)
+			results, err := o.Run()
 			Expect(err).NotTo(HaveOccurred())
 			var ordinary, plain, spec *parsers.Test
 			commands := map[string]bool{}
@@ -98,35 +134,65 @@ var _ = Describe("unified Go runner", func() {
 		}
 	})
 
-	It("accepts Ginkgo focus and label filters through go test", func() {
+	DescribeTable("accepts Ginkgo focus and label filters through go test",
+		func(passThrough []string) {
+			workDir, err := filepath.Abs("..")
+			Expect(err).NotTo(HaveOccurred())
+			o := &TestOrchestrator{
+				RunOptions: RunOptions{WorkDir: workDir, Frameworks: []string{"ginkgo"}, StartingPaths: []string{overlayFixture}, PassThroughArgs: passThrough},
+				registry:   DefaultRegistry(workDir),
+			}
+			results, err := o.Run()
+			Expect(err).NotTo(HaveOccurred())
+			var specs []parsers.Test
+			for _, suite := range results {
+				if suite.Framework == parsers.Ginkgo {
+					specs = append(specs, suite.Tests...)
+				}
+			}
+			// Ginkgo reports the specs its filters leave out as skipped, as its own JSON report does.
+			Expect(specs).To(ConsistOf(
+				And(HaveField("Name", "reports metadata"), HaveField("Passed", true)),
+				And(HaveField("Name", "passes without report entries"), HaveField("Skipped", true)),
+			), "results: %+v", results)
+			// A flag before the packages ends go test's package list, so it tests the module root instead.
+			Expect(results.All()).NotTo(ContainElement(HaveField("Package", "github.com/flanksource/gavel")), "results: %+v", results)
+		},
+		Entry("--focus with a label filter", []string{"--focus", "reports metadata", "--label-filter=inherited && leaf"}),
+		Entry("native --ginkgo.focus=", []string{"--ginkgo.focus=reports metadata"}),
+		Entry("space-separated -ginkgo.focus", []string{"-ginkgo.focus", "reports metadata"}),
+		Entry("-race with a Ginkgo focus", []string{"-race", "--ginkgo.focus=reports metadata"}),
+		Entry("vitest-style -t", []string{"-t", "reports metadata"}),
+	)
+
+	It("puts the packages before the user's flags in the go test argv", func() {
 		workDir, err := filepath.Abs("..")
 		Expect(err).NotTo(HaveOccurred())
-		o := &TestOrchestrator{
-			RunOptions: RunOptions{WorkDir: workDir},
-			registry:   DefaultRegistry(workDir),
-		}
-		results, err := o.detectAndRun([]Framework{parsers.Ginkgo}, []string{"./testrunner/runners/testdata/overlayfixture"}, []string{"--focus", "reports metadata", "--label-filter=inherited && leaf"})
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir, StartingPaths: []string{overlayFixture},
+			PassThroughArgs: []string{"-race", "-ginkgo.focus", "reports metadata"}}}
+		packages := map[Framework][]string{parsers.Ginkgo: {overlayFixture}}
+		detected, err := parsedTestOptions(o, parsers.Ginkgo)
 		Expect(err).NotTo(HaveOccurred())
-		var specs []parsers.Test
-		for _, suite := range results {
-			if suite.Framework == parsers.Ginkgo {
-				specs = append(specs, suite.Tests...)
-			}
+		resolved, err := o.resolveTestOptions(detected, packages)
+		Expect(err).NotTo(HaveOccurred())
+		plans, err := o.planGoBatches(packages, resolved, false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plans).To(HaveLen(1))
+		process, err := o.buildGoBatchCommand(plans[0], 0)
+		Expect(err).NotTo(HaveOccurred())
+		args := process.Args
+		Expect(args).NotTo(ContainElement("-args"))
+		pkg := slices.Index(args, overlayFixture)
+		Expect(pkg).To(BeNumerically(">", 0), "argv: %v", args)
+		for _, flag := range []string{"-race", "-ginkgo.focus=reports metadata"} {
+			Expect(slices.Index(args, flag)).To(BeNumerically(">", pkg), "%s follows the packages in %v", flag, args)
 		}
-		// Ginkgo reports the specs its filters leave out as skipped, as its own JSON report does.
-		ran := map[string]bool{}
-		for _, spec := range specs {
-			ran[spec.Name] = !spec.Skipped
-			if spec.Name == "reports metadata" {
-				Expect(spec.Passed).To(BeTrue())
-			}
-		}
-		Expect(ran).To(Equal(map[string]bool{"reports metadata": true, "passes without report entries": false}), "results: %+v", results)
 	})
 
 	It("rejects parallel Ginkgo nodes before execution", func() {
 		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: ".", Nodes: 2}, registry: DefaultRegistry(".")}
-		_, err := o.detectAndRun([]Framework{parsers.Ginkgo}, nil, nil)
+		_, err := o.detectAndRun(map[Framework]*runners.TestOptions{parsers.Ginkgo: {}})
 		Expect(err).To(MatchError(ContainSubstring("--nodes=2 is unsupported")))
 	})
 
@@ -144,10 +210,16 @@ var _ = Describe("unified Go runner", func() {
 			Expect(plan.packages).To(HaveLen(1))
 			byPackage[plan.packages[0]] = plan
 		}
-		Expect(byPackage["./testrunner/runners/testdata/overlayplain"].args).To(BeEmpty())
-		Expect(byPackage["./testrunner/runners/testdata/overlaybench"].args).To(ContainElements("-bench=.", "-run=^$"))
+		plain := byPackage["./testrunner/runners/testdata/overlayplain"].opts
+		Expect(plain.Bench).To(BeEmpty())
+		Expect(plain.Focus.Empty()).To(BeTrue())
+		bench := byPackage["./testrunner/runners/testdata/overlaybench"].opts
+		Expect(bench.Bench).To(Equal("."))
+		Expect(bench.Focus).To(Equal(runners.FileSelection{Regex: []string{"^$"}}))
 		o.registry = DefaultRegistry(workDir)
-		results, err := o.detectAndRun([]Framework{parsers.GoTest}, []string{"./testrunner/runners/testdata/overlaybench"}, nil)
+		o.Frameworks = []string{"go"}
+		o.StartingPaths = []string{"./testrunner/runners/testdata/overlaybench"}
+		results, err := o.Run()
 		Expect(err).NotTo(HaveOccurred())
 		var benchmarks []parsers.Test
 		for _, suite := range results {
@@ -195,8 +267,9 @@ var _ = Describe("unified Go runner", func() {
 				ginkgoPlan = plan
 			}
 		}
-		process, err := o.buildGoBatchCommand(ginkgoPlan)
+		process, err := o.buildGoBatchCommand(ginkgoPlan, 0)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(process.Args).To(ContainElements("-args", "-ginkgo.focus=selected"))
+		Expect(process.Args).To(ContainElement("-ginkgo.focus=selected"))
+		Expect(process.Args).NotTo(ContainElement("-args"))
 	})
 })

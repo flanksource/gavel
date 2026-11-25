@@ -3,14 +3,15 @@ import type { PRItem, PRInfo, SearchConfig, Project } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
-import { AppShell, Button } from '@flanksource/clicky-ui/components';
+import { AppShell, Button, SplitButton } from '@flanksource/clicky-ui/components';
 import { TaskManager, TaskManagerButton } from '@flanksource/clicky-ui/data';
 import { ChatButton } from '@flanksource/clicky-ui/ai';
 import { ActivityView } from './components/ActivityView';
+import { CommentsView } from './components/comments/CommentsView';
 import { TodoNewButton, TodoNavbarDensityPicker, TodoNavbarLayoutPicker, TodoWorkspaceList, TodoDetailPane, TodoFullPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { PlanReviewBar, TodoReviewButton, useReviewMode } from './components/todos/PlanReview';
-import { CreateTodoDialog } from './components/todos/CreateTodoDialog';
+import { useOpenCreateTodo } from './components/todos/CreateTodoDialog';
 import { TodoNewPage } from './components/todos/TodoNewPage';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
@@ -26,14 +27,14 @@ import { githubScopeVisible, hostControlsVisible, tabFor, visibleTabs } from './
 import { currentAuthMode } from './query';
 import { meQuery } from './components/oneShotQueries';
 import { useQuery } from '@tanstack/react-query';
-import { ReactGrabHelp } from './components/ReactGrabHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
-import { aggregateGavelShards, computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
+import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
 import { useCopyFeedback } from './useCopyFeedback';
 import {
   annotateRoutePaths,
   buildRoute,
+  emptyCommentFilters,
   findPRByRoutePath,
   parseRoute,
   type RouteState,
@@ -49,16 +50,17 @@ import { useAppQueries } from './useAppQueries';
 import { useAppMutations } from './useAppMutations';
 import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiCheck, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiOrganization, UiPlay, UiRobotAi, UiTerminal } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiAdd, UiArrowLeft, UiChatDots, UiCheck, UiCog, UiCopy, UiDotsVertical, UiFolderGit, UiGitPr, UiJson, UiListChecks, UiMarkdown, UiOrganization, UiPlay, UiRobotAi, UiSearch, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { SessionsDetailPane, SessionsSidebar } from './components/sessions/SessionsView';
 import { MenubarView } from './components/mobile/MenubarView';
+import { MobilePRList } from './components/mobile/MobilePRList';
 import { ProcessesPage } from './components/ProcessesPage';
-import { mobileTabFromRoute, routeTabFromMobile, type MobileTab } from './mobileTabs';
+import type { MobileTab } from './mobileTabs';
 import { useAgentSessions } from './components/sessions/sessionQueries';
 import { worktreeRef } from './projectRef';
 import { PromptsView } from './components/prompts/PromptsView';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import { Spinner } from './icons/Spinner';
 import { applyProjectScope } from './projectScope';
 
@@ -120,7 +122,7 @@ export function App() {
   // (if present) win for filters so deep links still work.
   const stored = typeof window !== 'undefined' ? loadUIState() : {};
   const hasUrlFilters = typeof window !== 'undefined'
-    && ['state', 'checks', 'repos', 'authors'].some(name => new URLSearchParams(window.location.search).has(name));
+    && ['state', 'checks', 'repos', 'authors', 'age'].some(name => new URLSearchParams(window.location.search).has(name));
   // First-run default hides bots (the daemon now fetches them so the @bots
   // author chip can toggle them back on). URL params and stored filters win.
   const defaultFilters: Filters = { ...emptyFilters(), authors: { '@bots': 'exclude' } };
@@ -137,18 +139,23 @@ export function App() {
   const [projectResults, setProjectResults] = useState(initialRoute.projectResults);
   const [projectRef, setProjectRef] = useState(initialRoute.projectRef);
   const [todoView, setTodoView] = useState(initialRoute.todoView);
+  const [taskTimeRange, setTaskTimeRange] = useState(initialRoute.taskTimeRange);
+  const [commentFilters, setCommentFilters] = useState(initialRoute.commentFilters);
   const authMode = currentAuthMode();
   const hostControls = hostControlsVisible(authMode);
   const [activeTab, setActiveTab] = useState<Tab>(() => tabFor(authMode, initialRoute.tab));
   const [menubarTab, setMenubarTab] = useState<MobileTab>('prs');
   const [menubarSessionId, setMenubarSessionId] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback({ copiedMs: 2500, errorMs: 2500 });
   const [addOpen, setAddOpen] = useState(false);
   const [settingsScope, setSettingsScope] = useState<SettingsScope | null>(null);
   const syncedScopeProject = useRef(initialConfig.project ?? '');
   const visible = useDocumentVisible();
   const isMobile = useIsMobile();
+  const me = useQuery(meQuery());
 
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
   const isMenubar = pathname === '/menubar';
@@ -159,12 +166,6 @@ export function App() {
   // to its referer. parseRoute reads it as the todos tab with selectedPath="new";
   // the early return below renders the form before any of that matters.
   const isTodoNewPage = hostControls && pathname === '/todos/new';
-  // On mobile the desktop AppShell (split panes, sidebar, toolbars) has no room,
-  // so the dashboard falls back to the same compact, single-column menubar
-  // dropdown layout the native menubar webview uses. The standalone /processes
-  // and /todos/new pages already lay out fine on narrow screens, so they keep
-  // their own views.
-  const useMenubarLayout = isMenubar || (isMobile && !isProcessesPage && !isTodoNewPage);
 
   // The native menu-bar webview stays resident when the popover is dismissed and
   // reports its page hidden even while it is on screen (see useDocumentVisible),
@@ -175,24 +176,27 @@ export function App() {
   const streamsActive = visible || isMenubar;
 
   const {
+    config,
+    prsLoading,
+    prError,
     snapshot,
     projects: allProjects,
     projectsLoaded,
     projectError,
     processError,
-    updateSnapshot,
-    refreshProjects,
     refreshProjectsAndProcesses,
-  } = useAppQueries({ enabled: streamsActive, hostData: hostControls, initialConfig });
+  } = useAppQueries({ enabled: streamsActive, prsEnabled: (!isTodoNewPage && !isProcessesPage && (isMenubar ? menubarTab === 'prs' : activeTab === 'prs')) || paletteOpen || statusOpen, hostData: hostControls, initialConfig });
   const {
     error: mutationError,
     markSeen,
     refresh: refreshPRs,
+    refreshing: refreshingPRs,
     togglePause,
     saveConfig,
     setIncludeBots,
     setShowClosed,
     setProjectHidden,
+    setOrgHidden,
   } = useAppMutations();
   const { detail, loading: detailLoading, refresh: refreshDetail } = usePRDetailStream(selected);
   const rawPrs = snapshot.prs;
@@ -204,7 +208,6 @@ export function App() {
   const fetchedAt = snapshot.fetchedAt;
   const nextFetchIn = snapshot.nextFetchIn;
   const error = mutationError || snapshot.error || processError;
-  const config = snapshot.config;
   const paused = snapshot.paused;
   const rateLimit = snapshot.rateLimit;
   const syncStatus = snapshot.syncStatus ?? {};
@@ -236,8 +239,8 @@ export function App() {
   const scopedPRs = projectScope.prs;
 
   const routeState: RouteState = useMemo(
-    () => ({ tab: activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, filters }),
-    [activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, filters],
+    () => ({ tab: activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, taskTimeRange, commentFilters, filters }),
+    [activeTab, selectedPath, scopeProject, projectDiffPath, projectRunId, projectHistory, projectResults, projectRef, todoView, taskTimeRange, commentFilters, filters],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
@@ -250,6 +253,8 @@ export function App() {
     setProjectResults(next.projectResults);
     setProjectRef(next.projectRef);
     setTodoView(next.todoView);
+    setTaskTimeRange(next.taskTimeRange);
+    setCommentFilters(next.commentFilters);
     setFilters(next.filters);
     const url = buildRoute(next);
     const current = `${window.location.pathname}${window.location.search}`;
@@ -290,8 +295,12 @@ export function App() {
   }, [commitRoute, filters, scopeProject]);
 
   const navigateTask = useCallback((id: string | null) => {
-    commitRoute({ tab: 'tasks', selectedPath: id ?? '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
-  }, [commitRoute, filters, scopeProject]);
+    commitRoute({ ...routeState, selectedPath: id ?? '' });
+  }, [commitRoute, routeState]);
+
+  const changeTaskTimeRange = useCallback((from: string, to: string) => {
+    commitRoute({ ...routeState, taskTimeRange: { from, to } });
+  }, [commitRoute, routeState]);
 
   const navigatePlatformOrg = useCallback((org: string) => {
     commitRoute({ tab: 'platform', selectedPath: org, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
@@ -346,6 +355,13 @@ export function App() {
     onViewChange: navigateTodoView,
     enabled: onTodosTab || paletteOpen,
   });
+  const openCreateTodo = useOpenCreateTodo();
+  const todoWorkspaces = visibleProjects.filter(project => !!project.dir);
+  const newTodo = () => openCreateTodo({
+    workspaces: todoWorkspaces,
+    defaultDir: todos.selected?.dir ?? scopedProjects[0]?.dir,
+    onOpen: todos.created,
+  });
   // Selecting a prompt encodes its id in the path (/prompts/{id}) and keeps the
   // dashboard project scope in the query so the page remains deep-linkable.
   const navigatePrompt = useCallback((id: string, scope: string) => {
@@ -384,6 +400,8 @@ export function App() {
       setProjectResults(next.projectResults);
       setProjectRef(next.projectRef);
       setTodoView(next.todoView);
+      setTaskTimeRange(next.taskTimeRange);
+      setCommentFilters(next.commentFilters);
       setFilters(next.filters);
     };
     window.addEventListener('popstate', onPopState);
@@ -438,12 +456,12 @@ export function App() {
     }
   });
   useEffect(() => {
-    // The menubar layout (native webview or mobile) drives PR selection through
-    // its own local state, not the route, so skip route→selection reconciliation
-    // there and let onSelect/onBack own it.
-    if (useMenubarLayout || isProcessesPage || activeTab !== 'prs') return;
+    // The native menubar webview drives PR selection through its own local
+    // state, not the route, so skip route→selection reconciliation there and
+    // let onSelect/onBack own it.
+    if (isMenubar || isProcessesPage || activeTab !== 'prs') return;
     reconcileSelection();
-  }, [useMenubarLayout, isProcessesPage, activeTab, selectedPath, prs]);
+  }, [isMenubar, isProcessesPage, activeTab, selectedPath, prs]);
 
   const onProcChanged = useCallback(() => {
     void refreshProjectsAndProcesses();
@@ -456,6 +474,8 @@ export function App() {
   }, [scopedProjects]);
 
   const openAdd = useCallback(() => setAddOpen(true), []);
+  // Settings replaces the body until the user navigates: any tab or route change closes it.
+  useEffect(() => setSettingsScope(null), [activeTab, selectedPath]);
   const openGlobalSettings = useCallback(() => setSettingsScope({ kind: 'global' }), []);
   const openProjectSettings = useCallback(
     (p: Project) => setSettingsScope({ kind: 'project', project: p }),
@@ -470,17 +490,6 @@ export function App() {
       ? mergePRItemFromDetail(current, detail.pr!)
       : current);
   }, [detail?.pr, selected?.number, selected?.repo]);
-
-  const selectedKey = selected ? prKey(selected) : '';
-  useEffect(() => {
-    if (!selectedKey || !detail?.gavelResults) return;
-    const aggregate = aggregateGavelShards(detail.gavelResults);
-    if (!aggregate) return;
-    updateSnapshot(current => ({
-      ...current,
-      gavelResults: { ...current.gavelResults, [selectedKey]: aggregate },
-    }));
-  }, [detail?.gavelResults, selectedKey, updateSnapshot]);
 
   function loadPR(pr: PRItem) {
     if (selected?.repo === pr.repo && selected.number === pr.number) refreshDetail();
@@ -511,6 +520,7 @@ export function App() {
 
   function handleRefresh() {
     refreshPRs();
+    if (selected) refreshDetail();
   }
 
   function handlePause() {
@@ -522,7 +532,13 @@ export function App() {
   }
 
   function hideProject(name: string, hidden: boolean) {
-    setProjectHidden({ name, hidden });
+    const project = allProjects.find(candidate => candidate.name === name);
+    if (!project) throw new Error(`Cannot change visibility of unknown project ${JSON.stringify(name)}`);
+    setProjectHidden({ dir: project.dir, hidden });
+  }
+
+  function hideOrg(login: string, hidden: boolean) {
+    setOrgHidden({ login, hidden });
   }
 
   function updateScopeConfig(partial: Partial<SearchConfig>) {
@@ -536,7 +552,7 @@ export function App() {
         commitRoute({
           ...routeState,
           scopeProject: partial.project,
-          selectedPath: activeTab === 'prs' || activeTab === 'projects' || activeTab === 'todos' ? '' : routeState.selectedPath,
+          selectedPath: activeTab === 'prs' || activeTab === 'projects' || activeTab === 'todos' || activeTab === 'comments' ? '' : routeState.selectedPath,
           projectDiffPath: activeTab === 'projects' ? '' : routeState.projectDiffPath,
           projectRunId: activeTab === 'projects' ? '' : routeState.projectRunId,
           projectRef: activeTab === 'projects' ? '' : routeState.projectRef,
@@ -586,7 +602,7 @@ export function App() {
     setShowClosed(wantClosed);
   }, [filters.state, setShowClosed, showClosedServer]);
   const filtered = useMemo(
-    () => filterPRs(scopedPRs, filters.state, filters.checks, filters.repos, filters.authors, viewer),
+    () => filterPRs(scopedPRs, { filters, viewer }),
     [scopedPRs, filters, viewer],
   );
 
@@ -598,28 +614,48 @@ export function App() {
   // pane) read one catalog, so it is loaded here rather than inside either one.
   // A hosted org's projects tab lists its repositories instead, so neither the
   // catalog nor the git summary loads there.
-  const projectCatalog = useProjectCatalog({ configured: scopedProjects, hiddenDirs, selectedName: selectedPath, enabled: hostControls && activeTab === 'projects' && projectHistory });
+  const projectCatalog = useProjectCatalog({ configured: scopedProjects, hiddenDirs, selectedName: selectedPath, enabled: hostControls && activeTab === 'projects', history: projectHistory });
   // The git work summary shown on every project row refreshes slowly and only
   // matters while the Projects tab is on screen.
   const projectGitSummary = useProjectGitSummary({ enabled: hostControls && activeTab === 'projects' && visible });
-  // The compact layout (mobile or the native menubar) keeps its tab and open
-  // session in the URL on mobile, and in local state in the menubar webview,
-  // which must stay on /menubar.
-  const mobileTab: MobileTab = isMenubar ? menubarTab : mobileTabFromRoute(activeTab);
-  const mobileSessionId = isMenubar ? menubarSessionId : activeTab === 'sessions' ? selectedPath : '';
-  const changeMobileTab = useCallback((next: MobileTab) => {
-    if (isMenubar) {
-      setMenubarTab(next);
-      setMenubarSessionId('');
-    } else changeTab(routeTabFromMobile(next));
-  }, [changeTab, isMenubar]);
-  const openMobileSession = useCallback((id: string) => {
-    if (isMenubar) setMenubarSessionId(id);
-    else navigateSession(id);
-  }, [isMenubar, navigateSession]);
+  // The native menubar webview keeps its tab and open session in local state,
+  // because it must stay on /menubar.
+  const changeMenubarTab = useCallback((next: MobileTab) => {
+    setMenubarTab(next);
+    setMenubarSessionId('');
+  }, []);
   const agentSessions = useAgentSessions({
-    enabled: (useMenubarLayout ? mobileTab === 'sessions' : activeTab === 'sessions') && streamsActive,
+    enabled: (isMenubar ? menubarTab === 'sessions' : activeTab === 'sessions') && streamsActive,
   });
+  const projectSidebar = <ProjectsSidebar
+    catalog={projectCatalog}
+    gitSummary={projectGitSummary}
+    selectedName={selectedPath}
+    selectedRunId={projectRunId}
+    historyEnabled={projectHistory}
+    onHistoryChange={setProjectHistoryEnabled}
+    onSelect={navigateProject}
+    onSelectRun={navigateProjectRun}
+    onChanged={onProcChanged}
+    onAdd={openAdd}
+    onSettings={openProjectSettings}
+    onHide={project => hideProject(project.name, true)}
+  />;
+  const projectDetail = <ProjectDetailPane
+    catalog={projectCatalog}
+    selectedName={selectedPath}
+    selectedRunId={projectRunId}
+    diffPath={projectDiffPath}
+    projectRef={projectRef}
+    resultsEnabled={projectResults}
+    onRefChange={navigateProjectRef}
+    onDiffPathChange={navigateProjectDiff}
+    onChanged={onProcChanged}
+  />;
+  const projectDialogs = <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />;
+  // Settings is a page, not a dialog: the dashboard shows it in the AppShell body
+  // (keeping the nav and header actions), the menubar in a full-window container.
+  const settingsPage = settingsScope && <SettingsPage scope={settingsScope} repoOptions={reposList} onClose={() => setSettingsScope(null)} onSaved={onProcChanged} />;
   function selectPRFromPalette(pr: PRItem) {
     commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
     loadPR(pr);
@@ -634,8 +670,9 @@ export function App() {
     commitRoute({ tab: 'todos', selectedPath: uuid, scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters });
   }
 
-  if (useMenubarLayout) {
+  if (isMenubar) {
     return (
+      <>
       <MenubarView
         prs={filtered}
         selected={selected}
@@ -646,6 +683,7 @@ export function App() {
         projects={scopedProjects}
         availableProjects={allProjects}
         onSetProjectHidden={hideProject}
+        onSetOrgHidden={hideOrg}
         projectsLoaded={projectsLoaded}
         projectError={projectError}
         projectsByRepo={projectsByRepo}
@@ -657,13 +695,15 @@ export function App() {
         onProcChanged={onProcChanged}
         fetchedAt={fetchedAt}
         error={error}
-        tab={mobileTab}
-        onTabChange={changeMobileTab}
+        tab={menubarTab}
+        onTabChange={changeMenubarTab}
         sessions={agentSessions}
-        sessionId={mobileSessionId}
-        onSessionChange={openMobileSession}
-        chatEnabled={!isMenubar}
+        sessionId={menubarSessionId}
+        onSessionChange={setMenubarSessionId}
       />
+      {projectDialogs}
+      {settingsPage && <div className="fixed inset-0 z-50">{settingsPage}</div>}
+      </>
     );
   }
 
@@ -682,95 +722,147 @@ export function App() {
     return <TodoNewPage projects={visibleProjects} projectError={projectError} />;
   }
 
+  const chatButton = hostControls && <ChatButton label="Open Gavel assistant" />;
+  // The phone header keeps the assistant beside search and folds every other
+  // action into the ⋮ toolbar row; `overflow` is that row, so it leaves out the
+  // actions the header already shows.
+  const shellActions = (overflow: boolean) => (
+    <>
+      {activeTab === 'todos' && <TodoReviewButton review={review} />}
+      {activeTab === 'todos' && <TodoNavbarLayoutPicker todos={todos} />}
+      {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
+      {!overflow && <TodoNewButton disabled={todoWorkspaces.length === 0} onNew={newTodo} />}
+      {!overflow && chatButton}
+      {hostControls && <TaskManagerButton basePath="/api/v1" />}
+      {hostControls && <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />}
+      {githubScopeVisible(authMode) && (
+        <OrgChooser config={{ ...config, project: scopeProject }} projects={allProjects} onChange={updateScopeConfig} onSetProjectHidden={hideProject} onSetOrgHidden={hideOrg} />
+      )}
+      <StatusIndicator
+        onOpenChange={setStatusOpen}
+        fetchedAt={fetchedAt}
+        error={error}
+        nextFetchIn={nextFetchIn}
+        paused={paused}
+        rateLimit={rateLimit}
+        onRefresh={handleRefresh}
+        onPause={handlePause}
+        networkBusy={detailLoading || refreshingPRs}
+      />
+      {hostControls && (
+        <Button
+          variant="ghost"
+          size="icon"
+          type="button"
+          onClick={openGlobalSettings}
+          title="Global settings (~/.gavel.yaml)"
+          aria-label="Global settings"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <UiCog />
+        </Button>
+      )}
+      <UserMenu />
+      <ThemeToggle />
+    </>
+  );
+  const bodyBackByTab: Partial<Record<Tab, { selected: boolean; onBack: () => void; label: string }>> = {
+    prs: { selected: selected !== null, onBack: closeSelectedPR, label: 'Back to pull requests' },
+    projects: { selected: selectedPath !== '', onBack: () => navigateProject(''), label: 'Back to projects' },
+    todos: { selected: selectedPath !== '', onBack: () => navigateTodo(''), label: 'Back to todos' },
+    sessions: { selected: selectedPath !== '', onBack: () => navigateSession(''), label: 'Back to sessions' },
+  };
+  const bodyBack = settingsPage || (activeTab === 'todos' && todosFullWidth) ? undefined : bodyBackByTab[activeTab];
+  // AppShell's own back bar is a row of its own; a phone puts the same action
+  // in the header, beside the brand, instead.
+  const headerBack = isMobile && bodyBack?.selected ? bodyBack : undefined;
+  const brand = <img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />;
+  // The PR filters, count and exports describe the list, so a phone showing a
+  // PR's detail page leaves them out.
+  const prListChrome = activeTab === 'prs' && !(isMobile && selected);
+  const prListProps = { prs: filtered, selected, onSelect: handleSelect, unread, syncStatus, gavelResults: gavelResultsMap, projectsByRepo, onProcChanged, viewer };
+  const prCount = prListChrome && isMobile ? (
+    <span className="whitespace-nowrap text-xs text-muted-foreground">
+      {filtered.length} pull request{filtered.length !== 1 ? 's' : ''}
+    </span>
+  ) : undefined;
+  const exportButton = (
+    <ExportSplitButton
+      onJSON={onDownloadJSON}
+      onMarkdown={onDownloadMarkdown}
+      onCopy={onCopyForAgent}
+      copyState={copyState}
+      copyError={copyError}
+    />
+  );
+  // On a wide screen the exports sit with the selected PR's actions; a phone
+  // keeps them under ⋮ for the list too.
+  const prExports = prListChrome && isMobile ? exportButton : undefined;
+  // A phone keeps the list's chrome to one row: the count sits beside the
+  // Filters button and the exports move under ⋮.
+  const prFilterBar = prListChrome
+    ? <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} trailing={prCount} />
+    : undefined;
+  // A phone gets the playground's AppShell header: tabs move into the
+  // navigation drawer, the header keeps search, the assistant and ⋮, and ⋮
+  // opens the remaining actions as a wrapping toolbar row above the filters.
+  const mobileToolbar = mobileMoreOpen || prFilterBar ? (
+    <>
+      {mobileMoreOpen && shellActions(true)}
+      {mobileMoreOpen && prExports}
+      {prFilterBar && <div className="basis-full">{prFilterBar}</div>}
+    </>
+  ) : undefined;
+
   return (
     <>
       <AppShell
-        brand={<img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />}
-        nav={<TabBar active={activeTab} onChange={changeTab} />}
-        search={<SearchTrigger onOpen={() => setPaletteOpen(true)} />}
-        actions={
+        brand={headerBack ? (
           <>
-            {activeTab === 'todos' && <TodoReviewButton review={review} />}
-            {activeTab === 'todos' && <TodoNavbarLayoutPicker todos={todos} />}
-            {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
-            {activeTab === 'todos' && <ReactGrabHelp />}
-            {activeTab === 'todos' && <TodoNewButton todos={todos} />}
-            {hostControls && <ChatButton label="Open Gavel assistant" />}
-            {hostControls && <TaskManagerButton basePath="/api/v1" />}
-            {hostControls && <ProcessManager projects={scopedProjects} onProcChanged={onProcChanged} />}
-            {githubScopeVisible(authMode) && (
-              <OrgChooser config={{ ...config, project: scopeProject }} projects={allProjects} onChange={updateScopeConfig} onSetProjectHidden={hideProject} />
-            )}
-            <StatusIndicator
-              fetchedAt={fetchedAt}
-              error={error}
-              nextFetchIn={nextFetchIn}
-              paused={paused}
-              rateLimit={rateLimit}
-              onRefresh={handleRefresh}
-              onPause={handlePause}
-              networkBusy={detailLoading}
-            />
-            {hostControls && (
-              <Button
-                variant="ghost"
-                size="icon"
-                type="button"
-                onClick={openGlobalSettings}
-                title="Global settings (~/.gavel.yaml)"
-                aria-label="Global settings"
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <UiCog />
-              </Button>
-            )}
-            <UserMenu />
-            <ThemeToggle />
+            <Button variant="ghost" size="icon" type="button" onClick={headerBack.onBack} aria-label={headerBack.label} title={headerBack.label} className="size-9 shrink-0">
+              <UiArrowLeft />
+            </Button>
+            {brand}
           </>
-        }
-        toolbar={
-          activeTab === 'prs' ? (
-            <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} />
-          ) : undefined
-        }
-        bodyHeader={
-          activeTab === 'prs' ? (
-            <span className="text-xs text-muted-foreground">
-              {filtered.length} pull request{filtered.length !== 1 ? 's' : ''}
-            </span>
-          ) : undefined
-        }
-        bodyActions={
-          activeTab === 'prs' ? (
-            <ExportButtons
-              onJSON={onDownloadJSON}
-              onMarkdown={onDownloadMarkdown}
-              onCopy={onCopyForAgent}
-              copyState={copyState}
-              copyError={copyError}
-            />
-          ) : undefined
-        }
+        ) : brand}
+        {...(isMobile
+          ? {
+              navSections: [{ items: shownTabs(me.data?.user?.platformAdmin).map(tab => ({
+                key: tab.id,
+                label: tab.label,
+                icon: tab.icon,
+                to: buildRoute({ tab: tab.id, selectedPath: '', scopeProject, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, projectRef: '', todoView: {}, filters }),
+                active: activeTab === tab.id,
+              })) }],
+              mobileSidebarLabel: 'Gavel navigation',
+              mobileActions: (
+                <MobileShellActions
+                  chat={chatButton}
+                  newTodoDisabled={todoWorkspaces.length === 0}
+                  onNewTodo={newTodo}
+                  moreOpen={mobileMoreOpen}
+                  onSearch={() => setPaletteOpen(true)}
+                  onToggleMore={() => setMobileMoreOpen(open => !open)}
+                />
+              ),
+              toolbar: mobileToolbar,
+              toolbarClassName: '[@media(pointer:coarse)]:[&_button]:min-h-11 [@media(pointer:coarse)]:[&_button]:min-w-11',
+            }
+          : {
+              nav: <TabBar active={activeTab} onChange={changeTab} />,
+              search: <SearchTrigger onOpen={() => setPaletteOpen(true)} />,
+              toolbar: prFilterBar,
+            })}
+        actions={shellActions(false)}
         bodySidebar={
-          activeTab === 'prs' ? (
-            <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} onProcChanged={onProcChanged} />
+          settingsPage ? undefined : activeTab === 'prs' ? (
+            isMobile && !selected
+              ? <MobilePRList {...prListProps} onRefresh={refreshPRs} refreshing={refreshingPRs} />
+              : <PRList {...prListProps} />
           ) : activeTab === 'projects' && !hostControls ? (
             <HostedProjectsSidebar projects={visibleProjects} selectedName={selectedPath} onSelect={navigateProject} />
           ) : activeTab === 'projects' ? (
-            <ProjectsSidebar
-              catalog={projectCatalog}
-              gitSummary={projectGitSummary}
-              selectedName={selectedPath}
-              selectedRunId={projectRunId}
-              historyEnabled={projectHistory}
-              onHistoryChange={setProjectHistoryEnabled}
-              onSelect={navigateProject}
-              onSelectRun={navigateProjectRun}
-              onChanged={onProcChanged}
-              onAdd={openAdd}
-              onSettings={openProjectSettings}
-              onHide={project => hideProject(project.name, true)}
-            />
+            projectSidebar
           ) : activeTab === 'todos' && !todosFullWidth ? (
             <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} />
           ) : activeTab === 'sessions' ? (
@@ -778,16 +870,19 @@ export function App() {
           ) : undefined
         }
         bodySplit={bodySplitByTab[activeTab] ?? 38}
+        // A narrow body pages between the list and the selected item instead
+        // of stacking them; the back bar clears the selection.
+        {...(bodyBack ? { bodyPane: bodyBack.selected ? 'main' : 'sidebar', ...(headerBack ? {} : { onBodyBack: bodyBack.onBack, bodyBackLabel: bodyBack.label }) } as const : {})}
         // Only the full-width todos layout opts out of AppShell's default: the
         // table wants the whole viewport, but the detail wants the contained
         // measure so markdown and session logs stay readable. Every other tab
         // passes a body sidebar, which AppShell already forces to full width.
-        contentWidth={todosFullWidth ? (todos.selected ? 'contained' : 'full') : undefined}
+        contentWidth={settingsPage || activeTab === 'comments' ? 'full' : todosFullWidth ? (todos.selected ? 'contained' : 'full') : undefined}
         contentClassName="overflow-hidden"
       >
-        {activeTab === 'prs' ? (
+        {settingsPage ? settingsPage : activeTab === 'prs' ? (
           selected ? (
-            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={scopedProjects} onTodoCreated={refreshProjects} onActionDone={() => { if (selected) loadPR(selected); }} onClose={closeSelectedPR} />
+            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={scopedProjects} onActionDone={refreshDetail} onRefresh={refreshDetail} onClose={closeSelectedPR} exportAction={exportButton} />
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
               <div className="text-center">
@@ -799,17 +894,7 @@ export function App() {
         ) : activeTab === 'projects' && !hostControls ? (
           <HostedProjectPane project={visibleProjects.find(project => project.name === selectedPath)} onSelectRun={navigateRun} />
         ) : activeTab === 'projects' ? (
-          <ProjectDetailPane
-            catalog={projectCatalog}
-            selectedName={selectedPath}
-            selectedRunId={projectRunId}
-            diffPath={projectDiffPath}
-            projectRef={projectRef}
-            resultsEnabled={projectResults}
-            onRefChange={navigateProjectRef}
-            onDiffPathChange={navigateProjectDiff}
-            onChanged={onProcChanged}
-          />
+          projectDetail
         ) : activeTab === 'todos' ? (
           <div className="flex h-full min-h-0 flex-col">
             {projectError && (
@@ -826,11 +911,33 @@ export function App() {
               )}
             </div>
           </div>
+        ) : activeTab === 'comments' ? (
+          <CommentsView
+            projects={visibleProjects}
+            scopedProjects={scopedProjects}
+            projectsLoaded={projectsLoaded}
+            projectError={projectError}
+            local={hostControls}
+            visible={visible}
+            filters={{ ...(commentFilters ?? emptyCommentFilters), project: scopeProject }}
+            selectedId={selectedPath}
+            onSelect={(id) => commitRoute({ ...routeState, selectedPath: id ?? '' })}
+            onFiltersChange={({ project, ...next }) => commitRoute({
+              ...routeState, scopeProject: project, commentFilters: next,
+              selectedPath: project === scopeProject ? selectedPath : '',
+            }, 'replace')}
+          />
         ) : activeTab === 'sessions' ? (
           <SessionsDetailPane query={agentSessions} selectedId={selectedPath} onOpenTodo={navigateTodo} onOpenWorktree={navigateSessionWorktree} />
         ) : activeTab === 'tasks' ? (
           <div className="h-full overflow-y-auto p-4">
-            <TaskManager basePath="/api/v1" selectedId={selectedPath || undefined} onSelectRun={navigateTask} />
+            <TaskManager
+              basePath="/api/v1"
+              selectedId={selectedPath || undefined}
+              onSelectRun={navigateTask}
+              {...(taskTimeRange ? { timeRange: taskTimeRange } : {})}
+              onTimeRangeChange={changeTaskTimeRange}
+            />
           </div>
         ) : activeTab === 'runs' ? (
           <RunsView selectedId={selectedPath} onSelect={navigateRun} />
@@ -851,6 +958,8 @@ export function App() {
       </AppShell>
 
       <CommandPalette
+        prsLoading={prsLoading}
+        prError={prError}
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         prs={prs}
@@ -861,38 +970,82 @@ export function App() {
         onOpenUUID={openUUIDFromPalette}
       />
 
-      <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={visibleProjects.filter(project => !!project.dir)} onCreated={todos.created} defaultDir={todos.selected?.dir ?? scopedProjects[0]?.dir} />
-      <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />
-      {settingsScope && (
-        <SettingsPage
-          scope={settingsScope}
-          repoOptions={reposList}
-          onClose={() => setSettingsScope(null)}
-          onSaved={onProcChanged}
-        />
-      )}
+      {projectDialogs}
+    </>
+  );
+}
+
+const allTabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
+  { id: 'prs', label: 'PRs', icon: UiGitPr },
+  { id: 'projects', label: 'Projects', icon: UiFolderGit },
+  { id: 'todos', label: 'Todos', icon: UiCheck },
+  { id: 'comments', label: 'Comments', icon: UiChatDots },
+  { id: 'runs', label: 'Runs', icon: UiPlay },
+  { id: 'sessions', label: 'Sessions', icon: UiTerminal },
+  { id: 'tasks', label: 'Tasks', icon: UiListChecks },
+  { id: 'prompts', label: 'Prompts', icon: UiRobotAi },
+  { id: 'activity', label: 'Activity', icon: UiActivity },
+  { id: 'platform', label: 'Platform', icon: UiOrganization },
+];
+
+function shownTabs(platformAdmin?: boolean) {
+  const shown = new Set(visibleTabs(currentAuthMode(), allTabs.map(t => t.id), platformAdmin));
+  return allTabs.filter(t => shown.has(t.id));
+}
+
+const mobileIconButton = 'inline-flex size-11 items-center justify-center rounded-md border transition-colors';
+
+function MobileShellActions({ chat, newTodoDisabled, onNewTodo, moreOpen, onSearch, onToggleMore }: {
+  chat: ReactNode;
+  newTodoDisabled: boolean;
+  onNewTodo: () => void;
+  moreOpen: boolean;
+  onSearch: () => void;
+  onToggleMore: () => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onSearch}
+        aria-label="Search pull requests, todos, and sessions"
+        title="Search"
+        className={`${mobileIconButton} border-border bg-background text-muted-foreground hover:text-foreground`}
+      >
+        <UiSearch className="size-4" />
+      </button>
+      <button
+        type="button"
+        onClick={onNewTodo}
+        disabled={newTodoDisabled}
+        aria-label="New todo"
+        title="New todo"
+        className={`${mobileIconButton} border-border bg-background text-muted-foreground hover:text-foreground disabled:opacity-50`}
+      >
+        <UiAdd className="size-4" />
+      </button>
+      {chat}
+      <button
+        type="button"
+        onClick={onToggleMore}
+        aria-expanded={moreOpen}
+        aria-label="More actions"
+        title="More actions"
+        className={`${mobileIconButton} ${moreOpen
+          ? 'border-primary bg-primary text-primary-foreground'
+          : 'border-border bg-background text-muted-foreground hover:text-foreground'}`}
+      >
+        <UiDotsVertical className="size-4" />
+      </button>
     </>
   );
 }
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
-  const allTabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
-    { id: 'prs', label: 'PRs', icon: UiGitPr },
-    { id: 'projects', label: 'Projects', icon: UiFolderGit },
-    { id: 'todos', label: 'Todos', icon: UiCheck },
-    { id: 'runs', label: 'Runs', icon: UiPlay },
-    { id: 'sessions', label: 'Sessions', icon: UiTerminal },
-    { id: 'tasks', label: 'Tasks', icon: UiListChecks },
-    { id: 'prompts', label: 'Prompts', icon: UiRobotAi },
-    { id: 'activity', label: 'Activity', icon: UiActivity },
-    { id: 'platform', label: 'Platform', icon: UiOrganization },
-  ];
   const me = useQuery(meQuery());
-  const shown = new Set(visibleTabs(currentAuthMode(), allTabs.map(t => t.id), me.data?.user?.platformAdmin));
-  const tabs = allTabs.filter(t => shown.has(t.id));
   return (
     <div className="flex gap-1 border-b border-transparent">
-      {tabs.map(t => {
+      {shownTabs(me.data?.user?.platformAdmin).map(t => {
         const Icon = t.icon;
         return (
           <Button
@@ -914,7 +1067,7 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
   );
 }
 
-function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
+function ExportSplitButton({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
   onJSON: () => void;
   onMarkdown: () => void;
   onCopy: () => void;
@@ -922,41 +1075,23 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
   copyError: string;
 }) {
   const CopyIcon = copyState === 'copied' ? UiCheck : copyState === 'copying' ? Spinner : UiCopy;
+  const tone = copyState === 'copied' ? 'text-green-700' : copyState === 'error' ? 'text-red-700' : '';
   return (
-    <div className="flex items-center gap-1">
-      <Button
-        variant="ghost"
-        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors h-auto justify-start"
-        onClick={onJSON}
-        title="Download current view as JSON"
-      >
-        <UiJson className="mr-0.5" />
-        JSON
-      </Button>
-      <Button
-        variant="ghost"
-        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors h-auto justify-start"
-        onClick={onMarkdown}
-        title="Download current view as Markdown"
-      >
-        <UiMarkdown className="mr-0.5" />
-        Markdown
-      </Button>
-      <Button
-        variant="ghost"
-        className={`text-xs px-2 py-1 rounded border transition-colors h-auto justify-start ${
-          copyState === 'copied'
-            ? 'border-green-300 bg-green-50 text-green-700'
-            : copyState === 'error'
-              ? 'border-red-300 bg-red-50 text-red-700'
-              : 'border-gray-300 text-gray-600 hover:bg-gray-200'
-        }`}
-        onClick={onCopy}
-        title={copyError || 'Copy Markdown export for agent'}
-      >
-        <CopyIcon className="mr-0.5" />
-        {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy for Agent'}
-      </Button>
-    </div>
+    <SplitButton
+      variant="outline"
+      size="sm"
+      title="Export options"
+      label={(
+        <span className={`flex items-center gap-1 ${tone}`} title={copyError || 'Copy Markdown export for agent'}>
+          <CopyIcon />
+          {copyState === 'copying' ? 'Copying…' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy'}
+        </span>
+      )}
+      onClick={onCopy}
+      items={[
+        { label: <span className="flex items-center gap-2"><UiJson />Download JSON</span>, title: 'Download current view as JSON', onSelect: onJSON },
+        { label: <span className="flex items-center gap-2"><UiMarkdown />Download Markdown</span>, title: 'Download current view as Markdown', onSelect: onMarkdown },
+      ]}
+    />
   );
 }

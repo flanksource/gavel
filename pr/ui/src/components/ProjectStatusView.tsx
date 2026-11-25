@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, FilterBar, SplitButton, SplitPane, type FilterBarFilter } from '@flanksource/clicky-ui/components';
+import { Button, FilterBar, SplitButton, type FilterBarFilter } from '@flanksource/clicky-ui/components';
 import {
   UiBeaker,
   UiCheck,
@@ -13,25 +13,30 @@ import {
 } from '@flanksource/clicky-ui/icons';
 import type { Project } from '../types';
 import { Spinner } from '../icons/Spinner';
+import { copyText } from '../clipboard';
 import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import { useDocumentVisible } from '../useDocumentVisible';
 import { useGitFocus } from '../useGitFocus';
+import { useIsMobile } from '../useIsMobile';
 import { ProjectActionDialog, type ProjectAction } from './ProjectActionDialog';
 import { type ProjectActionStatus } from './ProjectActionFeedback';
 import { ProjectActionRunDialog, type ProjectRunnerAction } from './ProjectActionRunDialog';
 import { ProjectCommitTasks } from './ProjectCommitTasks';
 import { ProjectDiffView } from './ProjectDiffView';
+import { ProjectChangesView } from './ProjectChangesView';
 import { ProjectFileTree } from './ProjectFileTree';
+import { ProjectGitLockPrompt, useProjectGitLockRequest } from './ProjectGitLockPrompt';
+import { useRebaseAction } from './rebaseAction';
 import {
   emptyProjectFileFilters,
   filterProjectFiles,
-  projectFileFiltersActive,
   scopeCounts,
   UNSCOPED_SCOPE,
   type ProjectFileFilters,
 } from './projectFileFilter';
 import { projectApiUrl } from './projectApiUrl';
-import { projectDiffQueryKey } from './projectMutations';
+import { invalidateProjectData, projectDiffQueryKey, projectEditorsQueryKey } from './projectMutations';
+import { stageRequestPaths, stagedCommitPaths, type IgnoreRequest, type ProjectEditor } from './projectStage';
 
 export type FileState = 'staged' | 'unstaged' | 'both' | 'untracked' | 'conflict';
 
@@ -52,9 +57,10 @@ export interface ProjectFileStatus {
   resultsStale: boolean;
   repomapError?: string;
   conflictReason?: string;
+  linkedDependencies?: { name: string; target: string }[];
 }
 
-interface ProjectStatusResponse {
+export interface ProjectStatusResponse {
   project: Project;
   workDir: string;
   branch: string;
@@ -68,6 +74,12 @@ interface ProjectCommitRun {
 }
 
 type ProjectCommitAction = 'commit' | 'open-pr';
+
+// An index or worktree mutation: each one changes what status and diffs report.
+type ProjectIndexRequest =
+  | { resource: 'stage'; body: { paths: string[]; unstage: boolean }; context: string }
+  | { resource: 'discard'; body: { paths: string[] }; context: string }
+  | { resource: 'ignore'; body: IgnoreRequest; context: string };
 
 interface Props {
   project: Project;
@@ -83,12 +95,16 @@ interface Props {
 const ignoreDiffPathChange = () => {};
 const ignoreChanged = () => {};
 const STATUS_POLL_INTERVAL_MS = 750;
+const noEditors: ProjectEditor[] = [];
 // The lint/test action endpoint is not worktree-scoped, so offering it here would
 // silently run against the main checkout.
 const RUNNER_MAIN_CHECKOUT_ONLY = 'Lint and test run in the main checkout only';
 
 export function ProjectStatusView({ project, diffPath = '', showResults = false, worktree, onDiffPathChange = ignoreDiffPathChange, onChanged = ignoreChanged }: Props) {
   const queryClient = useQueryClient();
+  const gitLock = useProjectGitLockRequest();
+  const rebaseAction = useRebaseAction();
+  const mobile = useIsMobile();
   const visible = useDocumentVisible();
   const focus = useGitFocus({ project: project.name, worktree });
   const statusQuery = useQuery({
@@ -104,7 +120,6 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     refetchIntervalInBackground: false,
   });
   const status = statusQuery.data ?? null;
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filters, setFilters] = useState<ProjectFileFilters>(emptyProjectFileFilters);
   const [error, setError] = useState('');
   const [advancedAction, setAdvancedAction] = useState<ProjectAction | null>(null);
@@ -114,15 +129,22 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   const [commitTaskError, setCommitTaskError] = useState('');
   const actionWasRunning = useRef(false);
 
-  const refreshProjectData = useCallback(async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.projectStatusScope(project.name) }),
-      queryClient.invalidateQueries({ queryKey: projectDiffQueryKey(project.name) }),
-    ]);
-  }, [project.name, queryClient]);
+  // The editors are only asked for once a row menu opens, then cached for the session.
+  const [editorsWanted, setEditorsWanted] = useState(false);
+  const editorsQuery = useQuery({
+    queryKey: projectEditorsQueryKey,
+    queryFn: ({ signal }) => fetchJSON<ProjectEditor[]>({ url: '/api/editors', signal, context: 'Failed to load editors' }),
+    enabled: editorsWanted,
+    staleTime: Infinity,
+  });
+  const editors = editorsQuery.data ?? noEditors;
+
+  const refreshProjectData = useCallback(
+    () => invalidateProjectData(queryClient, project.name),
+    [project.name, queryClient],
+  );
 
   useEffect(() => {
-    setSelected(new Set());
     setFilters(emptyProjectFileFilters());
     setActiveRun(projectActionRunFromLocation());
     setCommitRunId('');
@@ -146,28 +168,17 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   }, [actionRunning, project.name, queryClient]);
 
   useEffect(() => {
-    if (!status) return;
-    const available = new Set(status.files
-      .filter(file => file.state !== 'conflict' && !commitTaskError && !lockedFiles.has(file.path))
-      .map(file => file.path));
-    setSelected(current => new Set([...current].filter(path => available.has(path))));
-  }, [commitTaskError, lockedFiles, status]);
-
-  useEffect(() => {
     if (!diffPath || !status) return;
     const present = status.files.some(file => file.path === diffPath || file.path.startsWith(`${diffPath}/`));
     if (!present) onDiffPathChange('');
   }, [diffPath, onDiffPathChange, status]);
 
   const visibleFiles = useMemo(() => filterProjectFiles(status?.files ?? [], filters), [filters, status]);
-  const filtered = projectFileFiltersActive(filters);
-  // Select-all acts on the files the filter shows; selections of hidden files are
-  // left alone so the commit count still covers them.
-  const selectable = useMemo(
-    () => commitTaskError ? [] : visibleFiles.filter(file => file.state !== 'conflict' && !lockedFiles.has(file.path)),
-    [commitTaskError, lockedFiles, visibleFiles],
+  // A commit and the lint/PR actions take the whole index, filter or not.
+  const stagedFiles = useMemo(
+    () => commitTaskError ? [] : stagedCommitPaths(status?.files ?? [], lockedFiles),
+    [commitTaskError, lockedFiles, status],
   );
-  const allSelected = selectable.length > 0 && selectable.every(file => selected.has(file.path));
   const scopeFilter = useMemo<FilterBarFilter[]>(() => {
     const counts = scopeCounts(status?.files ?? []);
     const scoped = Object.keys(counts).some(scope => scope !== UNSCOPED_SCOPE);
@@ -184,7 +195,6 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
       value: filters.scopes, onChange: scopes => setFilters(current => ({ ...current, scopes })),
     }];
   }, [filters.scopes, status]);
-  const selectedFiles = useMemo(() => [...selected].sort(), [selected]);
 
   // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- queueing only starts a background run; ProjectCommitTasks refreshes project data via onComplete when it finishes
   const queueCommitMutation = useMutation({
@@ -195,6 +205,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     }) => {
       const label = action === 'open-pr' ? 'open PR' : 'commit';
       const result = await mutationJSON<ProjectCommitRun>({
+        ...gitLock.request(),
         url: `/api/projects/${encodeURIComponent(project.name)}/commit-queue`,
         method: 'POST',
         body: { ...(options ? { action, options } : { action, files }), ...(worktree ? { worktree } : {}) },
@@ -207,7 +218,6 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     },
     onSuccess: result => {
       setCommitRunId(result.runId);
-      setSelected(new Set());
       setError('');
     },
   });
@@ -236,35 +246,45 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
   });
 
   // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation -- onSuccess invalidates the project status and diff queries via refreshProjectData
-  const ignoreMutation = useMutation({
-    mutationFn: ({ path, directory }: { path: string; directory: boolean }) => mutationJSON({
-      url: projectApiUrl({ projectName: project.name, resource: 'ignore', worktree }),
+  const indexMutation = useMutation({
+    mutationFn: ({ resource, body, context }: ProjectIndexRequest) => mutationJSON({
+      ...(resource === 'ignore' ? {} : gitLock.request()),
+      url: projectApiUrl({ projectName: project.name, resource, worktree }),
       method: 'POST',
-      body: { path, directory },
-      context: `Failed to ignore ${path} in ${project.name}`,
+      body,
+      context,
     }),
-    onSuccess: async (_, { path, directory }) => {
-      setSelected(current => new Set([...current].filter(selectedPath => directory ? !selectedPath.startsWith(`${path}/`) : selectedPath !== path)));
+    onSuccess: async () => {
       setError('');
       await refreshProjectData();
     },
   });
 
+  const openMutation = useMutation({
+    mutationFn: ({ path, editor }: { path: string; editor: string }) => mutationJSON({
+      url: projectApiUrl({ projectName: project.name, resource: 'open', worktree }),
+      method: 'POST',
+      body: { path, editor },
+      context: `Failed to open ${path} in ${editor}`,
+    }),
+    onSuccess: () => setError(''),
+  });
+
   // Commits go to the per-project queue rather than the one-shot action so a
-  // second selection can be handed over while the first is still committing.
+  // second batch can be staged and handed over while the first is still committing.
   const queueCommit = useCallback(async (action: ProjectCommitAction, options?: Record<string, unknown>) => {
-    await queueCommitMutation.mutateAsync({ action, options, files: selectedFiles });
-  }, [queueCommitMutation.mutateAsync, selectedFiles]);
+    await queueCommitMutation.mutateAsync({ action, options, files: stagedFiles });
+  }, [queueCommitMutation.mutateAsync, stagedFiles]);
 
   const startAction = useCallback(async (action: ProjectAction, options?: Record<string, unknown>) => {
     if (action === 'commit') return queueCommit('commit', options);
     const body = options
       ? { action, options }
-      : action === 'lint' && selectedFiles.length > 0
-        ? { action, files: selectedFiles }
+      : action === 'lint' && stagedFiles.length > 0
+        ? { action, files: stagedFiles }
         : { action };
     await actionMutation.mutateAsync({ action, body });
-  }, [actionMutation.mutateAsync, queueCommit, selectedFiles]);
+  }, [actionMutation.mutateAsync, queueCommit, stagedFiles]);
 
   const closeActiveRun = useCallback(() => {
     setActiveRun(null);
@@ -282,7 +302,7 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     }
   }, [startAction]);
 
-  const queueSelected = useCallback(async (action: ProjectCommitAction) => {
+  const queueStaged = useCallback(async (action: ProjectCommitAction) => {
     try {
       await queueCommit(action);
     } catch (cause) {
@@ -294,37 +314,96 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
     void refreshProjectData().catch(cause => setError(cause instanceof Error ? cause.message : 'Failed to refresh project data'));
   }, [refreshProjectData]);
 
-  const ignore = useCallback(async (path: string, directory: boolean) => {
+  // Every row action reports its failure inline instead of swallowing it.
+  const attempt = useCallback(async (task: () => Promise<unknown>) => {
     try {
-      await ignoreMutation.mutateAsync({ path, directory });
+      await task();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : `Failed to ignore ${path}`);
+      setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [ignoreMutation.mutateAsync]);
+  }, []);
+
+  const stage = useCallback((paths: string[], unstage: boolean) => attempt(() => indexMutation.mutateAsync({
+    resource: 'stage',
+    body: { paths, unstage },
+    context: `Failed to ${unstage ? 'unstage' : 'stage'} ${paths.length === 1 ? paths[0] : `${paths.length} files`} in ${project.name}`,
+  })), [attempt, indexMutation.mutateAsync, project.name]);
+
+  const toggleStaged = useCallback((file: ProjectFileStatus) => {
+    const unstage = file.state === 'staged';
+    return stage(stageRequestPaths({ files: [file], locked: lockedFiles, unstage }), unstage);
+  }, [lockedFiles, stage]);
+
+  const discard = useCallback((path: string) => attempt(() => indexMutation.mutateAsync({
+    resource: 'discard',
+    body: { paths: [path] },
+    context: `Failed to discard ${path} in ${project.name}`,
+  })), [attempt, indexMutation.mutateAsync, project.name]);
+
+  const ignore = useCallback((request: IgnoreRequest) => attempt(() => indexMutation.mutateAsync({
+    resource: 'ignore',
+    body: request,
+    context: `Failed to ignore ${request.path} in ${project.name}`,
+  })), [attempt, indexMutation.mutateAsync, project.name]);
+
+  const openInEditor = useCallback((path: string, editor: string) => attempt(() => openMutation.mutateAsync({ path, editor })), [attempt, openMutation.mutateAsync]);
+
+  const copyPath = useCallback((path: string) => attempt(() => copyText(path)), [attempt]);
 
   const statusError = statusQuery.error instanceof Error ? statusQuery.error.message : '';
-  if (statusQuery.isPending && !status) return <Centered><Spinner /> Loading project status…</Centered>;
-  if (!status) return <Centered>{error || statusError || 'Project status is unavailable.'}</Centered>;
+  if (!status) return (
+    <div className="flex h-full min-h-0 flex-col">
+      {mobile && diffPath && <Button type="button" variant="ghost" className="min-h-11 self-start" onClick={() => onDiffPathChange('')}>Back to files</Button>}
+      <Centered>{statusQuery.isPending ? <><Spinner /> Loading project status…</> : error || statusError || 'Project status is unavailable.'}</Centered>
+    </div>
+  );
 
   const busy = status.action.running || actionMutation.isPending;
+  const treeDisabled = busy || indexMutation.isPending || commitTaskError !== '';
+  const reviewing = mobile && diffPath !== '';
+  const editorsError = editorsQuery.error instanceof Error ? editorsQuery.error.message : '';
+  const notices = <>
+    {(error || statusError || editorsError) && <div role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{error || statusError || editorsError}</div>}
+    {focus.error && <div role="alert" className="mt-2 text-xs text-amber-600 dark:text-amber-400">Git tracker focus failed: {focus.error}</div>}
+    {showResults && status.resultsStale && <div className="mt-2 text-xs text-amber-600">Test or lint results are from an earlier commit.</div>}
+  </>;
+  const commitButton = <SplitButton
+    variant="default"
+    size={mobile ? 'default' : 'sm'}
+    className={mobile ? '[&_button]:min-h-11 [&_button]:min-w-11' : undefined}
+    disabled={queueCommitMutation.isPending || (!mobile && stagedFiles.length === 0)}
+    primaryDisabled={stagedFiles.length === 0}
+    label={<span className="flex items-center gap-1"><UiGitCommit />Commit staged ({stagedFiles.length})</span>}
+    title="Commit options"
+    onClick={() => void run('commit')}
+    items={[
+      ...(mobile ? [{
+        label: stagedFiles.length > 0 ? `Commit & open PR (${stagedFiles.length})` : 'Open PR',
+        disabled: commitTaskError !== '',
+        onSelect: () => void queueStaged('open-pr'),
+      }] : []),
+      ...(mobile && rebaseAction ? [rebaseAction] : []),
+      { label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>, onSelect: () => setAdvancedAction('commit') },
+    ]}
+  />;
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border px-4 py-3">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
+      {!reviewing && (!mobile || error || statusError || editorsError || focus.error || (showResults && status.resultsStale)) && <div className="shrink-0 border-b border-border px-3 py-2 md:px-4 md:py-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
+          {!mobile && <div className="min-w-0">
             <h2 className="truncate text-base font-semibold text-foreground">{project.name}</h2>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span className="flex items-center gap-1"><UiGitBranch />{status.branch || '(detached)'}</span>
-              <span className="truncate" title={status.workDir}>{status.workDir}</span>
+              <span className="hidden truncate md:inline" title={status.workDir}>{status.workDir}</span>
               <span>{status.files.length} change{status.files.length === 1 ? '' : 's'}</span>
             </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          </div>}
+          {!mobile && <div className="flex flex-wrap items-center gap-1.5">
             <SplitButton
               variant="outline"
               size="sm"
               disabled={busy || !!worktree}
-              label={<span className="flex items-center gap-1"><UiWarningTriangle />{selected.size > 0 ? 'Lint selected' : 'Lint project'}</span>}
+              label={<span className="flex items-center gap-1"><UiWarningTriangle />{stagedFiles.length > 0 ? 'Lint staged' : 'Lint project'}</span>}
               title={worktree ? RUNNER_MAIN_CHECKOUT_ONLY : 'Lint options'}
               onClick={() => void run('lint')}
               items={[{
@@ -344,38 +423,26 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
                 onSelect: () => setAdvancedAction('test'),
               }]}
             />
+            {commitButton}
             <SplitButton
-              variant="default"
-              size="sm"
-              disabled={selected.size === 0 || queueCommitMutation.isPending}
-              label={<span className="flex items-center gap-1"><UiGitCommit />Commit selected ({selected.size})</span>}
-              title="Commit options"
-              onClick={() => void run('commit')}
-              items={[{
-                label: <span className="flex items-center gap-2"><UiCog />Advanced…</span>,
-                onSelect: () => setAdvancedAction('commit'),
-              }]}
-            />
-            <Button
-              type="button"
               variant="outline"
               size="sm"
-              disabled={queueCommitMutation.isPending || commitTaskError !== ''}
-              title={selected.size > 0 ? 'Commit the selected files, push, and open a PR' : 'Push local commits and open or update the branch PR'}
-              onClick={() => void queueSelected('open-pr')}
-            >
-              <span className="flex items-center gap-1"><UiGitPr />{selected.size > 0 ? `Commit & open PR (${selected.size})` : 'Open PR'}</span>
-            </Button>
+              primaryDisabled={queueCommitMutation.isPending || commitTaskError !== ''}
+              title="Pull request options"
+              label={<span className="flex items-center gap-1" title={stagedFiles.length > 0 ? 'Commit the staged files, push, and open a PR' : 'Push local commits and open or update the branch PR'}><UiGitPr />{stagedFiles.length > 0 ? `Commit & open PR (${stagedFiles.length})` : 'Open PR'}</span>}
+              onClick={() => void queueStaged('open-pr')}
+              items={rebaseAction ? [rebaseAction] : []}
+            />
             <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status">
               <UiRefresh />
             </Button>
-          </div>
+          </div>}
         </div>
-        {(error || statusError) && <div role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{error || statusError}</div>}
-        {focus.error && <div role="alert" className="mt-2 text-xs text-amber-600 dark:text-amber-400">Git tracker focus failed: {focus.error}</div>}
-        {showResults && status.resultsStale && <div className="mt-2 text-xs text-amber-600">Test or lint results are from an earlier commit.</div>}
-      </div>
+        {notices}
+      </div>}
+      {reviewing && <div className="shrink-0 px-3">{notices}{commitTaskError && <div role="alert" className="text-xs text-destructive">{commitTaskError}</div>}</div>}
 
+      <div hidden={reviewing} className={reviewing ? 'hidden' : 'contents'}>
       <ProjectCommitTasks
         key={`${project.name}\0${worktree ?? ''}`}
         projectName={project.name}
@@ -386,60 +453,58 @@ export function ProjectStatusView({ project, diffPath = '', showResults = false,
         onComplete={refreshAfterCommit}
         onRunChange={setCommitRunId}
       />
+      </div>
 
-      <SplitPane
-        className="min-h-0 flex-1"
-        defaultSplit={55}
-        minLeft={35}
-        minRight={30}
-        leftClass="overflow-hidden"
-        left={
+      <ProjectChangesView
+        files={visibleFiles}
+        locked={lockedFiles}
+        disabled={treeDisabled}
+        diffPath={diffPath}
+        onDiffPathChange={onDiffPathChange}
+        onToggleStaged={file => void toggleStaged(file)}
+        fileList={
           <div className="flex h-full min-h-0 flex-col">
             <div className="min-h-0 flex-1 overflow-auto">
               {status.files.length === 0 ? (
                 <Centered><UiCheck className="mr-1 text-green-600" />Working tree clean</Centered>
               ) : (
-                <div className="divide-y divide-border">
-                  <label className="sticky top-0 z-10 flex items-center gap-2 bg-muted px-4 py-2 text-xs font-medium text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      aria-label="Select all files"
-                      checked={allSelected}
-                      disabled={busy || ignoreMutation.isPending || commitTaskError !== '' || selectable.length === 0}
-                      onChange={() => setSelected(current => setPaths(current, selectable.map(file => file.path), !allSelected))}
-                    />
-                    {filtered ? `Select ${selectable.length} filtered file${selectable.length === 1 ? '' : 's'}` : 'Select all committable files'}
-                  </label>
-                  <ProjectFileTree
-                    files={visibleFiles}
-                    search={filters.search}
-                    onSearchChange={search => setFilters(current => ({ ...current, search }))}
-                    filterActions={scopeFilter.length > 0 && <FilterBar className="min-w-0" filters={scopeFilter} />}
-                    selected={selected}
-                    locked={lockedFiles}
-                    disabled={busy || ignoreMutation.isPending || commitTaskError !== ''}
-                    showResults={showResults}
-                    diffPath={diffPath}
-                    onDiffPathChange={onDiffPathChange}
-                    onToggleFile={path => setSelected(current => togglePath(current, path))}
-                    onToggleFiles={paths => setSelected(current => togglePaths(current, paths))}
-                    onIgnore={(path, directory) => void ignore(path, directory)}
-                  />
-                </div>
+                <ProjectFileTree
+                  files={visibleFiles}
+                  search={filters.search}
+                  onSearchChange={search => setFilters(current => ({ ...current, search }))}
+                  filterActions={scopeFilter.length > 0 && <FilterBar className="min-w-0" filters={scopeFilter} />}
+                  locked={lockedFiles}
+                  disabled={treeDisabled}
+                  showResults={showResults}
+                  diffPath={diffPath}
+                  editors={editors}
+                  onDiffPathChange={onDiffPathChange}
+                  onMenuOpen={() => setEditorsWanted(true)}
+                  onStage={(paths, unstage) => void stage(paths, unstage)}
+                  onDiscard={path => void discard(path)}
+                  onIgnore={request => void ignore(request)}
+                  onOpenInEditor={(path, editor) => void openInEditor(path, editor)}
+                  onCopyPath={path => void copyPath(path)}
+                />
               )}
             </div>
           </div>
         }
-        right={<ProjectDiffView projectName={project.name} path={diffPath} worktree={worktree} />}
+        diff={<ProjectDiffView projectName={project.name} path={diffPath} worktree={worktree} />}
       />
+      {mobile && <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-background px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status" className="min-h-11 min-w-11"><UiRefresh /></Button>
+        {commitButton}
+      </div>}
 
       <ProjectActionDialog
         projectName={project.name}
         action={advancedAction}
-        selectedFiles={selectedFiles}
+        stagedFiles={stagedFiles}
         onClose={() => setAdvancedAction(null)}
         onRun={(action, options) => startAction(action, options)}
       />
+      <ProjectGitLockPrompt owner={gitLock.owner} enabled={indexMutation.isPending || queueCommitMutation.isPending} />
       {activeRun && (
         <ProjectActionRunDialog
           projectName={project.name}
@@ -461,23 +526,6 @@ function projectActionRunFromLocation(): { action: ProjectRunnerAction; runId: s
   const runId = params.get('run');
   if ((action !== 'test' && action !== 'lint') || !runId) return null;
   return { action, runId };
-}
-
-function togglePath(current: Set<string>, path: string) {
-  const next = new Set(current);
-  if (next.has(path)) next.delete(path);
-  else next.add(path);
-  return next;
-}
-
-function togglePaths(current: Set<string>, paths: string[]) {
-  return setPaths(current, paths, !paths.every(path => current.has(path)));
-}
-
-function setPaths(current: Set<string>, paths: string[], select: boolean) {
-  const next = new Set(current);
-  paths.forEach(path => select ? next.add(path) : next.delete(path));
-  return next;
 }
 
 function Centered({ children }: { children: React.ReactNode }) {

@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	cexec "github.com/flanksource/clicky/exec"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	clickytask "github.com/flanksource/clicky/task"
@@ -42,6 +44,9 @@ type projectActionRequest struct {
 	Worktree string `json:"worktree,omitempty"`
 	// Branch is the branch a hosted project's test or lint runs on.
 	Branch string `json:"branch,omitempty"`
+	// indexPatch replays a queued commit's staged snapshot on retry. It is
+	// never read from a request body.
+	indexPatch string
 }
 
 type ProjectActionSchema struct {
@@ -89,26 +94,32 @@ type projectLintStatus struct {
 }
 
 type projectFileStatus struct {
-	Path           string                `json:"path"`
-	PreviousPath   string                `json:"previousPath,omitempty"`
-	State          status.FileState      `json:"state"`
-	StagedKind     status.ChangeKind     `json:"stagedKind,omitempty"`
-	WorkKind       status.ChangeKind     `json:"workKind,omitempty"`
-	Adds           int                   `json:"adds"`
-	Dels           int                   `json:"dels"`
-	ModifiedAt     time.Time             `json:"modifiedAt,omitempty"`
-	Language       string                `json:"language,omitempty"`
-	Scopes         []string              `json:"scopes,omitempty"`
-	TestStatus     projectTestStatus     `json:"testStatus"`
-	LintStatus     projectLintStatus     `json:"lintStatus"`
-	Problems       []projectFileProblem  `json:"problems,omitempty"`
-	ResultsStale   bool                  `json:"resultsStale"`
-	RepomapError   string                `json:"repomapError,omitempty"`
-	ConflictReason status.ConflictReason `json:"conflictReason,omitempty"`
+	Path               string                    `json:"path"`
+	PreviousPath       string                    `json:"previousPath,omitempty"`
+	State              status.FileState          `json:"state"`
+	StagedKind         status.ChangeKind         `json:"stagedKind,omitempty"`
+	WorkKind           status.ChangeKind         `json:"workKind,omitempty"`
+	Adds               int                       `json:"adds"`
+	Dels               int                       `json:"dels"`
+	ModifiedAt         time.Time                 `json:"modifiedAt,omitempty"`
+	Language           string                    `json:"language,omitempty"`
+	Scopes             []string                  `json:"scopes,omitempty"`
+	TestStatus         projectTestStatus         `json:"testStatus"`
+	LintStatus         projectLintStatus         `json:"lintStatus"`
+	Problems           []projectFileProblem      `json:"problems,omitempty"`
+	ResultsStale       bool                      `json:"resultsStale"`
+	RepomapError       string                    `json:"repomapError,omitempty"`
+	ConflictReason     status.ConflictReason     `json:"conflictReason,omitempty"`
+	LinkedDependencies []projectLinkedDependency `json:"linkedDependencies,omitempty"`
+}
+
+type projectLinkedDependency struct {
+	Name   string `json:"name"`
+	Target string `json:"target"`
 }
 
 type projectStatusResponse struct {
-	Project      Project             `json:"project"`
+	Project      projects.Project    `json:"project"`
 	WorkDir      string              `json:"workDir"`
 	Branch       string              `json:"branch"`
 	Files        []projectFileStatus `json:"files"`
@@ -198,7 +209,7 @@ func (s *Server) projectActionFor(name string) projectActionStatus {
 	return registry.actions[name]
 }
 
-func (s *Server) startProjectAction(project Project, action projectAction, args []string) (projectActionStatus, error) {
+func (s *Server) startProjectAction(project projects.Project, action projectAction, args []string) (projectActionStatus, error) {
 	registry := s.projectActionRegistry()
 	registry.mu.Lock()
 	if current := registry.actions[project.Name]; current.Running {
@@ -307,7 +318,7 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		includeResults = parsed
 	}
 	stopFile := rpchttp.Track(r.Context(), "file")
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	stopFile()
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
@@ -325,8 +336,13 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		// The stored scan carries no repomap classification; the scope filter needs it.
 		status.EnrichRepomap(workDir, files)
+		views := projectStatusFiles(files)
+		if err := enrichProjectLinkedDeps(workDir, views); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		respondJSON(w, http.StatusOK, projectStatusResponse{
-			Project: project, WorkDir: workDir, Branch: wt.Branch, Files: projectStatusFiles(files),
+			Project: project, WorkDir: workDir, Branch: wt.Branch, Files: views,
 			Action: s.projectActionFor(project.Name),
 		})
 		return
@@ -338,11 +354,16 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	views := projectStatusFiles(result.Files)
+	if err := enrichProjectLinkedDeps(workDir, views); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	respondJSON(w, http.StatusOK, projectStatusResponse{
 		Project:      project,
 		WorkDir:      result.WorkDir,
 		Branch:       result.Branch,
-		Files:        projectStatusFiles(result.Files),
+		Files:        views,
 		ResultsStale: result.ResultsStale,
 		Action:       s.projectActionFor(project.Name),
 	})
@@ -394,7 +415,7 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 		s.startHostedProjectAction(w, r)
 		return
 	}
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
@@ -426,7 +447,7 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProjectActionSchema(w http.ResponseWriter, r *http.Request) {
-	if _, err := GetProject(r.PathValue("name")); err != nil {
+	if _, err := getProject(r.Context(), r.PathValue("name")); err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}

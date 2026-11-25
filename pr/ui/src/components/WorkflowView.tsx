@@ -92,6 +92,9 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
             <UiLinkExternal className="text-xs" />
           </a>
         )}
+        {run.stale && (
+          <span className="text-xs font-normal text-amber-700" title={run.stale}>not current: GitHub unavailable</span>
+        )}
       </div>
       {expanded && run.jobs && run.jobs.map(job => (
         <JobView key={job.databaseId} job={job} repo={repo} runId={run.databaseId} />

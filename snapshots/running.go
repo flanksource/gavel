@@ -45,9 +45,13 @@ type Recorder struct {
 	workDir  string
 	interval time.Duration
 
-	mu      sync.Mutex
-	pending *testui.Snapshot
-	dirty   bool
+	mu         sync.Mutex
+	pending    *testui.Snapshot
+	dirty      bool
+	err        error
+	startOnce  sync.Once
+	stopOnce   sync.Once
+	finishOnce sync.Once
 
 	stop   chan struct{}
 	doneCh chan struct{}
@@ -80,10 +84,10 @@ func (r *Recorder) Update(snap *testui.Snapshot) {
 // Start launches the background ticker. Calling Start more than once is a
 // no-op after the first call.
 func (r *Recorder) Start() {
-	if r == nil || r.workDir == "" {
+	if r == nil {
 		return
 	}
-	go r.loop()
+	r.startOnce.Do(func() { go r.loop() })
 }
 
 func (r *Recorder) loop() {
@@ -101,8 +105,7 @@ func (r *Recorder) loop() {
 }
 
 // flush writes running.json if Update has been called since the last flush.
-// Errors are non-fatal: the in-flight run continues even when the disk is
-// full or read-only.
+// Failed writes remain dirty for retry and are returned by Stop.
 func (r *Recorder) flush() {
 	r.mu.Lock()
 	if !r.dirty || r.pending == nil {
@@ -114,9 +117,12 @@ func (r *Recorder) flush() {
 	r.mu.Unlock()
 
 	if err := writeRunningJSON(r.workDir, snap); err != nil {
-		// Logged at the call site only on the first failure; flushes don't
-		// have a logger handy and shouldn't spam every 3s.
-		_ = err
+		r.mu.Lock()
+		r.dirty = true
+		if r.err == nil {
+			r.err = err
+		}
+		r.mu.Unlock()
 	}
 }
 
@@ -126,34 +132,27 @@ func (r *Recorder) flush() {
 // running.json is left in place as a forensic record of what was in flight.
 //
 // Stop is idempotent and safe to call from defer.
-func (r *Recorder) Stop(success bool) {
+func (r *Recorder) Stop(success bool) error {
 	if r == nil {
-		return
+		return nil
 	}
-	select {
-	case <-r.stop:
-		return
-	default:
-		close(r.stop)
-	}
+	r.Start()
+	r.stopOnce.Do(func() { close(r.stop) })
 	<-r.doneCh
-
-	if success {
-		path := filepath.Join(r.workDir, Dir, RunningName)
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			_ = err
+	r.finishOnce.Do(func() {
+		r.flush()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if success && r.err == nil {
+			path := filepath.Join(r.workDir, Dir, RunningName)
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				r.err = fmt.Errorf("remove %s: %w", path, err)
+			}
 		}
-		return
-	}
-	// Best-effort final flush so the file on disk reflects the latest state
-	// at the moment of failure.
+	})
 	r.mu.Lock()
-	snap := r.pending
-	r.dirty = false
-	r.mu.Unlock()
-	if snap != nil {
-		_ = writeRunningJSON(r.workDir, snap)
-	}
+	defer r.mu.Unlock()
+	return r.err
 }
 
 func writeRunningJSON(workDir string, snap *testui.Snapshot) error {
@@ -164,7 +163,7 @@ func writeRunningJSON(workDir string, snap *testui.Snapshot) error {
 	if err := utils.MkdirOutput(dir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	return writeJSON(filepath.Join(dir, RunningName), snap)
+	return WriteSnapshot(filepath.Join(dir, RunningName), snap)
 }
 
 // SavePerRun writes a per-run timestamped snapshot, run-<ts>.json, to workDir's snapshot store
@@ -199,17 +198,36 @@ func SavePerRun(workDir string, snap *testui.Snapshot, started time.Time, label 
 	if label = slugifyLabel(label); label != "" {
 		stem += "-" + label
 	}
-	key, err := uniqueRunKey(store, stem)
+	var name string
+	if err := withSnapshotLock(context.Background(), store, func() error {
+		key, err := uniqueRunKey(store, stem)
+		if err != nil {
+			return err
+		}
+		if snap.Metadata != nil {
+			snap.Metadata.SavedRun = SnapshotStem(key)
+		}
+		name, err = putSnapshot(store, key, snap)
+		return err
+	}); err != nil {
+		return "", err
+	}
+	return Location(workDir, name), nil
+}
+
+// UpdatePerRun persists an in-flight run under its existing run ID, compressing it once it settles.
+func UpdatePerRun(workDir string, snap *testui.Snapshot) error {
+	if workDir == "" || snap == nil || snap.Metadata == nil || !validRunID(snap.Metadata.SavedRun) {
+		return errors.New("updating a run snapshot requires a workspace and saved run ID")
+	}
+	store, err := OpenStore(workDir)
 	if err != nil {
-		return "", err
+		return err
 	}
-	if err := putJSON(store, key, snap); err != nil {
-		return "", err
-	}
-	if err := ignoreLocalStore(workDir); err != nil {
-		return "", err
-	}
-	return Location(workDir, key), nil
+	return withSnapshotLock(context.Background(), store, func() error {
+		_, err := replaceSnapshot(store, snap.Metadata.SavedRun+".json", snap)
+		return err
+	})
 }
 
 // uniqueRunKey returns <stem>.json, suffixing -2, -3, … when that key is taken. The per-run
@@ -221,11 +239,18 @@ func uniqueRunKey(store blob.Store, stem string) (string, error) {
 			name = fmt.Sprintf("%s-%d", stem, i)
 		}
 		key := name + ".json"
-		exists, err := store.Exists(context.Background(), key)
-		if err != nil {
-			return "", err
+		var taken bool
+		for _, candidate := range snapshotKeys(key) {
+			exists, err := store.Exists(context.Background(), candidate)
+			if err != nil {
+				return "", err
+			}
+			if exists {
+				taken = true
+				break
+			}
 		}
-		if !exists {
+		if !taken {
 			return key, nil
 		}
 	}

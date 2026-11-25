@@ -103,6 +103,32 @@ var _ = Describe("project branch landing", func() {
 		Expect(response["error"]).To(And(ContainSubstring(`"elsewhere"`), ContainSubstring(`"main"`)))
 	})
 
+	It("squashes a branch into a chosen target checked out in a linked worktree, leaving main alone", func() {
+		pgGit(f.worktree, "checkout", "--", "b.txt")
+		featureBefore := pgGit(f.worktree, "rev-parse", "HEAD")
+
+		code, response := merge(map[string]any{"branch": "solo", "mode": "squash", "message": "fix: louder hello", "target": pgFeature})
+
+		Expect(code).To(Equal(http.StatusOK), "%v", response)
+		Expect(response).To(Equal(map[string]any{
+			"targetBranch": pgFeature, "landedSha": pgGit(f.worktree, "rev-parse", "HEAD"), "mode": "squash", "commits": float64(1),
+			"worktreeRemoved": false, "branchDeleted": true,
+		}))
+		Expect(pgGit(f.worktree, "rev-parse", "HEAD~1")).To(Equal(featureBefore))
+		Expect(pgGit(f.repo, "rev-parse", "HEAD")).To(Equal(f.base), "main is not the target")
+		Expect(pgGit(f.repo, "branch", "--list", "solo")).To(BeEmpty())
+	})
+
+	It("refuses a target that no checkout has checked out", func() {
+		pgGit(f.repo, "branch", "parked", f.base)
+
+		code, response := merge(map[string]any{"branch": "solo", "mode": "squash", "message": "fix: louder hello", "target": "parked"})
+
+		Expect(code).To(Equal(http.StatusConflict), "%v", response)
+		Expect(response["error"]).To(ContainSubstring(`"parked" is not checked out`))
+		Expect(pgGit(f.repo, "branch", "--list", "solo")).NotTo(BeEmpty())
+	})
+
 	DescribeTable("rejects a bad request", func(body map[string]any, status int) {
 		code, response := merge(body)
 		Expect(code).To(Equal(status), "%v", response)
@@ -110,6 +136,8 @@ var _ = Describe("project branch landing", func() {
 		Entry("unknown mode", map[string]any{"branch": "solo", "mode": "rebase"}, http.StatusBadRequest),
 		Entry("unknown branch", map[string]any{"branch": "nope", "mode": "squash"}, http.StatusNotFound),
 		Entry("unknown field", map[string]any{"branch": "solo", "mode": "squash", "cleanup": false}, http.StatusBadRequest),
+		Entry("target is the branch itself", map[string]any{"branch": "solo", "mode": "squash", "target": "solo"}, http.StatusBadRequest),
+		Entry("invalid target name", map[string]any{"branch": "solo", "mode": "squash", "target": "bad..name"}, http.StatusBadRequest),
 	)
 
 	It("opens a PR for a branch through prcreate", func() {

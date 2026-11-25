@@ -4,7 +4,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { Org, Project, SearchConfig } from '../types';
 import { UiCheck, UiChevronDown, UiChevronRight, UiEye, UiEyeClosed, UiFolder, UiGlobe, UiOrganization, UiUser } from '@flanksource/clicky-ui/icons';
-import { orgsQuery } from './oneShotQueries';
+import { HIDDEN_GITHUB_ORGS_FILTER, orgsQuery, userFilterQuery } from './oneShotQueries';
 
 interface Props {
   config: SearchConfig;
@@ -13,27 +13,31 @@ interface Props {
   projects: Project[];
   onChange: (partial: Partial<SearchConfig>) => void;
   onSetProjectHidden: (name: string, hidden: boolean) => void;
+  onSetOrgHidden: (login: string, hidden: boolean) => void;
 }
 
 // OrgChooser is the dashboard-wide scope switcher. Projects bind their repos
 // to PR results and their workspace to local views such as Todos; GitHub scopes
 // retain the existing org-wide and personal browsing modes.
 //
-// Orgs are fetched lazily on first open via /api/orgs?include-ignored=1 —
+// Orgs are fetched lazily on first open via /api/orgs plus
+// the hidden-github-orgs filter (GET /api/filters/hidden-github-orgs) —
 // the server caches the underlying list for 5 minutes, so the dropdown
 // stays snappy. Requesting the un-filtered list here lets the chooser
 // render an inline "Manage hidden" section so users can unhide without
 // juggling a second endpoint.
 
-export function OrgChooser({ config, projects: allProjects, onChange, onSetProjectHidden }: Props) {
+export function OrgChooser({ config, projects: allProjects, onChange, onSetProjectHidden, onSetOrgHidden }: Props) {
   const [open, setOpen] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
   const [showHiddenProjects, setShowHiddenProjects] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const orgsResult = useQuery({ ...orgsQuery(), enabled: open });
+  const hiddenOrgsResult = useQuery({ ...userFilterQuery(HIDDEN_GITHUB_ORGS_FILTER), enabled: open });
   const orgs: Org[] = orgsResult.data ?? [];
-  const loading = orgsResult.isPending && open;
-  const err = orgsResult.error instanceof Error ? orgsResult.error.message : null;
+  const loading = (orgsResult.isPending || hiddenOrgsResult.isPending) && open;
+  const queryError = orgsResult.error ?? hiddenOrgsResult.error;
+  const err = queryError instanceof Error ? queryError.message : null;
 
   // Close on outside click — the dropdown is anchored to the button so a
   // stray click should dismiss rather than trap the user.
@@ -48,10 +52,10 @@ export function OrgChooser({ config, projects: allProjects, onChange, onSetProje
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
-  const ignoredOrgs = config.ignoredOrgs || [];
-  const ignoredSet = new Set(ignoredOrgs);
-  const visibleOrgs = orgs.filter(o => !ignoredSet.has(o.login));
-  const hiddenOrgs = orgs.filter(o => ignoredSet.has(o.login));
+  // Hidden orgs are the server-side hidden-github-orgs filter, not config.
+  const hiddenSet = new Set(hiddenOrgsResult.data?.values);
+  const visibleOrgs = orgs.filter(o => !hiddenSet.has(o.login));
+  const hiddenOrgs = orgs.filter(o => hiddenSet.has(o.login));
 
   const projects = allProjects.filter(project => !project.hidden);
   const hiddenProjects = allProjects.filter(project => project.hidden);
@@ -110,21 +114,15 @@ export function OrgChooser({ config, projects: allProjects, onChange, onSetProje
 
   function hideOrg(login: string, e: ReactMouseEvent) {
     e.stopPropagation(); // don't also select it
-    const next = Array.from(new Set([...ignoredOrgs, login]));
-    const patch: Partial<SearchConfig> = { ignoredOrgs: next };
+    onSetOrgHidden(login, true);
     // If the user just hid the currently-selected org, drop back to @me so the
     // next poll doesn't keep fetching PRs from a hidden org.
-    if (config.org === login) {
-      patch.org = '';
-      patch.all = false;
-      patch.repos = [];
-    }
-    onChange(patch);
+    if (config.org === login) onChange({ org: '', all: false, repos: [] });
   }
 
   function unhideOrg(login: string, e: ReactMouseEvent) {
     e.stopPropagation();
-    onChange({ ignoredOrgs: ignoredOrgs.filter(o => o !== login) });
+    onSetOrgHidden(login, false);
   }
 
   function setProjectHidden(name: string, hidden: boolean, e: ReactMouseEvent) {

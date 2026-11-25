@@ -8,10 +8,11 @@ import { TodoBucketGroup } from './todos/TodoBucketGroup';
 import { TodoDetail } from './todos/TodoDetail';
 import { TodoDetailStack } from './todos/TodoDetailStack';
 import { TodoToolbar } from './todos/TodoToolbar';
-import { CreateTodoDialog } from './todos/CreateTodoDialog';
+import { useOpenCreateTodo } from './todos/CreateTodoDialog';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
 import { isChildTodo, isWorkspaceShown } from './todos/todoFilter';
 import { useTodoFamily } from './todos/useTodoFamily';
+import { useTodoListMode } from './todos/useTodoListMode';
 
 // MenubarTodos is the compact, single-column todos view for the menubar popover.
 // It mirrors the PRs tab's master-detail idiom: a workspace-grouped list, and
@@ -32,11 +33,13 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
   projectError?: string;
 }) {
   const todos = useWorkspaceTodos(projects);
+  const openCreateTodo = useOpenCreateTodo();
   const {
     workspaces, byDir, loadingList, selected, select, detail, loadingDetail, detailError, error,
-    updateItem, deleted, filters, toggleStatus, groupBy, showCreate, setShowCreate, created, selection,
+    updateItem, deleted, filters, setFilters, toggleStatus, groupBy, created, selection,
     tagsByDir,
   } = todos;
+  const { selecting, setSelecting, rowSelection, onFocusStatus } = useTodoListMode({ filters, setFilters, selection });
 
   // Severity/age grouping flattens todos across workspaces into buckets; the
   // default 'workspace' grouping keeps the per-workspace sections (the only mode
@@ -55,12 +58,12 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
       {workspaces.length > 0 && (
         <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2">
           <div className="min-w-0 flex-1">
-            <TodoToolbar todos={todos} />
+            <TodoToolbar todos={todos} selecting={selecting} onSelectingChange={setSelecting} />
           </div>
           <Button
             variant="ghost"
             type="button"
-            onClick={() => setShowCreate(true)}
+            onClick={() => openCreateTodo({ workspaces, onOpen: created })}
             title="New todo"
             className="inline-flex h-8 shrink-0 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           >
@@ -95,7 +98,8 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                   selected={selected}
                   onSelect={select}
                   filters={filters}
-                  selection={selection}
+                  onFocusStatus={onFocusStatus}
+                  selection={rowSelection}
                   tagsByDir={tagsByDir}
                 />
               ))}
@@ -112,17 +116,16 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                 data={byDir[ws.dir]}
                 filters={filters}
                 onToggleStatus={toggleStatus}
+                onFocusStatus={onFocusStatus}
                 selectedRef=""
                 onSelect={select}
-                selection={selection}
+                selection={rowSelection}
                 tags={tagsByDir?.get(ws.dir)}
               />
             ))}
           </ListMenu>
         )}
       </div>
-
-      <CreateTodoDialog open={showCreate} onClose={() => setShowCreate(false)} workspaces={workspaces} onCreated={created} />
     </div>
   );
 

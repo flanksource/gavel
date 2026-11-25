@@ -1,17 +1,18 @@
+import { rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { localClicky } from './vite.clicky';
+import { localClicky } from './vite.clicky.ts';
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(({ command }) => {
-  // `gavel test --ui --dev` resolves clicky-ui from the sibling checkout's source.
-  const clicky = localClicky(resolve(here, '../..'), command, 'testrunner/ui');
+  // Resolves clicky-ui from the sibling checkout's source when it is present.
+  const clicky = localClicky(resolve(here, '../..'), 'testrunner/ui');
   return {
     // Dev server for `gavel test|fixtures --ui --dev`, which reverse-proxies the
     // page here. 5273 is pr/ui's and 5274 the clicky-ui playground's; strictPort
@@ -23,8 +24,8 @@ export default defineConfig(({ command }) => {
       hmr: false,
       ...clicky.server,
     },
-    plugins: [react(), tailwindcss()],
-    // Lib/IIFE builds don't replace process.env.NODE_ENV, which React, TanStack
+    plugins: [react(), tailwindcss(), cleanChunks()],
+    // Lib builds don't replace process.env.NODE_ENV, which React, TanStack
     // Query and clicky-ui's data views reference at runtime; without it the
     // bundle throws before rendering. Not for `serve`: forcing 'production' there
     // changes React's development behavior.
@@ -44,21 +45,36 @@ export default defineConfig(({ command }) => {
       ],
     },
     build: {
+      // ES-module build: the Go server (assets.go) serves the stable testui.js
+      // entry and its hashed chunks/*.js under /_testui/, and the page loads it
+      // as <script type="module">, so lazy imports stay split.
       lib: {
         entry: 'src/index.tsx',
-        name: 'TestUI',
-        formats: ['iife'],
+        formats: ['es'],
         fileName: () => 'testui.js',
       },
       outDir: 'dist',
       // dist/ is shared with the library build (vite.lib.config.ts -> dist/lib),
       // which pr/ui imports as @flanksource/gavel/testrunner. Emptying it here
-      // would delete that consumer's entrypoints on every embed-bundle build.
+      // would delete that consumer's entrypoints on every embed-bundle build;
+      // cleanChunks drops only the previous build's chunks.
       emptyOutDir: false,
       minify: true,
-      rollupOptions: {
-        output: { inlineDynamicImports: true },
+      rolldownOptions: {
+        output: { chunkFileNames: 'chunks/[name]-[hash].js' },
       },
     },
   };
 });
+
+// cleanChunks removes the previous embed build's chunks, which emptyOutDir:false
+// would otherwise leave to accumulate (and be embedded) under dist/chunks.
+function cleanChunks(): Plugin {
+  return {
+    name: 'gavel-clean-chunks',
+    apply: 'build',
+    buildStart() {
+      rmSync(resolve(here, 'dist/chunks'), { recursive: true, force: true });
+    },
+  };
+}

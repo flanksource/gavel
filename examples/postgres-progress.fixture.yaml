@@ -1,0 +1,21 @@
+kind: Fixture
+name: PostgreSQL function progress
+params:
+  type: object
+  required: [connection]
+  properties:
+    connection:
+      type: string
+      title: PostgreSQL connection
+      format: connection
+      x-connection-types: [postgres]
+steps:
+  - id: progress
+    name: Process five batches inside a PostgreSQL function
+    kind: query
+    if: params.approved
+    connection: "{{.params.connection}}"
+    query:
+      queryFile: postgres-progress.sql
+    timeout: 30s
+    cel: row.completed == 5

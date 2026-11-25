@@ -1,0 +1,23 @@
+import { Section, StatCard, ProgressBar, Badge } from '@flanksource/facet';
+
+# Report
+
+Markdown prose mixed with facet components.
+
+<Section title="Key metrics">
+  <div className="grid grid-cols-3 gap-3 my-4">
+    <StatCard variant="bordered" value="99.9%" label="Uptime" color="green" size="sm" />
+    <StatCard variant="bordered" value="48" label="Checks" color="blue" size="sm" />
+    <StatCard variant="bordered" value="3" label="Alerts" color="red" size="sm" />
+  </div>
+</Section>
+
+<Section title="Resource usage">
+  <ProgressBar title="CPU" percentage={65} variant="primary" size="sm" />
+  <ProgressBar title="Memory" percentage={82} variant="warning" size="sm" />
+</Section>
+
+<div className="flex gap-2 my-4">
+  <Badge variant="status" status="success" label="API" size="sm" />
+  <Badge variant="status" status="warning" label="Workers" size="sm" />
+</div>

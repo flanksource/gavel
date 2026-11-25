@@ -42,6 +42,10 @@ class FakeEventSource {
     this.listeners.set(type, listener);
   }
 
+  removeEventListener(type: string, listener: EventListener) {
+    if (this.listeners.get(type) === listener) this.listeners.delete(type);
+  }
+
   emit(type: string, data: unknown) {
     this.listeners.get(type)?.(new MessageEvent(type, { data: JSON.stringify(data) }));
   }
@@ -110,6 +114,11 @@ describe('usePRDetailStream', () => {
 
     act(() => screen.getByRole('button', { name: 'Refresh detail' }).click());
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(3));
+    expect(FakeEventSource.instances.map(s => s.url)).toEqual([
+      '/api/prs/detail?repo=acme%2Fgavel&number=7',
+      '/api/prs/detail?repo=acme%2Fgavel&number=8',
+      '/api/prs/detail?repo=acme%2Fgavel&number=8&refresh=1',
+    ]);
   });
 
   it('accepts a PR frame with no comments and stores an empty list', async () => {
@@ -129,6 +138,8 @@ describe('usePRDetailStream', () => {
       pr: { title: 'No comments yet' },
       comments: [],
     });
+    expect(screen.getByTestId('detail').dataset.loading).toBe('true');
+    act(() => FakeEventSource.instances[0].emit('done', null));
     expect(screen.getByTestId('detail').dataset.loading).toBe('false');
   });
 
@@ -162,5 +173,57 @@ describe('usePRDetailStream', () => {
     expect(await screen.findByText('Connection lost')).toBeTruthy();
     expect(client.getQueryData(queryKeys.prDetail(firstPR.repo, firstPR.number))).toEqual({ error: 'Connection lost' });
     expect(FakeEventSource.instances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  describe('refreshing a loaded PR', () => {
+    const key = queryKeys.prDetail(firstPR.repo, firstPR.number);
+
+    async function refreshLoaded() {
+      vi.stubGlobal('EventSource', FakeEventSource);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      client.setQueryData(key, { pr: { title: 'Loaded' }, runs: { 42: { databaseId: 42 } }, gavelResults: [{ artifactId: 1 }], error: 'Earlier failure' });
+      const invalidate = vi.spyOn(client, 'invalidateQueries');
+      render(
+        <Provider client={client}>
+          <Probe selected={firstPR} />
+        </Provider>,
+      );
+      act(() => screen.getByRole('button', { name: 'Refresh detail' }).click());
+      await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+      return { client, invalidate, stream: FakeEventSource.instances[1] };
+    }
+
+    it('replaces runs and gavel results that are gone and clears the earlier error', async () => {
+      const { client, stream } = await refreshLoaded();
+
+      act(() => {
+        stream.emit('pr', { pr: { title: 'Refreshed' }, comments: [] });
+        stream.emit('runs', { runs: {}, error: 'load workflow run 42: status 403' });
+        stream.emit('gavel', { gavelResults: [] });
+      });
+
+      expect(client.getQueryData(key)).toEqual({
+        pr: { title: 'Refreshed' }, comments: [], runs: {}, runsError: 'load workflow run 42: status 403', gavelResults: [], error: undefined,
+      });
+    });
+
+    it('shows a failed refresh over the loaded detail and stops loading', async () => {
+      const { client, stream } = await refreshLoaded();
+
+      act(() => {
+        stream.emit('error', { error: 'GraphQL request: status 500' });
+        stream.fail();
+      });
+
+      expect(client.getQueryData(key)).toMatchObject({ pr: { title: 'Loaded' }, error: 'GraphQL request: status 500' });
+      expect(screen.getByTestId('detail').dataset.loading).toBe('false');
+      expect(stream.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('refetches the open job logs of the repository', async () => {
+      const { invalidate } = await refreshLoaded();
+
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['prs', 'job-logs', firstPR.repo] });
+    });
   });
 });

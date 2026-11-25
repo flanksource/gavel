@@ -153,30 +153,38 @@ func TestHostedWorkspacesRunInSandboxes(t *testing.T) {
 	assert.True(t, workspace.Options.SandboxedRuns, "a hosted workspace's runs execute in sandboxes")
 }
 
-func TestHostedTodoBatchListsTheOrgsWorkspaces(t *testing.T) {
+func TestHostedTodoListExcludesOnlyTheCallersHiddenProjects(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	creator, member := uuid.New(), uuid.New()
 	for name, id := range map[string]uuid.UUID{"ada": creator, "grace": member} {
 		require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', ?)`, id, "user_"+name).Error)
 	}
 	dataDir := t.TempDir()
-	workspace := "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
+	app := "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
+	tool := "repo:" + pushedRepo(t, db, org, dataDir, "tool").String()
 	base := hostedTodosServer(t, db, org, dataDir)
-	hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Private plan"})
-	hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", map[string]any{"dir": workspace, "title": "Shared plan", "visibility": "public"})
+	for _, todo := range []map[string]any{
+		{"dir": app, "title": "Private plan"},
+		{"dir": app, "title": "Shared plan", "visibility": "public"},
+		{"dir": tool, "title": "Tool plan", "visibility": "public"},
+	} {
+		status, created := hostedCall(t, base, http.MethodPost, "/api/todos", creator, "org:member", todo)
+		require.Equal(t, http.StatusCreated, status, created)
+	}
+	status, hidden := hostedCall(t, base, http.MethodPost, "/api/filters/hidden-projects/values", member, "org:member", map[string]any{"value": tool})
+	require.Equal(t, http.StatusOK, status, hidden)
 
-	status, batch := hostedCall(t, base, http.MethodPost, "/api/todos/batch", member, "org:member", map[string]any{"dirs": []string{workspace, "repo:" + uuid.NewString()}})
-	require.Equal(t, http.StatusOK, status, batch)
-	results := batch["results"].([]any)
-	require.Len(t, results, 2)
-	listed := results[0].(map[string]any)
-	assert.Equal(t, workspace, listed["dir"])
-	assert.Equal(t, []string{"Shared plan"}, listedTitles(listed), "the member sees only the public todo")
-	assert.Contains(t, results[1].(map[string]any)["error"].(map[string]any)["message"], "is not one of this organization's repositories")
-
-	status, refused := hostedCall(t, base, http.MethodPost, "/api/todos/batch", member, "org:member", map[string]any{"dirs": []string{"/etc"}})
-	require.Equal(t, http.StatusOK, status, refused)
-	assert.Contains(t, refused["results"].([]any)[0].(map[string]any)["error"].(map[string]any)["message"], `todo workspace "/etc" is not one of this organization's repositories`)
+	listed := func(user uuid.UUID) []string {
+		status, list := hostedCall(t, base, http.MethodGet, "/api/todos?exclude=hidden-projects", user, "org:member", nil)
+		require.Equal(t, http.StatusOK, status, list)
+		var titles []string
+		for _, item := range list["items"].([]any) {
+			titles = append(titles, item.(map[string]any)["dir"].(string)+" "+item.(map[string]any)["title"].(string))
+		}
+		return titles
+	}
+	assert.Equal(t, []string{app + " Shared plan"}, listed(member), "the member sees only the public todos of the projects they don't hide")
+	assert.Equal(t, []string{app + " Private plan", app + " Shared plan", tool + " Tool plan"}, listed(creator), "the member's hidden projects don't hide the creator's")
 }
 
 func TestAHostedDashboardWithoutWorkspacesReadsNoSessions(t *testing.T) {

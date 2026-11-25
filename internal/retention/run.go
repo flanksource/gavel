@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/internal/safefs"
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -153,7 +154,7 @@ func deleteRuns(ctx context.Context, db *gorm.DB, stores Stores, kinds []string,
 				if err != nil {
 					return deleted, err
 				}
-				if err := store.Delete(ctx, row.RunID+".json"); err != nil && !errors.Is(err, blob.ErrNotFound) {
+				if err := snapshots.DeleteRun(ctx, store, row.RunID); err != nil {
 					return deleted, fmt.Errorf("delete run snapshot %s of %s: %w", row.RunID, row.WorkspaceDir, err)
 				}
 			}

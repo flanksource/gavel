@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,23 +21,21 @@ import (
 // about how the list endpoint reads counts, not what is in each directory.
 func withProjects(t *testing.T, names ...string) {
 	t.Helper()
-	original := projectsPath
-	projectsPath = filepath.Join(t.TempDir(), "projects.json")
-	t.Cleanup(func() { projectsPath = original })
-	projects := make([]Project, 0, len(names))
+	useProjectsFileT(t, filepath.Join(t.TempDir(), "projects.json"))
+	ps := make([]projects.Project, 0, len(names))
 	for _, name := range names {
-		projects = append(projects, Project{Name: name, Dir: t.TempDir(), Repos: []string{"example/" + name}})
+		ps = append(ps, projects.Project{Name: name, Dir: t.TempDir(), Repos: []string{"example/" + name}})
 	}
-	require.NoError(t, SaveProjects(projects))
+	require.NoError(t, seedProjects(ps))
 }
 
 // perProjectTodoCounts adapts a per-project stub to the batched count seam, so
 // a test states what each project's counts are and the seam keeps its one
 // result per project, in order.
-func perProjectTodoCounts(fn func(Project) (todoCounts, error)) func(context.Context, []Project) []todoCountsResult {
-	return func(_ context.Context, projects []Project) []todoCountsResult {
-		results := make([]todoCountsResult, len(projects))
-		for i, project := range projects {
+func perProjectTodoCounts(fn func(projects.Project) (todoCounts, error)) func(context.Context, []projects.Project) []todoCountsResult {
+	return func(_ context.Context, ps []projects.Project) []todoCountsResult {
+		results := make([]todoCountsResult, len(ps))
+		for i, project := range ps {
 			results[i].Counts, results[i].Err = fn(project)
 		}
 		return results
@@ -43,7 +43,7 @@ func perProjectTodoCounts(fn func(Project) (todoCounts, error)) func(context.Con
 }
 
 // stubTodoCounts swaps the batched count seam for the duration of a test.
-func stubTodoCounts(t *testing.T, stub func(context.Context, []Project) []todoCountsResult) {
+func stubTodoCounts(t *testing.T, stub func(context.Context, []projects.Project) []todoCountsResult) {
 	t.Helper()
 	original := projectsTodoCounts
 	projectsTodoCounts = stub
@@ -69,15 +69,15 @@ func TestHandleProjectsCountsInOneBatch(t *testing.T) {
 		mu      sync.Mutex
 		batches [][]string
 	)
-	stubTodoCounts(t, func(ctx context.Context, projects []Project) []todoCountsResult {
-		names := make([]string, 0, len(projects))
-		for _, project := range projects {
+	stubTodoCounts(t, func(ctx context.Context, ps []projects.Project) []todoCountsResult {
+		names := make([]string, 0, len(ps))
+		for _, project := range ps {
 			names = append(names, project.Name)
 		}
 		mu.Lock()
 		batches = append(batches, names)
 		mu.Unlock()
-		return make([]todoCountsResult, len(projects))
+		return make([]todoCountsResult, len(ps))
 	})
 
 	rec, got := getProjects(t)
@@ -97,7 +97,7 @@ func TestHandleProjectsReturnsStoreOrder(t *testing.T) {
 	for i, name := range want {
 		totals[name] = (i + 1) * 10
 	}
-	stubTodoCounts(t, perProjectTodoCounts(func(project Project) (todoCounts, error) {
+	stubTodoCounts(t, perProjectTodoCounts(func(project projects.Project) (todoCounts, error) {
 		return todoCounts{Total: totals[project.Name], Open: totals[project.Name]}, nil
 	}))
 
@@ -117,7 +117,7 @@ func TestHandleProjectsReturnsStoreOrder(t *testing.T) {
 // so one workspace whose TODO store is unreachable must not 500 the whole list.
 func TestHandleProjectsIsolatesPerProjectCountFailures(t *testing.T) {
 	withProjects(t, "healthy", "broken", "also-healthy")
-	stubTodoCounts(t, perProjectTodoCounts(func(project Project) (todoCounts, error) {
+	stubTodoCounts(t, perProjectTodoCounts(func(project projects.Project) (todoCounts, error) {
 		if project.Name == "broken" {
 			return todoCounts{}, fmt.Errorf("connect to postgres: connection refused")
 		}
@@ -146,7 +146,7 @@ func TestHandleProjectsIsolatesPerProjectCountFailures(t *testing.T) {
 // that may be someone else's.
 func TestHandleProjectsReportsAMisalignedCountBatch(t *testing.T) {
 	withProjects(t, "first", "second")
-	stubTodoCounts(t, func(context.Context, []Project) []todoCountsResult {
+	stubTodoCounts(t, func(context.Context, []projects.Project) []todoCountsResult {
 		return []todoCountsResult{{Counts: todoCounts{Total: 1}}}
 	})
 
@@ -164,7 +164,7 @@ func TestHandleProjectsReportsAMisalignedCountBatch(t *testing.T) {
 // strict: there is no other project to serve, so the error is the response.
 func TestHandleProjectByNameStillFailsOnCountError(t *testing.T) {
 	withProjects(t, "broken")
-	stubTodoCounts(t, perProjectTodoCounts(func(Project) (todoCounts, error) {
+	stubTodoCounts(t, perProjectTodoCounts(func(projects.Project) (todoCounts, error) {
 		return todoCounts{}, fmt.Errorf("connect to postgres: connection refused")
 	}))
 
@@ -178,7 +178,7 @@ func TestHandleProjectByNameStillFailsOnCountError(t *testing.T) {
 // batch answers without the database: a project with no directory has no
 // workspace, and reports zero counts rather than an error.
 func TestCountProjectsTodosSkipsProjectsWithoutADirectory(t *testing.T) {
-	got := countProjectsTodos(t.Context(), []Project{{Name: "no-dir"}, {Name: "blank-dir", Dir: "  "}})
+	got := countProjectsTodos(t.Context(), []projects.Project{{Name: "no-dir"}, {Name: "blank-dir", Dir: "  "}})
 
 	assert.Equal(t, []todoCountsResult{{}, {}}, got)
 }

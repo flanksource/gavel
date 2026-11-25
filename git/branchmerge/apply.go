@@ -9,18 +9,25 @@ import (
 )
 
 // cherryPick picks opts.Commits onto the target. A failed pick is aborted.
+// With a strategy, a pick the strategy resolves to no change is dropped
+// rather than stopping the run.
 func cherryPick(opts Options, target, before string) error {
-	out, err := combinedGit(opts.Repo, append([]string{"cherry-pick", "--end-of-options"}, opts.Commits...)...)
+	args := append([]string{"cherry-pick"}, opts.Strategy.args()...)
+	if opts.Strategy != "" {
+		args = append(args, "--empty=drop")
+	}
+	out, err := combinedGit(opts.Repo, append(append(args, "--end-of-options"), opts.Commits...)...)
 	if err == nil {
 		return nil
 	}
 	return abortMerge(opts, target, before, fmt.Errorf("git cherry-pick: %s: %w", out, err))
 }
 
-// squash stages the whole branch onto the target with `git merge --squash` and
-// commits it as one commit, returning how many source commits it carried.
-// Hooks are skipped, as a cherry-pick skips them.
-func squash(opts Options, target, before string) (int, error) {
+// mergeWhole stages the whole branch onto the target, with `git merge --squash`
+// for Squash or `git merge --no-ff` for MergeCommit, and commits it with
+// opts.Message, returning how many source commits it carried. Hooks are
+// skipped, as a cherry-pick skips them.
+func mergeWhole(opts Options, target, before string) (int, error) {
 	source := "refs/heads/" + opts.Branch
 	count, err := captureGit(opts.Repo, "rev-list", "--count", "HEAD.."+source)
 	if err != nil {
@@ -33,10 +40,15 @@ func squash(opts Options, target, before string) (int, error) {
 	if commits == 0 {
 		return 0, fmt.Errorf("%w: %s has no commits that are not already on %s", ErrNothingToMerge, opts.Branch, target)
 	}
-	if out, err := combinedGit(opts.Repo, "merge", "--squash", "--no-commit", source); err != nil {
-		return 0, abortMerge(opts, target, before, fmt.Errorf("git merge --squash: %s: %w", out, err))
+	kind := "--squash"
+	if opts.Mode == MergeCommit {
+		kind = "--no-ff"
 	}
-	if _, err := captureGit(opts.Repo, "diff", "--cached", "--quiet"); err == nil {
+	args := append([]string{"merge", kind, "--no-commit"}, opts.Strategy.args()...)
+	if out, err := combinedGit(opts.Repo, append(args, source)...); err != nil {
+		return 0, abortMerge(opts, target, before, fmt.Errorf("git merge %s: %s: %w", kind, out, err))
+	}
+	if _, err := captureGit(opts.Repo, "diff", "--cached", "--quiet"); err == nil && opts.Mode == Squash {
 		return 0, abortMerge(opts, target, before,
 			fmt.Errorf("%w: squashing %s onto %s staged no changes", ErrNothingToMerge, opts.Branch, target))
 	}

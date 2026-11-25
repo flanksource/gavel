@@ -15,6 +15,8 @@ export type AgentSessionActivity = 'idle' | 'thinking' | 'working' | 'ask' | 'ap
 
 export interface AgentSession {
   id: string;
+  // The listed session that delegated this one (a subagent); absent at the top level.
+  parentId?: string;
   providerSessionId?: string;
   title: string;
   // The gavel project the session's directory or run belongs to; absent when

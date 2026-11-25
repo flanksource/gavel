@@ -7,11 +7,13 @@ import (
 	"strings"
 	"time"
 
+	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/repomap"
 )
 
@@ -133,29 +135,14 @@ func checklistItems(fixture fixtures.FixtureTest) []fixtures.ChecklistItem {
 // the agent to inspect the change at repoPath and return a per-item verdict.
 // When the verification is scoped to particular files, the grader is told which,
 // so it judges the change under review rather than everything dirty in the tree.
-func buildChecklistPrompt(fixture fixtures.FixtureTest, repoPath string, items []fixtures.ChecklistItem, changed []string, previous []fixtures.FixtureResult) string {
+func buildChecklistPrompt(fixture fixtures.FixtureTest, repoPath string, items []fixtures.ChecklistItem, changed []string, previous []fixtures.FixtureResult, source string) (string, error) {
 	var b strings.Builder
-	b.WriteString("You are verifying whether a code change satisfies its acceptance criteria.\n")
-	fmt.Fprintf(&b, "Inspect the current change in the git repository at %s — the working-tree diff, staged changes, and the most recent commits — using your tools.\n\n", repoPath)
-	if len(changed) > 0 {
-		b.WriteString("The change under review is limited to these files (relative to the repository root); judge the criteria against them:\n")
-		for _, path := range changed {
-			fmt.Fprintf(&b, "- %s\n", path)
-		}
-		b.WriteString("\n")
-	}
+	data := map[string]any{"repoPath": repoPath, "changed": changed}
 	if fixture.AIStep != nil {
-		if desc := strings.TrimSpace(fixture.AIStep.Description); desc != "" {
-			b.WriteString(desc)
-			b.WriteString("\n\n")
-		}
-		if custom := strings.TrimSpace(fixture.AIStep.Prompt); custom != "" {
-			b.WriteString(custom)
-			b.WriteString("\n\n")
-		}
+		data["description"] = fixture.AIStep.Description
+		data["instructions"] = fixture.AIStep.Prompt
 	}
 	if len(previous) > 0 {
-		b.WriteString("Executable fixture results completed earlier in this verification run. Use these verdicts as evidence for the matching criteria. Do not rerun these commands to establish whether they passed:\n")
 		for _, result := range previous {
 			if result.Type == "verify" || result.Type == aiKindName {
 				continue
@@ -169,14 +156,22 @@ func buildChecklistPrompt(fixture fixtures.FixtureTest, repoPath string, items [
 			}
 			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 	}
-	b.WriteString("Acceptance criteria — return exactly one verdict per item, in this order:\n")
+	data["previous"] = b.String()
+	b.Reset()
 	for i, item := range items {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, item.Text)
 	}
-	b.WriteString("\nFor each criterion set `passed` true only when the change clearly satisfies it, and give a one-line `message` citing the evidence for a pass or the gap for a fail.")
-	return b.String()
+	data["criteria"] = b.String()
+	if source != "" {
+		rendered, _, err := dotprompt.LoadNamed("todos.verify", source).Render(dotprompt.RenderOptions{Data: data, Declared: true, Dir: repoPath})
+		if err == nil && strings.TrimSpace(rendered.Prompt.User) == "" {
+			return "", fmt.Errorf("todos.verify template rendered no user instructions")
+		}
+		return rendered.Prompt.User, err
+	}
+	rendered, err := library.Render(context.Background(), library.RenderOptions{Directory: repoPath, Name: "acceptance-checklist", Data: data})
+	return rendered.User, err
 }
 
 // scoreChecklist aligns the agent's verdicts to the criteria (one result per

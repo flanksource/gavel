@@ -93,6 +93,10 @@ func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRe
 			return getErr
 		}
 		if strings.TrimSpace(*patch.Verification) != strings.TrimSpace(current.Verification) {
+			root, rootErr := p.todoRootSessionInputForIssue(ctx, current)
+			if rootErr != nil {
+				return rootErr
+			}
 			operationID := uuid.NewSHA1(
 				uuid.NameSpaceOID,
 				[]byte(fmt.Sprintf("gavel-todo-add-verification:%s:%d", id, version)),
@@ -101,9 +105,7 @@ func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRe
 				IssueID:              id,
 				ExpectedIssueVersion: version,
 				Patch:                patch,
-				RootSession: p.todoRootSessionInput(native.CreateIssueInput{
-					ID: current.ID, Title: current.Title, Body: current.Body,
-				}),
+				RootSession:          root,
 				Session: p.todoOperationSessionInput(current, todoOperationSessionOptions{
 					ID: operationID, Operation: todoSessionAddVerification,
 					Provider: "gavel", CWD: p.workDir, Prompt: *patch.Verification,

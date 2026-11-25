@@ -9,7 +9,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("a failed fixture's source", func() {
+var _ = Describe("a fixture step's source", func() {
 	const source = "kind: Fixture\nsteps:\n  - id: build\n    kind: exec\n  - id: render\n    kind: exec\n    exec: ./render\n"
 	const renderStep = "  - id: render\n    kind: exec\n    exec: ./render"
 
@@ -39,8 +39,9 @@ var _ = Describe("a failed fixture's source", func() {
 		}
 	})
 
-	It("is not recorded for a passing step", func() {
-		node, _ := attached(task.StatusPASS)
-		Expect(node.Results.Metadata).NotTo(HaveKey("source"))
+	It("is recorded for a passing step, but printed only under a failure", func() {
+		node, path := attached(task.StatusPASS)
+		Expect(node.Results.Metadata["source"]).To(Equal(parsers.SourceSnippet{File: path, Line: 5, EndLine: 7, Language: "yaml", Text: renderStep}))
+		Expect(node.Pretty().String()).NotTo(ContainSubstring("exec: ./render"))
 	})
 })

@@ -3,16 +3,20 @@ import type { PRItem } from './types';
 import { emptyFilters, type Filters, type FilterMode } from './components/FilterBar';
 import { isProjectRefParam } from './projectRef';
 import { isTodoDetailTab, type TodoDetailTabKey } from './components/todos/TodoDetailTabs';
+import type { InboxFilters } from '@flanksource/clicky-ui/comments/gavel';
 
 export type ExportFormat = 'json' | 'md';
 
 // Tab is the top-level view, encoded as the first path segment. PRs, projects,
 // todos, sessions, tasks, prompts and sandbox runs carry their selection in the path;
-// filters only apply to PRs. The platform tab is the hosted platform dashboard; its selection is
-// the organization it shows alone.
-export type Tab = 'prs' | 'projects' | 'todos' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs' | 'platform';
+// PR facets and the task time range are encoded in the query. The platform tab is the hosted
+// platform dashboard; its selection is the organization it shows alone.
+export type Tab = 'prs' | 'projects' | 'processes' | 'todos' | 'comments' | 'sessions' | 'activity' | 'tasks' | 'prompts' | 'runs' | 'platform';
 
-const SPA_TABS: readonly Tab[] = ['projects', 'todos', 'sessions', 'activity', 'tasks', 'prompts', 'runs', 'platform'];
+const SPA_TABS: readonly Tab[] = ['projects', 'processes', 'todos', 'comments', 'sessions', 'activity', 'tasks', 'prompts', 'runs', 'platform'];
+const commentFilterKeys = ['q', 'status', 'phase', 'author', 'kind'] as const;
+export type CommentFilters = Omit<InboxFilters, 'project'>;
+export const emptyCommentFilters: CommentFilters = { q: '', status: '', phase: '', author: '', kind: '', unread: false };
 
 export interface RouteState {
   tab: Tab;
@@ -32,6 +36,8 @@ export interface RouteState {
   // segments, because a todo ref may itself contain "/". Unset fields mean the
   // pane's defaults (and are left out of the URL).
   todoView: TodoDetailView;
+  taskTimeRange?: { from: string; to: string } | undefined;
+  commentFilters?: CommentFilters | undefined;
   filters: Filters;
 }
 
@@ -66,7 +72,7 @@ function splitCSV(value: string | null): string[] {
 
 // Tri-state facets are encoded in the URL as a CSV where excluded keys carry a
 // leading "-" (e.g. repos=foo,-bar means include foo, exclude bar).
-function parseFacet(value: string | null): Record<string, FilterMode> {
+export function parseFacet(value: string | null): Record<string, FilterMode> {
   const out: Record<string, FilterMode> = {};
   for (const raw of splitCSV(value)) {
     if (raw.startsWith('-')) out[raw.slice(1)] = 'exclude';
@@ -75,7 +81,7 @@ function parseFacet(value: string | null): Record<string, FilterMode> {
   return out;
 }
 
-function buildFacet(modes: Record<string, FilterMode>): string {
+export function buildFacet(modes: Record<string, FilterMode>): string {
   return Object.entries(modes)
     .map(([k, m]) => (m === 'exclude' ? `-${k}` : k))
     .join(',');
@@ -97,6 +103,7 @@ export function parseRoute(location: Location): RouteState {
 
   const params = new URLSearchParams(location.search);
   const scopeProject = params.get('project') ?? '';
+  if (tab === 'comments') selectedPath = params.get('thread') ?? '';
   return {
     tab,
     selectedPath,
@@ -107,11 +114,19 @@ export function parseRoute(location: Location): RouteState {
     projectResults: tab === 'projects' && params.get('results') === 'true',
     projectRef: tab === 'projects' && !projectRunId && selectedPath && isProjectRefParam(params.get('ref') ?? '') ? params.get('ref') ?? '' : '',
     todoView: tab === 'todos' && selectedPath ? parseTodoView(params) : {},
+    ...(tab === 'comments' ? { commentFilters: {
+      q: params.get('q') ?? '', status: params.get('status') ?? '', phase: params.get('phase') ?? '',
+      author: params.get('author') ?? '', kind: params.get('kind') ?? '', unread: params.get('unread') === 'true',
+    } } : {}),
+    ...(tab === 'tasks' && (params.has('from') || params.has('to'))
+      ? { taskTimeRange: { from: params.get('from') ?? '', to: params.get('to') ?? '' } }
+      : {}),
     filters: {
       state: parseFacet(params.get('state')),
       checks: parseFacet(params.get('checks')),
       repos: parseFacet(params.get('repos')),
       authors: parseFacet(params.get('authors')),
+      age: parseFacet(params.get('age')),
     },
   };
 }
@@ -130,11 +145,12 @@ export function buildRoute(state: RouteState): string {
   const params = new URLSearchParams();
   if (state.scopeProject) params.set('project', state.scopeProject);
   if (state.tab === 'prs') {
-    const { state: st, checks, repos, authors } = state.filters;
+    const { state: st, checks, repos, authors, age } = state.filters;
     if (Object.keys(st).length) params.set('state', buildFacet(st));
     if (Object.keys(checks).length) params.set('checks', buildFacet(checks));
     if (Object.keys(repos).length) params.set('repos', buildFacet(repos));
     if (Object.keys(authors).length) params.set('authors', buildFacet(authors));
+    if (Object.keys(age).length) params.set('age', buildFacet(age));
   } else if (state.tab === 'projects') {
     if (!state.projectRunId && state.projectDiffPath) params.set('diff', state.projectDiffPath);
     if (!state.projectRunId && state.projectHistory) params.set('history', 'true');
@@ -142,6 +158,15 @@ export function buildRoute(state: RouteState): string {
     if (!state.projectRunId && state.projectRef) params.set('ref', state.projectRef);
   } else if (state.tab === 'todos' && state.selectedPath) {
     setTodoViewParams(params, state.todoView);
+  } else if (state.tab === 'comments') {
+    if (state.selectedPath) params.set('thread', state.selectedPath);
+    const filters = state.commentFilters ?? emptyCommentFilters;
+    for (const key of commentFilterKeys) if (filters[key]) params.set(key, filters[key]);
+    if (filters.unread) params.set('unread', 'true');
+  } else if (state.tab === 'tasks' && state.taskTimeRange) {
+    const { from, to } = state.taskTimeRange;
+    if (from || !to) params.set('from', from);
+    if (to) params.set('to', to);
   }
 
   const query = params.toString();

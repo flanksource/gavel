@@ -11,9 +11,14 @@ import (
 	"github.com/flanksource/gavel/pr/model"
 )
 
+var mergeStrategies = map[string]string{"rebase": "rebase", "squash": "squash", "merge": "noFastForward"}
+
+func mergeCompletionOptions(strategy string) map[string]any {
+	return map[string]any{"mergeStrategy": strategy, "bypassPolicy": false, "deleteSourceBranch": false}
+}
+
 func (c *Client) MergePR(ctx context.Context, number int, input model.MergeInput) error {
-	strategies := map[string]string{"rebase": "rebase", "squash": "squash", "merge": "noFastForward"}
-	strategy, ok := strategies[strings.ToLower(strings.TrimSpace(input.Method))]
+	strategy, ok := mergeStrategies[strings.ToLower(strings.TrimSpace(input.Method))]
 	if number <= 0 || !ok || strings.TrimSpace(input.HeadSHA) == "" {
 		return fmt.Errorf("azure merge requires a positive PR number, rebase/squash/merge method and reviewed head SHA")
 	}
@@ -23,10 +28,14 @@ func (c *Client) MergePR(ctx context.Context, number int, input model.MergeInput
 	if err := c.Preflight(ctx); err != nil {
 		return err
 	}
+	completion := mergeCompletionOptions(strategy)
+	if message := strings.TrimSpace(strings.TrimSpace(input.CommitTitle) + "\n\n" + strings.TrimSpace(input.CommitBody)); message != "" && strategy != "rebase" {
+		completion["mergeCommitMessage"] = message
+	}
 	payload := map[string]any{
 		"status":                "completed",
 		"lastMergeSourceCommit": commitRef{ID: input.HeadSHA},
-		"completionOptions":     map[string]any{"mergeStrategy": strategy, "bypassPolicy": false, "deleteSourceBranch": false},
+		"completionOptions":     completion,
 	}
 	data, _, err := c.request(ctx, http.MethodPatch, c.repositoryPath()+"/pullrequests/"+strconv.Itoa(number), nil, payload)
 	if err != nil {

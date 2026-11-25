@@ -748,7 +748,7 @@ func withStubbedTidy(t *testing.T, sideEffect func(modDir string) error) *int {
 	t.Helper()
 	calls := 0
 	prev := runGoModTidy
-	runGoModTidy = func(modDir string) error {
+	runGoModTidy = func(_ context.Context, modDir string) error {
 		calls++
 		if sideEffect != nil {
 			return sideEffect(modDir)

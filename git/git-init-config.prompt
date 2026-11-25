@@ -1,0 +1,26 @@
+---
+mode: agent
+setup:
+  cwd: '{{workDir}}'
+budget:
+  timeout: 3m
+permissions:
+  tools:
+    Read: allow
+    Glob: allow
+    Grep: allow
+    Edit: allow
+    Write: allow
+    Bash: allow
+---
+You are configuring .gitanalyze.yaml for a git repository.
+
+Read the existing config at {{configPath}}, then analyze this repository to recommend updates:
+
+1. Look at the git log (last 50 commits) to identify bot authors, common noise commit patterns (fixup!, squash!, auto-generated), and low-signal commit types for this repository.
+2. Look at the repository structure to identify generated files, lock files, binary or asset files, and IDE/editor config files that should be ignored.
+3. If this repo contains Kubernetes manifests, identify auto-generated or low-signal resource types and namespaces.
+
+Edit {{configPath}} directly with your recommendations. Keep the existing filter_sets structure. Add new filter sets if appropriate. Update the includes list. Add YAML comments explaining each addition.
+
+Do NOT remove existing defaults - only add to them. Do NOT add entries that duplicate what's already there. Keep the file concise and well-organized.

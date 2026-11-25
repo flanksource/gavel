@@ -30,7 +30,20 @@ type StepScope struct {
 	background []namedBackground
 	tmpDir     string
 	failed     string
+	resumed    bool
 	closed     bool
+}
+
+// beforeResume reports whether step id comes before from in a run resumed at
+// from: true for every step until from itself is reached, in file order, but
+// for the params step, which every run resolves.
+func (s *StepScope) beforeResume(id, from string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id == from {
+		s.resumed = true
+	}
+	return !s.resumed && id != ParamsStepID
 }
 
 // MarkFailed records the first typed step that failed; later steps are skipped.

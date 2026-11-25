@@ -80,9 +80,9 @@ func agentCommitter(opts AgentHooksOptions, keepSubject bool) func(*agent.HookCo
 			// resolves its own paths from the anchor, and the two are mutually
 			// exclusive.
 			Files: filesUnlessFixup(plan),
-			// Captain already ran the cheap gates over the exact path set it
-			// selected; only `gates: full` asks for gavel's fuller pipeline
-			// (hooks, lint, linked-deps, tidy) on top.
+			// Captain already dropped excluded content from the path set; only
+			// `gates: full` asks for gavel's configured commit hooks on top (lint
+			// and the pre-commit checks run either way).
 			SkipGates: !api.HasGate(plan.Gates, api.FullPipelineGate),
 		}
 		if keepSubject {

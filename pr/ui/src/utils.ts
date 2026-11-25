@@ -1,4 +1,6 @@
 import type { PRItem, PRComment, CheckSummary, GavelResultsSummary, Project, ProcStatus, ProcProcess } from './types';
+import type { Filters } from './components/FilterBar';
+import { prAgeBucket } from './prAge';
 
 // prKey mirrors the Go-side poller.prKey() so the unread map keys match.
 export function prKey(pr: { repo: string; number: number }): string {
@@ -43,10 +45,13 @@ export function checkSummaryText(cs: CheckSummary): string {
   return parts.join(' ');
 }
 
+// timeAgo is the 'X ago' phrase for prose and status readouts ('Synced 42s ago');
+// list rows use the single-token ageShort instead.
 export function timeAgo(iso: string): string {
-  const d = new Date(iso);
-  const s = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (s < 60) return 'just now';
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (!Number.isFinite(s)) return 'unknown';
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
@@ -63,20 +68,6 @@ export function ageShort(iso: string): string {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   if (s < 604800) return `${Math.floor(s / 86400)}d`;
   return `${Math.floor(s / 604800)}w`;
-}
-
-// timeAgoShort is timeAgo with second-level granularity for fresh timestamps
-// ('Xs ago'), used by the header status/sync readouts where the most recent
-// poll is only seconds old.
-export function timeAgoShort(iso: string): string {
-  const d = new Date(iso);
-  const s = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (!Number.isFinite(s)) return 'unknown';
-  if (s < 5) return 'just now';
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
 
 export interface RepoGroup {
@@ -377,17 +368,14 @@ function checkCategories(pr: PRItem): string[] {
 
 export function filterPRs(
   prs: PRItem[],
-  stateFilter: FacetModes,
-  checksFilter: FacetModes,
-  repoFilter: FacetModes,
-  authorFilter: FacetModes,
-  viewer: string,
+  { filters, viewer, now = Date.now() }: { filters: Filters; viewer: string; now?: number },
 ): PRItem[] {
   return prs.filter(pr =>
-    passFacet(stateFilter, stateCategories(pr)) &&
-    passFacet(checksFilter, checkCategories(pr)) &&
-    passFacet(repoFilter, [pr.repo]) &&
-    passFacet(authorFilter, authorCategories(pr, viewer)),
+    passFacet(filters.state, stateCategories(pr)) &&
+    passFacet(filters.checks, checkCategories(pr)) &&
+    passFacet(filters.repos, [pr.repo]) &&
+    passFacet(filters.authors, authorCategories(pr, viewer)) &&
+    passFacet(filters.age, [prAgeBucket(pr.updatedAt, now)]),
   );
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/gavel/prompts"
 	promptregistry "github.com/flanksource/gavel/prompts/registry"
 	"github.com/flanksource/gavel/verify"
+	"github.com/flanksource/gavel/workflows"
 )
 
 // gavelSettingsResponse is the read payload for one .gavel.yaml scope: the merged
@@ -74,7 +75,7 @@ func resolveSettingsDir(r *http.Request) (scope, dir string, err error) {
 	if name == "" {
 		return "", "", errors.New("scope=global or project=<name> is required")
 	}
-	p, err := GetProject(name)
+	p, err := getProject(r.Context(), name)
 	if err != nil {
 		return "", "", err
 	}
@@ -134,7 +135,17 @@ func (s *Server) handleSettingsGavel(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, "invalid config: "+err.Error())
 			return
 		}
-		if err := verify.SaveGavelConfig(dir, cfg); err != nil {
+		for _, kind := range []string{"todos", "pr"} {
+			config, err := workflows.Config(cfg, kind)
+			if err == nil {
+				_, err = workflows.Resolve(kind, config, dir)
+			}
+			if err != nil {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		if err := verify.SaveGavelConfig(path, cfg); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

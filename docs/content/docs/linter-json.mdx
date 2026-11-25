@@ -1,0 +1,94 @@
+---
+title: JSON, YAML, NDJSON and frontmatter
+description: Validate data and Markdown frontmatter syntax and JSON Schemas using explicit paths, document declarations, configured globs or gavel's own file kinds.
+parent: lint-execution
+order: 12
+---
+
+`gavel lint json` checks `.json`, `.yaml`, `.yml`, and `.ndjson` files, and the YAML frontmatter of `.md` and `.mdx` files. It is built into Gavel and runs automatically during `gavel lint` when matching files are found. Files without a schema receive syntax checks; Markdown without frontmatter is skipped, and so are files under a Helm chart's `templates/` directory (one next to a `Chart.yaml`): those are Go templates that only become YAML once Helm renders them.
+
+```sh
+gavel lint json '*.yaml' '*.json' '*.ndjson'
+gavel lint json config.yaml --schema ./schema.json
+gavel lint json ./configs --changed
+gavel lint json ./configs --dry-run
+```
+
+Paths can name individual files, directories, or quoted globs. Gavel applies its usual file scopes, Git ignores, `--ignore`, rule exclusions, and baselines. Explicitly named files can be checked even when Git ignores them.
+
+## Select a schema
+
+`--schema` accepts a local JSON Schema file or an HTTP(S) URL and overrides declarations in the input. Relative CLI schema paths resolve from the invocation's working directory.
+
+Remote schema fetching is disabled by default. When a document declaration, YAML header, path mapping, or local schema reference reaches an HTTP(S) schema, Gavel makes no request and reports one `schema` warning at line 1 of the input file. The file is not validated, and the warning alone leaves the command's exit status at zero. Built-in schemas and local schema files continue to work.
+
+Enable fetching for a trusted input with `--remote-schemas`, or set `lint.linters.json.options.remote-schemas: true`. Passing an HTTP(S) URL explicitly through `--schema` also authorizes remote fetching for that schema and its references. A configured `options.schema` URL requires the remote-fetch option. An explicit local `--schema` does not authorize remote references.
+
+```sh
+gavel lint json config.yaml --remote-schemas
+gavel lint json config.yaml --schema https://example.com/schema.json
+```
+
+The editor applies the same policy when bundling schemas: it uses the JSON linter's configured remote-fetch option, or an explicit remote `gavel edit --schema` URL. Blocked remote schemas surface as errors in the editor instead of fetching them in the browser. Remote fetching accepts HTTP(S) only; other network schemes are refused.
+
+Remote fetching permits public destinations only, including redirects and nested schema references. Loopback, private, link-local, metadata and other reserved destinations, URLs with credentials, and proxies are refused. Use local schema files for schemas hosted on a private network.
+
+For YAML, put the schema declaration in a leading comment. Relative paths resolve from the YAML file:
+
+```yaml
+# yaml-language-server: $schema=./schema.json
+name: example
+```
+
+JSON objects can declare a schema through their top-level `$schema` property:
+
+```json
+{"$schema":"./schema.json","name":"example"}
+```
+
+Markdown frontmatter declares its schema the same way, with a `$schema` key or a `yaml-language-server` comment inside the `---` block. Findings report their line in the Markdown file.
+
+```markdown
+---
+$schema: ../schemas/page.json
+title: Getting started
+---
+```
+
+Gavel leaves `$schema` in the document during validation. The schema must allow that property if it forbids additional properties. Each NDJSON record can declare its own schema; an explicit `--schema` applies to every record.
+
+A file that declares no schema takes the schema its `.gavel.yaml` layers map its path to under [`lint.schemas`](/docs/configuration-reference#lint), so docs sites can type their frontmatter without a `$schema` key on every page. Otherwise gavel's own file kinds get a built-in schema: fixture Markdown frontmatter (`fixtures.files`, by default `**/*.fixture.md`) and YAML/JSON fixture documents.
+
+```yaml
+lint:
+  schemas:
+    "docs/**/*.mdx": schemas/page.json
+```
+
+Schema references resolve relative to the containing schema file or URL. Schemas are loaded and compiled once per run. Draft-07 and draft 2020-12 declarations are supported. Invalid schemas, missing files, and HTTP failures stop validation with an execution error.
+
+## Project defaults
+
+Set a default schema through `lint.linters.json.options.schema`. Local paths resolve from the `.gavel.yaml` file that declares them; URLs stay unchanged. CLI flags override configured defaults.
+
+```yaml
+lint:
+  linters:
+    json:
+      options:
+        schema: ./schemas/config.json
+        remote-schemas: true
+      runtime:
+        timeout: 30s
+```
+
+## Findings
+
+YAML files may contain multiple documents. A YAML header applies to every document in that file. NDJSON validates each nonblank line independently and reports the original line numbers, including blank lines. Records can exceed 64 KiB.
+
+Findings use the `json` source with `syntax` or `schema` rule IDs. Schema findings include an instance path and source location. Error findings and execution failures produce a nonzero command exit status.
+
+```sh
+gavel lint json ./configs --exclude json:schema
+```
+

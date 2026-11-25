@@ -45,10 +45,18 @@ const prFragment = `fragment prFields on PullRequest {
   reviewDecision
   mergeable
   mergeStateStatus
+  autoMergeRequest { mergeMethod enabledAt }
   headRefOid
   headRepository { url }
-  baseRef { target { oid } branchProtectionRule { requiredStatusCheckContexts } }
+  baseRef {
+    target { oid }
+    branchProtectionRule {
+      requiredStatusCheckContexts requiredApprovingReviewCount requiresApprovingReviews
+      requiresConversationResolution requiresCommitSignatures requiresStrictStatusChecks
+    }
+  }
   url
+  updatedAt
   additions
   deletions
   changedFiles
@@ -71,11 +79,13 @@ const prFragment = `fragment prFields on PullRequest {
             nodes {
               __typename
               ... on CheckRun {
+                id
                 name
                 status
                 conclusion
                 detailsUrl
                 checkSuite {
+                  app { slug }
                   workflowRun {
                     workflow {
                       name
@@ -103,6 +113,7 @@ const prFragment = `fragment prFields on PullRequest {
     }
   }
   comments(last: 100) {
+    pageInfo { hasPreviousPage startCursor }
     nodes {
       databaseId
       body
@@ -168,24 +179,26 @@ type graphQLPRConnection struct {
 }
 
 type graphQLPR struct {
-	ID             string        `json:"id"`
-	Number         int           `json:"number"`
-	Title          string        `json:"title"`
-	Body           string        `json:"body"`
-	Author         graphQLAuthor `json:"author"`
-	HeadRefName    string        `json:"headRefName"`
-	BaseRefName    string        `json:"baseRefName"`
-	State          string        `json:"state"`
-	IsDraft        bool          `json:"isDraft"`
-	ReviewDecision string        `json:"reviewDecision"`
-	Mergeable      string        `json:"mergeable"`
-	MergeState     string        `json:"mergeStateStatus"`
-	HeadRefOid     string        `json:"headRefOid"`
+	AutoMerge      *model.AutoMergeInfo `json:"autoMergeRequest"`
+	ID             string               `json:"id"`
+	Number         int                  `json:"number"`
+	Title          string               `json:"title"`
+	Body           string               `json:"body"`
+	Author         graphQLAuthor        `json:"author"`
+	HeadRefName    string               `json:"headRefName"`
+	BaseRefName    string               `json:"baseRefName"`
+	State          string               `json:"state"`
+	IsDraft        bool                 `json:"isDraft"`
+	ReviewDecision string               `json:"reviewDecision"`
+	Mergeable      string               `json:"mergeable"`
+	MergeState     string               `json:"mergeStateStatus"`
+	HeadRefOid     string               `json:"headRefOid"`
 	HeadRepository struct {
 		URL string `json:"url"`
 	} `json:"headRepository"`
 	BaseRef       *graphQLRef          `json:"baseRef"`
 	URL           string               `json:"url"`
+	UpdatedAt     time.Time            `json:"updatedAt"`
 	Additions     int                  `json:"additions"`
 	Deletions     int                  `json:"deletions"`
 	ChangedFiles  int                  `json:"changedFiles"`
@@ -201,16 +214,15 @@ type graphQLPR struct {
 // merging against it reports a clean merge for a PR GitHub calls CONFLICTING.
 // `baseRef.target.oid` is the live tip and the commit GitHub actually merges into.
 type graphQLRef struct {
-	Protection *struct {
-		RequiredContexts []string `json:"requiredStatusCheckContexts"`
-	} `json:"branchProtectionRule"`
-	Target struct {
+	Protection *model.BranchProtectionInfo `json:"branchProtectionRule"`
+	Target     struct {
 		OID string `json:"oid"`
 	} `json:"target"`
 }
 
 type graphQLCommentList struct {
-	Nodes []graphQLCommentNode `json:"nodes"`
+	PageInfo graphQLPageInfo      `json:"pageInfo"`
+	Nodes    []graphQLCommentNode `json:"nodes"`
 }
 
 type graphQLCommentNode struct {
@@ -303,6 +315,8 @@ type graphQLContexts struct {
 }
 
 type graphQLCheckNode struct {
+	Required   *bool              `json:"isRequired"`
+	ID         string             `json:"id"`
 	Typename   string             `json:"__typename"`
 	Name       string             `json:"name"`
 	Status     string             `json:"status"`
@@ -315,6 +329,9 @@ type graphQLCheckNode struct {
 }
 
 type graphQLCheckSuite struct {
+	App *struct {
+		Slug string `json:"slug"`
+	} `json:"app"`
 	WorkflowRun *graphQLWorkflowRun `json:"workflowRun"`
 }
 
@@ -328,6 +345,7 @@ type graphQLWorkflow struct {
 
 func (pr graphQLPR) toPRInfo() *model.PRInfo {
 	info := &model.PRInfo{
+		AutoMerge:         pr.AutoMerge,
 		NodeID:            pr.ID,
 		Number:            pr.Number,
 		Title:             pr.Title,
@@ -343,6 +361,7 @@ func (pr graphQLPR) toPRInfo() *model.PRInfo {
 		HeadRefOID:        pr.HeadRefOid,
 		HeadRepositoryURL: pr.HeadRepository.URL,
 		URL:               pr.URL,
+		UpdatedAt:         pr.UpdatedAt,
 		Additions:         pr.Additions,
 		Deletions:         pr.Deletions,
 		ChangedFiles:      pr.ChangedFiles,
@@ -352,6 +371,7 @@ func (pr graphQLPR) toPRInfo() *model.PRInfo {
 	// undefined rather than clean — an empty OID is what conflict detection
 	// reports as unavailable.
 	if pr.BaseRef != nil {
+		info.BranchProtection = pr.BaseRef.Protection
 		info.BaseRefOID = pr.BaseRef.Target.OID
 	}
 
@@ -472,12 +492,16 @@ func (n graphQLCheckNode) toStatusCheck() model.StatusCheck {
 
 func (n graphQLCheckNode) checkRunToStatusCheck() model.StatusCheck {
 	sc := model.StatusCheck{
+		NodeID:     n.ID,
 		Name:       n.Name,
 		Status:     strings.ToUpper(n.Status),
 		DetailsURL: n.DetailsURL,
 	}
 	if n.Conclusion != nil {
 		sc.Conclusion = strings.ToUpper(*n.Conclusion)
+	}
+	if n.CheckSuite != nil && n.CheckSuite.App != nil {
+		sc.AppSlug = n.CheckSuite.App.Slug
 	}
 	if n.CheckSuite != nil && n.CheckSuite.WorkflowRun != nil {
 		sc.WorkflowName = n.CheckSuite.WorkflowRun.Workflow.Name
@@ -538,8 +562,9 @@ func FetchPR(opts Options, prNumber int) (*model.PRInfo, error) {
 		variables["branch"] = branch
 	}
 
+	ctx := opts.context()
 	logger.Tracef("fetching PR via GraphQL (pr=%s, repo=%s)", formatPRArg(prNumber), repo)
-	respBody, _, err := postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, query, variables)
+	respBody, _, err := postGraphQL(ctx, token, graphqlEndpoint(), activity.KindGraphQL, query, variables)
 	if err != nil {
 		return nil, err
 	}
@@ -559,10 +584,13 @@ func FetchPR(opts Options, prNumber int) (*model.PRInfo, error) {
 		return nil, fmt.Errorf("no PR found for %s in %s", formatPRArg(prNumber), repo)
 	}
 
-	if err := completeReviewThreads(token, gqlPR); err != nil {
+	if err := completeReviewThreads(ctx, token, gqlPR); err != nil {
 		return nil, err
 	}
-	if err := completeHeadChecks(token, gqlPR); err != nil {
+	if err := completeComments(ctx, token, gqlPR); err != nil {
+		return nil, err
+	}
+	if err := completeHeadChecks(ctx, token, gqlPR); err != nil {
 		return nil, err
 	}
 	pr := gqlPR.toPRInfo()

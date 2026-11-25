@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/flanksource/gavel/testrunner/history"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +36,10 @@ func TestRunTestHistoryUsesGlobalCWD(t *testing.T) {
 	}, started, "")
 	require.NoError(t, err)
 
-	got, err := runTestHistory(testHistoryOptions{Paths: []string{"pkg/foo"}})
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	require.NoError(t, rootCmd.PersistentPreRunE(cmd, nil))
+	got, err := runTestHistory(cmd.Context(), testHistoryOptions{Paths: []string{"pkg/foo"}})
 	require.NoError(t, err)
 
 	report, ok := got.(*history.Report)

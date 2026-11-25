@@ -22,8 +22,9 @@ func (c gitHubClient) MergePR(ctx context.Context, number int, input model.Merge
 	if input.HeadSHA != "" && pr.HeadRefOID != input.HeadSHA {
 		return fmt.Errorf("PR head changed from %s to %s; refresh before merging", input.HeadSHA, pr.HeadRefOID)
 	}
+	merge := github.MergeOptions{NodeID: pr.NodeID, Method: input.Method, HeadSHA: pr.HeadRefOID, CommitHeadline: input.CommitTitle, CommitBody: input.CommitBody}
 	if input.Auto {
-		return github.EnableAutoMerge(c.opts, pr.NodeID, input.Method)
+		return github.EnableAutoMerge(c.opts, merge)
 	}
-	return github.MergePullRequest(c.opts, github.MergeOptions{NodeID: pr.NodeID, Method: input.Method, HeadSHA: pr.HeadRefOID})
+	return github.MergePullRequest(c.opts, merge)
 }

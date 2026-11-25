@@ -2,13 +2,16 @@ package git
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/flanksource/gavel/internal/linecounts"
 	"github.com/flanksource/repomap"
 )
 
 // CommitFile is one file changed in a commit: its current path (and previous
 // path for a rename), the change kind, and the added/deleted line counts.
+// Binary files and non-SLOC assets have zero line counts.
 // Language and Scopes are the repomap classification of the file's path, left
 // empty when repomap has no entry for it. The dashboard renders these as the
 // "repomap-based git commit status" rows under an expanded commit.
@@ -55,6 +58,9 @@ func parseCommitFiles(patch string) []CommitFile {
 		if cur.Status != "renamed" {
 			cur.PreviousPath = ""
 		}
+		if cur.Binary || !linecounts.Supported(cur.Path) {
+			cur.Adds, cur.Dels = 0, 0
+		}
 		files = append(files, *cur)
 		cur = nil
 	}
@@ -93,17 +99,35 @@ func parseCommitFiles(patch string) []CommitFile {
 // stripping the a/ and b/ prefixes and any surrounding quotes git adds for
 // paths with special characters.
 func diffGitPaths(line string) (oldPath, newPath string) {
-	fields := strings.Fields(line)
-	if len(fields) < 4 {
+	paths := strings.TrimPrefix(line, "diff --git ")
+	if strings.HasPrefix(paths, `"`) {
+		quoted, err := strconv.QuotedPrefix(paths)
+		if err != nil {
+			return "", ""
+		}
+		return trimDiffPath(quoted), trimDiffPath(strings.TrimSpace(paths[len(quoted):]))
+	}
+	if split := strings.Index(paths, ` "b/`); split >= 0 {
+		return trimDiffPath(paths[:split]), trimDiffPath(paths[split+1:])
+	}
+	oldPath, newPath, ok := strings.Cut(paths, " b/")
+	if !ok {
 		return "", ""
 	}
-	return trimDiffPath(fields[2]), trimDiffPath(fields[3])
+	return trimDiffPath(oldPath), newPath
 }
 
 func trimDiffPath(path string) string {
-	path = strings.Trim(path, `"`)
-	path = strings.TrimPrefix(path, "a/")
-	path = strings.TrimPrefix(path, "b/")
+	if strings.HasPrefix(path, `"`) {
+		unquoted, err := strconv.Unquote(path)
+		if err != nil {
+			return ""
+		}
+		path = unquoted
+	}
+	if strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/") {
+		return path[2:]
+	}
 	return path
 }
 

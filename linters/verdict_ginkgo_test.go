@@ -10,7 +10,7 @@ import (
 
 func TestLintVerdict(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Lint verdict") }
 
-var _ = Describe("Lint verdict", func() {
+var _ = Describe("Lint verdict and run diagnostics", func() {
 	DescribeTable("fails only errors and execution failures", func(result *LinterResult, failed bool) {
 		Expect(HasFailures([]*LinterResult{result})).To(Equal(failed))
 	},
@@ -23,4 +23,9 @@ var _ = Describe("Lint verdict", func() {
 		Entry("skipped", &LinterResult{Skipped: true}, false),
 		Entry("nil", nil, false),
 	)
+	It("keeps fileless diagnostics when the user requests one file", func() {
+		result := &LinterResult{WorkDir: GinkgoT().TempDir(), Violations: []models.Violation{{Severity: models.SeverityWarning}, {File: "other.go"}}}
+		Expect(FilterViolationsByUserScope([]*LinterResult{result}, result.WorkDir, []string{"selected.go"})).To(Equal(1))
+		Expect(result.Violations).To(Equal([]models.Violation{{Severity: models.SeverityWarning}}))
+	})
 })

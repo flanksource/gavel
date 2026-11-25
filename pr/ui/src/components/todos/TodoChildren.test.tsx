@@ -1,17 +1,12 @@
 import type React from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { TodoItem, TodoPhase, TodoPhaseRun } from '../../types';
 import { TodoChildren, TodoRouteLink } from './TodoChildren';
 
-const dialog = vi.hoisted(() => ({ props: [] as Array<{ open: boolean; parent: { ref: string; title: string; dir: string }; onCreated: (dir: string, todo: unknown) => void }> }));
+const openCreateTodo = vi.hoisted(() => vi.fn<(draft: { parent: { ref: string; title: string; dir: string }; onOpen?: (dir: string, todo: TodoItem) => void }) => void>());
 
-vi.mock('./CreateTodoDialog', () => ({
-  CreateTodoDialog: (props: (typeof dialog.props)[number]) => {
-    dialog.props.push(props);
-    return props.open ? <div data-testid="create-child-dialog">{props.parent.title}</div> : null;
-  },
-}));
+vi.mock('./CreateTodoDialog', () => ({ useOpenCreateTodo: () => openCreateTodo }));
 
 // The shared one-second clock, fixed, so the tests can see who subscribes to it
 // and what a live phase reads against.
@@ -117,16 +112,19 @@ describe('TodoChildren', () => {
     expect(screen.getByRole('button', { name: /add child/i })).toBeTruthy();
   });
 
-  it('opens the create flow with this todo as the parent and closes it once the child is created', () => {
-    renderChildren({ childTodos: [] });
-    expect(screen.queryByTestId('create-child-dialog')).toBeNull();
+  it('opens the create flow with this todo as the parent and opens the created child from its toast', () => {
+    const onOpenTodo = vi.fn();
+    openCreateTodo.mockClear();
+    renderChildren({ childTodos: [], onOpenTodo });
+    expect(openCreateTodo).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: /add child/i }));
-    expect(screen.getByTestId('create-child-dialog').textContent).toBe('Migrate ledger');
-    expect(dialog.props.at(-1)!.parent).toEqual({ ref: 'parent-ref', title: 'Migrate ledger', dir: DIR });
+    expect(openCreateTodo).toHaveBeenCalledOnce();
+    const draft = openCreateTodo.mock.calls[0][0];
+    expect(draft.parent).toEqual({ ref: 'parent-ref', title: 'Migrate ledger', dir: DIR });
 
-    act(() => dialog.props.at(-1)!.onCreated(DIR, child('new')));
-    expect(screen.queryByTestId('create-child-dialog')).toBeNull();
+    draft.onOpen!(DIR, child('new'));
+    expect(onOpenTodo).toHaveBeenCalledWith('new');
   });
 
   it('offers no Add child on a todo that is itself a child', () => {

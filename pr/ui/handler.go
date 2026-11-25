@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
-	"html/template"
 	"io/fs"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,12 +25,13 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/blob"
 	gavelctx "github.com/flanksource/gavel/context"
+	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/launch"
 	prcreate "github.com/flanksource/gavel/pr/create"
 	"github.com/flanksource/gavel/pr/model"
 	promptlibrary "github.com/flanksource/gavel/prompts/library"
-	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/tenant"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/google/uuid"
@@ -38,11 +39,10 @@ import (
 )
 
 type SearchConfig struct {
-	Repos       []string `json:"repos"`
-	All         bool     `json:"all,omitempty"`
-	Org         string   `json:"org,omitempty"`
-	Project     string   `json:"project,omitempty"`
-	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
+	Repos   []string `json:"repos"`
+	All     bool     `json:"all,omitempty"`
+	Org     string   `json:"org,omitempty"`
+	Project string   `json:"project,omitempty"`
 }
 
 type repoInfo struct {
@@ -52,6 +52,7 @@ type repoInfo struct {
 }
 
 type Server struct {
+	workspaceData *workspaceData
 	// ctx is the process root context carrying the shared services; reach it
 	// through context(), which gives a zero-value Server its own.
 	ctx     gavelctx.Context
@@ -145,6 +146,7 @@ type Server struct {
 	// duplicate the CLI-owned fixture schema builder.
 	fixtureSchemaProvider        func() (any, error)
 	projectActionOptionsProvider ProjectActionOptionsProvider
+	projectCommitRunner          ProjectCommitRunner
 
 	// commitQueues holds one serialized commit queue per project so several
 	// selections can be committed back-to-back without overlapping git index
@@ -153,7 +155,8 @@ type Server struct {
 
 	// gitChanges wakes /api/git/stream on every git_* row change any process
 	// sharing the database NOTIFYs (see GitChangeListener).
-	gitChanges sse.Notifier
+	gitChanges    sse.Notifier
+	launchService *launch.Service
 
 	// hosted restricts Handler to the hosted route allowlist (see hosted.go).
 	hosted bool
@@ -164,6 +167,8 @@ type Server struct {
 	org         uuid.UUID
 	orgDB       *gorm.DB
 	githubCache *cache.Store
+	// filters holds the callers' named filters (see filters.go).
+	filters *filters.Store
 
 	// blobs is the storage: store from ~/.gavel.yaml; nil keeps attachments in
 	// attachmentsDir.
@@ -184,7 +189,7 @@ type Server struct {
 // SetOrg scopes the Server's stores to org, whose settings live in db. Call it
 // before serving.
 func (s *Server) SetOrg(org uuid.UUID, db *gorm.DB) {
-	s.org, s.orgDB = org, db
+	s.org, s.orgDB, s.filters = org, db, filters.NewStore(db)
 }
 
 // SetHostedWorkspaces serves the organization's repositories as its todo workspaces.
@@ -550,6 +555,16 @@ func (s *Server) RefreshCh() chan struct{} {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/todos/changes", s.handleWorkspaceChanges)
+	mux.HandleFunc("GET /api/connections/storage", s.handleConnectionStorage)
+	for _, pattern := range []string{"GET /api/connections", "POST /api/connections", "GET /api/connections/{reference}", "PATCH /api/connections/{reference}", "DELETE /api/connections/{reference}", "POST /api/connections/{reference}/validate"} {
+		mux.HandleFunc(pattern, s.handleConnections)
+	}
+	if s.launchService != nil {
+		for _, path := range []string{"/api/launch", "/api/launch/", "/api/runs", "/api/runs/", "/api/workspace/"} {
+			mux.Handle(path, s.launchService.Handler())
+		}
+	}
 	router := route.NewRouter(mux)
 	if s.devProxy != nil {
 		mux.HandleFunc("/", s.handleDevRoute)
@@ -588,7 +603,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests/run", s.handleTestRun)
 	mux.Handle(testRunTracesPrefix+"/", s.testRunTraces())
 	mux.HandleFunc("/api/todos", s.handleTodos)
-	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
+	mux.HandleFunc("POST /api/todos/labels/batch", s.handleTodoLabelsBatch)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
 	mux.HandleFunc("GET /api/todos/new/steps", s.handleTodoNewSteps)
@@ -637,6 +652,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ssh-keys", s.handleSSHKeyList)
 	mux.HandleFunc("POST /api/ssh-keys", s.handleSSHKeyAdd)
 	mux.HandleFunc("DELETE /api/ssh-keys/{id}", s.handleSSHKeyDelete)
+	mux.HandleFunc("GET /api/filters", s.handleFilterList)
+	mux.HandleFunc("GET /api/filters/{name}", s.handleFilterGet)
+	mux.HandleFunc("POST /api/filters/{name}/values", s.handleFilterAdd)
+	mux.HandleFunc("DELETE /api/filters/{name}/values", s.handleFilterRemove)
 	mux.HandleFunc("GET /api/model-keys", s.handleModelKeyList)
 	mux.HandleFunc("PUT /api/model-keys/{provider}", s.handleModelKeySet)
 	mux.HandleFunc("DELETE /api/model-keys/{provider}", s.handleModelKeyDelete)
@@ -648,8 +667,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/budgets/{resource}/{kind}", s.handleBudgetSet)
 	mux.HandleFunc("DELETE /api/budgets/{resource}/{kind}", s.handleBudgetRemove)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
-	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
-	mux.HandleFunc("/react-grab", handleReactGrabInstall)
 	mux.HandleFunc("/brand/gavel-logo.svg", handleLogo)
 	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
 	mux.HandleFunc("/brand/menubar-unread.png", handleMenubarUnreadIcon)
@@ -668,13 +685,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
 	mux.HandleFunc("DELETE /api/settings/runtime-presets/{id}", s.handleSettingsRuntimePresets)
 	mux.HandleFunc("POST /api/settings/runtime-presets/resolve", s.handleSettingsRuntimePresetResolve)
+	mux.HandleFunc("/api/settings/lifecycles", s.handleSettingsLifecycles)
+	mux.HandleFunc("/api/pr/lifecycle", s.handlePRLifecycle)
 	mux.HandleFunc("/api/settings/gavel", s.handleSettingsGavel)
 	mux.HandleFunc("/api/settings/gavel/trace", s.handleSettingsGavelTrace)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("PUT /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("DELETE /api/projects/{name}", s.handleProjectByName)
-	mux.HandleFunc("POST /api/projects/{name}/hidden", s.handleProjectHidden)
 	mux.HandleFunc("GET /api/projects/{name}/status", s.handleProjectStatus)
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
@@ -686,12 +704,22 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/project-runs/", http.StripPrefix("/api/project-runs", s.projectRunServer().Handler()))
 	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
 	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
+	mux.HandleFunc("POST /api/projects/{name}/stage", s.handleProjectStage)
+	mux.HandleFunc("POST /api/projects/{name}/stage/lines", s.handleProjectStageLines)
+	mux.HandleFunc("POST /api/projects/{name}/discard", s.handleProjectDiscard)
+	mux.HandleFunc("POST /api/projects/{name}/open", s.handleProjectOpen)
+	mux.HandleFunc("GET /api/editors", s.handleEditors)
 	mux.HandleFunc("GET /api/projects/git-summary", s.handleProjectsGitSummary)
 	mux.HandleFunc("GET /api/projects/{name}/git", s.handleProjectGit)
 	mux.HandleFunc("GET /api/projects/{name}/branch/files", s.handleProjectBranchFiles)
 	mux.HandleFunc("GET /api/projects/{name}/branch/diff", s.handleProjectBranchDiff)
 	mux.HandleFunc("POST /api/projects/{name}/branch/merge", s.handleProjectBranchMerge)
 	mux.HandleFunc("POST /api/projects/{name}/branch/pr", s.handleProjectBranchPR)
+	mux.HandleFunc("GET /api/projects/{name}/branch/rebase", s.handleProjectRebaseContext)
+	mux.HandleFunc("POST /api/projects/{name}/branch/rebase", s.handleProjectRebase)
+	mux.HandleFunc("POST /api/projects/{name}/branch/rebase/abort", s.handleProjectRebaseAbort)
+	mux.HandleFunc("GET /api/projects/{name}/checkout/switch", s.handleProjectCheckoutSwitchPlan)
+	mux.HandleFunc("POST /api/projects/{name}/checkout/switch", s.handleProjectCheckoutSwitch)
 	mux.HandleFunc("GET /api/git/stream", s.handleGitStream)
 	mux.HandleFunc("POST /api/git/focus", s.handleGitFocus)
 	mux.HandleFunc("GET /api/git/metrics", s.handleGitMetrics)
@@ -703,9 +731,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/proc/stop", s.handleProcControl)
 	mux.HandleFunc("/api/proc/restart", s.handleProcControl)
 	mux.HandleFunc("/api/proc/logs", s.handleProcLogs)
-	// Serves GET /api/proc/metrics/{id}?since= as a timeseries the process
-	// dashboard gauges poll; {id} is one URL-encoded segment (see procRunKey).
+	// Serves GET /api/proc/metrics/{id}?since= as a timeseries for the process
+	// dashboard gauges; {id} is one URL-encoded segment (see procRunKey). The
+	// page's TimeseriesStreamProvider reads them in one batch from
+	// /api/proc/metrics/stream over the events hub.
 	metrics.RegisterRoutes(router, s.procMetrics, "/api/proc")
+	metrics.RegisterStreamRoutes(router, metrics.StoreSource(s.procMetrics), "/api/proc")
 	taskSource := s.taskSource
 	if taskSource == nil {
 		taskSource = newSupervisorTaskSource(s.retryCommitRunControl)
@@ -725,7 +756,12 @@ func (s *Server) Handler() http.Handler {
 	// gavel's own prompts (prompts/library) resolve by bare name for every
 	// Captain prompt operation, alongside Captain's configured sources.
 	prompts := captaincli.PromptSources{FS: []captaincli.PromptFS{{Label: promptlibrary.Label, FS: promptlibrary.FS}}}
-	var served http.Handler = mux
+	var served http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/comments") {
+			r = r.WithContext(withEntityServer(r.Context(), s))
+		}
+		mux.ServeHTTP(w, r)
+	})
 	if s.hosted {
 		// Inside the hub, so a sub can't reach a route hosted mode turns off.
 		served = s.hostedRoutes(mux)
@@ -763,9 +799,8 @@ func assetsHandler() http.Handler {
 	}))
 }
 
-// requestOrigin reconstructs the scheme+host this request was served from so an
-// asset can target gavel itself even when injected into a different app's page
-// (e.g. via the React Grab bookmarklet, where window.location is the host app).
+// requestOrigin reconstructs the scheme+host this request was served from, so
+// server-built links (attachment URLs, push base URLs) target gavel itself.
 func requestOrigin(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil {
@@ -775,37 +810,6 @@ func requestOrigin(r *http.Request) string {
 		scheme = proto
 	}
 	return scheme + "://" + r.Host
-}
-
-// handleReactGrabPlugin serves the React Grab plugin script with __GAVEL_ORIGIN__
-// substituted for this server's origin. It is intentionally uncached so the
-// origin always matches the host that served it.
-//
-// The origin is reconstructed from the client-controlled Host / X-Forwarded-Proto
-// headers and lands inside a JS string literal, so it is escaped for that context
-// and can never terminate the literal.
-func handleReactGrabPlugin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	origin := template.JSEscapeString(requestOrigin(r))
-	fmt.Fprint(w, strings.ReplaceAll(reactGrabPluginJS, "__GAVEL_ORIGIN__", origin))
-}
-
-// handleReactGrabInstall serves the install page (bookmarklet + console snippet)
-// for loading the React Grab plugin into any running dev app.
-//
-// The origin comes from the client-controlled Host / X-Forwarded-Proto headers
-// and is reflected into HTML, once inside a `javascript:` href. A browser HTML-
-// decodes that attribute before evaluating it as JS, so the value is escaped in
-// that order too: JS first, then HTML. Escaping only the HTML layer would let
-// `&#39;` decode back into a quote that breaks out of the bookmarklet's string.
-func handleReactGrabInstall(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	origin := html.EscapeString(template.JSEscapeString(requestOrigin(r)))
-	fmt.Fprint(w, strings.ReplaceAll(reactGrabInstallHTML, "__GAVEL_ORIGIN__", origin))
 }
 
 func handleLogo(w http.ResponseWriter, r *http.Request) {
@@ -947,18 +951,19 @@ func (s *Server) snapshotLocked() snapshot {
 }
 
 // setGavelSummary caches a PR's gavel summary and triggers a snapshot
-// push so the sidebar can re-render with fresh badges. Safe to call
-// with no server lock held.
+// push so the sidebar can re-render with fresh badges. A nil summary
+// clears the PR's badge. Safe to call with no server lock held.
 func (s *Server) setGavelSummary(repo string, number int, summary *GavelResultsSummary) {
-	if summary == nil {
-		return
-	}
 	key := fmt.Sprintf("%s#%d", repo, number)
 	s.mu.Lock()
 	if s.gavelCache == nil {
 		s.gavelCache = make(map[string]*GavelResultsSummary)
 	}
-	s.gavelCache[key] = summary
+	if summary == nil {
+		delete(s.gavelCache, key)
+	} else {
+		s.gavelCache[key] = summary
+	}
 	s.mu.Unlock()
 	s.notify()
 }
@@ -1128,10 +1133,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	select {
-	case s.refreshCh <- struct{}{}:
-	default:
-	}
+	s.requestPoll()
 	w.WriteHeader(http.StatusAccepted)
 	fmt.Fprint(w, `{"status":"refresh requested"}`)
 }
@@ -1197,6 +1199,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.mu.RLock()
 		cfg := s.config
 		s.mu.RUnlock()
+		if cfg.Repos == nil {
+			cfg.Repos = []string{}
+		}
 		json.NewEncoder(w).Encode(cfg) //nolint:errcheck
 	case http.MethodPost:
 		var cfg SearchConfig
@@ -1213,9 +1218,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.SetConfig(cfg)
 			go SaveSettings(UISettings{
-				Repos:       cfg.Repos,
-				Project:     cfg.Project,
-				IgnoredOrgs: cfg.IgnoredOrgs,
+				Repos:   cfg.Repos,
+				Project: cfg.Project,
 			})
 		}
 		select {
@@ -1250,19 +1254,22 @@ func (s *Server) handleRepos(w http.ResponseWriter, _ *http.Request) {
 // snappy — org membership changes rarely enough that a 5-minute staleness
 // ceiling is fine.
 //
-// By default the response is filtered through SearchConfig.IgnoredOrgs so
-// the dropdown only shows orgs the user cares about. Pass
-// ?include-ignored=1 to get the full list — used by the chooser's "manage
-// hidden orgs" expansion so the user can unhide.
+// Every org is returned; ?exclude=hidden-github-orgs drops the orgs that
+// filter holds, so the dropdown only shows orgs the user cares about while the
+// chooser's "manage hidden orgs" view still lists the hidden ones to unhide.
 //
 // On fetch failure we return whatever we had cached even if expired; an
 // empty slice rather than an error keeps the chooser functional (it can
 // still offer "All" / "@me" modes).
 func (s *Server) handleOrgs(w http.ResponseWriter, r *http.Request) {
+	excluded, err := s.excludedValues(r, filters.KindGitHubOrg)
+	if err != nil {
+		writeJSONError(w, filterErrorStatus(err), err)
+		return
+	}
 	s.mu.RLock()
 	cached := s.orgs
 	fresh := time.Since(s.orgsCachedAt) < orgsCacheTTL
-	ignored := s.config.IgnoredOrgs
 	s.mu.RUnlock()
 
 	if !fresh {
@@ -1281,9 +1288,7 @@ func (s *Server) handleOrgs(w http.ResponseWriter, r *http.Request) {
 	if cached == nil {
 		cached = []github.Org{}
 	}
-	if r.URL.Query().Get("include-ignored") != "1" {
-		cached = filterIgnoredOrgs(cached, ignored)
-	}
+	cached = filterIgnoredOrgs(cached, slices.Collect(maps.Keys(excluded)))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cached) //nolint:errcheck
 }
@@ -1426,249 +1431,6 @@ func (s *Server) knownHomepage(homepage string) bool {
 	return false
 }
 
-type prDetail struct {
-	PR       *model.PRInfo                `json:"pr,omitempty"`
-	Runs     map[int64]*model.WorkflowRun `json:"runs,omitempty"`
-	Comments []model.PRComment            `json:"comments,omitempty"`
-	// GavelResults holds one summary per gavel sticky comment on the PR
-	// (typically one per matrix shard). Order matches the order of the
-	// sticky comments on the PR.
-	GavelResults []*GavelResultsSummary `json:"gavelResults,omitempty"`
-	Error        string                 `json:"error,omitempty"`
-}
-
-// prFrame builds the SSE `pr` payload. Comments are normalized to a non-nil
-// slice: a PR with no actionable comments would otherwise marshal as
-// `"comments":null`, which the UI rejects as a malformed frame.
-func prFrame(pr *model.PRInfo, comments []model.PRComment) map[string]any {
-	if comments == nil {
-		comments = []model.PRComment{}
-	}
-	return map[string]any{"pr": pr, "comments": comments}
-}
-
-func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
-	numStr := r.URL.Query().Get("number")
-	if repo == "" || numStr == "" {
-		http.Error(w, `{"error":"repo and number params required"}`, http.StatusBadRequest)
-		return
-	}
-	prNumber, err := strconv.Atoi(numStr)
-	if err != nil {
-		http.Error(w, `{"error":"invalid number"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Stream progressive detail via SSE so the UI can render sections
-	// as they arrive rather than waiting for all GitHub round-trips.
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		// Fallback: non-streaming response
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(s.fetchPRDetail(repo, prNumber)) //nolint:errcheck
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	emit := func(event string, data any) {
-		b, _ := json.Marshal(data)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		flusher.Flush()
-	}
-
-	// Serve from detail cache if available
-	cacheKey := SyncStatusKey(repo, prNumber)
-	if entry, ok := s.detailCache.Get(cacheKey); ok {
-		d := entry.Detail
-		if d.PR != nil {
-			emit("pr", prFrame(d.PR, d.Comments))
-		}
-		if len(d.Runs) > 0 {
-			emit("runs", map[string]any{"runs": d.Runs})
-		}
-		if len(d.GavelResults) > 0 {
-			emit("gavel", map[string]any{"gavelResults": d.GavelResults})
-		}
-		emit("done", nil)
-
-		// Trigger background re-sync if stale
-		if s.detailCache.IsStale(cacheKey, s.prUpdatedAt(repo, prNumber)) {
-			if s.detailSyncer != nil {
-				s.detailSyncer.Notify()
-			}
-		}
-		return
-	}
-
-	opts := s.ghOpts
-	opts.Repo = repo
-
-	// Phase 1: PR metadata + comments (single GraphQL call)
-	pr, err := github.FetchPR(opts, prNumber)
-	if err != nil {
-		logger.Warnf("failed to fetch PR %s#%d: %v", repo, prNumber, err)
-		emit("error", map[string]string{"error": err.Error()})
-		emit("done", nil)
-		return
-	}
-	comments := prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
-	emit("pr", prFrame(pr, comments))
-
-	// Phase 2: Workflow runs + gavel results in parallel
-	type runResult struct {
-		id  int64
-		run *model.WorkflowRun
-	}
-
-	// Collect unique run IDs
-	var runIDs []int64
-	seen := make(map[int64]bool)
-	for _, check := range pr.StatusCheckRollup {
-		runID, err := github.ExtractRunID(check.DetailsURL)
-		if err != nil || seen[runID] {
-			continue
-		}
-		seen[runID] = true
-		runIDs = append(runIDs, runID)
-	}
-
-	// Start gavel results fetch in parallel — one goroutine per sticky
-	// shard, with bounded concurrency so PRs with many matrix shards
-	// don't hammer the artifacts API.
-	allComments := append(pr.Comments, pr.ReviewThreads...)
-	artifacts := github.FindGavelArtifacts(allComments)
-	var gavelSummaries []*GavelResultsSummary
-	gavelDone := make(chan struct{})
-	if len(artifacts) > 0 {
-		go func() {
-			defer close(gavelDone)
-			gavelSummaries = fetchGavelArtifacts(opts, artifacts)
-		}()
-	} else {
-		close(gavelDone)
-	}
-
-	// Fetch workflow runs in parallel
-	runCh := make(chan runResult, len(runIDs))
-	for _, id := range runIDs {
-		go func(runID int64) {
-			run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{})
-			if err != nil {
-				logger.Warnf("failed to fetch run %d: %v", runID, err)
-				runCh <- runResult{runID, nil}
-				return
-			}
-			runCh <- runResult{runID, run}
-		}(id)
-	}
-
-	runs := make(map[int64]*model.WorkflowRun, len(runIDs))
-	for range runIDs {
-		rr := <-runCh
-		if rr.run != nil {
-			runs[rr.id] = rr.run
-		}
-	}
-	if len(runs) > 0 {
-		emit("runs", map[string]any{"runs": runs})
-	}
-
-	// Wait for all gavel artifacts (parallel fetch above)
-	<-gavelDone
-	if len(gavelSummaries) > 0 {
-		emit("gavel", map[string]any{"gavelResults": gavelSummaries})
-		s.setGavelSummary(repo, prNumber, aggregateGavelSummaries(gavelSummaries))
-	}
-
-	emit("done", nil)
-
-	// Cache the result for future requests
-	detail := prDetail{PR: pr, Runs: runs, Comments: comments, GavelResults: gavelSummaries}
-	prUpdated := s.prUpdatedAt(repo, prNumber)
-	s.detailCache.Put(cacheKey, detail, prUpdated)
-	s.detailCache.SetStatus(cacheKey, PRSyncStatus{State: SyncUpToDate, LastSynced: time.Now()})
-	s.notify()
-}
-
-// fetchPRDetail loads full PR metadata, workflow runs, and comments from
-// GitHub. Returns a prDetail with Error set on failure rather than an error
-// value so callers (handleDetail, export) can embed it directly.
-func (s *Server) fetchPRDetail(repo string, number int) prDetail {
-	opts := s.ghOpts
-	opts.Repo = repo
-
-	result := prDetail{}
-
-	pr, err := github.FetchPR(opts, number)
-	if err != nil {
-		logger.Warnf("failed to fetch PR %s#%d: %v", repo, number, err)
-		result.Error = err.Error()
-		return result
-	}
-	result.PR = pr
-
-	runs := make(map[int64]*model.WorkflowRun)
-	seen := make(map[int64]bool)
-	for _, check := range pr.StatusCheckRollup {
-		runID, err := github.ExtractRunID(check.DetailsURL)
-		if err != nil || seen[runID] {
-			continue
-		}
-		seen[runID] = true
-		run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{})
-		if err != nil {
-			logger.Warnf("failed to fetch run %d: %v", runID, err)
-			continue
-		}
-		runs[runID] = run
-	}
-	result.Runs = runs
-	result.Comments = prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
-
-	// Scan all comments (including general issue comments, not just review
-	// threads) for gavel sticky comments — one per matrix shard.
-	allComments := append(pr.Comments, pr.ReviewThreads...)
-	artifacts := github.FindGavelArtifacts(allComments)
-	if len(artifacts) > 0 {
-		summaries := fetchGavelArtifacts(opts, artifacts)
-		result.GavelResults = summaries
-		s.setGavelSummary(repo, number, aggregateGavelSummaries(summaries))
-	}
-
-	return result
-}
-
-// populatePRDetail fills a PRViewNode's detail fields using the same fetch
-// logic that powers /api/prs/detail. Returns a non-nil error only when the
-// PR metadata fetch itself fails (in which case the node is left unchanged).
-func (s *Server) populatePRDetail(node *PRViewNode) error {
-	detail := s.fetchPRDetail(node.Repo, node.Number)
-	if detail.Error != "" {
-		return fmt.Errorf("%s", detail.Error)
-	}
-	node.PR = detail.PR
-	node.Runs = detail.Runs
-	node.Comments = detail.Comments
-	node.GavelResults = detail.GavelResults
-	return nil
-}
-
-// prUpdatedAt returns the UpdatedAt for a PR in the current server state.
-func (s *Server) prUpdatedAt(repo string, number int) time.Time {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, pr := range s.prs {
-		if pr.Repo == repo && pr.Number == number {
-			return pr.UpdatedAt
-		}
-	}
-	return time.Time{}
-}
-
 type jobLogsResponse struct {
 	JobID int64        `json:"jobId"`
 	Logs  string       `json:"logs,omitempty"`
@@ -1698,12 +1460,6 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 	opts := s.ghOpts
 	opts.Repo = repo
 
-	// We don't know the steps ahead of time — callers that already have the run can pass
-	// steps via the runId route. Simpler: fetch the run to learn the job's steps, then
-	// call FetchJobLogs. But that's an extra GitHub round-trip. Since the frontend already
-	// has the job + step metadata in memory (from /api/prs/detail), it can reconstruct
-	// the Job shell and we only need jobID for the log fetch. attachLogsToSteps needs
-	// step names to split — so we also need runId here.
 	runIDStr := r.URL.Query().Get("runId")
 	if runIDStr == "" {
 		http.Error(w, `{"error":"runId param required"}`, http.StatusBadRequest)
@@ -1718,7 +1474,8 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	resp := jobLogsResponse{JobID: jobID}
 
-	run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{})
+	// The exact job, with its step names: a re-run replaces the jobs the run lists.
+	run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{JobID: jobID})
 	if err != nil {
 		logger.Warnf("failed to fetch run %d: %v", runID, err)
 		resp.Error = err.Error()
@@ -1726,18 +1483,7 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var job *model.Job
-	for i := range run.Jobs {
-		if run.Jobs[i].DatabaseID == jobID {
-			job = &run.Jobs[i]
-			break
-		}
-	}
-	if job == nil {
-		http.Error(w, `{"error":"job not found in run"}`, http.StatusNotFound)
-		return
-	}
-
+	job := &run.Jobs[0]
 	if err := github.FetchJobLogs(opts, job, tail); err != nil {
 		logger.Warnf("failed to fetch logs for job %d: %v", jobID, err)
 		resp.Error = err.Error()

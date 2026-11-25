@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import type { Snapshot } from '../types';
-import { useTestRun } from './use-test-run';
+import type { LinterResult, Snapshot, Test } from '../types';
+import { deriveStatusText, useTestRun } from './use-test-run';
 
 // A controllable fake EventSource so tests can drive `message`/`done`/`error`
 // frames deterministically without a real network connection.
@@ -18,6 +18,9 @@ class FakeEventSource {
   }
   addEventListener(type: string, fn: (ev: MessageEvent) => void) {
     (this.listeners[type] ??= []).push(fn);
+  }
+  removeEventListener(type: string, fn: (ev: MessageEvent) => void) {
+    this.listeners[type] = (this.listeners[type] ?? []).filter((listener) => listener !== fn);
   }
   emit(type: string, data?: unknown) {
     const ev = { data: data === undefined ? undefined : JSON.stringify(data) } as MessageEvent;
@@ -169,6 +172,7 @@ describe('useTestRun (SSE transport)', () => {
     const closeSpy = vi.fn();
     const injected = {
       addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       close: closeSpy,
       onerror: null,
     };
@@ -239,5 +243,81 @@ describe('useTestRun (polling fallback)', () => {
     const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls.length;
     await vi.advanceTimersByTimeAsync(2000);
     expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls);
+  });
+
+  it('aborts the active request and clears the polling wait on unmount', async () => {
+    const fetchMock = vi.mocked(fetch);
+    const { unmount } = renderHook(() => useTestRun({ forcePoll: true, pollMs: 500 }));
+    await vi.advanceTimersByTimeAsync(0);
+    const signal = fetchMock.mock.calls[0]?.[1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    expect(signal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a previous run response whose JSON finishes after the run changes', async () => {
+    let resolvePrevious!: (value: Snapshot) => void;
+    const previous = new Promise<Snapshot>((resolve) => { resolvePrevious = resolve; });
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, json: () => previous } as Response);
+    const { result, rerender } = renderHook(({ runId }) => useTestRun({ forcePoll: true, runId }), {
+      initialProps: { runId: 'previous' },
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    rerender({ runId: 'current' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(result.current.snapshot).toEqual(runningSnap);
+    await act(async () => { resolvePrevious(doneSnap); });
+    expect(result.current.snapshot).toEqual(runningSnap);
+    expect(result.current.done).toBe(false);
+  });
+});
+
+describe('deriveStatusText', () => {
+  const linter = (over: Partial<LinterResult>): LinterResult => ({ linter: 'l', success: true, duration: 1, violations: [], ...over });
+  const lintTasks: Test[] = [{ name: 'lint prompt', framework: 'task', context: { status: 'running' } }];
+
+  it('counts running, done and failed linters while a lint-only run is in flight', () => {
+    expect(deriveStatusText(snapshot({
+      status: { running: true, lint_run: true },
+      tests: lintTasks,
+      lint: [
+        linter({ status: 'running', success: false }),
+        linter({ status: 'running', success: false }),
+        linter({ status: 'pending', success: false }),
+        linter({}),
+        linter({}),
+        linter({ success: false, error: 'uir executable not found' }),
+      ],
+    }))).toBe('Running linters... (3 running · 2 done · 1 failed)');
+  });
+
+  it('reads Running linters with no counts before any linter has reported', () => {
+    expect(deriveStatusText(snapshot({ status: { running: true, lint_run: true }, tests: lintTasks }))).toBe('Running linters...');
+  });
+
+  it('reports a finished lint-only run with its done and failed counts', () => {
+    expect(deriveStatusText(snapshot({
+      status: { running: false, lint_run: true },
+      tests: [],
+      lint: [linter({}), linter({}), linter({ success: false, error: 'boom' })],
+    }))).toBe('Lint run complete (2 done · 1 failed)');
+  });
+
+  it('keeps the test wording for a live test group and a finished test+lint run', () => {
+    const testGroup: Test = { name: 'Running tests across packages', framework: 'task', context: { status: 'running' } };
+    expect(deriveStatusText(snapshot({ status: { running: true, lint_run: true }, tests: [testGroup], lint: [linter({ status: 'pending', success: false })] }))).toBe('Running tests...');
+    expect(deriveStatusText(snapshot({
+      status: { running: false, lint_run: true },
+      tests: [{ name: 'TestFoo', framework: 'go test', passed: true }],
+      lint: [linter({})],
+    }))).toBe('Test run complete');
+  });
+
+  it('keeps the rerun wording', () => {
+    const metadata = { sequence: 3, kind: 'rerun' as const };
+    expect(deriveStatusText(snapshot({ status: { running: true, lint_run: true }, tests: lintTasks, metadata }))).toBe('Running rerun #3...');
+    expect(deriveStatusText(snapshot({ status: { running: false, lint_run: true }, tests: [], metadata }))).toBe('Rerun complete');
   });
 });

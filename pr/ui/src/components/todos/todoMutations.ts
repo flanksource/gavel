@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import type { ModalSubmissionResult } from '@flanksource/clicky-ui/components';
 import type { TodoChildDisposition, TodoItem, TodoLandResponse, TodoListResponse, TodoRunLanding, TodoRunResponse } from '../../types';
 import { isProjectGitKey, queryKeys } from '../../query';
 import { todoQuery } from './format';
-import { setTodoQueryData, todoQueryKeys } from './todoQueries';
-import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
+import { HIDDEN_PROJECTS_FILTER, invalidateTodoLists, setTodoQueryData, todoQueryKeys } from './todoQueries';
 
 export interface TodoMutationBody {
   body: BodyInit;
@@ -17,10 +17,6 @@ export interface TodoUpdateMutationBody extends TodoMutationBody {
 export interface CreateTodoResponse {
   todo: TodoItem;
   run?: { status: string; sessionId?: string; promptRunId?: string; error?: string };
-}
-
-interface WorkspaceTodoBatchCache {
-  byDir?: Record<string, TodoListResponse>;
 }
 
 function workspaceLabel(dir: string) {
@@ -69,11 +65,19 @@ export async function todoMutationResponseError(response: Response, context: str
   return new TodoMutationError(detail ? `${context}: ${detail}` : `${context} (${response.status})`, response.status);
 }
 
+/** Maps a create request onto a hosted modal outcome: a 4xx means the server
+ *  refused the todo, anything else may have saved it, so the outcome is unknown. */
+export async function createTodoSubmissionResult(create: () => Promise<CreateTodoResponse>): Promise<ModalSubmissionResult<CreateTodoResponse>> {
+  try {
+    return { status: 'success', value: await create() };
+  } catch (cause) {
+    if (cause instanceof TodoMutationError && cause.status < 500) return { status: 'rejected', error: cause.message };
+    return { status: 'unknown', error: cause instanceof Error ? cause.message : 'Could not create todo' };
+  }
+}
+
 export async function invalidateTodoCollections(client: QueryClient, dir: string) {
-  await Promise.all([
-    client.invalidateQueries({ queryKey: todoQueryKeys.list(dir), exact: true }),
-    client.invalidateQueries({ queryKey: workspaceTodoBatchKeys.all }),
-  ]);
+  await invalidateTodoLists(client, dir);
 }
 
 export async function setTodoCaches(client: QueryClient, dir: string, todo: TodoItem) {
@@ -110,25 +114,16 @@ export function optimisticallySetTodoCaches(client: QueryClient, dir: string, to
   const listKey = todoQueryKeys.list(dir);
   const previousItem = client.getQueryData<TodoItem>(itemKey);
   const previousList = client.getQueryData<TodoListResponse>(listKey);
-  const previousBatches = client.getQueriesData({ queryKey: workspaceTodoBatchKeys.all });
+  const workspaceListKey = todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER);
+  const previousWorkspaceList = client.getQueryData<TodoListResponse>(workspaceListKey);
   setTodoQueryData(client, dir, todo);
-  client.setQueriesData<WorkspaceTodoBatchCache>({ queryKey: workspaceTodoBatchKeys.all }, current => {
-    const workspace = current?.byDir?.[dir.trim()];
-    if (!current || !workspace?.items.some(item => item.ref === todo.ref)) return current;
-    return {
-      ...current,
-      byDir: {
-        ...current.byDir,
-        [dir.trim()]: { ...workspace, items: workspace.items.map(item => item.ref === todo.ref ? todo : item) },
-      },
-    };
-  });
   return () => {
     if (previousItem === undefined) client.removeQueries({ queryKey: itemKey, exact: true });
     else client.setQueryData(itemKey, previousItem);
     if (previousList === undefined) client.removeQueries({ queryKey: listKey, exact: true });
     else client.setQueryData(listKey, previousList);
-    for (const [queryKey, value] of previousBatches) client.setQueryData(queryKey, value);
+    if (previousWorkspaceList === undefined) client.removeQueries({ queryKey: workspaceListKey, exact: true });
+    else client.setQueryData(workspaceListKey, previousWorkspaceList);
   };
 }
 

@@ -6,7 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -27,9 +28,9 @@ var _ = Describe("Load", func() {
 	})
 
 	It("returns the default when nothing is configured", func() {
-		def, err := lifecycle.LoadWith(verify.LifecycleConfig{}, workDir)
+		def, err := lifecycle1.LoadWith(verify.LifecycleConfig{}, workDir)
 		Expect(err).NotTo(HaveOccurred())
-		want, err := lifecycle.Default()
+		want, err := lifecycle1.Default()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(def).To(Equal(want))
 	})
@@ -39,7 +40,7 @@ var _ = Describe("Load", func() {
 			"name": "run", "prompt": "file:prompts/custom-run.prompt", "events": []string{"completed"},
 			"outcomes": []map[string]any{{"status": "completed", "when": "run.state == 'succeeded'"}, {"status": "failed", "when": "true"}},
 		}}}
-		def, err := lifecycle.LoadWith(override, workDir)
+		def, err := lifecycle1.LoadWith(override, workDir)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(stepNames(def)).To(Equal([]string{"triage", "plan", "verify", "run", "triage.new"}))
 		run, _ := def.Step("run")
@@ -59,7 +60,7 @@ var _ = Describe("Load", func() {
 				"outcomes": []map[string]any{{"status": "completed", "when": "true"}},
 			}},
 		}
-		def, err := lifecycle.LoadWith(override, workDir)
+		def, err := lifecycle1.LoadWith(override, workDir)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(stepNames(def)).To(Equal([]string{"triage", "plan", "verify", "run", "triage.new", "handoff"}))
 		Expect(def.Subject).To(HaveKeyWithValue("owner", "string"))
@@ -72,7 +73,7 @@ var _ = Describe("Load", func() {
 		Expect(os.MkdirAll(filepath.Join(workDir, ".gavel"), 0o755)).To(Succeed())
 		doc := "name: acme\nsteps:\n  - name: plan\n    prompt: file:plan.prompt\n    events: [new]\n    outcomes:\n      - { status: review, when: \"true\" }\n"
 		Expect(os.WriteFile(filepath.Join(workDir, ".gavel", "lifecycle.yaml"), []byte(doc), 0o644)).To(Succeed())
-		def, err := lifecycle.LoadWith(verify.LifecycleConfig{File: ".gavel/lifecycle.yaml"}, workDir)
+		def, err := lifecycle1.LoadWith(verify.LifecycleConfig{File: ".gavel/lifecycle.yaml"}, workDir)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(def.Name).To(Equal("acme"))
 		plan, _ := def.Step("plan")
@@ -82,7 +83,7 @@ var _ = Describe("Load", func() {
 	It("refuses an override file that walks out of the work dir", func() {
 		const escaping = "../../../etc/passwd"
 
-		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: escaping}, workDir)
+		_, err := lifecycle1.LoadWith(verify.LifecycleConfig{File: escaping}, workDir)
 
 		Expect(err).To(MatchError(ContainSubstring("todos.lifecycle file")))
 		Expect(err).To(MatchError(ContainSubstring(escaping)))
@@ -93,13 +94,13 @@ var _ = Describe("Load", func() {
 		outside := filepath.Join(GinkgoT().TempDir(), "lifecycle.yaml")
 		Expect(os.WriteFile(outside, []byte("name: acme\n"), 0o600)).To(Succeed())
 
-		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: outside}, workDir)
+		_, err := lifecycle1.LoadWith(verify.LifecycleConfig{File: outside}, workDir)
 
 		Expect(err).To(MatchError(ContainSubstring(outside)))
 	})
 
 	It("fails on an override file that does not exist", func() {
-		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: "missing.yaml"}, workDir)
+		_, err := lifecycle1.LoadWith(verify.LifecycleConfig{File: "missing.yaml"}, workDir)
 		Expect(err).To(MatchError(ContainSubstring("todos.lifecycle file")))
 	})
 
@@ -112,7 +113,7 @@ var _ = Describe("Load", func() {
 			Steps: []map[string]any{{"name": "run", "prompt": "todos.run", "outcomes": []map[string]any{{"status": "pending", "when": "true"}}}},
 		}
 
-		_, err := lifecycle.LoadWith(override, workDir)
+		_, err := lifecycle1.LoadWith(override, workDir)
 
 		Expect(err).To(MatchError(ContainSubstring("mutually exclusive")))
 		Expect(err).To(MatchError(ContainSubstring(".gavel/lifecycle.yaml")))
@@ -122,7 +123,7 @@ var _ = Describe("Load", func() {
 		override := verify.LifecycleConfig{Steps: []map[string]any{{
 			"name": "run", "prompt": "todos.run", "events": []string{"completed"}, "outcome": []map[string]any{{"status": "pending", "when": "true"}},
 		}}}
-		_, err := lifecycle.LoadWith(override, workDir)
+		_, err := lifecycle1.LoadWith(override, workDir)
 		Expect(err).To(MatchError(ContainSubstring("step run: at least one outcome is required")))
 	})
 
@@ -134,12 +135,12 @@ var _ = Describe("Load", func() {
 			"name": "run", "prompt": "todos.run", "events": []string{"completed"}, "futureSetting": true,
 			"outcomes": []map[string]any{{"status": "pending", "when": "true"}},
 		}}}
-		def, err := lifecycle.LoadWith(override, workDir)
+		def, err := lifecycle1.LoadWith(override, workDir)
 		Expect(err).NotTo(HaveOccurred())
 		run, ok := def.Step("run")
 		Expect(ok).To(BeTrue())
 		Expect(run.Outcomes).To(Equal([]lifecycle.Outcome{{Status: "pending", When: "true"}}))
-		Expect(warnings.String()).To(ContainSubstring("todos.lifecycle: unknown field steps[0].futureSetting"))
+		Expect(warnings.String()).To(ContainSubstring("lifecycle: unknown field steps[0].futureSetting"))
 	})
 
 	It("names the lifecycle file and field in transition warnings", func() {
@@ -148,20 +149,20 @@ var _ = Describe("Load", func() {
 		DeferCleanup(func() { logger.SetOutput(nil) })
 		path := filepath.Join(workDir, "lifecycle.yaml")
 		Expect(os.WriteFile(path, []byte("futureSetting: true\n"), 0o600)).To(Succeed())
-		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: path}, workDir)
+		_, err := lifecycle1.LoadWith(verify.LifecycleConfig{File: path}, workDir)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(warnings.String()).To(ContainSubstring(path + ": unknown field futureSetting"))
 	})
 
 	It("fails on an override step with no outcomes", func() {
 		override := verify.LifecycleConfig{Steps: []map[string]any{{"name": "run", "prompt": "todos.run", "events": []string{"completed"}}}}
-		_, err := lifecycle.LoadWith(override, workDir)
+		_, err := lifecycle1.LoadWith(override, workDir)
 		Expect(err).To(MatchError(ContainSubstring("step run: at least one outcome is required")))
 	})
 
 	It("Parse rejects a document without a verify step", func() {
 		doc := "name: bare\nsubject:\n  status: string\nsteps:\n  - name: run\n    prompt: todos.run\n    events: [completed]\n    outcomes:\n      - { status: pending, when: \"true\" }\n"
-		_, err := lifecycle.Parse([]byte(doc))
+		_, err := lifecycle1.Parse([]byte(doc))
 		Expect(err).To(MatchError(ContainSubstring(`has no "verify" step`)))
 	})
 })

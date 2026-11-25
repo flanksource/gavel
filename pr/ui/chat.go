@@ -12,16 +12,10 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	clickyaichat "github.com/flanksource/clicky/aichat"
 	"github.com/flanksource/commons-db/shell"
+	"github.com/flanksource/gavel/ai/chatprompt"
+	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
-
-const gavelChatSystemPrompt = "You are Gavel's development workflow assistant. Use the available tools to inspect tracked work. " +
-	"The project tool lists the registered projects (local checkouts) and their TODO counts; each project is addressed by its short name (its id, e.g. clicky-ui). " +
-	"The todo tool lists TODOs across every registered project unless you pass project (a short name) or dir. " +
-	"Its rows are summaries (short id, title, status, priority, labels, project short name); use todo_get with the id for a TODO's body, plan and verification. " +
-	"It returns one page at a time (limit/offset, with the total), so narrow it with status, priority, label or search rather than paging through everything. " +
-	"Items the user attached arrive as the current UI context: a todo item's id is the TODO's short id, and a project item's id is the project's short name. " +
-	"Prefer tool results over guesses, and ask before making changes."
 
 func newGavelChatServer(root *cobra.Command, cwd string, db *captaindb.DB) (*aichat.Service, error) {
 	threads, err := aichat.NewDatabaseThreadStore(db)
@@ -75,16 +69,25 @@ func gavelChatRuntimeProfile(cwd string) aichat.RuntimeProfileProvider {
 		if err := config.AI.Validate(); err != nil {
 			return aichat.RuntimeProfile{}, fmt.Errorf("validate Captain chat settings: %w", err)
 		}
+		cfg, err := verify.LoadGavelConfig(cwd)
+		if err != nil {
+			return aichat.RuntimeProfile{}, err
+		}
+		layers, err := cfg.Chat.Assistant.Layers(verify.PromptResolveOptions{Base: cfg.AI, DefaultPrompt: chatprompt.Default, Dir: cwd, Name: "chat.assistant"})
+		if err != nil {
+			return aichat.RuntimeProfile{}, err
+		}
+		layers = append(layers, api.SpecLayer{
+			Name: "gavel", Scope: api.SpecLayerGlobal,
+			Spec: api.Spec{Setup: &shell.Setup{Cwd: cwd}},
+		})
 		composed, err := api.ComposeSpecLayers(api.ResolveSpecOptions{
-			Layers: []api.SpecLayer{{
-				Name: "gavel", Scope: api.SpecLayerGlobal,
-				Spec: api.Spec{Setup: &shell.Setup{Cwd: cwd}},
-			}},
-			Saved: &config.AI,
+			Layers: layers,
+			Saved:  &config.AI,
 		})
 		if err != nil {
 			return aichat.RuntimeProfile{}, fmt.Errorf("compose Gavel chat runtime profile: %w", err)
 		}
-		return aichat.RuntimeProfile{System: gavelChatSystemPrompt, Composed: composed, Saved: &config.AI}, nil
+		return aichat.RuntimeProfile{Composed: composed, Saved: &config.AI}, nil
 	})
 }

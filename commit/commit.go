@@ -61,6 +61,13 @@ type Options struct {
 	// paths (see stageExplicitFiles), so --stage is ignored. Rejected together
 	// with --interactive / --since / --fixup (see validateFilesOptions).
 	Files []string
+	// IndexPatch is an absolute path to a staged snapshot written by
+	// SnapshotStagedPatch. Run commits exactly that patch from a private index
+	// (HEAD plus the patch), as --stage=staged would, then points the real
+	// index's entries for the committed paths at the new HEAD and deletes the
+	// patch. The real index's other staging is never touched. Rejected
+	// together with file arguments, --interactive, --fixup and --since.
+	IndexPatch string
 	// CommitAll stages all changes and asks the LLM to split them into logical
 	// commit groups (plus a separate chore commit for lock/generated files).
 	// Set implicitly when MaxCommits is provided.
@@ -79,12 +86,17 @@ type Options struct {
 	DryRun     bool
 	Force      bool
 	Push       bool
+	// PushMode, with Push, selects which commits are published and seed the PR.
+	PushMode PushMode
+	// Target selects [remote/]base[:topic] for the push/PR flow.
+	Target string
+	target commitTarget
 	// PushBranch, with Push, pushes HEAD to this remote branch instead of
 	// searching for the PR to push to: the caller already knows which PR it is
 	// working on, and may be committing on a scratch branch no PR is open for.
 	PushBranch string
-	// AutoMerge, with Push, enables GitHub auto-merge on a newly opened PR so
-	// it merges once required checks pass. Only applies to PRs this run opens.
+	// AutoMerge, with Push, enables automatic completion on a newly opened PR
+	// once the provider's requirements are met.
 	AutoMerge bool
 	// MergeType is the merge method used when AutoMerge is set: rebase|squash|merge.
 	MergeType string
@@ -156,6 +168,18 @@ type Options struct {
 	lintGates LintGates
 }
 
+// PushedPR is the pull request a push landed on.
+type PushedPR struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+	Title  string `json:"title,omitempty"`
+	Base   string `json:"base,omitempty"`
+	// Branch is the PR's head branch the commits were pushed to.
+	Branch string `json:"branch,omitempty"`
+	// Created is set when the push opened the PR rather than updating one.
+	Created bool `json:"created,omitempty"`
+}
+
 type CommitResult struct {
 	Label   string   `json:"label,omitempty"`
 	Message string   `json:"message"`
@@ -175,6 +199,9 @@ type Result struct {
 	Staged   []string       `json:"staged,omitempty"`
 	Hooks    []HookResult   `json:"hooks,omitempty"`
 	Commits  []CommitResult `json:"commits,omitempty"`
+	// PR is the pull request a --push opened or pushed to; nil when nothing
+	// was pushed to a PR (no --push, a dry run, or a --push-branch push).
+	PR *PushedPR `json:"pr,omitempty"`
 	// Lint is set when the pre-commit lint gate ran. Non-nil whether it
 	// passed (Violations==0) or blocked (Violations>0); the CLI uses it to
 	// render findings and run the triage flow.
@@ -202,9 +229,17 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.WorkDir = gitRoot
+	if err := opts.resolveTarget(); err != nil {
+		return nil, err
+	}
 	if opts.Push && (opts.PushBranch == "" || opts.AutoMerge) && pushDepsForTest == nil {
 		if err := validatePushProvider(ctx, opts); err != nil {
 			return nil, err
+		}
+	}
+	if opts.Target != "" && !opts.DryRun {
+		if err := runGitFetch(remoteRef{WorkDir: opts.WorkDir, Remote: opts.target.remoteName(), Ref: opts.target.base}); err != nil {
+			return nil, fmt.Errorf("fetch --target base: %w", err)
 		}
 	}
 	// --max-commits only has meaning for the grouping flow, so setting it implies
@@ -214,6 +249,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		opts.CommitAll = true
 	}
 	if err := validateFilesOptions(opts); err != nil {
+		return nil, err
+	}
+	if err := validateIndexPatchOptions(opts); err != nil {
 		return nil, err
 	}
 	if err := validateInteractiveOptions(opts); err != nil {
@@ -230,6 +268,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.PrecommitMode = precommitMode
+	ctx = withGitLockPolicy(ctx, gitLockPolicy{Mode: precommitMode, AssumeYes: opts.AssumeYes})
 
 	gates, err := resolveLintGates(opts.LintFlag, opts.LintSecretsFlag, opts.Config.Lint)
 	if err != nil {
@@ -246,35 +285,16 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	// stageCommitAllSource both no-op on a non-empty index, so no per-flow
 	// change is needed.
 	if len(opts.Files) > 0 {
-		if err := stageExplicitFiles(opts.WorkDir, opts.Files); err != nil {
+		if err := stageExplicitFiles(ctx, opts.WorkDir, opts.Files); err != nil {
 			return nil, err
 		}
 		opts.Stage = StageStaged
 	}
-
-	var (
-		result *Result
-	)
-	switch {
-	case opts.Since != "":
-		result, err = runIssueIdSquash(ctx, opts)
-	case opts.Fixup != "":
-		result, err = runFixup(ctx, opts)
-	case opts.CommitAll:
-		if opts.Message != "" {
-			return nil, ErrCommitAllWithMessage
-		}
-		if opts.MaxCommits == 0 {
-			opts.MaxCommits = defaultMaxCommits
-		}
-		result, err = runCommitAll(ctx, opts)
-	case opts.Batch:
-		result, err = runInteractiveBatch(ctx, opts)
-	case opts.Interactive && !opts.DryRun:
-		result, err = runInteractiveLoop(ctx, opts)
-	default:
-		result, err = runSingleCommit(ctx, opts)
+	if opts.CommitAll && opts.Message != "" {
+		return nil, ErrCommitAllWithMessage
 	}
+
+	result, err := runCommitFlow(ctx, opts)
 	if err != nil {
 		// With --push, "nothing staged" is not fatal: fall through and
 		// push existing local commits / open a PR for what HEAD already
@@ -293,13 +313,45 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	return result, nil
 }
 
+// runCommitFlow dispatches to the commit mode opts select. An --index-patch
+// run commits from its private index and syncs the real index before Run
+// pushes, since a push may rebase the worktree.
+func runCommitFlow(ctx context.Context, opts Options) (*Result, error) {
+	if opts.IndexPatch != "" {
+		index, err := openPrivateIndex(ctx, opts.WorkDir, opts.IndexPatch)
+		if err != nil {
+			return nil, err
+		}
+		opts.IndexPatch, opts.Stage = "", StageStaged
+		result, err := runCommitFlow(ctx, opts)
+		return result, index.close(ctx, err)
+	}
+	switch {
+	case opts.Since != "":
+		return runIssueIdSquash(ctx, opts)
+	case opts.Fixup != "":
+		return runFixup(ctx, opts)
+	case opts.CommitAll:
+		if opts.MaxCommits == 0 {
+			opts.MaxCommits = defaultMaxCommits
+		}
+		return runCommitAll(ctx, opts)
+	case opts.Batch:
+		return runInteractiveBatch(ctx, opts)
+	case opts.Interactive && !opts.DryRun:
+		return runInteractiveLoop(ctx, opts)
+	default:
+		return runSingleCommit(ctx, opts)
+	}
+}
+
 func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Interactive {
 		if _, err := runInteractiveStaging(ctx, opts); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := stageFiles(opts.WorkDir, opts.Stage, opts.Config); err != nil {
+		if err := stageFiles(ctx, opts.WorkDir, opts.Stage, opts.Config); err != nil {
 			return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
 		}
 	}
@@ -320,7 +372,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
 
 	if !opts.Force {
-		hookResults, hookErr := RunHooks(opts.WorkDir, opts.Config.Hooks, source.Files)
+		hookResults, hookErr := RunHooks(ctx, opts.WorkDir, opts.Config.Hooks, source.Files)
 		result.Hooks = hookResults
 		if hookErr != nil {
 			return result, hookErr
@@ -364,7 +416,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return result, nil
 	}
 
-	hash, err := commitWithMessage(opts.WorkDir, analysis.Message)
+	hash, err := commitWithMessage(ctx, opts.WorkDir, analysis.Message)
 	if err != nil {
 		return result, fmt.Errorf("create commit: %w", err)
 	}

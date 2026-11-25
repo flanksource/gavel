@@ -1,0 +1,75 @@
+---
+title: AI
+description: Evaluate a prompt and acceptance checklist with a configured grader.
+parent: fixture-step-reference
+order: 4
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+import FixtureExample from "../../src/components/site/FixtureExample";
+
+Use the `ai` step to evaluate a prompt and acceptance checklist with a configured grader.
+
+## Example
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: AI example
+steps:
+  - id: review
+    kind: ai
+    prompt: Inspect parser changes and cite evidence for each criterion.
+    criteria:
+      - Invalid input identifies its source position.
+      - Valid input preserves its parsed result.
+```
+
+````markdown
+---
+ai:
+  criteriaSection: Acceptance Criteria
+---
+
+# AI example
+
+```prompt
+Inspect parser changes and cite evidence for each criterion.
+```
+
+## Acceptance Criteria
+
+- [ ] Invalid input identifies its source position.
+- [ ] Valid input preserves its parsed result.
+````
+
+</FixtureExample>
+
+Save the YAML variant as `review.fixture.yaml`. Inspect it with `gavel fixtures outline review.fixture.yaml`, then run `gavel fixtures review.fixture.yaml` once the grader is configured. For Markdown, use `review.fixture.md` with the same commands. Running either variant invokes the configured AI backend.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+Configure an available AI runtime and grader through project `ai` and `todos.verify` settings or this step's `model`/`spec`.
+
+</Prerequisites>
+
+`prompt`, `description`, `criteria`, and `checklist` supply the review contract.
+
+## Results and lifetime
+
+With a nonempty `criteria` or `checklist`, the step runs acceptance grading and exposes `passed` and checklist evidence. An AI check executes a grader and can consume its configured budget; it should have concrete criteria rather than an unexplained assertion that it passed.
+
+With no checklist items, the step executes a prompt-only model call. That mode exposes `output.text` and, when the runtime supplies structured output, `output.data`. Write CEL against those outputs, such as `output.text != ""`; prompt-only mode does not supply grading roots like `passed`.
+
+[AI review fixtures](/docs/fixture-ai-review) covers Markdown review documents and grader snapshots.
+
+## Complete step reference
+
+Use Tree or Table to browse global fields and this kind's configuration separately. Expand nested fields or additional metadata when available. Shared behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="ai" />
+

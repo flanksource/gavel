@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -23,31 +24,39 @@ func CoverTest(opts RunOptions, test parsers.Test, profile string) error {
 	if target == "" {
 		target = "."
 	}
-	plan := goBatchPlan{targets: []string{target}, framework: test.Framework, coverProfile: profile}
+	cwd, err := filepath.Abs(o.WorkDir)
+	if err != nil {
+		return err
+	}
+	runtime, configured, err := o.runtimeFor(test.Framework, target)
+	if err != nil {
+		return err
+	}
+	plan := goBatchPlan{runtime: runtime, targets: []string{target}, framework: test.Framework, coverProfile: profile}
+	// The run's own arguments first, so the rerun builds as the run did.
+	focus := runners.TestOptions{Cwd: cwd, Tags: slices.Clone(o.Tags), ExtraArgs: slices.Clone(opts.ExtraArgs)}
 	switch test.Framework {
 	case parsers.GoTest:
 		var segments []string
 		for _, segment := range strings.Split(test.Name, "/") {
 			segments = append(segments, "^"+regexp.QuoteMeta(segment)+"$")
 		}
-		// The run's own arguments first, so the rerun builds as the run did; the later -run wins.
-		plan.args = append(append([]string(nil), opts.ExtraArgs...), "-run="+strings.Join(segments, "/"))
+		focus.Focus.Regex = []string{strings.Join(segments, "/")}
 	case parsers.Ginkgo:
 		bootstrap, err := ginkgoBootstrap(filepath.Join(o.WorkDir, target))
 		if err != nil {
 			return err
 		}
-		if plan.args, err = runners.GinkgoGoTestArgs(opts.ExtraArgs); err != nil {
-			return err
-		}
-		plan.args = append(plan.args, "-run=^"+regexp.QuoteMeta(bootstrap)+"$", "-ginkgo.focus="+ginkgoFocus(test))
+		plan.ginkgo = []string{target}
+		focus.Focus.Regex = []string{ginkgoFocus(test)}
+		focus.ExtraArgs = append(focus.ExtraArgs, "-run=^"+regexp.QuoteMeta(bootstrap)+"$")
 	default:
 		return fmt.Errorf("per-test coverage needs a go test or ginkgo test, not %s", test.Framework)
 	}
-	if len(o.Tags) > 0 {
-		plan.args = append(plan.args, "-tags="+strings.Join(o.Tags, ","))
+	if plan.opts, err = configured.Merge(focus); err != nil {
+		return err
 	}
-	process, err := o.buildGoBatchCommand(plan)
+	process, err := o.buildGoBatchCommand(plan, 0)
 	if err != nil {
 		return err
 	}
