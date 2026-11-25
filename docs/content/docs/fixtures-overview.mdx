@@ -1,0 +1,136 @@
+---
+title: Fixture overview
+description: Write executable YAML and Markdown checks for CLIs, services, test runners, linters, and AI review.
+order: 6
+---
+
+import DocChildren from "../../src/components/site/DocChildren";
+import FixtureExample from "../../src/components/site/FixtureExample";
+import FixtureDocumentReference from "../../src/components/site/FixtureDocumentReference";
+
+Fixtures are YAML, Markdown, or JSON files that Gavel can execute. Start with YAML to declare ordered, typed steps. The examples show YAML first, with a Markdown tab for checks that both formats support. Each format keeps test intent, commands, and assertions in one document that a developer can read and a CI job can run.
+
+Use fixtures when you want to test command output, HTTP smoke checks, generated files, policy checks, or a repeatable workflow around `gavel test`, `gavel lint`, and AI review.
+
+```bash
+gavel fixtures smoke.fixture.yaml # [!code focus] [!code note:one file]
+gavel fixtures "fixtures/**/*.fixture.yaml" # [!code highlight] [!code note:quoted glob]
+gavel test --fixtures # [!code highlight] [!code note:test report]
+```
+
+The first command runs one known fixture file. The second quotes the glob so Gavel expands it consistently instead of relying on shell-specific glob behavior. The third command folds fixture discovery into the normal `gavel test` report, which is what you want when fixtures are part of the project test suite.
+
+`gavel fixtures` runs the files you name directly. `gavel test --fixtures` folds discovered fixture files into the normal test report. Discovery is enabled with `.gavel.yaml`:
+
+```yaml
+fixtures:
+  enabled: true # [!code focus] [!code note:opt in]
+  files: # [!code highlight]
+    - "tests/**/*.fixture.yaml" # [!code note:YAML discovery]
+    - "tests/**/*.fixture.md"
+```
+
+`enabled` opts the project into fixture discovery. `files` replaces the default `**/*.fixture.md` glob with explicit YAML and Markdown patterns. The runner's default discovery glob is `**/*.fixture.md`; include YAML and JSON patterns explicitly when using those formats.
+
+<Callout variant="tip" title="Start with examples">
+  The repository ships copyable fixtures in `examples/precommit.fixture.md`,
+  `examples/pre-release.fixture.md`, `examples/smoke-test.fixture.md`, and
+  `examples/ai-review.fixture.md`.
+</Callout>
+
+## What a fixture can run
+
+A YAML fixture declares steps for commands, tests, lint, AI review, services, browsers, and TODO operations. Markdown supports these runnable forms:
+
+- shell commands, Python, JavaScript, TypeScript, PowerShell, and Go snippets
+- markdown table rows where each row is a test case
+- `yaml test` steps that run the Gavel test engine
+- `yaml lint` steps that run the Gavel lint engine
+- AI verification steps that score a diff against a prompt and checklist
+
+Services, browser lifecycle, and TODO operation steps require a typed YAML or JSON document; plain Markdown fences do not dispatch those step kinds.
+
+Every runnable node becomes part of the same fixture result tree. When fixtures are called from Go, [`Runner.RunTesting`](https://pkg.go.dev/github.com/flanksource/gavel/fixtures#Runner.RunTesting) mirrors markdown files, sections, tables, and table rows as nested [`testing.T.Run`](https://pkg.go.dev/testing#T.Run) nodes. Ginkgo suites can use [`Runner.RegisterGinkgoSpecs`](https://pkg.go.dev/github.com/flanksource/gavel/fixtures#Runner.RegisterGinkgoSpecs) so fixture rows become individual specs.
+
+## Minimal fixture
+
+Save the default example as `smoke.fixture.yaml` and run `gavel fixtures smoke.fixture.yaml`. For the Markdown variant, save `smoke.fixture.md` and run `gavel fixtures smoke.fixture.md`.
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Smoke checks
+steps:
+  - id: greeting
+    exec: printf
+    args: ["%s", "ok"]
+    cel: stdout == "ok" && exitCode == 0
+```
+
+````markdown
+# Smoke checks
+
+```bash
+printf '%s' ok
+```
+
+- cel: stdout == "ok" && exitCode == 0
+````
+
+</FixtureExample>
+
+The YAML step names the executable, supplies its arguments, and checks its result with `cel`. The Markdown variant puts the command in a Bash fence and the same assertion in a bullet. Both can inspect `stdout`, `stderr`, `exitCode`, `json`, and ANSI metadata.
+
+## Choosing a format
+
+<DocChildren parent="fixtures-overview" />
+
+Use [Fixture formats](/docs/fixture-formats) for command-output checks. Use [Runner steps](/docs/fixture-runner-steps) when the fixture should orchestrate `gavel test` or `gavel lint`. Use [AI review fixtures](/docs/fixture-ai-review) when a prompt and acceptance checklist are the test.
+
+For todo work, fixtures also act as the definition of done. A todo's `## Verification` section is parsed as fixture nodes and reused by the [todo run loop](/docs/todo-run-loop).
+
+## Inspect before execution
+
+```bash
+gavel fixtures outline smoke.fixture.yaml
+gavel fixtures --schema
+gavel fixtures --ui --addr localhost smoke.fixture.yaml
+```
+
+`outline` parses the file and shows its runnable structure without executing it. `--schema` exports all editor schemas and help metadata. `--ui` streams the execution tree into the test report UI. Use explicit files for individual checks and configure discovery globs when fixtures belong in a project-wide `gavel test` run.
+
+## Setup, execution, and teardown
+
+A Markdown file can declare `setup` for dotenv values, environment variables, connections, and a checkout or worktree. Gavel prepares it once, runs `build` once in that environment, starts any daemon, and then runs the tests. The daemon stops before setup teardown. A prepared worktree is shared by tests in that file.
+
+Command assertions can inspect stdout, stderr, exit status, parsed JSON, and the summaries of the traces they arm (`traces:`). Assertions must evaluate to true; failed commands and invalid CEL expressions appear as failures with their available evidence. Use `-vvv` to inspect commands, streams, and CEL context.
+
+## Typed YAML and JSON fixtures
+
+The YAML tab above is a complete typed document. JSON uses the same fields. Typed documents execute steps in order and allow an `id`, output exports, wait/retry policies, and background lifetimes. Include `**/*.fixture.yaml` and `**/*.fixture.json` in discovery globs when using them through `gavel test`; the default glob is Markdown only.
+
+Use the [Fixture file reference](/docs/fixture-reference) for the complete Markdown frontmatter and fence fields, and the [Fixture step reference](/docs/fixture-step-reference) for every typed document field and registered kind.
+
+## Schema
+
+<FixtureDocumentReference />
+
+## Ready-made workflow templates
+
+These repository fixtures run against the bundled sample application. Copy one into your project or run it from the Gavel checkout:
+
+| Fixture | Purpose |
+| --- | --- |
+| [precommit](https://github.com/flanksource/gavel/blob/main/examples/precommit.fixture.md) | Lint and test changed files, then check formatting |
+| [pre-release](https://github.com/flanksource/gavel/blob/main/examples/pre-release.fixture.md) | Build and run the complete test and lint suite |
+| [smoke-test](https://github.com/flanksource/gavel/blob/main/examples/smoke-test.fixture.md) | Start the sample app and probe its health |
+| [ai-review](https://github.com/flanksource/gavel/blob/main/examples/ai-review.fixture.md) | Grade a change against an acceptance checklist |
+| [Go code review](https://github.com/flanksource/gavel/blob/main/examples/go-code-review.fixture.md) | Review Go structure and design issues |
+| [Go API checklist](https://github.com/flanksource/gavel/blob/main/examples/go-code-review-jev.fixture.md) | Judge the Go checklist through a single API call; requires `TYPESAFE_API_KEY` |
+
+```bash
+gavel fixtures examples/precommit.fixture.md
+```
+
+For disposable database and process setup, use the [worked service guides](/docs/fixture-kind-services).

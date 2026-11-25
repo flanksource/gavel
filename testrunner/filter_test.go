@@ -1,67 +1,47 @@
 package testrunner
 
 import (
-	"strings"
-	"testing"
-
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/testrunner/runners"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 )
 
-func TestFilterFrameworks(t *testing.T) {
-	detected := []Framework{parsers.GoTest, parsers.Ginkgo, parsers.Jest, parsers.Vitest}
+var _ = Describe("filterFrameworks", func() {
+	detected := func() map[Framework]*runners.TestOptions {
+		return map[Framework]*runners.TestOptions{
+			parsers.GoTest: {Cwd: "/repo"}, parsers.Ginkgo: {Cwd: "/repo"},
+			parsers.Jest: {Cwd: "/repo"}, parsers.Vitest: {Cwd: "/repo"},
+		}
+	}
 
-	t.Run("narrow to single", func(t *testing.T) {
-		got, err := filterFrameworks(detected, []string{"jest"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(got) != 1 || got[0] != parsers.Jest {
-			t.Fatalf("got %v, want [jest]", got)
-		}
+	It("narrows to the requested framework and keeps its detected options", func() {
+		all := detected()
+		got, err := filterFrameworks(all, []string{"jest"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(map[Framework]*runners.TestOptions{parsers.Jest: all[parsers.Jest]}))
 	})
 
-	t.Run("go aliases resolve", func(t *testing.T) {
-		for _, alias := range []string{"go", "gotest", "go-test", "go test"} {
-			got, err := filterFrameworks(detected, []string{alias})
-			if err != nil {
-				t.Fatalf("alias %q: unexpected error: %v", alias, err)
-			}
-			if len(got) != 1 || got[0] != parsers.GoTest {
-				t.Fatalf("alias %q: got %v, want [go test]", alias, got)
-			}
-		}
+	DescribeTable("resolves go aliases", func(alias string) {
+		got, err := filterFrameworks(detected(), []string{alias})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(lo.Keys(got)).To(Equal([]Framework{parsers.GoTest}))
+	}, Entry("go", "go"), Entry("gotest", "gotest"), Entry("go-test", "go-test"), Entry("go test", "go test"))
+
+	It("dedupes a framework requested twice", func() {
+		got, err := filterFrameworks(detected(), []string{"jest", "jest"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(HaveLen(1))
 	})
 
-	t.Run("dedupes", func(t *testing.T) {
-		got, err := filterFrameworks(detected, []string{"jest", "jest"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != 1 {
-			t.Fatalf("expected 1 framework, got %v", got)
-		}
+	It("rejects an unknown framework, listing the known ones", func() {
+		_, err := filterFrameworks(detected(), []string{"jst"})
+		Expect(err).To(MatchError(And(ContainSubstring("unknown framework"), ContainSubstring("jest"))))
 	})
 
-	t.Run("unknown hard-fails with known list", func(t *testing.T) {
-		_, err := filterFrameworks(detected, []string{"jst"})
-		if err == nil {
-			t.Fatal("expected error for typo")
-		}
-		if !strings.Contains(err.Error(), "unknown framework") {
-			t.Errorf("error should mention unknown framework, got %q", err)
-		}
-		if !strings.Contains(err.Error(), "jest") {
-			t.Errorf("error should list known frameworks, got %q", err)
-		}
+	It("rejects a framework that was not detected", func() {
+		_, err := filterFrameworks(detected(), []string{"playwright"})
+		Expect(err).To(MatchError(ContainSubstring("not detected")))
 	})
-
-	t.Run("not-detected hard-fails", func(t *testing.T) {
-		_, err := filterFrameworks(detected, []string{"playwright"})
-		if err == nil {
-			t.Fatal("expected error when requested framework isn't detected")
-		}
-		if !strings.Contains(err.Error(), "not detected") {
-			t.Errorf("error should mention not detected, got %q", err)
-		}
-	})
-}
+})

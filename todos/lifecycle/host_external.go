@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
@@ -59,7 +60,7 @@ func (h *Host) SettleExternalTurn(ctx context.Context, todo *types.TODO, stepNam
 	}
 	status, classifyErr := h.Def.Outcome(step, lc, outcome.Result)
 	if classifyErr != nil {
-		status = OutcomeKeep
+		status = lifecycle.OutcomeKeep
 	}
 	outcome.Status = status
 	return errors.Join(classifyErr, h.OnOutcome(ctx, todo, step, outcome, status))
@@ -67,7 +68,7 @@ func (h *Host) SettleExternalTurn(ctx context.Context, todo *types.TODO, stepNam
 
 // externalOutcome builds the facts and execution record for an external turn
 // through the same collection a dispatched step goes through.
-func (h *Host) externalOutcome(step Step, definition todoprompt.Definition, turn ExternalTurn) (*StepOutcome, error) {
+func (h *Host) externalOutcome(step lifecycle.Step, definition todoprompt.Definition, turn ExternalTurn) (*StepOutcome, error) {
 	source := strings.TrimSpace(turn.Source)
 	if source == "" {
 		return nil, fmt.Errorf("external turn for step %s: source is required", step.Name)
@@ -76,7 +77,7 @@ func (h *Host) externalOutcome(step Step, definition todoprompt.Definition, turn
 		return nil, fmt.Errorf("external turn for step %s: prompt run is required", step.Name)
 	}
 	execution := &todos.ExecutionResult{ExecutorName: source}
-	facts := StepResult{}
+	facts := lifecycle.StepResult{}
 	switch turn.State {
 	case RunSucceeded:
 		if turn.Envelope == nil {

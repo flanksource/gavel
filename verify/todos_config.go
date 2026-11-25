@@ -37,8 +37,8 @@ type TodosConfig struct {
 	// definition-of-done loop. It overrides the base ai: spec field-wise and is
 	// itself overridden by the request.
 	//
-	// File overrides are unsupported because the lifecycle owns the verification
-	// prompt; the checklist is generated from the todo's acceptance criteria.
+	// File overrides customize checklist instructions; criteria and verdict schema
+	// remain owned by the fixture runner.
 	//
 	// The implementer's own run spec is deliberately NOT a layer in this chain: a
 	// grader built from it inherited the session it was grading, along with the
@@ -72,9 +72,6 @@ var builtinStepBlocks = map[string]bool{"run": true, "plan": true, "triage": tru
 // and its map entry disagree with no rule saying which wins; a lifecycle that
 // points at a file and also declares steps inline has the same problem.
 func (c TodosConfig) Validate() error {
-	if c.Verify.File != "" {
-		return fmt.Errorf("todos.verify.file: prompt file overrides are unsupported; configure the step prompt under todos.lifecycle")
-	}
 	for name, spec := range c.Steps {
 		if builtinStepBlocks[name] {
 			return fmt.Errorf("todos.steps.%s: the built-in %s step is configured under todos.%s, not todos.steps", name, name, name)
@@ -94,23 +91,25 @@ func (c TodosConfig) Validate() error {
 // inline Name/Subject/Steps. Steps are kept as generic YAML here — the
 // lifecycle package decodes them strictly, so verify does not depend on it.
 type LifecycleConfig struct {
-	File    string            `yaml:"file,omitempty" json:"file,omitempty"`
-	Name    string            `yaml:"name,omitempty" json:"name,omitempty"`
-	Subject map[string]string `yaml:"subject,omitempty" json:"subject,omitempty"`
-	Steps   []map[string]any  `yaml:"steps,omitempty" json:"steps,omitempty"`
+	File     string            `yaml:"file,omitempty" json:"file,omitempty"`
+	Name     string            `yaml:"name,omitempty" json:"name,omitempty"`
+	Subject  map[string]string `yaml:"subject,omitempty" json:"subject,omitempty"`
+	Steps    []map[string]any  `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Order    *[]string         `yaml:"order,omitempty" json:"order,omitempty"`
+	Disabled *[]string         `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 // IsZero reports whether no override is configured.
 func (c LifecycleConfig) IsZero() bool {
-	return c.File == "" && c.Name == "" && len(c.Subject) == 0 && len(c.Steps) == 0
+	return c.File == "" && c.Name == "" && len(c.Subject) == 0 && len(c.Steps) == 0 && c.Order == nil && c.Disabled == nil
 }
 
 // Validate rejects an override that is both a file and an inline definition.
 // The file form used to win silently, so steps declared next to it were a
 // definition nobody ran.
 func (c LifecycleConfig) Validate() error {
-	if c.File != "" && (c.Name != "" || len(c.Subject) > 0 || len(c.Steps) > 0) {
-		return fmt.Errorf("todos.lifecycle: file (%s) and the inline name/subject/steps are mutually exclusive; move the inline definition into the file or drop file", c.File)
+	if c.File != "" && (c.Name != "" || len(c.Subject) > 0 || len(c.Steps) > 0 || c.Order != nil || c.Disabled != nil) {
+		return fmt.Errorf("lifecycle: file (%s) and inline fields are mutually exclusive; move the inline definition into the file or drop file", c.File)
 	}
 	return nil
 }

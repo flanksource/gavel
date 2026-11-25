@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/captainconfig"
@@ -32,6 +33,7 @@ func (s *Server) handleSettingsPromptCatalog(w http.ResponseWriter, r *http.Requ
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	entries = append(entries, discoveredPromptEntries(r.Context(), scope, dir)...)
 	respondJSON(w, http.StatusOK, entries)
 }
 
@@ -81,6 +83,10 @@ func (s *Server) handleSettingsPromptRender(w http.ResponseWriter, r *http.Reque
 	}
 	desc, ok := findRegisteredPrompt(r.PathValue("id"))
 	if !ok {
+		if strings.HasPrefix(r.PathValue("id"), libraryPromptPrefix) {
+			s.renderLibraryPrompt(w, r, dir, req)
+			return
+		}
 		respondError(w, http.StatusNotFound, "unknown prompt "+r.PathValue("id"))
 		return
 	}

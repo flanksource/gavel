@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
+
+	"github.com/flanksource/clicky/sse"
+	"github.com/flanksource/gavel/utils"
 )
 
 // OutputLine is a single line of process output captured during a rerun.
@@ -14,14 +18,33 @@ type OutputLine struct {
 	Stream string `json:"stream"` // "stdout" or "stderr"
 }
 
+// RerunCommand is a process a rerun ran: Line is argv quoted for a shell, and
+// Shell the line that reruns it from any directory (cd to Cwd first).
+type RerunCommand struct {
+	Cwd   string   `json:"cwd,omitempty"`
+	Argv  []string `json:"argv"`
+	Line  string   `json:"line"`
+	Shell string   `json:"shell"`
+}
+
+func newRerunCommand(cwd string, argv []string) RerunCommand {
+	line := utils.ShellJoin(argv)
+	shell := line
+	if cwd != "" {
+		shell = "cd " + utils.ShellQuote(cwd) + " && " + line
+	}
+	return RerunCommand{Cwd: cwd, Argv: slices.Clone(argv), Line: line, Shell: shell}
+}
+
 // RerunOutputBuffer is a thread-safe buffer that captures process output
 // during a rerun and serves it to SSE clients.
 type RerunOutputBuffer struct {
-	mu      sync.Mutex
-	lines   []OutputLine
-	status  string // "running", "success", "failed", "canceled"
-	command string
-	updated chan struct{}
+	mu       sync.Mutex
+	lines    []OutputLine
+	commands []RerunCommand
+	status   string // "running", "success", "failed", "canceled"
+	command  string
+	updated  sse.Notifier
 }
 
 // NewRerunOutputBuffer creates a buffer ready to capture rerun output.
@@ -29,15 +52,11 @@ func NewRerunOutputBuffer(command string) *RerunOutputBuffer {
 	return &RerunOutputBuffer{
 		status:  "running",
 		command: command,
-		updated: make(chan struct{}, 1),
 	}
 }
 
 func (b *RerunOutputBuffer) notify() {
-	select {
-	case b.updated <- struct{}{}:
-	default:
-	}
+	b.updated.Notify()
 }
 
 // StdoutWriter returns an io.Writer that appends to the buffer as stdout.
@@ -53,6 +72,15 @@ func (b *RerunOutputBuffer) StderrWriter() *streamWriter {
 type streamWriter struct {
 	buf    *RerunOutputBuffer
 	stream string
+}
+
+// RecordCommand makes the writer a utils.CommandRecorder, keeping each command
+// the rerun runs into it.
+func (w *streamWriter) RecordCommand(cwd string, argv []string) {
+	w.buf.mu.Lock()
+	w.buf.commands = append(w.buf.commands, newRerunCommand(cwd, argv))
+	w.buf.mu.Unlock()
+	w.buf.notify()
 }
 
 func (w *streamWriter) Write(p []byte) (int, error) {
@@ -88,10 +116,13 @@ func (b *RerunOutputBuffer) Cancel() {
 	b.notify()
 }
 
+// rerunStreamSnapshot is one SSE frame: Lines are the output written since the
+// last frame, Commands every command the rerun has run so far.
 type rerunStreamSnapshot struct {
-	Lines   []OutputLine `json:"lines"`
-	Status  string       `json:"status"`
-	Command string       `json:"command"`
+	Lines    []OutputLine   `json:"lines"`
+	Commands []RerunCommand `json:"commands"`
+	Status   string         `json:"status"`
+	Command  string         `json:"command"`
 }
 
 func (b *RerunOutputBuffer) snapshot(cursor int) (rerunStreamSnapshot, int) {
@@ -102,9 +133,10 @@ func (b *RerunOutputBuffer) snapshot(cursor int) (rerunStreamSnapshot, int) {
 		lines = b.lines[cursor:]
 	}
 	return rerunStreamSnapshot{
-		Lines:   lines,
-		Status:  b.status,
-		Command: b.command,
+		Lines:    lines,
+		Commands: slices.Clone(b.commands),
+		Status:   b.status,
+		Command:  b.command,
 	}, len(b.lines)
 }
 
@@ -128,6 +160,9 @@ func (s *Server) handleRerunStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	wake, unsubscribe := buf.updated.Subscribe()
+	defer unsubscribe()
+
 	cursor := 0
 	snap, cursor := buf.snapshot(cursor)
 	if b, err := json.Marshal(snap); err == nil {
@@ -142,7 +177,7 @@ func (s *Server) handleRerunStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-buf.updated:
+		case <-wake:
 		case <-ticker.C:
 		}
 

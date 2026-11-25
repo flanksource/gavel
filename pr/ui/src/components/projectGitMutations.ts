@@ -63,9 +63,12 @@ export function useBranchLandMutation({ projectName, onMerged }: {
   });
 }
 
-/** The conflicting paths a rejected land reported, empty for any other failure. */
-export function landConflicts(error: unknown): string[] {
-  if (!(error instanceof HttpError) || typeof error.body !== 'object' || error.body === null) return [];
-  const { conflicts } = error.body as { conflicts?: unknown };
-  return Array.isArray(conflicts) ? conflicts.filter((path): path is string => typeof path === 'string') : [];
+export function landFailure(error: unknown) {
+  if (!(error instanceof HttpError) || typeof error.body !== 'object' || error.body === null) return;
+  const body = error.body as { aborted?: unknown; error?: unknown; conflicts?: unknown };
+  return {
+    aborted: body.aborted === true,
+    reason: typeof body.error === 'string' ? body.error : error.message,
+    conflicts: Array.isArray(body.conflicts) ? body.conflicts.filter((path): path is string => typeof path === 'string') : [],
+  };
 }

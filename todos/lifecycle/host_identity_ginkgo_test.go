@@ -1,7 +1,8 @@
 package lifecycle_test
 
 import (
-	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -26,7 +27,7 @@ const goldenVersion = int64(7)
 var _ = Describe("dispatch identity", func() {
 	DescribeTable("built-in steps keep their pre-lifecycle identities",
 		func(step, wantSession, wantPromptRun string) {
-			identity := lifecycle.IdentityFor(lifecycle.Seed(goldenIssue, step, goldenVersion))
+			identity := lifecycle1.IdentityFor(lifecycle1.Seed(goldenIssue, step, goldenVersion))
 			Expect(identity.SessionID.String()).To(Equal(wantSession))
 			Expect(identity.PromptRunID.String()).To(Equal(wantPromptRun))
 			Expect(identity.AdmissionKey).To(Equal("gavel-todo:" + goldenIssue.String() + ":" + step + ":7"))
@@ -40,15 +41,15 @@ var _ = Describe("dispatch identity", func() {
 	)
 
 	It("gives two steps of one issue version distinct prompt runs", func() {
-		plan := lifecycle.IdentityFor(lifecycle.Seed(goldenIssue, "plan", goldenVersion))
-		triage := lifecycle.IdentityFor(lifecycle.Seed(goldenIssue, "triage", goldenVersion))
-		custom := lifecycle.IdentityFor(lifecycle.Seed(goldenIssue, "security", goldenVersion))
+		plan := lifecycle1.IdentityFor(lifecycle1.Seed(goldenIssue, "plan", goldenVersion))
+		triage := lifecycle1.IdentityFor(lifecycle1.Seed(goldenIssue, "triage", goldenVersion))
+		custom := lifecycle1.IdentityFor(lifecycle1.Seed(goldenIssue, "security", goldenVersion))
 		Expect(plan.PromptRunID).NotTo(Equal(triage.PromptRunID))
 		Expect(triage.PromptRunID).NotTo(Equal(custom.PromptRunID))
 	})
 
 	It("derives a todo's identity from its native id, the step name and its version", func() {
-		host := &lifecycle.Host{}
+		host := &lifecycle1.Host{}
 		todo := &types.TODO{ID: goldenIssue.String(), Version: goldenVersion}
 		identity, err := host.Identity(todo, lifecycle.Step{Name: "run"})
 		Expect(err).NotTo(HaveOccurred())
@@ -56,7 +57,7 @@ var _ = Describe("dispatch identity", func() {
 	})
 
 	It("refuses a todo without a native id", func() {
-		host := &lifecycle.Host{}
+		host := &lifecycle1.Host{}
 		_, err := host.Identity(&types.TODO{ID: "not-a-uuid"}, lifecycle.Step{Name: "run"})
 		Expect(err).To(MatchError(ContainSubstring("has no native id")))
 	})

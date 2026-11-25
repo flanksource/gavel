@@ -118,6 +118,16 @@ var _ = Describe("ExtractFailedTestPackages", func() {
 })
 
 var _ = Describe("ExtractFailedLintTargets", func() {
+	It("reruns the physical inputs for findings in transformed sources", func() {
+		result := &linters.LinterResult{
+			Linter: "sql", Violations: []models.Violation{{File: "generated.sql"}},
+			Sources: map[string]linters.SourceFile{"generated.sql": {Inputs: []string{"manifest.xml", "body.txt"}}},
+		}
+		names, files := ExtractFailedLintTargets([]*linters.LinterResult{result})
+		Expect(names).To(Equal([]string{"sql"}))
+		Expect(files).To(Equal([]string{"manifest.xml", "body.txt"}))
+	})
+
 	It("returns unique linters and files", func() {
 		results := []*linters.LinterResult{
 			{

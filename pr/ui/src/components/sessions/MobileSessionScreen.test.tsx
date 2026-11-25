@@ -105,7 +105,21 @@ describe('MobileSessionScreen', () => {
     expect(screen.getByText('Refactor parser')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
     expect(onBack).toHaveBeenCalledOnce();
-    expect(inspector.props).toMatchObject({ src: '/api/captain/sessions/sess-1', layout: 'compact', follow: false });
+    expect(inspector.props).toMatchObject({ layout: 'compact', follow: false });
+    expect(inspector.props?.session).toMatchObject({
+      currentSessionId: 'sess-1',
+      sessions: [{ id: 'sess-1', src: '/api/captain/sessions/sess-1' }],
+    });
+  });
+
+  it("offers the session's sub-sessions through the inspector's menu", () => {
+    const sub = session({ id: 'sub-1', parentId: 'sess-1', title: 'Helper' });
+    renderScreen({ sessions: [session(), sub] });
+
+    expect(inspector.props?.session).toMatchObject({
+      currentSessionId: 'sess-1',
+      sessions: [{ id: 'sess-1' }, { id: 'sub-1', parentId: 'sess-1', src: '/api/captain/sessions/sub-1' }],
+    });
   });
 
   it('follows a live session', () => {

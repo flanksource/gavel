@@ -1,9 +1,11 @@
 package lifecycle
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
@@ -91,7 +93,7 @@ func (p *prExecution) Post(hc *agent.HookContext, phase agent.Phase) error {
 	if p.tools != nil {
 		addressed = p.tools.TakeThreads()
 	}
-	snapshot, err := p.client.Status(hc.Context, p.number, model.StatusOptions{Threads: true})
+	snapshot, err := p.pushedStatus(hc.Context, head)
 	if err != nil {
 		return err
 	}
@@ -113,6 +115,39 @@ func (p *prExecution) Post(hc *agent.HookContext, phase agent.Phase) error {
 	}
 	hc.Notify("PR #%d pushed revision %s; addressed threads: %s. The fixture will verify the entire PR at this revision.", p.number, head, strings.Join(addressed, ", "))
 	return nil
+}
+
+// prHeadSync bounds how long pushedStatus waits for the provider to report a
+// push: GitHub moves a PR's head asynchronously, so a status read straight after
+// the push can still name the previous head.
+var prHeadSync = struct{ Timeout, Interval time.Duration }{Timeout: time.Minute, Interval: 2 * time.Second}
+
+// pushedStatus is the PR's status once the provider reports it open at head.
+func (p *prExecution) pushedStatus(ctx context.Context, head string) (*model.StatusSnapshot, error) {
+	deadline := time.Now().Add(prHeadSync.Timeout)
+	for {
+		snapshot, err := p.client.Status(ctx, p.number, model.StatusOptions{Threads: true})
+		if err != nil {
+			return nil, err
+		}
+		if snapshot == nil || snapshot.PR == nil {
+			return nil, fmt.Errorf("PR #%d status is empty after pushing %s", p.number, head)
+		}
+		if snapshot.PR.State != "OPEN" {
+			return nil, fmt.Errorf("PR #%d is %s after pushing %s", p.number, snapshot.PR.State, head)
+		}
+		if snapshot.PR.HeadRefOID == head {
+			return snapshot, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("PR #%d still reports head %s %s after pushing %s", p.number, snapshot.PR.HeadRefOID, prHeadSync.Timeout, head)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("wait for PR #%d to report pushed head %s: %w", p.number, head, ctx.Err())
+		case <-time.After(prHeadSync.Interval):
+		}
+	}
 }
 
 // validateAddressedThreads refuses to resolve anything unless the PR is open at

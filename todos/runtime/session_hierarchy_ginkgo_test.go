@@ -3,9 +3,11 @@ package runtime
 import (
 	"encoding/json"
 
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/runtime/runtimetest"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -50,8 +52,44 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 		Expect(root.ParentSessionID).To(BeNil())
 		Expect(root.RootSessionID).To(BeNil())
 		Expect(root.AgentType).To(Equal("todo"))
+		Expect(root.HostID).To(Equal("local"))
 		Expect(root.Metadata).To(HaveKeyWithValue("links", HaveKeyWithValue("todo", created.ID)))
 	})
+
+	DescribeTable("admits the run beneath the TODO root",
+		func(ctx SpecContext, rootHost, expectedHost string) {
+			input := native.CreateIssueInput{ID: uuid.New(), WorkspaceID: provider.workspace.ID, Title: "Run an existing TODO"}
+			if rootHost == "" {
+				_, err := provider.Repository().CreateIssue(ctx, input)
+				Expect(err).NotTo(HaveOccurred())
+			} else {
+				root := provider.todoRootSessionInput(input)
+				root.HostID = rootHost
+				_, err := provider.coordinator.CreateIssueWithSession(ctx, native.CreateIssueSessionInput{Issue: input, RootSession: root})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			todo, err := provider.Get(ctx, input.ID.String())
+			Expect(err).NotTo(HaveOccurred())
+
+			admission, err := runtimetest.Admit(ctx, provider, todo, todos.RunPreparation{
+				Mode: types.ModeRun, ExecutorName: "codex",
+			}, runtimetest.Started(""))
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { provider.ownership.stop(admission.PromptRunID) })
+			run, err := provider.Captain().GetPromptRun(ctx, admission.PromptRunID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(run.RootSessionID).To(Equal(input.ID))
+			operation, err := provider.Captain().GetSession(ctx, run.SessionID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(operation.ParentSessionID).To(Equal(&input.ID))
+			Expect(operation.HostID).To(Equal(captaindb.LocalHostID()))
+			root, err := provider.Captain().GetSession(ctx, input.ID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(root.HostID).To(Equal(expectedHost))
+		},
+		Entry("created on another host", "other-host.example", "other-host.example"),
+		Entry("bootstraps the root for an older TODO", "", "local"),
+	)
 
 	DescribeTable("tags each operation session and links it beneath the TODO root",
 		func(ctx SpecContext, mode types.RunMode, tag string) {

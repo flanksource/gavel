@@ -49,11 +49,11 @@ func startRunTrace(opts testrunner.RunOptions, started time.Time) (*runTrace, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	archive, err := verify.OpenWorkspaceStorage(ctx, opts.WorkDir)
+	archive, err := verify.OpenWorkspaceStorage(ctx, opts.Dirs.StateRoot)
 	if err != nil {
 		return nil, err
 	}
-	host, err := traces.Open(opts.WorkDir, traces.RunID(started))
+	host, err := traces.Open(opts.Dirs.StateRoot, traces.RunID(started))
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func (t *runTrace) serveOn(srv *testui.Server) error {
 // and closes its store, which stays on disk for the saved snapshot and is
 // copied to the configured storage; the oldest runs' stores beyond
 // traces.KeepRuns go.
-func (t *runTrace) close(workDir string) error {
+func (t *runTrace) close(stateRoot string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var processErr error
@@ -105,7 +105,7 @@ func (t *runTrace) close(workDir string) error {
 			t.process.Stop(ctx),
 		)
 	}
-	return errors.Join(processErr, t.host.Close(ctx), t.host.Persist(ctx, t.archive), traces.Prune(workDir, traces.KeepRuns))
+	return errors.Join(processErr, t.host.Close(ctx), t.host.Persist(ctx, t.archive), traces.Prune(stateRoot, traces.KeepRuns))
 }
 
 // runID names the run's store, empty for a run that opened none.

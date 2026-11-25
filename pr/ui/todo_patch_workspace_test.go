@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -213,7 +215,7 @@ func TestTodoAPINativeProviderListsWorkspace(t *testing.T) {
 
 func TestHandleProjectsIncludesTodoCounts(t *testing.T) {
 	withProject(t, "gavel", "flanksource/gavel", "")
-	stubTodoCounts(t, perProjectTodoCounts(func(Project) (todoCounts, error) {
+	stubTodoCounts(t, perProjectTodoCounts(func(projects.Project) (todoCounts, error) {
 		return todoCounts{Total: 1, Open: 1, InProgress: 1}, nil
 	}))
 

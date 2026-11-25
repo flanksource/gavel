@@ -3,7 +3,7 @@ import { Button, ListMenuHeader, ListMenuItems, ListMenuSection } from '@flankso
 import { UiChevronDown, UiChevronRight, UiFolder } from '@flanksource/clicky-ui/icons';
 import type { Project, TodoDensity, TodoListResponse, TodoStatus } from '../../types';
 import { RepoIcon } from '../RepoIcon';
-import { emptyCounts, TodoCountsBar, TodoRow, type TodoRowTarget } from './format';
+import { emptyCounts, TodoActionCounts, TodoCountsBar, TodoRow, type TodoRowTarget } from './format';
 import type { TagIndex } from './tagResolve';
 import { childCountsById } from './todoFamily';
 import { defaultTodoFilters, isChildTodo, isTodoVisible, type TodoFilters } from './todoFilter';
@@ -21,7 +21,11 @@ const emptyItems: TodoListResponse['items'] = [];
 // tab's per-repo grouping: a sticky header with the workspace name and its
 // open/failed/total counts, with the workspace's todos listed beneath. The
 // Closed/Status filter hides matching rows but leaves the header counts whole.
-export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, filters, onToggleStatus, range, density = 'comfortable', sortBy = defaultTodoSort(), selection, tags }: {
+//
+// On a phone (`onFocusStatus` set) the header counts only what needs action, and
+// the rows take their phone layout; the full status breakdown is in the Filters
+// sheet's Status facet.
+export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, filters, onToggleStatus, onFocusStatus, range, density = 'comfortable', sortBy = defaultTodoSort(), selection, tags }: {
   workspace: Project;
   data?: TodoListResponse;
   selectedRef: string;
@@ -32,6 +36,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
   onSelect: (target: TodoRowTarget) => void;
   filters?: TodoFilters;
   onToggleStatus?: (status: TodoStatus) => void;
+  onFocusStatus?: (status: TodoStatus) => void;
   range?: ResolvedRange | null;
   density?: TodoDensity;
   sortBy?: TodoSort;
@@ -102,7 +107,11 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
             </>
           )}
         </Button>
-        <TodoCountsBar counts={counts} statusFilter={active.statuses} onToggle={onToggleStatus} />
+        {onFocusStatus ? (
+          <TodoActionCounts counts={counts} statusFilter={active.statuses} onFocus={onFocusStatus} />
+        ) : (
+          <TodoCountsBar counts={counts} statusFilter={active.statuses} onToggle={onToggleStatus} />
+        )}
       </ListMenuHeader>
       {open && <ListMenuItems items={items} getItemKey={item => item.ref}>{item => (
         <TodoRow
@@ -117,6 +126,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
           tags={tags}
           childDone={item.id ? childCounts.get(item.id)?.done : undefined}
           childTotal={item.id ? childCounts.get(item.id)?.total : undefined}
+          mobile={Boolean(onFocusStatus)}
         />
       )}</ListMenuItems>}
       {open && items.length === 0 && (

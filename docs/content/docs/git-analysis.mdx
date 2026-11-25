@@ -1,0 +1,222 @@
+---
+title: "Git analysis and repository maps"
+description: "Inspect commit history, classify changes, and configure repository analysis."
+parent: cli-usage
+order: 20
+---
+
+## history
+
+Retrieve and filter commit history from a git repository.
+
+```bash
+gavel git history --path .
+gavel git history --since 2024-01-01 --until 2024-06-01
+gavel git history --author "alice" --message "feat*"
+gavel git history abc1234                    # specific commit
+gavel git history main..feature-branch       # commit range
+```
+
+| Flag | Description |
+|------|-------------|
+| `--path` | Path to git repository (default: `.`) |
+| `--since` | Start date for filtering |
+| `--until` | End date for filtering |
+| `--author` | Filter by author name/email (repeatable) |
+| `--message` | Filter by commit message |
+| `--show-patch` | Include diffs |
+
+## analyze
+
+Analyze commits with scope/technology detection, Kubernetes resource change tracking, severity scoring, and optional AI-powered analysis.
+
+```bash
+gavel git analyze
+gavel git analyze --ai --ai-model api:haiku
+gavel git analyze --scope backend --tech kubernetes
+gavel git analyze --summary --summary-window week
+gavel git analyze --include bots --exclude merges --verbose
+gavel git analyze --input previous-run.json   # re-analyze from JSON
+```
+
+| Flag | Description |
+|------|-------------|
+| `--ai` | Enable AI-powered analysis |
+| `--ai-model` | AI model to use |
+| `--scope` | Filter by scope types |
+| `--commit-types` | Filter by conventional commit types |
+| `--tech` | Filter by technologies |
+| `--summary` | Generate a tree-based summary |
+| `--summary-window` | Grouping window: `day`, `week`, `month`, `year` |
+| `--include` | Include named filter sets from `.gitanalyze.yaml` |
+| `--exclude` | Exclude named filter sets from `.gitanalyze.yaml` |
+| `--verbose` | Show what was skipped and why |
+| `--input` | Load from previous JSON output (repeatable) |
+| `--short` | Show condensed file-change summary |
+
+## init-config
+
+Create a `.gitanalyze.yaml` with sensible defaults, then optionally spawn an AI CLI to analyze the repo and recommend additional rules.
+
+```bash
+gavel git init-config                          # create defaults + AI recommendations via claude
+gavel git init-config --model gemini           # use gemini instead
+gavel git init-config --model codex            # use codex instead
+gavel git init-config --model none             # just create the defaults file, no AI
+```
+
+| Flag | Description |
+|------|-------------|
+| `--path` | Path to git repository (default: `.`) |
+| `--model` | AI CLI to use: `claude`, `gemini`, `codex`, or `none` (default: `claude`) |
+| `--debug` | Enable debug logging |
+
+## amend-commits
+
+Interactively improve commit messages using AI. Rewrites commits below a quality score threshold.
+
+```bash
+gavel git amend-commits
+gavel git amend-commits --threshold 5.0 --base main
+gavel git amend-commits --dry-run
+```
+
+## Repository maps
+
+`repomap` exposes the merged architecture and file-mapping rules that Gavel uses elsewhere. If `git analyze` or other classification-aware features look surprising, this is the inspection command to run next.
+
+It has two complementary modes:
+
+- `gavel repomap view` shows the merged effective config for a path.
+- `gavel repomap get` shows the resolved file map for a file or directory.
+
+Common workflows:
+
+```bash
+gavel repomap view .
+gavel repomap view ./cmd
+gavel repomap get ./main.go
+gavel repomap get src/main.go
+```
+
+## Repository classification
+
+Placed at the repository root (or any directory — gavel walks up to find it). Defines scope classification, technology detection, severity rules, and build/git settings.
+
+```yaml
+scopes:
+  rules:
+    backend:
+      - path: "cmd/**"
+      - path: "pkg/**"
+    frontend:
+      - path: "web/**"
+
+tech:
+  rules:
+    kubernetes:
+      - path: "deploy/*.yaml"
+
+severity:
+  default: medium
+  rules:
+    'kubernetes.kind == "Secret"': critical
+    'change.type == "deleted"': critical
+    'commit.line_changes > 500': critical
+
+git:
+  version_field_patterns:
+    - "**.image"
+    - "**.tag"
+    - "**.version"
+```
+
+Embedded defaults detect common scope types (ci, dependency, docs, test) and technologies (Go, Node.js, Python, Kubernetes, Terraform, Docker, etc.).
+
+## Git analysis filters
+
+Controls which commits, files, authors, and resources are excluded from `gavel git analyze`. Placed at the repository root.
+
+```yaml
+# Named filter sets toggled with --include / --exclude
+filter_sets:
+  bots:
+    ignore_authors:
+      - "dependabot*"
+      - "renovate*"
+      - "github-actions*"
+
+  noise:
+    ignore_files:
+      - "*.lock"
+      - "go.sum"
+      - "package-lock.json"
+
+  generated:
+    ignore_resources:
+      - kind: ConfigMap
+        name: "*-generated"
+      - kind: Secret
+
+# Which filter sets are active by default
+includes:
+  - bots
+  - noise
+
+# Top-level filters (always applied)
+ignore_commits:
+  - "fixup!*"
+  - "squash!*"
+
+ignore_files:
+  - ".idea/*"
+  - "*.svg"
+
+ignore_commit_types:
+  - "chore"
+  - "ci"
+
+# CEL expressions — skip when true
+ignore_commit_rules:
+  - cel: "commit.is_merge"
+  - cel: "commit.line_changes > 10000"
+
+# Kubernetes resource filters
+ignore_resources:
+  - kind: Secret
+  - kind: ConfigMap
+    name: "*-generated"
+```
+
+<details>
+<summary>CEL variables for ignore_commit_rules</summary>
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `commit.author` | string | Author name |
+| `commit.author_email` | string | Author email |
+| `commit.subject` | string | Commit subject line |
+| `commit.body` | string | Commit body |
+| `commit.type` | string | Conventional commit type |
+| `commit.scope` | string | Conventional commit scope |
+| `commit.is_merge` | bool | True if subject starts with "Merge " |
+| `commit.files_changed` | int | Number of files changed |
+| `commit.line_changes` | int | Total lines added + deleted |
+| `commit.additions` | int | Lines added |
+| `commit.deletions` | int | Lines deleted |
+| `commit.files` | list | File paths changed |
+| `commit.tags` | list | Commit tags |
+| `commit.is_tagged` | bool | True if commit has tags |
+
+</details>
+
+**Embedded defaults** skip bot authors (`dependabot*`, `renovate*`, `github-actions*`), lock files (`*.lock`, `go.sum`, etc.), and merge commits.
+
+Override at the CLI:
+
+```bash
+gavel git analyze --exclude bots      # include bot commits
+gavel git analyze --include generated  # activate the "generated" filter set
+gavel git analyze --verbose            # show skip reasons
+```
+

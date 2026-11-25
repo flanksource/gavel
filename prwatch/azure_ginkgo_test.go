@@ -37,6 +37,21 @@ var _ = Describe("Azure status watches", func() {
 		r.PR.MergeReadiness.WaitingForMerge = true
 		Expect(followDone(newResultFilters(nil, nil), r, false)).To(BeFalse())
 	})
+	It("keeps following selected comments after Azure pipelines settle", func() {
+		r := azureResult("ready", model.StatusChecks{{Name: "Test", Status: "COMPLETED", Conclusion: "SUCCESS"}})
+		r.Comments = []model.PRComment{{ID: 1, IsReviewThread: true}}
+		filters := newResultFilters([]string{"1"}, []string{"Test"})
+		Expect(followDone(filters, r, false)).To(BeFalse())
+		r.Comments[0].IsResolved = true
+		Expect(followDone(filters, r, false)).To(BeTrue())
+	})
+	It("uses Azure merge readiness for whole-PR verification when an optional reviewer rejects", func() {
+		r := azureResult("ready", model.StatusChecks{{Name: "Test", Status: "COMPLETED", Conclusion: "SUCCESS"}})
+		r.PR.ReviewDecision = "CHANGES_REQUESTED"
+		Expect(wholePRBlocked(r)).To(BeFalse())
+		r.PR.MergeReadiness.State = "blocked"
+		Expect(wholePRBlocked(r)).To(BeTrue())
+	})
 	It("returns failure for cancelled Azure checks", func() {
 		r := azureResult("ready", model.StatusChecks{{Status: "COMPLETED", Conclusion: "CANCELLED"}})
 		Expect(statusExitCode(r)).To(Equal(1))

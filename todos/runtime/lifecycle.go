@@ -150,16 +150,10 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 		return nil
 	}
 	activeStep := native.StepKind("")
+	todo.SessionSummary = issue.Overview.SessionSummary
 	if issue.ActivePromptRunID != nil {
-		// Two point reads rather than one batched overview: see executionIndex
-		// for why ListPromptRunOverviews is not usable here.
-		run, err := p.captain.GetPromptRun(ctx, *issue.ActivePromptRunID)
-		if err != nil {
-			return err
-		}
-		session, err := p.captain.GetSession(ctx, run.SessionID)
-		if err != nil {
-			return err
+		if issue.Overview.OverviewRunID == nil {
+			return fmt.Errorf("TODO %s references missing Captain run %s", issue.ID, *issue.ActivePromptRunID)
 		}
 		if todo.LLM == nil {
 			todo.LLM = &types.LLM{}
@@ -167,52 +161,38 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 		// session.Provider is the executor/driver identity (e.g. "cmux-claude"),
 		// never an LLM model — assigning it to LLM.Model poisons the next run's
 		// --model resolution. Only the session id is a legitimate LLM field here.
-		if strings.TrimSpace(session.ProviderSessionID) != "" {
-			todo.LLM.SessionId = session.ProviderSessionID
+		if strings.TrimSpace(issue.Overview.ProviderSessionID) != "" {
+			todo.LLM.SessionId = issue.Overview.ProviderSessionID
 		}
-		lastRun := run.QueuedAt
-		if run.StartedAt != nil {
-			lastRun = *run.StartedAt
+		if issue.Overview.RunAt == nil {
+			return fmt.Errorf("TODO %s run has no timestamp", issue.ID)
 		}
-		if run.FinishedAt != nil {
-			lastRun = *run.FinishedAt
-		}
+		lastRun := *issue.Overview.RunAt
 		if issue.UpdatedAt.After(lastRun) {
 			lastRun = issue.UpdatedAt
 		}
 		todo.LastRun = &lastRun
-		todo.LastRunSummary = strings.TrimSpace(run.ResultText)
-		links, err := p.promptRunLinks(ctx, issue.WorkspaceID, issue.ID)
-		if err != nil {
-			return err
-		}
-		todo.Attempts = len(links)
-		for _, link := range links {
-			if link.PromptRunID != run.ID {
-				continue
-			}
-			activeStep = link.StepKind
-			switch link.StepKind {
-			case native.StepPlan:
-				todo.RunMode = types.ModePlan
-			case native.StepVerify:
-				todo.RunMode = types.ModeVerify
-			default:
-				todo.RunMode = types.ModeRun
-			}
-			break
+		todo.LastRunSummary = strings.TrimSpace(issue.Overview.ResultText)
+		todo.Attempts = issue.Overview.Attempts
+		activeStep = issue.Overview.StepKind
+		switch activeStep {
+		case native.StepPlan:
+			todo.RunMode = types.ModePlan
+		case native.StepVerify:
+			todo.RunMode = types.ModeVerify
+		default:
+			todo.RunMode = types.ModeRun
 		}
 	}
 
 	if issue.SelectedPlanID == nil {
 		return nil
 	}
-	plan, err := p.captain.GetPlan(ctx, *issue.SelectedPlanID)
-	if err != nil {
-		return err
+	if issue.Overview.OverviewPlanID == nil {
+		return fmt.Errorf("TODO %s references missing Captain plan %s", issue.ID, *issue.SelectedPlanID)
 	}
-	if plan.LatestRevision != nil {
-		if plan.LatestRevision.Revision <= 1 {
+	if issue.Overview.PlanRevision != nil {
+		if *issue.Overview.PlanRevision <= 1 {
 			todo.PlanStatus = types.PlanNew
 		} else {
 			todo.PlanStatus = types.PlanUpdated
@@ -220,7 +200,7 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 	}
 	// Plan paths are source metadata only in native storage.
 	todo.PlanPath = ""
-	todo.Status = todoStatusWithPlan(issue.Status, issue.ExecutionState, activeStep, plan.ApprovalState)
+	todo.Status = todoStatusWithPlan(issue.Status, issue.ExecutionState, activeStep, captaindb.PlanApprovalState(issue.Overview.ApprovalState))
 	return nil
 }
 
@@ -231,16 +211,19 @@ func todoStatusWithPlan(
 	approval captaindb.PlanApprovalState,
 ) types.Status {
 	projected := todoStatus(status, execution)
-	planReviewable := execution == native.ExecutionIdle || (execution == native.ExecutionFailed && step == native.StepPlan)
-	if (status != native.StatusOpen && status != native.StatusDraft) || !planReviewable {
+	if status != native.StatusOpen && status != native.StatusDraft {
 		return projected
 	}
 	switch approval {
 	case captaindb.PlanApprovalPending, captaindb.PlanApprovalRevisionRequested:
-		return types.StatusReview
+		switch execution {
+		case native.ExecutionIdle, native.ExecutionFailed, native.ExecutionStalled, native.ExecutionVerificationFailed:
+			return types.StatusReview
+		}
 	case captaindb.PlanApprovalRejected, captaindb.PlanApprovalApproved:
-		return types.StatusPending
-	default:
-		return projected
+		if execution == native.ExecutionIdle || (execution == native.ExecutionFailed && step == native.StepPlan) {
+			return types.StatusPending
+		}
 	}
+	return projected
 }

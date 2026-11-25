@@ -4,6 +4,7 @@ package blob
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,15 @@ type localStore struct {
 // Local returns a Store over the directory root, which is created on the first write.
 func Local(root string) Store {
 	return &localStore{root: root}
+}
+
+// LocalDirectory returns the directory backing a store opened with Local.
+func LocalDirectory(store Store) (string, bool) {
+	local, ok := store.(*localStore)
+	if !ok {
+		return "", false
+	}
+	return local.root, true
 }
 
 // open opens the root directory; a root that doesn't exist yet holds no objects.
@@ -49,9 +59,24 @@ func (s *localStore) Write(ctx context.Context, key string, r io.Reader) error {
 			return fmt.Errorf("write blob %s: %w", key, err)
 		}
 	}
-	file, err := root.Create(key)
+	mode := fs.FileMode(0o666)
+	existing, err := root.Stat(key)
+	if err == nil {
+		mode = existing.Mode().Perm()
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("stat blob %s: %w", key, err)
+	}
+	temp := path.Join(path.Dir(key), ".blob-"+rand.Text())
+	file, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return fmt.Errorf("write blob %s: %w", key, err)
+	}
+	defer root.Remove(temp)
+	if existing != nil {
+		if err := file.Chmod(mode); err != nil {
+			_ = file.Close()
+			return fmt.Errorf("set permissions for blob %s: %w", key, err)
+		}
 	}
 	if _, err := io.Copy(file, r); err != nil {
 		_ = file.Close()
@@ -59,6 +84,9 @@ func (s *localStore) Write(ctx context.Context, key string, r io.Reader) error {
 	}
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("write blob %s: %w", key, err)
+	}
+	if err := root.Rename(temp, key); err != nil {
+		return fmt.Errorf("publish blob %s: %w", key, err)
 	}
 	return nil
 }

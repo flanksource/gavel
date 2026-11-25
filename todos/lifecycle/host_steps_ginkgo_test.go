@@ -3,15 +3,16 @@ package lifecycle_test
 import (
 	"context"
 
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-func stateOf(states []lifecycle.StepState, name string) lifecycle.StepState {
+func stateOf(states []lifecycle1.StepState, name string) lifecycle1.StepState {
 	GinkgoHelper()
 	for _, state := range states {
 		if state.Step.Name == name {
@@ -19,13 +20,13 @@ func stateOf(states []lifecycle.StepState, name string) lifecycle.StepState {
 		}
 	}
 	Fail("no step state for " + name)
-	return lifecycle.StepState{}
+	return lifecycle1.StepState{}
 }
 
 var _ = Describe("Host step selection", func() {
 	var (
 		provider *fakeProvider
-		host     *lifecycle.Host
+		host     *lifecycle1.Host
 		ctx      context.Context
 	)
 	BeforeEach(func() {
@@ -44,7 +45,7 @@ var _ = Describe("Host step selection", func() {
 			Expect(err).NotTo(HaveOccurred())
 			names := make([]string, len(states))
 			suggested := ""
-			byName := map[string]lifecycle.StepState{}
+			byName := map[string]lifecycle1.StepState{}
 			for i, state := range states {
 				names[i] = state.Step.Name
 				byName[state.Step.Name] = state
@@ -108,7 +109,7 @@ var _ = Describe("Host step selection", func() {
 		It("reads a custom step's runs under its own name", func() {
 			// A project step that escalates once two runs have happened, whatever
 			// they were, and never twice: it reads size(runs) and last.<itself>.
-			def, err := lifecycle.LoadWith(verify.LifecycleConfig{Steps: []map[string]any{{
+			def, err := lifecycle1.LoadWith(verify.LifecycleConfig{Steps: []map[string]any{{
 				"name": "escalate", "prompt": "file:prompts/escalate.prompt", "events": []string{"escalated"},
 				"when":     "size(runs) >= 2 && !has(last.escalate)",
 				"outcomes": []map[string]any{{"status": "keep", "when": "true"}},

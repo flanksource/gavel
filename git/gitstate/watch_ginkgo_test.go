@@ -50,6 +50,19 @@ var _ = Describe("metadata watcher", func() {
 		Eventually(func() uint64 { return enqueued("status", "watch") }).
 			WithTimeout(10 * time.Second).WithPolling(debounce).Should(BeNumerically(">", before))
 	})
+
+	It("rescans refs when a fetch writes FETCH_HEAD", func(ctx SpecContext) {
+		r := newTrackedRepo(ctx, gitstate.Options{Debounce: debounce, Idle: time.Hour, Hot: time.Hour})
+		Expect(r.tracker.Start()).To(Succeed())
+		_, err := r.tracker.State(ctx, r.root)
+		Expect(err).NotTo(HaveOccurred())
+		before := enqueued("refs", "watch")
+
+		Expect(os.WriteFile(filepath.Join(r.root, ".git", "FETCH_HEAD"), []byte(r.base+"\t\tbranch 'main' of origin\n"), 0o644)).To(Succeed())
+
+		Eventually(func() uint64 { return enqueued("refs", "watch") }).
+			WithTimeout(10 * time.Second).WithPolling(debounce).Should(BeNumerically(">", before))
+	})
 })
 
 var _ = Describe("scan queue", func() {

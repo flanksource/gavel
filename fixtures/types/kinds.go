@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/processruntime"
 )
 
 // The kinds this package owns: every markdown fence/row lowers to one of them,
@@ -36,7 +37,33 @@ func (k execKind) Execute(ctx context.Context, step *fixtures.StepContext) (fixt
 	if err != nil {
 		return fixtures.StepOutcome{}, err
 	}
-	return fixtures.StepOutcome{Result: result, Outputs: execOutputs(result)}, nil
+	outcome := fixtures.StepOutcome{Result: result, Outputs: execOutputs(result)}
+	if step.Test.Step != nil {
+		cfg, err := fixtures.KindConfig[execStepConfig](step)
+		if err != nil {
+			return fixtures.StepOutcome{}, err
+		}
+		if cfg.Cleanup != "" {
+			outcome.Cleanup = execCleanup(step, cfg)
+		}
+	}
+	return outcome, nil
+}
+
+// execCleanup runs the step's cleanup script at teardown with the step's env
+// and cwd; a non-zero exit is the teardown's error, naming its output.
+func execCleanup(step *fixtures.StepContext, cfg execStepConfig) func(context.Context) error {
+	return func(ctx context.Context) error {
+		test, err := execStepConfig{Script: cfg.Cleanup, Env: cfg.Env, CWD: cfg.CWD}.apply(step.Test)
+		if err != nil {
+			return fmt.Errorf("exec step %q cleanup: %w", step.Spec.ID, err)
+		}
+		result := (&ExecFixture{}).Run(ctx, test, step.Opts)
+		if result.Status != task.StatusPASS {
+			return fmt.Errorf("exec step %q cleanup exited %d: %s\n%s%s", step.Spec.ID, result.ExitCode, result.Error, result.Stdout, result.Stderr)
+		}
+		return nil
+	}
 }
 
 // Observe re-runs the command, so `wait.until` polls over fresh
@@ -64,7 +91,13 @@ func (execKind) run(ctx context.Context, step *fixtures.StepContext) (fixtures.F
 			return fixtures.FixtureResult{}, fmt.Errorf("exec step %q: %w", step.Spec.ID, err)
 		}
 	}
-	return (&ExecFixture{}).Run(ctx, test, step.Opts), nil
+	opts := step.Opts
+	if test.DeclaredTimeout() != nil {
+		// runKind enforces the declared timeout on ctx; the configured one
+		// (test.testTimeout) only limits a command that declares none.
+		opts.ProcessRuntime = opts.ProcessRuntime.Merge(processruntime.Options{Timeout: new("")})
+	}
+	return (&ExecFixture{Stdout: step.Stdout(), Stderr: step.Stderr()}).Run(ctx, test, opts), nil
 }
 
 // execStepConfig is a YAML/JSON exec step. `script` runs under bash -c (or
@@ -73,6 +106,7 @@ func (execKind) run(ctx context.Context, step *fixtures.StepContext) (fixtures.F
 // defaults to 0.
 type execStepConfig struct {
 	Script   string              `json:"script,omitempty"`
+	Cleanup  string              `json:"cleanup,omitempty"`
 	Exec     string              `json:"exec,omitempty"`
 	Args     []string            `json:"args,omitempty"`
 	Env      map[string]any      `json:"env,omitempty"`
@@ -131,6 +165,7 @@ var execSchema = json.RawMessage(`{
   "anyOf": [{"required": ["script"]}, {"required": ["exec"]}],
   "properties": {
     "script": {"type": "string", "description": "Shell script run with bash -c (or exec -c)."},
+    "cleanup": {"type": "string", "description": "Shell script run with bash -c at fixture teardown, on every exit path once this step ran (passed or failed), with the step's env and cwd. A non-zero exit fails the teardown."},
     "exec": {"type": "string", "description": "Executable to run."},
     "args": {"type": "array", "items": {"type": "string"}},
     "env": {"type": "object", "additionalProperties": {"type": ["string", "number", "boolean"]}},
@@ -190,6 +225,7 @@ func (k runnerKind) Execute(ctx context.Context, step *fixtures.StepContext) (fi
 	}
 	opts := step.Opts
 	opts.Context = ctx
+	opts.Progress = step.Progress
 	result := k.run(test, opts)
 	outputs := map[string]any{}
 	if result.Run != nil {

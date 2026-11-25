@@ -4,10 +4,12 @@ import (
 	"fmt"
 
 	"github.com/flanksource/gavel/ai/aifix"
+	"github.com/flanksource/gavel/ai/chatprompt"
 	"github.com/flanksource/gavel/ai/prfix"
 	"github.com/flanksource/gavel/commit"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/prompts"
+	"github.com/flanksource/gavel/prompts/library"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/gavel/testrunner/outline"
 	todomerge "github.com/flanksource/gavel/todos/merge"
@@ -18,6 +20,8 @@ import (
 func All() []prompts.Prompt {
 	var all []prompts.Prompt
 	all = append(all, aifix.Prompts()...)
+	all = append(all, chatprompt.Prompts()...)
+	all = append(all, library.Prompts()...)
 	all = append(all, prfix.Prompts()...)
 	all = append(all, gavelgit.Prompts()...)
 	all = append(all, commit.Prompts()...)

@@ -1,14 +1,15 @@
 package github
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/flanksource/gavel/github/activity"
 )
 
-const enableAutoMergeMutation = `mutation($prId: ID!, $method: PullRequestMergeMethod!) {
-  enablePullRequestAutoMerge(input: {pullRequestId: $prId, mergeMethod: $method}) {
+const enableAutoMergeMutation = `mutation($prId: ID!, $method: PullRequestMergeMethod!, $head: GitObjectID, $headline: String, $body: String) {
+  enablePullRequestAutoMerge(input: {pullRequestId: $prId, mergeMethod: $method, expectedHeadOid: $head, commitHeadline: $headline, commitBody: $body}) {
     pullRequest { number }
   }
 }`
@@ -35,11 +36,11 @@ func MergeMethodFor(mergeType string) (string, error) {
 // GraphQL mutation. postGraphQL surfaces HTTP-level and GraphQL errors[] (e.g.
 // "auto merge is not allowed for this repository") as Go errors, so any failure
 // propagates rather than being swallowed.
-func EnableAutoMerge(opts Options, prNodeID, mergeType string) error {
-	if strings.TrimSpace(prNodeID) == "" {
+func EnableAutoMerge(opts Options, input MergeOptions) error {
+	if strings.TrimSpace(input.NodeID) == "" {
 		return fmt.Errorf("EnableAutoMerge: PR node ID is required")
 	}
-	method, err := MergeMethodFor(mergeType)
+	method, err := MergeMethodFor(input.Method)
 	if err != nil {
 		return err
 	}
@@ -48,10 +49,7 @@ func EnableAutoMerge(opts Options, prNodeID, mergeType string) error {
 		return err
 	}
 
-	_, _, err = postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, enableAutoMergeMutation, map[string]any{
-		"prId":   prNodeID,
-		"method": method,
-	})
+	_, _, err = postGraphQL(context.Background(), token, graphqlEndpoint(), activity.KindGraphQL, enableAutoMergeMutation, mergeVariables(input, method))
 	if err != nil {
 		return fmt.Errorf("enable auto-merge (%s): %w", method, err)
 	}

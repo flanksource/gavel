@@ -10,7 +10,9 @@ import {
   useDeleteTodoMutation,
   useUpdateTodoMutation,
 } from './todoMutations';
-import { todoQueryKeys } from './todoQueries';
+import { HIDDEN_PROJECTS_FILTER, todoQueryKeys } from './todoQueries';
+
+const workspaceList = todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER);
 
 function todo(overrides: Partial<TodoItem> = {}): TodoItem {
   return {
@@ -55,13 +57,12 @@ function wrapper(queryClient: QueryClient) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('todo mutations', () => {
-  it('stores a created todo and invalidates its direct list plus the shared workspace batches', async () => {
+  it('stores a created todo and invalidates its direct list plus the shared workspace list', async () => {
     const queryClient = client();
     const created = todo({ ref: 'created-1', title: 'Created' });
     queryClient.setQueryData(todoQueryKeys.list('/repo'), list([]));
     queryClient.setQueryData(todoQueryKeys.list('/other'), list([]));
-    queryClient.setQueryData(['todos', 'batch', { dirs: ['/other', '/repo'] }], { byDir: {} });
-    queryClient.setQueryData(['todos', 'batch', { dirs: ['/other'] }], { byDir: {} });
+    queryClient.setQueryData(workspaceList, list([]));
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ todo: created }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -73,8 +74,7 @@ describe('todo mutations', () => {
     expect(queryClient.getQueryData(todoQueryKeys.item('/repo', created.ref))).toEqual(created);
     expect(queryClient.getQueryState(todoQueryKeys.list('/repo'))?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(todoQueryKeys.list('/other'))?.isInvalidated).toBe(false);
-    expect(queryClient.getQueryState(['todos', 'batch', { dirs: ['/other', '/repo'] }])?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(['todos', 'batch', { dirs: ['/other'] }])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(workspaceList)?.isInvalidated).toBe(true);
   });
 
   it('updates exact item/list caches and leaves another workspace unchanged', async () => {
@@ -83,7 +83,7 @@ describe('todo mutations', () => {
     const updated = todo({ title: 'Server title' });
     queryClient.setQueryData(todoQueryKeys.item('/repo', original.ref), original);
     queryClient.setQueryData(todoQueryKeys.list('/repo'), list([original]));
-    queryClient.setQueryData(['todos', 'batch', { dirs: ['/repo'] }], { byDir: { '/repo': list([original]) } });
+    queryClient.setQueryData(workspaceList, list([{ ...original, dir: '/repo' }]));
     queryClient.setQueryData(todoQueryKeys.item('/other', original.ref), original);
     queryClient.setQueryData(todoQueryKeys.list('/other'), list([original]));
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(updated), {
@@ -101,6 +101,7 @@ describe('todo mutations', () => {
     expect(queryClient.getQueryData<TodoListResponse>(todoQueryKeys.list('/repo'))?.items).toEqual([updated]);
     expect(queryClient.getQueryData(todoQueryKeys.item('/other', original.ref))).toEqual(original);
     expect(queryClient.getQueryData<TodoListResponse>(todoQueryKeys.list('/other'))?.items).toEqual([original]);
+    expect(queryClient.getQueryData<TodoListResponse>(workspaceList)?.items).toEqual([{ ...updated, dir: '/repo' }]);
   });
 
   it('restores exact item/list caches when an optimistic mutation is rolled back', () => {
@@ -108,23 +109,23 @@ describe('todo mutations', () => {
     const original = todo();
     queryClient.setQueryData(todoQueryKeys.item('/repo', original.ref), original);
     queryClient.setQueryData(todoQueryKeys.list('/repo'), list([original]));
-    queryClient.setQueryData(['todos', 'batch', { dirs: ['/repo'] }], { byDir: { '/repo': list([original]) } });
+    queryClient.setQueryData(workspaceList, list([{ ...original, dir: '/repo' }]));
 
     const rollback = optimisticallySetTodoCaches(queryClient, '/repo', { ...original, title: 'Optimistic' });
     expect(queryClient.getQueryData<TodoItem>(todoQueryKeys.item('/repo', original.ref))?.title).toBe('Optimistic');
     expect(queryClient.getQueryData<TodoListResponse>(todoQueryKeys.list('/repo'))?.items[0]?.title).toBe('Optimistic');
-    expect(queryClient.getQueryData<{ byDir: Record<string, TodoListResponse> }>(['todos', 'batch', { dirs: ['/repo'] }])?.byDir['/repo'].items[0]?.title).toBe('Optimistic');
+    expect(queryClient.getQueryData<TodoListResponse>(workspaceList)?.items[0]?.title).toBe('Optimistic');
 
     rollback();
     expect(queryClient.getQueryData(todoQueryKeys.item('/repo', original.ref))).toEqual(original);
     expect(queryClient.getQueryData<TodoListResponse>(todoQueryKeys.list('/repo'))?.items).toEqual([original]);
-    expect(queryClient.getQueryData<{ byDir: Record<string, TodoListResponse> }>(['todos', 'batch', { dirs: ['/repo'] }])?.byDir['/repo'].items).toEqual([original]);
+    expect(queryClient.getQueryData<TodoListResponse>(workspaceList)?.items).toEqual([{ ...original, dir: '/repo' }]);
   });
 
   describe('archiving a todo', () => {
     const archive = async (request: { ref: string; children?: 'archive' | 'detach' }) => {
       const queryClient = client();
-      queryClient.setQueryData(['todos', 'batch', { dirs: ['/repo'] }], { byDir: {} });
+      queryClient.setQueryData(workspaceList, list([]));
       const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }));
       vi.stubGlobal('fetch', fetchMock);
       const hook = renderHook(() => useDeleteTodoMutation('/repo'), { wrapper: wrapper(queryClient) });
@@ -146,10 +147,10 @@ describe('todo mutations', () => {
       expect(url.searchParams.has('children')).toBe(false);
     });
 
-    it('refreshes the workspace batches so promoted children appear and archived ones go', async () => {
+    it('refreshes the workspace list so promoted children appear and archived ones go', async () => {
       const { queryClient } = await archive({ ref: 'parent-1', children: 'detach' });
 
-      expect(queryClient.getQueryState(['todos', 'batch', { dirs: ['/repo'] }])?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(workspaceList)?.isInvalidated).toBe(true);
     });
   });
 

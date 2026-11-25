@@ -13,15 +13,15 @@ const bootstrapStaleTime = 30_000;
 // out, so the last good response seeds the first render.
 export const PROJECTS_CACHE_KEY = 'gavel.pr-ui.cache.projects.v1';
 
-type SnapshotUpdater = (current: Snapshot) => Snapshot;
-
 export interface AppQueryState {
+  config: SearchConfig;
+  prsLoading: boolean;
+  prError: string;
   snapshot: Snapshot;
   projects: Project[];
   projectsLoaded: boolean;
   projectError: string;
   processError: string;
-  updateSnapshot: (updater: SnapshotUpdater) => void;
   refreshProjects: () => Promise<void>;
   refreshProjectsAndProcesses: () => Promise<void>;
 }
@@ -29,7 +29,7 @@ export interface AppQueryState {
 // hostData turns on the host's process statuses and git state, which a hosted
 // dashboard doesn't serve. Projects load either way: a hosted dashboard serves its
 // organization's repositories as projects, its todo workspaces.
-export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: boolean; hostData: boolean; initialConfig: SearchConfig }): AppQueryState {
+export function useAppQueries({ enabled, prsEnabled = true, hostData, initialConfig }: { enabled: boolean; prsEnabled?: boolean; hostData: boolean; initialConfig: SearchConfig }): AppQueryState {
   const queryClient = useQueryClient();
   const hostEnabled = enabled && hostData;
   const [processStreamError, setProcessStreamError] = useState('');
@@ -40,7 +40,13 @@ export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: b
       queryClient.getQueryData<Snapshot>(queryKeys.prSnapshot()) ?? initialSnapshot,
       parseSnapshot(await fetchJSON<unknown>({ url: '/api/prs', signal, context: 'Load pull requests' })),
     ),
-    enabled,
+    enabled: enabled && prsEnabled,
+    staleTime: bootstrapStaleTime,
+  });
+  const configQuery = useQuery({
+    queryKey: queryKeys.config(),
+    queryFn: ({ signal }) => fetchJSON<SearchConfig>({ url: '/api/config', signal, context: 'Load dashboard configuration' }),
+    enabled: enabled && !prsEnabled,
     staleTime: bootstrapStaleTime,
   });
   const projectsQuery = useQuery<Project[]>({
@@ -76,11 +82,15 @@ export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: b
 
   // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream, which drops its listeners
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !prsEnabled) return;
     const stream = openEventStream('/api/prs/stream');
-    stream.addEventListener('message', event => {
+    const onMessage = (event: Event) => {
       try {
         const incoming = parseSnapshot(JSON.parse((event as MessageEvent<string>).data));
+        const config = queryClient.getQueryData<SearchConfig>(queryKeys.config());
+        if (config && JSON.stringify(config) !== JSON.stringify(incoming.config)) {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.config(), exact: true });
+        }
         queryClient.setQueryData<Snapshot>(queryKeys.prSnapshot(), current => mergeSnapshot(current ?? initialSnapshot, incoming));
       } catch {
         queryClient.setQueryData<Snapshot>(queryKeys.prSnapshot(), current => ({
@@ -88,39 +98,49 @@ export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: b
           error: 'Pull request stream received an invalid update.',
         }));
       }
-    });
+    };
+    stream.addEventListener('message', onMessage);
     stream.onerror = () => {
       queryClient.setQueryData<Snapshot>(queryKeys.prSnapshot(), current => ({
         ...(current ?? initialSnapshot),
         error: 'Connection lost — retrying...',
       }));
     };
-    return () => stream.close();
-  }, [enabled, initialSnapshot, queryClient]);
+    return () => {
+      stream.removeEventListener('message', onMessage);
+      stream.close();
+    };
+  }, [enabled, prsEnabled, initialSnapshot, queryClient]);
+
+  useEffect(() => {
+    if (enabled && prsEnabled) return;
+    void queryClient.cancelQueries({ queryKey: queryKeys.prSnapshot(), exact: true });
+  }, [enabled, prsEnabled, queryClient]);
 
   // react-doctor-disable-next-line react-doctor/effect-needs-cleanup -- the cleanup closes the stream, which drops its listeners
   useEffect(() => {
     if (!hostEnabled) return;
     const stream = openEventStream('/api/proc/status/stream');
-    stream.addEventListener('message', event => {
+    const onMessage = (event: Event) => {
       try {
         queryClient.setQueryData(queryKeys.processStatuses(), parseProcStatuses(JSON.parse((event as MessageEvent<string>).data)));
         setProcessStreamError('');
       } catch {
         setProcessStreamError('Process status stream received an invalid update.');
       }
-    });
+    };
+    stream.addEventListener('message', onMessage);
     stream.onerror = () => setProcessStreamError(current => current || 'Process status stream disconnected; reconnecting…');
-    return () => stream.close();
+    return () => {
+      stream.removeEventListener('message', onMessage);
+      stream.close();
+    };
   }, [hostEnabled, queryClient]);
 
   // Git state is pushed, not polled: a generation change invalidates the
   // project git queries wherever they are mounted.
   const gitStream = useGitStream({ enabled: hostEnabled });
 
-  const updateSnapshot = useCallback((updater: SnapshotUpdater) => {
-    queryClient.setQueryData<Snapshot>(queryKeys.prSnapshot(), current => updater(current ?? initialSnapshot));
-  }, [initialSnapshot, queryClient]);
   const refreshProjects = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.projects(), exact: true });
   }, [queryClient]);
@@ -133,12 +153,14 @@ export function useAppQueries({ enabled, hostData, initialConfig }: { enabled: b
 
   const projectFailure = projectsQuery.failureReason ?? projectsQuery.error;
   return {
+    config: configQuery.data ?? prQuery.data?.config ?? initialConfig,
+    prsLoading: enabled && prsEnabled && prQuery.isPending,
+    prError: prsEnabled && prQuery.error ? errorMessage(prQuery.error) : '',
     snapshot: prQuery.data ?? (prQuery.error ? { ...initialSnapshot, error: errorMessage(prQuery.error) } : initialSnapshot),
     projects: projectsQuery.data ?? [],
     projectsLoaded: projectsQuery.data !== undefined || projectsQuery.failureCount > 0,
-    projectError: projectFailure ? errorMessage(projectFailure) : '',
+    projectError: configQuery.error ? errorMessage(configQuery.error) : projectFailure ? errorMessage(projectFailure) : '',
     processError: processStreamError || gitStream.error || (procQuery.error ? errorMessage(procQuery.error) : ''),
-    updateSnapshot,
     refreshProjects,
     refreshProjectsAndProcesses,
   };
@@ -205,9 +227,8 @@ function buildMergedSnapshot(current: Snapshot, incoming: Snapshot): Snapshot {
     },
     rateLimit: incoming.rateLimit ?? current.rateLimit,
     syncStatus: incoming.syncStatus ?? current.syncStatus,
-    gavelResults: incoming.gavelResults
-      ? { ...current.gavelResults, ...incoming.gavelResults }
-      : current.gavelResults,
+    // The server omits gavelResults once no PR has any.
+    gavelResults: incoming.gavelResults,
   };
 }
 

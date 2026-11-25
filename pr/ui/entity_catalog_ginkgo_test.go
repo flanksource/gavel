@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"path/filepath"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
@@ -105,18 +107,17 @@ var _ = Describe("generated entity catalog", func() {
 	}
 
 	BeforeEach(func() {
-		originalPath, originalCounts := projectsPath, projectsTodoCounts
-		projectsPath = filepath.Join(GinkgoT().TempDir(), "projects.json")
-		projectsTodoCounts = func(_ context.Context, projects []Project) []todoCountsResult {
+		originalCounts := projectsTodoCounts
+		useProjectsFile(filepath.Join(GinkgoT().TempDir(), "projects.json"))
+		projectsTodoCounts = func(_ context.Context, projects []projects.Project) []todoCountsResult {
 			return make([]todoCountsResult, len(projects))
 		}
 		DeferCleanup(func() {
-			projectsPath = originalPath
 			projectsTodoCounts = originalCounts
 		})
 
 		firstDir, secondDir = filepath.Clean(GinkgoT().TempDir()), filepath.Clean(GinkgoT().TempDir())
-		Expect(SaveProjects([]Project{
+		Expect(seedProjects([]projects.Project{
 			{Name: "Alpha Work", Dir: firstDir},
 			{Name: "beta", Dir: secondDir},
 		})).To(Succeed())
@@ -210,7 +211,7 @@ var _ = Describe("generated entity catalog", func() {
 	)
 
 	It("refuses short-name listings when two projects share a short name, but keeps the dashboard's list", func() {
-		Expect(SaveProjects([]Project{
+		Expect(seedProjects([]projects.Project{
 			{Name: "Alpha Work", Dir: firstDir},
 			{Name: "alpha-work", Dir: secondDir},
 		})).To(Succeed())

@@ -49,6 +49,53 @@ func TestMergePullRequest_SurfacesGraphQLError(t *testing.T) {
 	assert.Contains(t, err.Error(), "Pull request is not mergeable")
 }
 
+func TestMergePullRequest_SendsCommitMessage(t *testing.T) {
+	var gotVars map[string]any
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		assert.Contains(t, payload.Query, "commitHeadline: $headline")
+		gotVars = payload.Variables
+		_, _ = w.Write([]byte(`{"data":{"mergePullRequest":{"pullRequest":{"number":7,"state":"MERGED"}}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("GITHUB_API_URL", srv.URL)
+
+	headline, body := "feat: widgets (#7)", "* add widget\n* test widget"
+	err := MergePullRequest(Options{Token: "tok"}, MergeOptions{NodeID: "PR_node_1", Method: "squash", CommitHeadline: headline, CommitBody: body})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"prId": "PR_node_1", "method": "SQUASH", "headline": headline, "body": body}, gotVars)
+}
+
+func TestMergePullRequest_RebaseRefusalIsTyped(t *testing.T) {
+	cases := []struct {
+		name, method, message string
+		rebaseRefused         bool
+	}{
+		{name: "rebase refused", method: "rebase", message: "This branch can't be rebased", rebaseRefused: true},
+		{name: "other rebase refusal", method: "rebase", message: "Pull request is not mergeable"},
+		{name: "squash refusal", method: "squash", message: "This branch can't be rebased"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+				_, _ = w.Write([]byte(`{"errors":[{"message":"` + tc.message + `"}]}`))
+			}))
+			t.Cleanup(srv.Close)
+			t.Setenv("GITHUB_API_URL", srv.URL)
+
+			err := MergePullRequest(Options{Token: "tok"}, MergeOptions{NodeID: "PR_node_1", Method: tc.method})
+			require.Error(t, err)
+			var rejected *GraphQLError
+			assert.True(t, errors.As(err, &rejected), "GitHub's refusal should be a *GraphQLError")
+			assert.Equal(t, tc.rebaseRefused, errors.Is(err, ErrRebaseNotAllowed))
+		})
+	}
+}
+
 func TestMergePullRequest_EmptyNodeIDFailsBeforeRequest(t *testing.T) {
 	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 		t.Errorf("HTTP call should not happen for an empty node ID")

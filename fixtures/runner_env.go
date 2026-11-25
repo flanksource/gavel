@@ -3,7 +3,6 @@ package fixtures
 import (
 	"errors"
 	"fmt"
-	cexec "github.com/flanksource/clicky/exec"
 	"net"
 	"os"
 	"os/exec"
@@ -12,10 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	cexec "github.com/flanksource/clicky/exec"
+
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/processruntime"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // maxWorkers is RunnerOptions.MaxWorkers with its zero value resolved to serial
@@ -56,15 +57,15 @@ func (r *Runner) firstDeclared(kind string, pick func(FixtureTest) string) (stri
 		}
 	})
 
-	setup := r.setups[owner]
+	setup, prepared := r.setups.get(owner), r.setups.count()
 	switch {
-	case command == "" || len(r.setups) == 0:
+	case command == "" || prepared == 0:
 	case setup == nil:
 		logger.Warnf("%s: runs in %s because %s declares no setup:, while other files in this run do",
 			kind, r.options.WorkDir, owner)
-	case len(r.setups) > 1:
+	case prepared > 1:
 		logger.Warnf("%s: runs in %s (declared by %s); the other %d prepared setup(s) in this run do not get their own",
-			kind, setup.Cwd, owner, len(r.setups)-1)
+			kind, setup.Cwd, owner, prepared-1)
 	}
 	return command, setup
 }
@@ -236,7 +237,5 @@ func freePort() (int, error) {
 
 // renderBuildTemplate renders a gomplate template for build commands
 func renderBuildTemplate(template string, data map[string]interface{}) (string, error) {
-	return gomplate.RunTemplate(data, gomplate.Template{
-		Template: template,
-	})
+	return gomplate.RunTemplate(data, gomplate.Template{Template: template, Strict: true})
 }

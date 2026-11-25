@@ -1,0 +1,48 @@
+{
+  "name": "@flanksource/gavel-extension",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx scripts/build.ts",
+    "build:dev": "tsx scripts/build.ts --dev",
+    "check": "tsc --noEmit",
+    "check:dev": "tsc -p tsconfig.dev.json --noEmit",
+    "lint": "oxlint src host comments agents contracts scripts --deny-warnings",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "^3.0.201",
+    "@flanksource/clicky-ui": "^0.3.75",
+    "@flanksource/page-runtime": "0.1.1",
+    "@iconify-icons/ph": "1.2.5",
+    "@mdxeditor/editor": "^4.0.4",
+    "@tanstack/react-query": "^5.101.1",
+    "ai": "^6.0.199",
+    "bippy": "0.6.1",
+    "marked": "^15.0.0",
+    "monaco-editor": "0.48.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "recharts": "^3.8.1",
+    "shiki": "^1.24.0",
+    "streamdown": "^2.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^24",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.1.2",
+    "fake-indexeddb": "^6.2.4",
+    "jsdom": "^26.0.0",
+    "oxlint": "^1.71.0",
+    "sharp": "^0.34.5",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

@@ -1,6 +1,8 @@
 package model
 
 import (
+	"cmp"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -9,12 +11,16 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
+	"github.com/flanksource/gavel/models"
 )
 
 type PRInfo struct {
-	Provider       string          `json:"provider,omitempty"`
-	MergeReadiness *MergeReadiness `json:"mergeReadiness,omitempty"`
-	Number         int             `json:"number"`
+	MergeRules       []json.RawMessage     `json:"mergeRules,omitempty"`
+	AutoMerge        *AutoMergeInfo        `json:"autoMerge,omitempty"`
+	BranchProtection *BranchProtectionInfo `json:"branchProtection,omitempty"`
+	Provider         string                `json:"provider,omitempty"`
+	MergeReadiness   *MergeReadiness       `json:"mergeReadiness,omitempty"`
+	Number           int                   `json:"number"`
 	// NodeID is the GraphQL global node ID, required to merge/approve/enable
 	// auto-merge on this PR. Empty when the PR was loaded from a source that
 	// doesn't request it (e.g. the REST search path).
@@ -39,6 +45,7 @@ type PRInfo struct {
 	HeadRefOID        string       `json:"headRefOid,omitempty"`
 	HeadRepositoryURL string       `json:"headRepositoryUrl,omitempty"`
 	URL               string       `json:"url"`
+	UpdatedAt         time.Time    `json:"updatedAt,omitzero"`
 	Additions         int          `json:"additions"`
 	Deletions         int          `json:"deletions"`
 	ChangedFiles      int          `json:"changedFiles"`
@@ -49,8 +56,9 @@ type PRInfo struct {
 	PRFiles []PRFileInfo `json:"prFiles,omitempty"`
 	// Comments and ReviewThreads are populated by FetchPR in a single GraphQL request.
 	// Callers typically pass them through prwatch.MergeAndFilter to produce the actionable set.
-	Comments      []PRComment `json:"comments,omitempty"`
-	ReviewThreads []PRComment `json:"reviewThreads,omitempty"`
+	Comments      []PRComment  `json:"comments,omitempty"`
+	ReviewThreads []PRComment  `json:"reviewThreads,omitempty"`
+	Reviewers     []PRReviewer `json:"reviewers,omitempty"`
 }
 
 // PRCommitInfo is a commit in the PR.
@@ -84,13 +92,18 @@ type PRAuthor struct {
 type StatusChecks []StatusCheck
 
 type StatusCheck struct {
-	RunID        int64  `json:"runId,omitempty"`
-	JobID        string `json:"jobId,omitempty"`
-	Name         string `json:"name"`
-	Status       string `json:"status"`
-	Conclusion   string `json:"conclusion"`
-	WorkflowName string `json:"workflowName"`
-	DetailsURL   string `json:"detailsUrl"`
+	Required     *bool              `json:"required,omitempty"`
+	NodeID       string             `json:"nodeId,omitempty"`
+	AppSlug      string             `json:"appSlug,omitempty"`
+	Lint         []models.Violation `json:"lint,omitempty"`
+	LintError    string             `json:"lintError,omitempty"`
+	RunID        int64              `json:"runId,omitempty"`
+	JobID        string             `json:"jobId,omitempty"`
+	Name         string             `json:"name"`
+	Status       string             `json:"status"`
+	Conclusion   string             `json:"conclusion"`
+	WorkflowName string             `json:"workflowName"`
+	DetailsURL   string             `json:"detailsUrl"`
 }
 
 type WorkflowRun struct {
@@ -104,27 +117,40 @@ type WorkflowRun struct {
 	WorkflowPath string `json:"workflowPath,omitempty"`
 	WorkflowYAML string `json:"workflowYaml,omitempty"`
 	Jobs         []Job  `json:"jobs"`
+	// Stale says why this is an earlier copy of the run: GitHub could not be
+	// asked for the current one. Empty when the run is current.
+	Stale string `json:"stale,omitempty"`
 }
 
 type Job struct {
-	NativeID    string    `json:"nativeId,omitempty"`
-	DatabaseID  int64     `json:"databaseId"`
-	Name        string    `json:"name"`
-	Status      string    `json:"status"`
-	Conclusion  string    `json:"conclusion"`
-	StartedAt   time.Time `json:"startedAt"`
-	CompletedAt time.Time `json:"completedAt"`
-	URL         string    `json:"url"`
-	Steps       []Step    `json:"steps"`
-	Logs        string    `json:"logs,omitempty"`
+	NativeID    string       `json:"nativeId,omitempty"`
+	DatabaseID  int64        `json:"databaseId"`
+	Name        string       `json:"name"`
+	Status      string       `json:"status"`
+	Conclusion  string       `json:"conclusion"`
+	StartedAt   time.Time    `json:"startedAt"`
+	CompletedAt time.Time    `json:"completedAt"`
+	URL         string       `json:"url"`
+	Steps       []Step       `json:"steps"`
+	Logs        string       `json:"logs,omitempty"`
+	LogHeadings []LogHeading `json:"logHeadings,omitempty"`
 }
 
 type Step struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	Number     int    `json:"number"`
-	Logs       string `json:"logs,omitempty"`
+	Name        string       `json:"name"`
+	Status      string       `json:"status"`
+	Conclusion  string       `json:"conclusion"`
+	Number      int          `json:"number"`
+	Logs        string       `json:"logs,omitempty"`
+	LogHeadings []LogHeading `json:"logHeadings,omitempty"`
+}
+
+// LogHeading names a group of lines in Logs. Line is zero-based and EndLine is exclusive.
+type LogHeading struct {
+	Title   string `json:"title"`
+	Line    int    `json:"line"`
+	EndLine int    `json:"endLine"`
+	Depth   int    `json:"depth"`
 }
 
 type PRComment struct {
@@ -133,6 +159,7 @@ type PRComment struct {
 	ID         int64     `json:"id"`
 	Body       string    `json:"body"`
 	Author     string    `json:"author"`
+	AuthorName string    `json:"authorName,omitempty"`
 	AvatarURL  string    `json:"avatarUrl,omitempty"`
 	URL        string    `json:"url"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -309,12 +336,7 @@ func (s Step) Pretty() api.Text {
 	text := clicky.Text("      ", "").
 		Add(StatusIcon(strings.ToUpper(s.Status), strings.ToUpper(s.Conclusion))).
 		Append(" "+s.Name, "text-gray-500")
-	if s.Logs != "" {
-		for _, line := range strings.Split(strings.TrimSpace(s.Logs), "\n") {
-			text = text.NewLine().Append("        "+line, "text-gray-500")
-		}
-	}
-	return text
+	return appendLogLines(text, "        ", s.Logs, s.LogHeadings)
 }
 
 func (j Job) Pretty() api.Text {
@@ -329,24 +351,42 @@ func (j Job) Pretty() api.Text {
 		return text
 	}
 
-	hasStepLogs := false
 	for _, step := range j.Steps {
 		text = text.NewLine().Add(step.Pretty())
-		if step.Logs != "" {
-			hasStepLogs = true
-		}
 	}
 
-	if !hasStepLogs && j.Logs != "" {
-		text = text.NewLine().Add(prettyLogTail(j.Logs))
+	if j.Logs != "" || len(j.LogHeadings) > 0 {
+		text = text.NewLine().Append("      ── Log tail ──────────", "text-red-600")
+		text = appendLogLines(text, "        ", j.Logs, j.LogHeadings)
 	}
 	return text
 }
 
-func prettyLogTail(logTail string) api.Text {
-	text := clicky.Text("      ── Log tail ──────────", "text-red-600")
-	for _, line := range strings.Split(strings.TrimSpace(logTail), "\n") {
-		text = text.NewLine().Append("      "+line, "text-gray-500")
+func appendLogLines(text api.Text, indent, logs string, headings []LogHeading) api.Text {
+	var lines []string
+	if logs != "" {
+		lines = strings.Split(logs, "\n")
+	}
+	var active []LogHeading
+	for i := 0; i <= len(lines); i++ {
+		for len(active) > 0 && active[len(active)-1].EndLine <= i {
+			active = active[:len(active)-1]
+		}
+		for len(headings) > 0 && headings[0].Line == i {
+			heading := headings[0]
+			headings = headings[1:]
+			text = text.NewLine().Append(indent+strings.Repeat("  ", heading.Depth)+heading.Title, "font-bold")
+			if heading.EndLine > i {
+				active = append(active, heading)
+			}
+		}
+		if i < len(lines) {
+			depth := 0
+			if len(active) > 0 {
+				depth = active[len(active)-1].Depth + 1
+			}
+			text = text.NewLine().Append(indent+strings.Repeat("  ", depth)+lines[i], "text-gray-500")
+		}
 	}
 	return text
 }
@@ -376,7 +416,7 @@ func (pr PRInfo) Pretty() api.Text {
 		Append(" ← ", "text-gray-500").
 		Append(pr.HeadRefName, "text-cyan-600").
 		Append(" | ", "text-gray-500").
-		Append(pr.Author.Login, "text-blue-600")
+		Append(cmp.Or(pr.Author.Name, pr.Author.Login), "text-blue-600")
 
 	if pr.State != "" {
 		meta = meta.Append(" | ", "text-gray-500").Append(pr.State, StateStyle(pr.State))
@@ -412,7 +452,15 @@ func (pr PRInfo) Pretty() api.Text {
 			meta = meta.NewLine().Append("    "+reason, style)
 		}
 	}
-	return title.NewLine().Add(meta)
+	text := title.NewLine().Add(meta)
+	if len(pr.Reviewers) == 0 {
+		return text
+	}
+	text = text.NewLine().NewLine().Append("Reviewers:", "font-bold")
+	for _, reviewer := range pr.Reviewers {
+		text = text.NewLine().Append("  ", "").Add(reviewer.Pretty())
+	}
+	return text
 }
 
 // IsConflicting reports whether GitHub currently refuses to merge the PR
@@ -491,9 +539,9 @@ func StateStyle(state string) string {
 
 func ReviewStyle(decision string) string {
 	switch decision {
-	case "APPROVED":
+	case ReviewApproved, ReviewApprovedWithSuggestions:
 		return "text-green-600"
-	case "CHANGES_REQUESTED":
+	case "CHANGES_REQUESTED", ReviewRejected:
 		return "text-red-600"
 	default:
 		return "text-yellow-600"

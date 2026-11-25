@@ -1,30 +1,15 @@
-// react-grab is a dev-only DOM/React instrumentation overlay. Gate it on DEV so
-// it loads under the `vite` dev server but is statically dead (and tree-shaken
-// out) of every `vite build` bundle — the embedded production bundle served to
-// the menubar webview and `gavel pr list --ui`. The previous `!import.meta.env.CI`
-// gate was always true in builds (Vite never exposes CI), so the overlay shipped
-// to production and ran under the app's constant re-render loop, growing memory
-// without bound (the webview ballooned to ~26GB; the /processes page OOM-crashed).
-if (import.meta.env.DEV) {
-  import("react-grab");
-  // Load gavel's React Grab plugin (the same artifact gavel serves for injection
-  // into other apps) so the "Add to gavel todo" action is available in dev. It
-  // polls for window.__REACT_GRAB__, which the import above sets.
-  document.body.appendChild(
-    Object.assign(document.createElement("script"), { src: "/react-grab-plugin.js" }),
-  );
-}
-
 import "./index.css";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { EventSourceProvider, ThemeProvider } from "@flanksource/clicky-ui/hooks";
 import { ToastProvider } from "@flanksource/clicky-ui/components";
+import { TimeseriesStreamProvider } from "@flanksource/clicky-ui/data";
 import { ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { ClerkProvider } from "@clerk/react";
 import { App } from "./App";
 import { type AuthConfig, loadAuthConfig } from "./authConfig";
 import { AuthGate } from "./components/AuthGate";
+import { PRDialogProvider } from "./components/PRDialogProvider";
 import { GitHubSetupPage } from "./components/GitHubConnect";
 import { setAuthMode } from "./query";
 import { ChatLayer, chatLayerEnabled } from "./components/ChatLayer";
@@ -61,6 +46,10 @@ function render(auth: AuthConfig) {
           /api/events connection instead of opening native EventSources that
           would compete for Chrome's six-per-host HTTP/1.1 connection cap. */}
       <EventSourceProvider value={openEventStream}>
+        {/* Batches every live metric widget (task pool and process gauges,
+            ProcessTable core bars) into one /tasks/metrics/stream sub per
+            window over that hub, instead of each series polling on its own. */}
+        <TimeseriesStreamProvider>
         <ThemeProvider defaultTheme="system">
           {/* Bulk actions report their outcome as a toast: the results of a batch
               have nowhere to live inside DataTable's flex toolbar, and a partial
@@ -73,14 +62,15 @@ function render(auth: AuthConfig) {
                   {window.location.pathname === "/github/setup" ? <GitHubSetupPage /> : <App />}
                 </AuthGate>
               ) : (
-                <>
+                <PRDialogProvider scope="local">
                   <App />
                   {chatLayerEnabled(window.location.pathname) && <ChatLayer />}
-                </>
+                </PRDialogProvider>
               )}
             </ChatWindowManagerProvider>
           </ToastProvider>
         </ThemeProvider>
+        </TimeseriesStreamProvider>
       </EventSourceProvider>
     </QueryClientProvider>
   );

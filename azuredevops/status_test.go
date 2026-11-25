@@ -15,6 +15,33 @@ const fixtureBuilds = `{"value":[{"id":101,"status":"completed","result":"failed
 const fixtureTimeline = `{"records":[{"id":"job-uuid","name":"Test","type":"Job","state":"completed","result":"failed","order":1},{"id":"task-uuid","parentId":"job-uuid","name":"Run tests","type":"Task","state":"completed","result":"failed","order":2,"log":{"id":7}}]}`
 
 var _ = Describe("pipeline status", func() {
+	DescribeTable("reports review approval from blocking reviewer policies",
+		func(policyStatus string, requiredReviewer bool, decision string) {
+			c := testClient(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/pullrequests/27"):
+					fmt.Fprintf(w, `%s,"reviewers":[{"id":"alice","vote":5},{"id":"bob","vote":-5,"isRequired":%t},{"id":"eve","vote":-10}]}`, strings.TrimSuffix(fixturePR, "}"), requiredReviewer)
+				case strings.HasSuffix(r.URL.Path, "/evaluations"):
+					fmt.Fprintf(w, `{"value":[{"status":%q,"configuration":{"id":17,"isEnabled":true,"isBlocking":true,"type":{"id":"fa4e907d-c16b-4a4c-9dfa-4906e5d171dd","displayName":"Minimum number of reviewers"}}}]}`, policyStatus)
+				case strings.HasSuffix(r.URL.Path, "/refs"):
+					fmt.Fprint(w, `{"value":[{"name":"refs/heads/feature","objectId":"head-sha"}]}`)
+				case strings.HasSuffix(r.URL.Path, "/builds"):
+					fmt.Fprint(w, `{"value":[]}`)
+				default:
+					fmt.Fprint(w, fixtureRepository)
+				}
+			})
+			result, err := c.Status(context.Background(), 27, model.StatusOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.PR.ReviewDecision).To(Equal(decision))
+			Expect(result.PR.Reviewers).To(HaveLen(3))
+			Expect(result.PR.Reviewers[0].State).To(Equal("APPROVED_WITH_SUGGESTIONS"))
+			Expect(result.PR.Reviewers[1].State).To(Equal("WAITING_FOR_AUTHOR"))
+			Expect(result.PR.Reviewers[2].State).To(Equal("REJECTED"))
+		}, Entry("satisfied policy allows optional downvotes", "approved", false, "APPROVED"),
+		Entry("unsatisfied policy with an approval vote", "rejected", false, "REVIEW_REQUIRED"),
+		Entry("required reviewer is still waiting for the author", "approved", true, "REVIEW_REQUIRED"))
+
 	It("rejects policy evaluations missing their blocking configuration", func() {
 		c := testClient(func(w http.ResponseWriter, r *http.Request) {
 			switch {
@@ -38,7 +65,7 @@ var _ = Describe("pipeline status", func() {
 			defer GinkgoRecover()
 			switch {
 			case strings.HasSuffix(r.URL.Path, "/pullrequests/27"):
-				fmt.Fprint(w, strings.TrimSuffix(fixturePR, "}")+`,"forkSource":{"repository":{"id":"fork-id","project":{"name":"fork-project"}}}}`)
+				fmt.Fprint(w, strings.TrimSuffix(fixturePR, "}")+`,"forkSource":{"repository":{"id":"fork-id","name":"fork-service","project":{"name":"fork-project"}}}}`)
 			case strings.HasSuffix(r.URL.Path, "/refs"):
 				Expect(r.URL.Path).To(Equal("/acme/fork-project/_apis/git/repositories/fork-id/refs"))
 				fmt.Fprint(w, `{"value":[{"name":"refs/heads/feature","objectId":"head-sha"}]}`)
@@ -58,9 +85,11 @@ var _ = Describe("pipeline status", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.PR.MergeReadiness.State).To(Equal("ready"))
 	})
-	It("excludes a trial merge after the target branch changes", func() {
+	It("keeps the last trial merge builds when only the target branch advances", func() {
 		c := testClient(func(w http.ResponseWriter, r *http.Request) {
 			switch {
+			case strings.HasSuffix(r.URL.Path, "/timeline"):
+				fmt.Fprint(w, fixtureTimeline)
 			case strings.HasSuffix(r.URL.Path, "/pullrequests/27"):
 				fmt.Fprint(w, strings.TrimSuffix(fixturePR, "}")+`,"lastMergeTargetCommit":{"commitId":"old-target"}}`)
 			case strings.HasSuffix(r.URL.Path, "/refs"):
@@ -79,8 +108,12 @@ var _ = Describe("pipeline status", func() {
 		})
 		result, err := c.Status(context.Background(), 27, model.StatusOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Runs).To(BeEmpty())
+		Expect(result.Runs).To(HaveKey(int64(101)))
+		Expect(result.Runs[101].Conclusion).To(Equal("FAILURE"))
+		Expect(result.PR.StatusCheckRollup).To(HaveLen(1))
+		Expect(result.PR.BaseRefOID).To(Equal("new-target"))
 		Expect(result.PR.MergeReadiness.WaitingForMerge).To(BeTrue())
+		Expect(result.PR.MergeReadiness.Reasons).To(ContainElement("target branch advanced since the last trial merge; checks ran against the previous target"))
 	})
 	It("does not reuse an old trial merge while the source branch advances", func() {
 		c := testClient(func(w http.ResponseWriter, r *http.Request) {

@@ -12,6 +12,7 @@ interface StoredFilters {
   checks: StoredFacet;
   repos: StoredFacet;
   authors: StoredFacet;
+  age?: StoredFacet;
 }
 
 interface Stored {
@@ -38,6 +39,7 @@ export function saveUIState(config: SearchConfig, filters: Filters): void {
       checks: filters.checks,
       repos: filters.repos,
       authors: filters.authors,
+      age: filters.age,
     },
   };
   try {
@@ -54,5 +56,6 @@ export function filtersFromStored(s: Stored['filters']): Filters | null {
     checks: s.checks || {},
     repos: s.repos || {},
     authors: s.authors || {},
+    age: s.age ?? {},
   };
 }

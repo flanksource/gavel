@@ -6,10 +6,7 @@ import { lineComments, type LineCommentAnchor, type LineCommentPatch } from './l
 import { TodoRunChanges } from './TodoRunChanges';
 import { useTodoSessionDetail } from './TodoSessionDetail';
 import { latestRunWorkspace, shortSha, type LatestRunWorkspace } from './runWorkspace';
-
-// RUN_BRANCH_POLL_MS matches the detail pane's background attempts poll, so the
-// branch panel shares that one query rather than adding a faster one.
-const RUN_BRANCH_POLL_MS = 15_000;
+import { TodoWorktreeStatus } from './TodoWorktreeStatus';
 
 function KeptWorktreeWarning({ path, reason, dirty }: { path?: string; reason?: string; dirty: number }) {
   return (
@@ -42,7 +39,7 @@ export interface TodoRunBranchProps {
  * run records a worktree or commits.
  */
 export function TodoRunBranch({ dir, todoRef, renderActions, events, onPatch }: TodoRunBranchProps) {
-  const { detail, error } = useTodoSessionDetail(dir, todoRef, !!todoRef, { intervalMs: RUN_BRANCH_POLL_MS });
+  const { detail, error } = useTodoSessionDetail(dir, todoRef, !!todoRef);
   const latest = detail ? latestRunWorkspace(detail.attempts) : null;
   if (!latest && !error) return null;
   const worktree = latest?.workspace.worktree;
@@ -75,13 +72,12 @@ export function TodoRunBranch({ dir, todoRef, renderActions, events, onPatch }: 
         {worktree?.branchDeleted && <span className="text-[11px] text-muted-foreground">branch deleted</span>}
         {latest && <span className="text-[11px] text-muted-foreground">Attempt #{latest.attempt.ordinal}</span>}
         <span className="ml-auto flex items-center gap-2">
-          {commits.length > 0 && (
-            <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">{commits.length}</span>
-          )}
+          <span className="text-[11px] tabular-nums text-muted-foreground">{commits.length} {commits.length === 1 ? 'commit' : 'commits'}</span>
           {latest && renderActions?.(latest)}
         </span>
       </div>
       {error && <div className="whitespace-pre-wrap px-3 py-2 text-xs text-red-600">{error}</div>}
+      {worktree && <TodoWorktreeStatus dir={dir} worktree={worktree} />}
       {worktree?.kept && <KeptWorktreeWarning path={worktree.path} reason={worktree.keptReason} dirty={worktree.dirty?.length ?? 0} />}
       {(commits.length > 0 || (worktree?.setup && worktree.head)) && (
         <TodoRunChanges

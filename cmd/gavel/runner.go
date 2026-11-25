@@ -195,10 +195,12 @@ func jobCommand(spec sandbox.RunSpec, src string) (string, []string, error) {
 
 // runSnapshots lists the per-run snapshots in src's .gavel directory.
 func runSnapshots(src string) map[string]bool {
-	matches, _ := filepath.Glob(filepath.Join(src, snapshots.Dir, snapshots.PerRunPrefix+"*.json"))
+	matches, _ := filepath.Glob(filepath.Join(src, snapshots.Dir, snapshots.PerRunPrefix+"*.json*"))
 	found := map[string]bool{}
 	for _, match := range matches {
-		found[match] = true
+		if snapshots.SnapshotStem(filepath.Base(match)) != "" {
+			found[match] = true
+		}
 	}
 	return found
 }
@@ -251,7 +253,7 @@ func (a runAPI) download(ctx context.Context, path, to string) error {
 }
 
 func (a runAPI) postResults(ctx context.Context, path string) error {
-	file, err := os.Open(path)
+	file, err := snapshots.OpenFile(path)
 	if err != nil {
 		return fmt.Errorf("read results %s: %w", path, err)
 	}

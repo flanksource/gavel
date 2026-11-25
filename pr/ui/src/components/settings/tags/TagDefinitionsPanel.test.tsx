@@ -14,17 +14,19 @@ const counts: Record<string, number> = { flaky: 12, bug: 3 };
 
 let requests: { url: string; method: string; body?: string }[] = [];
 
-function mockFetch(
+function mockFetch({
   removal = { name: 'flaky', definition: true, todos: 12 },
   loadedDefinitions = definitions,
-) {
+  loadedCounts = counts,
+} = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
     requests.push({ url, method, body: init?.body as string | undefined });
-    const payload = method === 'DELETE'
-      ? { definitions: loadedDefinitions, counts, removed: removal }
-      : { definitions: loadedDefinitions, counts };
+    const labels = { definitions: loadedDefinitions, counts: loadedCounts };
+    const payload = url === '/api/todos/labels/batch'
+      ? { results: [{ dir: '/work/gavel', labels }], palette: [] }
+      : method === 'DELETE' ? { ...labels, removed: removal } : labels;
     return new Response(JSON.stringify(payload), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -69,8 +71,8 @@ describe('TagDefinitionsPanel', () => {
     fireEvent.click(picker.getByRole('menuitemradio', { name: /debug/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    await waitFor(() => expect(requests.some(request => request.method === 'POST')).toBe(true));
-    const save = requests.find(request => request.method === 'POST');
+    await waitFor(() => expect(requests.some(request => request.method === 'POST' && request.url === '/api/todos/labels')).toBe(true));
+    const save = requests.find(request => request.method === 'POST' && request.url === '/api/todos/labels');
     expect(JSON.parse(save?.body ?? '{}')).toMatchObject({ name: 'flaky', icon: 'debug' });
   });
 
@@ -79,7 +81,7 @@ describe('TagDefinitionsPanel', () => {
       { ...definitions[0], icon: 'custom-registry-key', iconify: 'ph:alien' },
       ...definitions.slice(1),
     ];
-    vi.stubGlobal('fetch', mockFetch(undefined, customDefinitions));
+    vi.stubGlobal('fetch', mockFetch({ loadedDefinitions: customDefinitions }));
     renderPanel();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Tag icon for flaky' }));
@@ -90,8 +92,8 @@ describe('TagDefinitionsPanel', () => {
     fireEvent.change(screen.getAllByLabelText('Tag description')[0], { target: { value: 'Still custom' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    await waitFor(() => expect(requests.some(request => request.method === 'POST')).toBe(true));
-    const save = requests.find(request => request.method === 'POST');
+    await waitFor(() => expect(requests.some(request => request.method === 'POST' && request.url === '/api/todos/labels')).toBe(true));
+    const save = requests.find(request => request.method === 'POST' && request.url === '/api/todos/labels');
     expect(JSON.parse(save?.body ?? '{}')).toMatchObject({
       name: 'flaky',
       icon: 'custom-registry-key',
@@ -163,8 +165,8 @@ describe('TagDefinitionsPanel', () => {
     const picker = within(await screen.findByRole('listbox', { name: 'Tags' }));
     fireEvent.click(picker.getByRole('option', { name: /bug/ }));
 
-    await waitFor(() => expect(requests.some(request => request.method === 'POST')).toBe(true));
-    const save = requests.find(request => request.method === 'POST');
+    await waitFor(() => expect(requests.some(request => request.method === 'POST' && request.url === '/api/todos/labels')).toBe(true));
+    const save = requests.find(request => request.method === 'POST' && request.url === '/api/todos/labels');
     const body = JSON.parse(save?.body ?? '{}');
     expect(body.name).toBe('bug');
     // Adoption must not repaint: the stored row keeps the colour the built-in
@@ -175,13 +177,7 @@ describe('TagDefinitionsPanel', () => {
   // The backfill adopts what a project already used; anything typed since is
   // adopted the same way, from here.
   it('offers an in-use tag that nothing has defined yet', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      requests.push({ url: String(input), method: init?.method ?? 'GET', body: init?.body as string });
-      return new Response(
-        JSON.stringify({ definitions, counts: { ...counts, 'typed-by-hand': 5 } }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    }));
+    vi.stubGlobal('fetch', mockFetch({ loadedCounts: { ...counts, 'typed-by-hand': 5 } }));
     renderPanel();
     await screen.findByLabelText('Remove flaky');
 

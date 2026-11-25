@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionStats } from '../../types';
 import { useSessionStats } from './TodoSessionTimer';
-import { sessionStatsQueryOptions, todoGlobalItemQueryOptions, todoItemQueryOptions, todoListQueryOptions, todoQueryKeys } from './todoQueries';
+import { sessionStatsQueryOptions, todoGlobalItemQueryOptions, todoItemQueryOptions, todoListQueryOptions, todoQueryKeys, workspaceTodoListQueryOptions } from './todoQueries';
 
 function stats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
@@ -79,6 +79,33 @@ describe('todo list query', () => {
     expect(result).toEqual(expected);
     expect(fetchMock).toHaveBeenCalledWith('/api/todos?dir=%2Frepo', { signal: expect.any(AbortSignal) });
   });
+
+  it('loads the flat all-workspace list excluding hidden projects and keeps it apart from per-dir lists', async () => {
+    const expected = { counts: { total: 1 }, items: [{ ref: 'todo-1', dir: '/repo' }] };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(expected), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const options = workspaceTodoListQueryOptions('hidden-projects');
+    const result = await options.queryFn?.({ signal: new AbortController().signal } as never);
+
+    expect(result).toEqual(expected);
+    expect(fetchMock).toHaveBeenCalledWith('/api/todos?exclude=hidden-projects', { signal: expect.any(AbortSignal) });
+    expect(options.queryKey).toEqual(['todos', 'list', { exclude: 'hidden-projects' }]);
+    expect(options.queryKey).not.toEqual(todoQueryKeys.list('/repo'));
+  });
+
+  it('refuses a flat list item that does not say which workspace it belongs to', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ counts: { total: 1 }, items: [{ ref: 'todo-1' }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    await expect(workspaceTodoListQueryOptions('hidden-projects').queryFn?.({ signal: new AbortController().signal } as never))
+      .rejects.toThrow('todo todo-1 omitted its workspace directory');
+  });
 });
 
 describe('todo detail queries', () => {
@@ -100,32 +127,19 @@ describe('todo detail queries', () => {
     expect(signals).toEqual([workspaceSignal, globalSignal]);
   });
 
-  it('polls visible in-progress details and stops for terminal details', () => {
-    const options = todoItemQueryOptions('/repo', 'todo-1', { pollWhileActive: true, intervalMs: 1_000 });
-    const interval = options.refetchInterval as (query: { state: { data?: { status?: string } } }) => number | false;
-
-    expect(interval({ state: { data: { status: 'in_progress' } } })).toBe(1_000);
-    expect(interval({ state: { data: { status: 'completed' } } })).toBe(false);
+  it('keeps details fresh until an explicit invalidation', () => {
+    const options = todoItemQueryOptions('/repo', 'todo-1');
+    expect(options.staleTime).toBe(Infinity);
+    expect(options.refetchInterval).toBe(false);
     expect(options.refetchIntervalInBackground).toBe(false);
   });
 });
 
 describe('session stats query', () => {
-  it.each([
-    ['a live run keeps retrying until its session appears', true, stats({ found: false }), 4_000],
-    ['a settled run stops after one look for a missing session', false, stats({ found: false }), false],
-    ['a running session polls regardless of what the todo status claims', false, stats({ inProgress: true }), 2_000],
-    ['final totals never refetch', false, stats(), false],
-  ])('%s', (_label, expectLive, data, expected) => {
-    const options = sessionStatsQueryOptions({ dir: '/repo', sessionId: 'session-1', expectLive });
-    const interval = options.refetchInterval as (query: { state: { data?: SessionStats } }) => number | false;
-
-    expect(interval({ state: { data } })).toBe(expected);
-  });
-
-  it('re-reads settled totals far less often than a live run', () => {
-    expect(sessionStatsQueryOptions({ dir: '/repo', sessionId: 'session-1', expectLive: false }).staleTime)
-      .toBeGreaterThan(sessionStatsQueryOptions({ dir: '/repo', sessionId: 'session-1' }).staleTime as number);
+  it('refreshes stats through invalidation without recurring reads', () => {
+    const options = sessionStatsQueryOptions({ dir: '/repo', sessionId: 'session-1' });
+    expect(options.staleTime).toBe(Infinity);
+    expect(options.refetchInterval).toBe(false);
   });
 
   it('deduplicates concurrent consumers and reuses fresh cached data on remount', async () => {

@@ -1,12 +1,17 @@
 package commit
 
 import (
+	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/captain/pkg/captainconfig"
+	"github.com/flanksource/clicky/task"
+	commonscontext "github.com/flanksource/commons/context"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -53,12 +58,43 @@ var _ = Describe("RunHooks", func() {
 		workDir = GinkgoT().TempDir()
 	})
 
+	It("waits for a worker before running a matching hook", func() {
+		task.SetMaxConcurrent(1)
+		DeferCleanup(func() { task.SetMaxConcurrent(4) })
+		started, release := make(chan struct{}), make(chan struct{})
+		blocker := task.StartTask("occupy the worker", func(ctx commonscontext.Context, _ *task.Task) (struct{}, error) {
+			close(started)
+			select {
+			case <-release:
+				return struct{}{}, nil
+			case <-ctx.Done():
+				return struct{}{}, ctx.Err()
+			}
+		}, task.WithContext(GinkgoT().Context()), task.WithCancellationDrain())
+		DeferCleanup(func() { blocker.Cancel(); _, _ = blocker.GetResult() })
+		Eventually(started).Should(BeClosed())
+
+		ctx, cancel := context.WithCancel(GinkgoT().Context())
+		done := make(chan error, 1)
+		go func() {
+			_, err := RunHooks(ctx, workDir, []verify.CommitHook{{Name: "write marker", Run: "touch checked"}}, []string{"main.go"})
+			done <- err
+			close(done)
+		}()
+		DeferCleanup(func() { cancel(); <-done })
+		marker := filepath.Join(workDir, "checked")
+		Consistently(marker, 150*time.Millisecond).ShouldNot(BeAnExistingFile())
+		close(release)
+		Eventually(done).Should(Receive(Succeed()))
+		Expect(marker).To(BeAnExistingFile())
+	})
+
 	It("passes when all hooks succeed", func() {
 		hooks := []verify.CommitHook{
 			{Name: "one", Run: "true"},
 			{Name: "two", Run: "exit 0"},
 		}
-		results, err := RunHooks(workDir, hooks, []string{"main.go"})
+		results, err := RunHooks(GinkgoT().Context(), workDir, hooks, []string{"main.go"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(results).To(HaveLen(2))
 		Expect(results[0]).To(Equal(HookResult{Name: "one"}))
@@ -71,7 +107,7 @@ var _ = Describe("RunHooks", func() {
 			{Name: "failing", Run: "exit 7"},
 			{Name: "never-runs", Run: "exit 99"},
 		}
-		results, err := RunHooks(workDir, hooks, []string{"main.go"})
+		results, err := RunHooks(GinkgoT().Context(), workDir, hooks, []string{"main.go"})
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, ErrHookFailed)).To(BeTrue(), "expected wrapped ErrHookFailed, got %v", err)
 		Expect(results).To(HaveLen(2), "third hook must not run after second fails")
@@ -84,7 +120,7 @@ var _ = Describe("RunHooks", func() {
 		hooks := []verify.CommitHook{
 			{Name: "py-only", Run: "exit 99", Files: []string{"**/*.py"}},
 		}
-		results, err := RunHooks(workDir, hooks, []string{"main.go", "README.md"})
+		results, err := RunHooks(GinkgoT().Context(), workDir, hooks, []string{"main.go", "README.md"})
 		Expect(err).ToNot(HaveOccurred(), "hook should skip entirely, never run 'exit 99'")
 		Expect(results).To(HaveLen(1))
 		Expect(results[0].Skipped).To(BeTrue())
@@ -95,14 +131,14 @@ var _ = Describe("RunHooks", func() {
 		hooks := []verify.CommitHook{
 			{Name: "go-only", Run: "true", Files: []string{"**/*.go"}},
 		}
-		results, err := RunHooks(workDir, hooks, []string{"README.md", "pkg/foo.go"})
+		results, err := RunHooks(GinkgoT().Context(), workDir, hooks, []string{"README.md", "pkg/foo.go"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(results).To(HaveLen(1))
 		Expect(results[0].Skipped).To(BeFalse())
 	})
 
 	It("treats an empty hook list as a no-op", func() {
-		results, err := RunHooks(workDir, nil, []string{"main.go"})
+		results, err := RunHooks(GinkgoT().Context(), workDir, nil, []string{"main.go"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(results).To(BeEmpty())
 	})

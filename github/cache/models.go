@@ -31,10 +31,10 @@ type HTTPCacheEntry struct {
 	ExpiresAt *time.Time
 }
 
-// WorkflowRunCache stores completed GitHub Actions workflow runs. Once a run
-// is completed its job/step structure is immutable, so we never need to
-// re-fetch it from the API. In-progress runs are NOT stored here — those go
-// through the ETag-aware HTTP cache only.
+// WorkflowRunCache stores completed GitHub Actions workflow runs. A completed
+// run only changes when it is re-run, which keeps its run id: readers check the
+// row against the PR's checks (see github.FetchRunJobs). In-progress runs are
+// NOT stored here — those go through the ETag-aware HTTP cache only.
 type WorkflowRunCache struct {
 	OrgID      uuid.UUID  `gorm:"primaryKey;type:uuid"`
 	UserID     *uuid.UUID `gorm:"type:uuid"`

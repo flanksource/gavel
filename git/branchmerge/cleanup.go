@@ -1,6 +1,7 @@
 package branchmerge
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 
 	gavelgit "github.com/flanksource/gavel/git"
 )
+
+var errBranchNotLanded = errors.New("branch not fully landed")
 
 type CleanupOptions struct {
 	Repo string
@@ -19,11 +22,17 @@ type CleanupOptions struct {
 	// from the landed check (git cherry's <limit>).
 	Limit string
 	Mode  Mode
+	// KeepUnlanded keeps a branch whose work is not all in LandedSHA without
+	// failing, reporting why in CleanupResult.BranchKept. A landing with a
+	// conflict Strategy sets it, since `-X ours` drops branch hunks on purpose.
+	KeepUnlanded bool
 }
 
 type CleanupResult struct {
 	WorktreeRemoved bool
 	BranchDeleted   bool
+	// BranchKept explains why an unlanded branch was kept (KeepUnlanded only).
+	BranchKept string
 }
 
 // Cleanup removes the branch's worktree, if it is still there, and deletes the
@@ -50,10 +59,14 @@ func Cleanup(opts CleanupOptions) (CleanupResult, error) {
 		return result, nil
 	}
 	verify := verifyCherry
-	if opts.Mode == Squash {
+	if opts.Mode != Incremental {
 		verify = verifySquash
 	}
 	if err := verify(opts); err != nil {
+		if opts.KeepUnlanded && errors.Is(err, errBranchNotLanded) {
+			result.BranchKept = err.Error()
+			return result, nil
+		}
 		return result, err
 	}
 	if out, err := combinedGit(opts.Repo, "branch", "-D", opts.Branch); err != nil {
@@ -72,7 +85,7 @@ func (o CleanupOptions) validated() (CleanupOptions, error) {
 	if err := gavelgit.ValidateRevision(o.LandedSHA); err != nil {
 		return CleanupOptions{}, fmt.Errorf("%w: landed commit: %w", ErrInvalidOptions, err)
 	}
-	out := CleanupOptions{Repo: o.Repo, Worktree: o.Worktree, Branch: o.Branch, LandedSHA: o.LandedSHA, Mode: o.Mode}
+	out := CleanupOptions{Repo: o.Repo, Worktree: o.Worktree, Branch: o.Branch, LandedSHA: o.LandedSHA, Mode: o.Mode, KeepUnlanded: o.KeepUnlanded}
 	if o.Limit != "" {
 		if err := gavelgit.ValidateRevision(o.Limit); err != nil {
 			return CleanupOptions{}, fmt.Errorf("%w: limit: %w", ErrInvalidOptions, err)
@@ -98,7 +111,7 @@ func verifyCherry(opts CleanupOptions) error {
 		}
 	}
 	if len(unlanded) > 0 {
-		return fmt.Errorf("kept branch %s: %s not in %s", opts.Branch, strings.Join(unlanded, ", "), short(opts.LandedSHA))
+		return fmt.Errorf("%w: kept branch %s: %s not in %s", errBranchNotLanded, opts.Branch, strings.Join(unlanded, ", "), short(opts.LandedSHA))
 	}
 	return nil
 }
@@ -112,10 +125,10 @@ func verifySquash(opts CleanupOptions) error {
 	}
 	out, err := combinedGit(opts.Repo, "merge-tree", "--write-tree", "--no-messages", opts.LandedSHA, "refs/heads/"+opts.Branch)
 	if err != nil {
-		return fmt.Errorf("kept branch %s: merging it into %s conflicts: %s: %w", opts.Branch, short(opts.LandedSHA), out, err)
+		return fmt.Errorf("%w: kept branch %s: merging it into %s conflicts: %s: %w", errBranchNotLanded, opts.Branch, short(opts.LandedSHA), out, err)
 	}
 	if merged := strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]); merged != landedTree {
-		return fmt.Errorf("kept branch %s: it holds changes not in %s", opts.Branch, short(opts.LandedSHA))
+		return fmt.Errorf("%w: kept branch %s: it holds changes not in %s", errBranchNotLanded, opts.Branch, short(opts.LandedSHA))
 	}
 	return nil
 }

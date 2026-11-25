@@ -7,7 +7,6 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/internal/database"
-	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos/portable"
 	"github.com/spf13/cobra"
 )
@@ -42,7 +41,7 @@ func runTodosImport(ctx context.Context, opts TodosImportOptions) error {
 	if err != nil {
 		return fmt.Errorf("resolve portable TODO import workspace: %w", err)
 	}
-	project, err := ui.ProjectForDir(workDir)
+	project, err := projectForDir(ctx, workDir)
 	if err != nil {
 		return err
 	}
@@ -64,7 +63,7 @@ func runTodosExport(ctx context.Context, opts TodosExportOptions) error {
 	if err != nil {
 		return fmt.Errorf("resolve portable TODO export workspace: %w", err)
 	}
-	project, err := ui.ProjectForDir(workDir)
+	project, err := projectForDir(ctx, workDir)
 	if err != nil {
 		return err
 	}

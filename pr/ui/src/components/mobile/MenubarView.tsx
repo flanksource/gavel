@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import type { PRItem, PRDetail, SearchConfig, PRSyncStatus, GavelResultsSummary, Project } from '../../types';
 import { Button } from '@flanksource/clicky-ui/components';
-import { ChatButton } from '@flanksource/clicky-ui/ai';
 import { UiArrowLeft, UiCheck, UiGitPr, UiTerminal } from '@flanksource/clicky-ui/icons';
 import { PRList } from '../PRList';
 import { PRDetailPanel } from '../PRDetail';
@@ -33,6 +32,7 @@ export function MenubarView({
   projects,
   availableProjects,
   onSetProjectHidden,
+  onSetOrgHidden,
   projectsLoaded,
   projectError,
   projectsByRepo,
@@ -49,7 +49,6 @@ export function MenubarView({
   sessions,
   sessionId,
   onSessionChange,
-  chatEnabled,
 }: {
   prs: PRItem[];
   selected: PRItem | null;
@@ -60,6 +59,7 @@ export function MenubarView({
   projects: Project[];
   availableProjects: Project[];
   onSetProjectHidden: (name: string, hidden: boolean) => void;
+  onSetOrgHidden: (login: string, hidden: boolean) => void;
   projectsLoaded: boolean;
   projectError?: string;
   projectsByRepo: Record<string, Project>;
@@ -77,8 +77,6 @@ export function MenubarView({
   // The open session's id, or '' for the list; shown full-screen like a PR.
   sessionId: string;
   onSessionChange: (id: string) => void;
-  // False in the native menubar webview, which has no assistant layer.
-  chatEnabled: boolean;
 }) {
   useMenubarExternalLinks();
   const procStatus = useProcStatus();
@@ -102,7 +100,7 @@ export function MenubarView({
     return <MobileSessionScreen query={sessions} sessionId={sessionId} onBack={() => onSessionChange('')} />;
   }
 
-  if (selected) {
+  if (menubarTab === 'prs' && selected) {
     return (
       <div
         className="h-dvh overflow-hidden bg-background text-foreground"
@@ -161,14 +159,13 @@ export function MenubarView({
             just renders empty. Surface it here, ahead of the PR poll's clock. */}
         <div className="flex min-w-0 items-center justify-end gap-2">
           <div className="min-w-0 max-w-40">
-            <OrgChooser config={config} projects={availableProjects} onChange={onScopeChange} onSetProjectHidden={onSetProjectHidden} />
+            <OrgChooser config={config} projects={availableProjects} onChange={onScopeChange} onSetProjectHidden={onSetProjectHidden} onSetOrgHidden={onSetOrgHidden} />
           </div>
           {projectError ? (
             <div role="alert" className="max-w-32 truncate text-[11px] text-destructive">{projectError}</div>
           ) : (
             <div className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
           )}
-          {chatEnabled && <ChatButton label="Open Gavel assistant" />}
         </div>
       </div>
 
@@ -204,7 +201,7 @@ export function MenubarView({
         />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
         {menubarTab === 'processes' ? (
           workspaces.length > 0 ? (
             <div className="divide-y divide-border p-2">

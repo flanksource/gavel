@@ -104,6 +104,7 @@ type WorkspacePath struct {
 // Issue is durable Gavel-owned state. Captain-owned execution details are
 // referenced by ID and are not duplicated here.
 type Issue struct {
+	Overview          IssueOverview  `json:"-"`
 	ID                uuid.UUID      `json:"id"`
 	WorkspaceID       uuid.UUID      `json:"workspaceId"`
 	Title             string         `json:"title"`

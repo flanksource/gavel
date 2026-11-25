@@ -1,10 +1,11 @@
 import { useState, useMemo, useRef, useCallback, type ReactNode, type ComponentType } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Project } from '../types';
+import type { PRItem, PRDetail, PRComment, PRFileInfo, GavelResultsSummary, Project } from '../types';
 import { aggregateGavelShards, failedTestsLabel, timedOutNote, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
-import { ShardLintFindings, ShardTestFailures } from './ShardFindings';
-import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
+import { PREVIEW_LIMIT, ShardLintFindings, ShardTestFailures } from './ShardFindings';
+import { newPRTodoFormKey } from './todos/prTodoDraft';
 import { PRLinkedTodos } from './PRLinkedTodos';
+import { PRLifecycleActions } from './PRLifecycleActions';
 import { PRActions, type ExtraAction } from './PRActions';
 import { RelativeTime } from './RelativeTime';
 import { stripAnsi } from '../ansi';
@@ -38,18 +39,20 @@ import {
   UiLinkExternal,
   UiMarkdown,
   UiPass,
+  UiRefresh,
   UiServerProcess,
   UiWarningTriangle,
 } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
 import { VercelIcon } from '../icons/VercelIcon';
-import { Button } from '@flanksource/clicky-ui/components';
-import { AnsiHtml, GitChangedFilesSummary, GitCommitList, GitFileList, type GitCommitItem, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
+import { Button, useModal } from '@flanksource/clicky-ui/components';
+import { AnsiHtml, GitChangedFilesSummary, GitFileList, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
 import { useTimeoutFlash } from '../useTimeoutFlash';
 import { copyText } from '../clipboard';
 import { useContainerWidth } from '../useContainerWidth';
-import { prCommitDiffQuery, prFileDiffQuery } from './oneShotQueries';
+import { prFileDiffQuery } from './oneShotQueries';
+import { PRCommitList } from './PRCommitList';
 
 function formatWorkflowsText(runs: WorkflowRun[]): string {
   return runs.map(r => {
@@ -148,21 +151,25 @@ interface Props {
   // projects are the configured workspaces a PR-derived todo can be created in.
   // The dialog can register one when this list is absent or empty.
   projects?: Project[];
-  // onTodoCreated lets the host refresh todo counts after one is added.
-  onTodoCreated?: () => void;
   // onActionDone fires after a merge/approve/auto-merge action lands so the host
   // can re-fetch the PR detail and reflect the new state.
   onActionDone?: () => void;
+  // onRefresh, when set, renders a refresh button that re-fetches the PR's
+  // detail and workflow status from GitHub, bypassing the server cache.
+  onRefresh?: () => void;
   // onClose, when set, renders a close button in the header that dismisses the
   // panel. Only the desktop split-pane layout wires it; the menu-bar view has
   // its own back button and leaves this unset.
   onClose?: () => void;
+  // exportAction is the host's copy/download control for the current view,
+  // placed with the PR's own actions.
+  exportAction?: ReactNode;
 }
 
 type DetailTab = 'overview' | 'commits' | 'files';
 
-export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, onActionDone, onClose }: Props) {
-  const [showCreate, setShowCreate] = useState(false);
+export function PRDetailPanel({ pr, detail, loading, projects, onActionDone, onRefresh, onClose, exportAction }: Props) {
+  const { openModal } = useModal();
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const workspaces = useMemo(() => (projects ?? []).filter(p => !!p.dir), [projects]);
   const [containerRef, containerWidth] = useContainerWidth<HTMLDivElement>();
@@ -176,10 +183,10 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
     () => [{
       label: 'New todo',
       icon: UiAdd,
-      onClick: () => setShowCreate(true),
+      onClick: () => openModal(newPRTodoFormKey, { pr, detail, workspaces }),
       title: "Create a todo from this PR's failures and comments",
     }],
-    [],
+    [openModal, pr, detail, workspaces],
   );
 
   const info = detail?.pr;
@@ -200,6 +207,21 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
               collapsed={collapsedActions}
               extras={extraActions}
             />
+            {exportAction}
+            {onRefresh && (
+              <Button
+                variant="ghost"
+                size="icon"
+                type="button"
+                onClick={onRefresh}
+                disabled={loading}
+                title="Refresh PR status and workflows"
+                aria-label="Refresh pull request status"
+                className="h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                {loading ? <Spinner className="text-base" /> : <UiRefresh className="text-base" />}
+              </Button>
+            )}
             {onClose && (
               <Button
                 variant="ghost"
@@ -247,6 +269,14 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
       {activeTab === 'overview' && (
         <>
           <PRLinkedTodos prUrl={pr.url} />
+          <PRLifecycleActions key={pr.url} pr={pr} projects={workspaces} />
+
+          {detail?.runsError && (
+            <div role="alert" className="mt-3 p-2 bg-red-50 border border-red-100 rounded text-xs text-red-700 whitespace-pre-wrap">
+              <UiError className="mr-1" />
+              {detail.runsError}
+            </div>
+          )}
 
           {detail?.runs && Object.keys(detail.runs).length > 0 && (
             <Section
@@ -276,7 +306,7 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
       )}
 
       {activeTab === 'commits' && (
-        <CommitsTab commits={commits} pr={pr} />
+        <PRCommitList commits={commits} repo={pr.repo} className="mt-2" diffMaxHeightClassName="max-h-[560px]" />
       )}
 
       {activeTab === 'files' && (
@@ -291,15 +321,6 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
         </a>
       </div>
 
-      <CreateTodoFromPRDialog
-        open={showCreate}
-        onClose={() => setShowCreate(false)}
-        pr={pr}
-        detail={detail}
-        workspaces={workspaces}
-        onCreated={onTodoCreated}
-        onProjectsChanged={onTodoCreated}
-      />
     </div>
   );
 }
@@ -365,40 +386,6 @@ function DetailTabBar({ active, onChange, commitCount, fileCount }: {
         );
       })}
     </div>
-  );
-}
-
-function CommitsTab({ commits, pr }: { commits: PRCommitInfo[]; pr: PRItem }) {
-  const queryClient = useQueryClient();
-  const items = useMemo<GitCommitItem[]>(() => commits.map(commit => ({
-    id: commit.oid,
-    sha: commit.oid,
-    shortSha: commit.oid.slice(0, 7),
-    title: commit.messageHeadline,
-    body: commit.messageBody,
-    authorName: commit.authorName,
-    authorLogin: commit.authorLogin,
-    authorAvatarUrl: commit.authorAvatarUrl,
-    committedAt: commit.committedDate,
-    additions: commit.additions,
-    deletions: commit.deletions,
-    changedFiles: commit.changedFiles,
-    href: `https://github.com/${pr.repo}/commit/${commit.oid}`,
-  })), [commits, pr.repo]);
-
-  const loadDiff = useCallback(
-    (commit: GitCommitItem) => queryClient.fetchQuery(prCommitDiffQuery(pr.repo, commit.sha)),
-    [pr.repo, queryClient],
-  );
-
-  return (
-    <GitCommitList
-      commits={items}
-      loadDiff={loadDiff}
-      renderTime={iso => <RelativeTime iso={iso} />}
-      className="mt-2"
-      diffMaxHeightClassName="max-h-[560px]"
-    />
   );
 }
 
@@ -849,15 +836,20 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
   const agg = useMemo(() => aggregateGavelShards(shards), [shards]);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   if (!agg) return null;
+
   const multi = shards.length > 1;
 
-  // The aggregate has no single artifact, so the metric cards in the
-  // header don't deep-link when there are multiple shards — clicks on
-  // specific results happen via the per-shard rows.
-  const headerCards = buildMetricCards(agg, multi ? null : (tab: string) => shardLink(pr, agg, tab));
+  // With several shards the header cards open every shard's results merged
+  // into one run, filterable back down to individual shards.
+  const mergeable = mergeableShards(shards);
+  const overviewLink = !multi
+    ? (tab: string) => shardLink(pr, agg, tab)
+    : mergeable.length > 0 ? (tab: string) => resultsLink(pr, mergeable, tab, true) : null;
+  const headerCards = buildMetricCards(agg, overviewLink);
   // A shard that produced no cards but carries an error knows why it produced
   // nothing — say that instead of the generic "no data" text.
   const errored = shards.filter(s => s.error);
+  const outdated = shards.filter(s => s.outdated);
 
   return (
     <Section
@@ -868,6 +860,14 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
         markdown: () => formatGavelMarkdown(agg),
       }}
     >
+      {outdated.length > 0 && (
+        <div className="text-xs text-amber-700 pb-1">
+          <UiWarningTriangle className="mr-1" />
+          {outdated.length === shards.length
+            ? 'From an earlier run, not the head commit.'
+            : `From an earlier run, not the head commit: ${outdated.map(s => s.stickyId || `artifact ${s.artifactId}`).join(', ')}`}
+        </div>
+      )}
       {headerCards.length > 0 ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2">
           {headerCards.map((c) => (
@@ -897,9 +897,8 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
 
       <ReproduceCommands commands={agg.commands ?? []} />
 
-      {!multi && (
-        <ShardExtras results={shards[0]} />
-      )}
+      {/* The aggregate carries every shard's failures, so the overview previews them across shards too. */}
+      <ShardExtras results={agg} link={overviewLink} />
 
       {multi && (
         <div className="mt-3">
@@ -968,9 +967,27 @@ function ReproduceCommands({ commands }: { commands: string[] }) {
 }
 
 function shardLink(pr: PRItem, results: GavelResultsSummary, tab: string): string {
-  const backTo = `${window.location.pathname}${window.location.search}`;
-  const basePath = `/results/${pr.repo}/${results.artifactId}`;
-  return `${basePath}/${tab}?backTo=${encodeURIComponent(backTo)}`;
+  return resultsLink(pr, [results], tab, false);
+}
+
+// resultsLink opens the results page over the given shards merged into one
+// run. With filterable set, every shard is listed as ?shard={artifactId}:{label}
+// so the page can narrow the merged view to a subset.
+function resultsLink(pr: PRItem, shards: GavelResultsSummary[], tab: string, filterable: boolean): string {
+  const [tabPath, tabQuery = ''] = tab.split('?');
+  const params = new URLSearchParams(tabQuery);
+  params.set('backTo', `${window.location.pathname}${window.location.search}`);
+  if (filterable) {
+    for (const s of shards) params.append('shard', `${s.artifactId}:${s.stickyId || `artifact ${s.artifactId}`}`);
+  }
+  const ids = shards.map(s => s.artifactId).join(',');
+  return `/results/${pr.repo}/${ids}/${tabPath}?${params.toString()}`;
+}
+
+// The shards a merged results page can load: an errored shard has no results
+// payload to merge.
+function mergeableShards(shards: GavelResultsSummary[]): GavelResultsSummary[] {
+  return shards.filter(s => s.artifactId > 0 && !s.error);
 }
 
 function buildMetricCards(
@@ -1081,8 +1098,9 @@ function ShardError({ results, href }: { results: GavelResultsSummary; href?: st
 // ShardExtras renders the artifact's failing tests and lint findings with
 // clicky-ui's test runner and lint results, so a shard row in the PR dashboard
 // reads like the results page it links to instead of a parallel rendering of
-// the same data.
-function ShardExtras({ results }: { results: GavelResultsSummary }) {
+// the same data. Each previews the first few findings as a list, and links to
+// that results page for the rest.
+function ShardExtras({ results, link }: { results: GavelResultsSummary; link: ((tab: string) => string) | null }) {
   const failures = results.failures ?? [];
   const lint = results.lint ?? [];
   const violations = countViolations(lint);
@@ -1097,8 +1115,9 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
           title="Test failures"
           icon={UiBeaker}
           iconColor="text-red-600"
-          shown={failures.length}
+          shown={Math.min(failures.length, PREVIEW_LIMIT)}
           total={results.testsFailed}
+          moreHref={link?.('tests?filter=failed')}
         >
           <ShardTestFailures failures={failures} />
         </FailureList>
@@ -1108,8 +1127,9 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
           title="Lint violations"
           icon={UiWarningTriangle}
           iconColor="text-yellow-600"
-          shown={violations}
+          shown={Math.min(violations, PREVIEW_LIMIT)}
           total={results.lintViolations}
+          moreHref={link?.('lint')}
         >
           <ShardLintFindings lint={lint} />
         </FailureList>
@@ -1229,7 +1249,7 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
                   <MetricCard key={c.label} {...c} />
                 ))}
               </div>
-              <ShardExtras results={results} />
+              <ShardExtras results={results} link={link} />
             </>
           )}
         </div>
@@ -1238,7 +1258,7 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
   );
 }
 
-function FailureList({ title, icon: Icon, iconColor, shown, total, children }: {
+function FailureList({ title, icon: Icon, iconColor, shown, total, moreHref, children }: {
   title: string;
   icon: ComponentType<IconProps>;
   iconColor: string;
@@ -1248,15 +1268,18 @@ function FailureList({ title, icon: Icon, iconColor, shown, total, children }: {
   // total is the artifact's real count. Omit it (or pass the same number) when
   // nothing was dropped — "showing 2 of 2" is noise.
   total?: number;
+  // moreHref is the full view of the findings, linked when some were dropped.
+  moreHref?: string;
   children: ReactNode;
 }) {
   const rows = children;
+  const truncated = total !== undefined && total > shown;
   return (
-    <div className="mt-3">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
+    <div className="mt-2">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">
         <Icon className={iconColor} />
         <span className="font-semibold">{title}</span>
-        {total !== undefined && total > shown && (
+        {truncated && (
           <span className="text-muted-foreground normal-case tracking-normal">
             showing {shown} of {total}
           </span>
@@ -1265,6 +1288,12 @@ function FailureList({ title, icon: Icon, iconColor, shown, total, children }: {
       <div className="divide-y divide-border border border-border rounded">
         {rows}
       </div>
+      {truncated && moreHref && (
+        <a href={moreHref} className="mt-1 inline-flex items-center gap-0.5 text-xs text-blue-600 hover:underline">
+          Show all {total}
+          <UiChevronRight className="text-[10px]" />
+        </a>
+      )}
     </div>
   );
 }

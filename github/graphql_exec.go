@@ -22,10 +22,9 @@ func graphqlEndpoint() string {
 // and top-level GraphQL `errors[]` as Go errors — callers never have to repeat
 // that boilerplate. kind tags the call for activity stats (e.g. KindSearch,
 // KindGraphQL).
-func postGraphQL(token, endpoint, kind, query string, variables map[string]any) ([]byte, *RateLimit, error) {
+func postGraphQL(ctx context.Context, token, endpoint, kind, query string, variables map[string]any) ([]byte, *RateLimit, error) {
 	body := map[string]any{"query": query, "variables": variables}
 
-	ctx := context.Background()
 	client := newClient(token)
 
 	start := time.Now()
@@ -81,7 +80,18 @@ func graphQLErrors(body []byte) error {
 	for i, e := range envelope.Errors {
 		msgs[i] = e.Message
 	}
-	return fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
+	return &GraphQLError{Messages: msgs}
+}
+
+// GraphQLError is GitHub answering a request with errors[]: the request reached
+// GitHub and it refused it, so the outcome is known — unlike a transport
+// failure, where a mutation may or may not have been applied.
+type GraphQLError struct {
+	Messages []string
+}
+
+func (e *GraphQLError) Error() string {
+	return "GraphQL errors: " + strings.Join(e.Messages, "; ")
 }
 
 // summarizeRollup classifies a status-check rollup's contexts into pass/fail/

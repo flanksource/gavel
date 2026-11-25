@@ -1,10 +1,10 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, Field, Modal, SegmentedControl, Tabs } from "@flanksource/clicky-ui/components";
-import { CodeBlock } from "@flanksource/clicky-ui/data";
+import { CodeBlock, Markdown } from "@flanksource/clicky-ui/data";
 import { PromptRunEditor, promptRuntimeValueToPayload, type AIPromptRunValue, type AISpecRuntimeValue, type ResolvedRuntimeSpec, type RuntimePreset } from "@flanksource/clicky-ui/ai";
 import { createRuntimePreset, runtimePresetLibraryQuery } from "../prompts/runtimePresetCatalog";
-import type { TodoRunOptions } from "../../types";
+import type { TodoItem, TodoRunOptions } from "../../types";
 import { Spinner } from "../../icons/Spinner";
 import { inputClass } from "./format";
 import {
@@ -26,6 +26,8 @@ import {
 import { lastPromptRunOptions, verificationSpec } from "./PromptRunButton";
 import { TodoRunWarnings } from './TodoRunWarnings';
 import { continueBranchLabel, NEW_BRANCH_LABEL, type RunBranchChoice } from './runBranchChoice';
+import { usePlanActions } from './planActions';
+import { PlanTldrCallout, usePlanQuery } from './PlanTldr';
 
 const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
 const VERIFY_SPEC_SECTIONS = ["model", "permissions", "verify"] as const;
@@ -63,6 +65,9 @@ export function TodoRunAdvancedDialog({
   dir,
   refID,
   branchChoice = null,
+  reviewRequired = false,
+  onChanged,
+  onLaunch,
 }: {
   open: boolean;
   onClose: () => void;
@@ -78,11 +83,18 @@ export function TodoRunAdvancedDialog({
   refID: string;
   // The branch a run may continue on, when the todo's previous run left one.
   branchChoice?: RunBranchChoice | null;
+  reviewRequired?: boolean;
+  onChanged?: (todo: TodoItem) => void;
+  onLaunch?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [runRequest, setRunRequest] = useState<AIPromptRunValue>({ spec: INITIAL_RUNTIME_VALUE });
   const runtimeValue = runRequest.spec ?? {};
   const [step, setStep] = useState<string>(initialMode ?? nextStep ?? "run");
+  const needsApproval = reviewRequired && step === "run";
+  const planQuery = usePlanQuery(dir, refID, open && needsApproval);
+  const planActions = usePlanActions(dir);
+  const { reset: resetPlanActions } = planActions;
   const [resume, setResume] = useState(false);
   const [reuseBranch, setReuseBranch] = useState(true);
   const [promptDraft, setPromptDraft] = useState("");
@@ -155,6 +167,10 @@ export function TodoRunAdvancedDialog({
     ]);
     return saved;
   }
+
+  useEffect(() => {
+    if (open) resetPlanActions();
+  }, [open, refID, resetPlanActions]);
 
   useEffect(() => {
     if (!open) return;
@@ -235,9 +251,22 @@ export function TodoRunAdvancedDialog({
   if (!open) return null;
 
   function submit() {
-    if (!context) return;
+    if (!context || needsApproval) return;
     const { ref: _ref, ...payload } = buildRequestPayload();
     onRun(payload);
+  }
+
+  const planReady = planQuery.data?.found && !!planQuery.data.content?.trim() && !planQuery.isPending && !planQuery.error;
+  const submitDisabled = contextLoading || !context || !!contextError || !!loading || planActions.busy;
+
+  async function approvePlan(run: boolean) {
+    if (submitDisabled || !needsApproval || !planReady) return;
+    const { ref: _ref, ...options } = buildRequestPayload();
+    const result = await planActions.approve(refID, { run, options: run ? options : undefined });
+    if (!result) return;
+    onChanged?.(result.todo);
+    if (run) onLaunch?.();
+    onClose();
   }
 
   const promptEditorNode = (
@@ -254,9 +283,26 @@ export function TodoRunAdvancedDialog({
   );
 
   return (
-    <Modal open onClose={onClose} title={selectedStep ? `${submitLabel} todo` : title} size="2xl" footer={<div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={submit} loading={loading} disabled={contextLoading || !context || !!contextError}>{submitLabel}</Button></div>}>
+    <Modal open onClose={onClose} title={needsApproval ? "Review plan & run" : selectedStep ? `${submitLabel} todo` : title} size="2xl" footer={
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        {needsApproval ? <>
+          <Button variant="outline" onClick={() => void approvePlan(false)} disabled={submitDisabled || !planReady}>Approve</Button>
+          <Button onClick={() => void approvePlan(true)} loading={planActions.busy} disabled={submitDisabled || !planReady}>Approve & Run</Button>
+        </> : <Button onClick={submit} loading={loading} disabled={submitDisabled}>{submitLabel}</Button>}
+      </div>
+    }>
       <div className="space-y-3">
         <TodoRunContextError error={contextError} />
+        {needsApproval && <section aria-label="Selected plan" className="space-y-2 rounded-md border border-border p-3">
+          <div className="text-sm font-medium">Plan approval required</div>
+          <p className="text-xs text-muted-foreground">Review the selected plan before approving its immutable revision for implementation.</p>
+          {planQuery.isPending ? <Spinner /> : planQuery.error ? <div role="alert" className="text-xs text-red-600">{planQuery.error.message}</div> : !planReady ? <div role="alert" className="text-xs text-red-600">The selected plan has no readable revision to approve.</div> : <>
+            <PlanTldrCallout plan={planQuery.data} />
+            <div className="max-h-64 overflow-auto"><Markdown text={planQuery.data?.content ?? ''} className="text-sm" /></div>
+          </>}
+        </section>}
+        {planActions.error && <div role="alert" className="text-xs text-red-600">{planActions.error}</div>}
         {contextLoading && <div className="text-xs text-muted-foreground">Loading Captain run providers…</div>}
         {context && !contextError && (
           <>

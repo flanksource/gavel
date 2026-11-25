@@ -4,18 +4,22 @@ import {
   Button,
   JsonSchemaForm,
   Modal,
+  type PreExtension,
 } from '@flanksource/clicky-ui/components';
 import {
   projectActionSchemaQuery,
   type ProjectActionName,
 } from './oneShotQueries';
+import { ErrorBoundary } from './ErrorBoundary';
+import { RuntimeOptions } from './project-action/RuntimeOptions';
+import { runtimeKeys, withoutRemovedAIOptions } from './project-action/runtime';
 
 export type ProjectAction = ProjectActionName;
 
 interface Props {
   projectName: string;
   action: ProjectAction | null;
-  selectedFiles: string[];
+  stagedFiles: string[];
   onClose: () => void;
   onRun: (action: ProjectAction, options: Record<string, unknown>) => Promise<void>;
 }
@@ -27,9 +31,51 @@ interface RememberedActionOptions {
 
 type RememberedOptions = Record<string, Partial<Record<ProjectAction, RememberedActionOptions>>>;
 
-const storageKey = 'gavel.project-action-options.v1';
+const storageKey = 'gavel.project-action-options.v2';
 
-export function ProjectActionDialog({ projectName, action, selectedFiles, onClose, onRun }: Props) {
+const inheritedBoolean: PreExtension = field => (
+  field.kind === 'boolean' && field.value === undefined && typeof field.schema.default === 'boolean'
+    ? { ...field, value: field.schema.default }
+    : field
+);
+const formExtensions = [inheritedBoolean];
+const commitControls: PreExtension = field => {
+  if (runtimeKeys.some(key => key === field.key)) return null;
+  if (field.schema['x-enum-display'] !== 'segmented') return field;
+  return {
+    ...field,
+    options: field.options?.map(option => ({ ...option, label: field.schema['x-enum-labels']?.[option.value] ?? option.label })),
+    value: field.value ?? '',
+    onChange: next => field.onChange(next === '' ? undefined : next),
+  };
+};
+const commitExtensions = [...formExtensions, commitControls];
+
+export function ProjectActionDialog(props: Props) {
+  const { action, projectName, onClose } = props;
+  return (
+    <ErrorBoundary
+      key={`${projectName}/${action ?? ''}`}
+      fallback={error => (
+        <Modal
+          open={action !== null}
+          onClose={onClose}
+          title={`Advanced ${action} options`}
+          footer={<Button type="button" variant="ghost" onClick={onClose}>Close</Button>}
+        >
+          <div role="alert">
+            <p className="text-sm font-medium">Could not render advanced {action} options.</p>
+            <p className="text-sm text-muted-foreground">{error.message}</p>
+          </div>
+        </Modal>
+      )}
+    >
+      <ProjectActionFormDialog {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function ProjectActionFormDialog({ projectName, action, stagedFiles, onClose, onRun }: Props) {
   const [value, setValue] = useState<Record<string, unknown>>({});
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState('');
@@ -48,21 +94,36 @@ export function ProjectActionDialog({ projectName, action, selectedFiles, onClos
   useEffect(() => {
     if (!action || !definition) return;
     const remembered = readRememberedOptions(projectName, action);
-    const initial = remembered?.schemaVersion === definition.schemaVersion
-      ? { ...definition.defaults, ...remembered.value }
-      : { ...definition.defaults };
-    if (action !== 'test' && selectedFiles.length > 0) initial.files = [...selectedFiles].sort();
+    let initial = remembered?.schemaVersion === definition.schemaVersion
+      ? { ...remembered.value }
+      : {};
+    if (action === 'commit') initial = withoutRemovedAIOptions(initial);
+    if (takesStagedFiles(action)) delete initial.files;
     setValue(initial);
     setRunError('');
-  }, [action, definition, projectName, selectedFiles]);
+  }, [action, definition, projectName]);
+
+  useEffect(() => {
+    if (!action || !takesStagedFiles(action) || !definition) return;
+    setValue(current => {
+      const next = { ...current };
+      delete next.files;
+      if (stagedFiles.length > 0) next.files = [...stagedFiles].sort();
+      return next;
+    });
+  }, [action, definition, projectName, stagedFiles]);
 
   const run = async () => {
     if (!action || !definition) return;
     setRunning(true);
     setRunError('');
     try {
-      await onRun(action, value);
-      rememberOptions(projectName, action, definition.schemaVersion, value);
+      const sparse = Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+      const options = action === 'commit' ? withoutRemovedAIOptions(sparse) : sparse;
+      await onRun(action, options);
+      const remembered = { ...options };
+      if (takesStagedFiles(action)) delete remembered.files;
+      rememberOptions(projectName, action, definition.schemaVersion, remembered);
       onClose();
     } catch (cause) {
       setRunError(cause instanceof Error ? cause.message : `Failed to start ${action}`);
@@ -75,7 +136,7 @@ export function ProjectActionDialog({ projectName, action, selectedFiles, onClos
     <Modal
       open={action !== null}
       onClose={onClose}
-      title={action ? `Advanced ${action} options` : 'Advanced options'}
+      title={action ? `Advanced ${actionTitle(action)} options` : 'Advanced options'}
       size="lg"
       footer={
         <div className="flex items-center justify-end gap-2">
@@ -89,23 +150,39 @@ export function ProjectActionDialog({ projectName, action, selectedFiles, onClos
     >
       {loading && <div className="py-8 text-center text-sm text-muted-foreground">Loading options…</div>}
       {!loading && definition && (
-        <JsonSchemaForm
-          schema={definition.schema}
-          value={value}
-          onChange={setValue}
-          size="sm"
-          inline
-          idPrefix={`project-${projectName}-${action}`}
-          showPreferencesMenu={false}
-          persistPreferences={false}
-        />
+        <fieldset disabled={running} className="min-w-0 space-y-4">
+          {action === 'commit' && <RuntimeOptions value={value} onChange={setValue} />}
+          <JsonSchemaForm
+            schema={definition.schema}
+            value={value}
+            onChange={setValue}
+            applyDefaults={false}
+            pre={action === 'commit' || action === 'open-pr' ? commitExtensions : formExtensions}
+            size="sm"
+            layout={{ mode: 'stacked' }}
+            idPrefix={`project-${projectName}-${action}`}
+            showPreferencesMenu={false}
+            persistPreferences={false}
+          />
+        </fieldset>
       )}
     </Modal>
   );
 }
 
+// The staged files ride in the options of the actions whose schema lists them;
+// open-pr commits the staged files beside its push options, test takes paths.
+function takesStagedFiles(action: ProjectAction) {
+  return action === 'commit' || action === 'lint';
+}
+
+function actionTitle(action: ProjectAction) {
+  return action === 'open-pr' ? 'Open PR' : action;
+}
+
 function actionButtonLabel(action: ProjectAction | null) {
-  if (action === 'commit') return 'Commit selected';
+  if (action === 'commit') return 'Commit staged';
+  if (action === 'open-pr') return 'Open PR';
   if (action === 'test') return 'Run tests';
   return 'Run lint';
 }

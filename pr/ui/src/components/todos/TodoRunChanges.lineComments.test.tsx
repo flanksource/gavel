@@ -6,7 +6,7 @@ import { lineComments, type LineCommentAnchor } from './lineComments';
 import { TodoRunChanges } from './TodoRunChanges';
 import { queryTestWrapper } from './queryTestWrapper';
 
-const LINE: DiffLineTarget = { side: 'new', line: 7, content: 'return nil' };
+const LINE = { side: 'new', line: 7, content: 'return nil' } as const;
 
 // The real diff renderer is clicky-ui's; here it only proves the two seams the
 // viewer drives: the per-line "+" action and the widgets rendered under a line.
@@ -23,7 +23,7 @@ vi.mock('@flanksource/clicky-ui/data', async importOriginal => ({
       <div data-testid="diff-panel">{payload?.diff ?? 'loading'}</div>
       {onLineAction && (
         // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test stand-in for the diff gutter button.
-        <button type="button" onClick={() => onLineAction(LINE)}>gutter plus</button>
+        <button type="button" onClick={(event) => onLineAction({ ...LINE, element: event.currentTarget })}>gutter plus</button>
       )}
       {lineWidgets?.map(widget => (
         <div key={widget.key} data-testid="line-widget" data-side={widget.side} data-line={widget.line}>{widget.node}</div>

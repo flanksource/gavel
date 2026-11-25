@@ -62,7 +62,7 @@ func (c *Client) OpenPRs(ctx context.Context) ([]model.PRInfo, error) {
 	}
 	result := make([]model.PRInfo, 0, len(prs))
 	for _, pr := range prs {
-		info, err := c.prInfo(pr)
+		info, err := c.prInfo(ctx, pr)
 		if err != nil {
 			return nil, err
 		}
@@ -111,7 +111,7 @@ func (c *Client) CreatePR(ctx context.Context, in model.CreatePRInput) (*model.C
 
 func fullRef(branch string) string { return "refs/heads/" + strings.TrimPrefix(branch, "refs/heads/") }
 
-func (c *Client) prInfo(pr pullRequest) (*model.PRInfo, error) {
+func (c *Client) prInfo(ctx context.Context, pr pullRequest) (*model.PRInfo, error) {
 	if pr.ID <= 0 {
 		return nil, fmt.Errorf("azure PR response is missing pullRequestId")
 	}
@@ -120,7 +120,7 @@ func (c *Client) prInfo(pr pullRequest) (*model.PRInfo, error) {
 	if !ok {
 		return nil, fmt.Errorf("unexpected Azure PR state %q", pr.Status)
 	}
-	source, err := c.sourceRepository(pr)
+	source, err := c.sourceRepository(ctx, pr)
 	if err != nil {
 		return nil, err
 	}

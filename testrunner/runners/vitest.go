@@ -52,24 +52,28 @@ func detectVitest(dir string, pkg *pkgJSON) bool {
 	return false
 }
 
-func (r *Vitest) Detect(workDir string) (bool, error) {
-	return anyNodePackage(workDir, detectVitest)
+var vitestFlags = nodeFlagSet{framework: "vitest", focus: "-t", parallel: "--maxWorkers", failFast: "--bail=1", suffixes: vitestTestSuffixes}
+
+func (r *Vitest) Flags() []FlagSpec {
+	return []FlagSpec{{Names: []string{"maxWorkers"}, Kind: ParallelFlag}}
 }
 
-func (r *Vitest) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
-	if !recursive {
-		pkg, _ := readPackageJSON(workDir)
-		if detectVitest(workDir, pkg) {
-			return []string{"."}, nil
-		}
-		return nil, nil
+func (r *Vitest) Detect(cwd string, argv []string) (*TestOptions, error) {
+	return detect(r, cwd, argv, nodePresent(cwd, detectVitest, vitestTestSuffixes), nodeFileOwner(cwd, detectVitest, vitestTestSuffixes))
+}
+
+func (r *Vitest) DiscoverPackages(opts TestOptions) ([]string, error) {
+	return discoverNodePackages(opts, detectVitest, vitestTestSuffixes)
+}
+
+func (r *Vitest) BuildCommand(opts TestOptions) (*TestRun, error) {
+	packagePath := firstPackage(opts)
+	userArgs, err := nodeRunnerArgs(opts, packagePath, vitestFlags)
+	if err != nil {
+		return nil, err
 	}
-	return walkNodePackages(workDir, detectVitest)
-}
-
-func (r *Vitest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error) {
-	cwd := filepath.Join(r.workDir, packagePath)
-	reportPath := filepath.Join(r.workDir, ".vitest", fmt.Sprintf("vitest-report-%s-%d.json", sanitizePkgPath(packagePath), time.Now().UnixNano()))
+	cwd := filepath.Join(opts.Cwd, packagePath)
+	reportPath := filepath.Join(opts.Cwd, ".vitest", fmt.Sprintf("vitest-report-%s-%d.json", sanitizePkgPath(packagePath), time.Now().UnixNano()))
 	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create vitest report dir: %w", err)
 	}
@@ -82,7 +86,7 @@ func (r *Vitest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 	cmd, pre := DetectPackageManager(cwd)
 	args := append([]string{}, pre...)
 	args = append(args, "vitest", "run", "--reporter=json", "--outputFile.json="+reportPath, "--reporter="+reporterPath)
-	args = append(args, extraArgs...)
+	args = append(args, userArgs...)
 
 	process := exec.NewExec(cmd, args...).WithCwd(cwd).WithProcessGroup()
 	process.SucceedOnNonZero = true

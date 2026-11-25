@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/flanksource/gavel/projects"
+
 	clickytask "github.com/flanksource/clicky/task"
 )
 
@@ -16,7 +18,7 @@ var errCommitRunNotFound = errors.New("not found")
 // retryableCommitRun is a finished commit queue run reduced to the requests
 // that failed or were canceled, in the order they were queued.
 type retryableCommitRun struct {
-	project  Project
+	project  projects.Project
 	requests []projectActionRequest
 }
 
@@ -65,7 +67,7 @@ func (s *Server) loadRetryableCommitRun(ctx context.Context, runID string) (retr
 	if name == "" {
 		return retryableCommitRun{}, fmt.Errorf("run %q has no project label", runID)
 	}
-	project, err := GetProject(name)
+	project, err := getProject(ctx, name)
 	if err != nil {
 		return retryableCommitRun{}, fmt.Errorf("run %q: %w", runID, err)
 	}
@@ -126,9 +128,10 @@ func retryCommitRequests(runID string, details projectCommitGroupDetails, status
 		if !commitRetryable(status) {
 			continue
 		}
-		request := projectActionRequest{Action: entry.Action, Files: entry.Files, Worktree: entry.Worktree}
-		if entry.Options != nil {
-			request = projectActionRequest{Action: entry.Action, Options: entry.Options, Worktree: entry.Worktree}
+		// open-pr options are push flags beside its files; commit options carry the files.
+		request := projectActionRequest{Action: entry.Action, Files: entry.Files, Options: entry.Options, Worktree: entry.Worktree, indexPatch: entry.IndexPatch}
+		if entry.Options != nil && entry.Action != projectActionOpenPR {
+			request = projectActionRequest{Action: entry.Action, Options: entry.Options, Worktree: entry.Worktree, indexPatch: entry.IndexPatch}
 		}
 		requests = append(requests, request)
 	}
@@ -155,7 +158,7 @@ func (s *Server) enqueueCommitRetry(run retryableCommitRun) (projectCommitRun, e
 	if len(queued) == 0 {
 		return projectCommitRun{}, fmt.Errorf("no commits to retry for project %s", run.project.Name)
 	}
-	return s.projectCommitQueue(run.project, queued[0].workDir).enqueue(s, run.project, queued)
+	return s.projectCommitQueue(run.project, queued[0].workDir).enqueue(s.context(), s, run.project, queued)
 }
 
 func commitRetryable(status clickytask.Status) bool {
@@ -163,7 +166,7 @@ func commitRetryable(status clickytask.Status) bool {
 }
 
 func (s *Server) handleCommitQueueRetry(w http.ResponseWriter, r *http.Request) {
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return

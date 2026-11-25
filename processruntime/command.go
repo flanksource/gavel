@@ -10,9 +10,12 @@ import (
 	"sync"
 
 	cexec "github.com/flanksource/clicky/exec"
+	"github.com/flanksource/gavel/slots"
 )
 
 type Command struct {
+	ctx         context.Context
+	slots       slots.Limits
 	Dir         string
 	Env         []string
 	Stdout      io.Writer
@@ -24,10 +27,10 @@ type Command struct {
 
 func NewCommand(ctx context.Context, options Options, binary string, args ...string) *Command {
 	p := cexec.NewExec(binary, args...).WithContext(ctx).WithProcessGroup()
-	return &Command{Process: p, ConfigError: options.Apply(p)}
+	return &Command{Process: p, ConfigError: options.Apply(p), ctx: ctx, slots: options.Slots}
 }
 
-func (c *Command) Run() error {
+func (c *Command) Run() (err error) {
 	if c.ConfigError != nil {
 		return c.ConfigError
 	}
@@ -42,7 +45,16 @@ func (c *Command) Run() error {
 	if c.Stdin != nil {
 		c.Process.WithStdin(c.Stdin)
 	}
-	result := c.Process.Run().Result()
+	lease, err := slots.Acquire(c.ctx, slots.Request{Limits: c.slots, WorkDir: c.Dir, Command: strings.Join(append([]string{c.Process.Cmd}, c.Process.Args...), " ")})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := lease.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	result := c.Process.WithEnv(lease.Env()).Run().Result()
 	var native *exec.ExitError
 	if errors.As(result.Error, &native) {
 		return native

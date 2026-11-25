@@ -4,7 +4,6 @@ import { SessionInspector, fetchRemoteSession, questionsFromToolInput, type Appr
 import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
-import { CmuxSessionButton } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
 import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
 import { VerificationFailureStatus } from './VerificationFailureStatus';
@@ -90,8 +89,6 @@ export function TodoSession({
   todo,
   onChanged,
   onVerification,
-  onResume,
-  resumeDisabled,
   onRun,
   onAdvanced,
   runOptions,
@@ -111,10 +108,6 @@ export function TodoSession({
   todo: TodoItem;
   onChanged?: (todo: TodoItem) => void;
   onVerification?: () => void;
-  // onResume/resumeDisabled back the session toolbar's "Resume in cmux" action,
-  // wired from the todo detail's run flow.
-  onResume?: () => void;
-  resumeDisabled?: boolean;
   // onRun/onAdvanced/runBusy/runDisabled back the never-run start hero
   // (TodoSessionStart), wired from the todo detail's run flow.
   onRun?: (options?: TodoRunOptions) => void;
@@ -305,7 +298,7 @@ export function TodoSession({
     ...(answerMutation.error ? [{ source: 'Session answer', message: answerMutation.error.message }] : []),
     ...(stopMutation.error ? [{ source: 'Session stop', message: stopMutation.error.message }] : []),
   ];
-  const toolbarActions = <SessionToolbarActions dir={dir} sessionId={followedSessionId} agent={stats?.agent} detail={detail} attempt={attempt} onResume={onResume} resumeDisabled={resumeDisabled} />;
+  const toolbarActions = <SessionToolbarActions detail={detail} attempt={attempt} />;
   const transcriptProps = { pendingTools, onPendingToolDecision: decide, showHeader: false, className: 'text-xs' };
 
   return (
@@ -371,13 +364,8 @@ function todoSessionMetadata({ attempt, stats, sessionId }: { attempt: TodoSessi
   };
 }
 
-function SessionToolbarActions({ dir, sessionId, agent, detail, attempt, onResume, resumeDisabled }: { dir: string; sessionId: string | undefined; agent: string | undefined; detail: TodoSessionDetailResponse | null; attempt: TodoSessionAttempt | undefined; onResume: (() => void) | undefined; resumeDisabled: boolean | undefined }) {
-  return (
-    <>
-      {sessionId ? <CmuxSessionButton dir={dir} sessionId={sessionId} {...(agent ? { agent } : {})} {...(onResume ? { onResume } : {})} {...(resumeDisabled !== undefined ? { resumeDisabled } : {})} /> : null}
-      {detail ? <CopyAllDetailsButton detail={detail} attempt={attempt} compact /> : null}
-    </>
-  );
+function SessionToolbarActions({ detail, attempt }: { detail: TodoSessionDetailResponse | null; attempt: TodoSessionAttempt | undefined }) {
+  return detail ? <CopyAllDetailsButton detail={detail} attempt={attempt} compact /> : null;
 }
 
 function latestQuestionTool(messages: SessionUIMessage[]): { input?: Record<string, unknown>; toolCallId?: string } | undefined {

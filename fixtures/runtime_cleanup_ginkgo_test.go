@@ -18,7 +18,7 @@ var _ = Describe("Fixture runtime isolation", func() {
 		var runner *Runner
 		var err error
 		runner, err = NewRunner(RunnerOptions{Paths: []string{path}, WorkDir: dir, ProgressSink: func(context.Context, ExecutionSnapshot) error {
-			for _, setup := range runner.setups {
+			for _, setup := range runner.setups.prepared {
 				setup.cleanup = func() error { return fmt.Errorf("cleanup failed") }
 			}
 			return nil

@@ -398,7 +398,7 @@ func TestRepositoryListAliasesByKind(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	byIssue, err := repo.ListAliasesByKind(ctx, workspace.ID, "github")
+	byIssue, err := repo.ListAliasesByKind(ctx, []uuid.UUID{workspace.ID}, "github")
 	require.NoError(t, err)
 
 	names := map[uuid.UUID][]string{}

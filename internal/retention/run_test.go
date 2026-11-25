@@ -101,6 +101,8 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 			row.org, row.dir, row.runID, filepath.Join(row.dir, ".gavel", row.runID+".json"), row.kind, row.started.UnixNano()).Error)
 		putBlob(t, row.store, row.runID+".json")
 	}
+	putBlob(t, localRuns, "run-old.json.zst")
+	putBlob(t, otherRuns, "run-lint-old.json.gz")
 
 	// Linter executions.
 	for _, executed := range []time.Time{old, fresh} {
@@ -161,10 +163,12 @@ func TestRunDeletesWhatOutlivedItsWindow(t *testing.T) {
 	require.NoError(t, db.Raw(`SELECT run_id FROM test_run_caches ORDER BY run_id`).Scan(&runs).Error)
 	assert.Equal(t, []string{"run-fresh", "run-lint-fresh"}, runs)
 	assert.False(t, hasBlob(t, localRuns, "run-old.json"))
+	assert.False(t, hasBlob(t, localRuns, "run-old.json.zst"))
 	assert.False(t, hasBlob(t, localRuns, "run-mixed-old.json"))
 	assert.True(t, hasBlob(t, localRuns, "sha-abc.json"), "the snapshot last.json may name stays")
 	assert.True(t, hasBlob(t, localRuns, "run-fresh.json"))
 	assert.False(t, hasBlob(t, otherRuns, "run-lint-old.json"))
+	assert.False(t, hasBlob(t, otherRuns, "run-lint-old.json.gz"))
 	assert.True(t, hasBlob(t, otherRuns, "run-lint-fresh.json"))
 
 	assert.Equal(t, 1, countRows(t, db, `SELECT count(*) FROM linter_executions`))

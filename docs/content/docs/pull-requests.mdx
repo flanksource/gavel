@@ -1,0 +1,269 @@
+---
+title: "Pull requests"
+description: "Inspect PR checks, reproduce failures, and browse pull requests in the dashboard."
+parent: cli-usage
+order: 20
+---
+
+## Status and verification
+
+Use `pr status` to inspect or follow GitHub Actions state for a pull request. It can resolve the current branch's PR automatically, fall back to the most recent PR, and optionally fetch failed job logs.
+
+The GitHub linter supplies CodeQL findings for this PR beneath its CodeQL result check, including every file, line, title, and message. Findings from a required failing CodeQL check are lint errors; otherwise they are warnings. Another failing check never changes their severity. All annotation pages are fetched without requiring `--logs` or Gavel artifacts. `--json` includes findings in each check's `lint` field; retrieval failures appear in `lintError`. `--actions` scopes findings and errors with their check. PR status exit codes still reflect all failed checks, including optional ones. This invocation never audits other PRs, Dependabot, default-branch alerts, or PR health rules.
+
+### Repository GitHub lint
+
+`gavel lint github` explicitly audits all open PRs (including drafts and bots), open Dependabot security alerts, default-branch CodeQL alerts, and CodeQL annotations on open PRs. It does not run during ordinary lint unless selected with `--linters github`.
+
+```bash
+gavel lint github
+gavel lint github -- --repo acme/service --stale-after 720h
+gavel lint github --exclude 'github:pr-stale'
+```
+
+Configure repository selection under `lint.linters.github.config`:
+
+```yaml
+lint:
+  linters:
+    github:
+      config:
+        orgs: [acme]
+        repos: [personal/service]
+        excludeRepos: ["acme/legacy-*", "retired-org/*"]
+        staleAfter: 720h
+```
+
+`orgs` discovers every repository visible to your credentials, including forks and archived repositories. `repos` adds explicit `owner/repo` entries or qualified GitHub repository search queries. Results are combined and deduplicated, then `excludeRepos` removes matching repositories. These are case-insensitive doublestar globs against the full `owner/repo`; `owner/*` excludes an entire organization. With neither `orgs` nor `repos`, the linter uses the checkout's GitHub origin. If queries or exclusions leave no repositories, it reports a skipped audit with a reason, without falling back to the origin.
+
+To select repositories by topic:
+
+```yaml
+lint:
+  linters:
+    github:
+      config:
+        orgs: []
+        repos:
+          - "org:flanksource topic:mission-control"
+```
+
+Clear inherited `orgs` for topic-only selection; queries add repositories rather than filtering organization discovery. Query strings use native GitHub search semantics, including `fork:true` to include forks. All pages are fetched; incomplete results or queries exceeding GitHub's 1,000-result search limit fail visibly while retaining repositories already discovered. Narrow the query to resolve these errors.
+
+Native `--repo owner/repo` overrides configured organization/repository selection; exclusions still apply. `--stale-after` overrides `staleAfter`, a positive Go duration measured from the PR's last activity, defaulting to 720 hours (30 days). These native arguments can also be set in `lint.linters.github.args`. Across config layers, each authored list replaces its inherited list, including `[]`; omitted fields inherit. Settings do not activate the linter automatically. PR status ignores repository-selection settings and fetches CodeQL findings only for its selected PR.
+
+Local file scopes, `--changed`, `--since`, and artifact-based `--pr` narrowing are unsupported; use `--cwd` to choose the directory whose configuration to load.
+
+Rules are `pr-stale` (warning), `pr-conflicting` (error), `pr-check-failed` (error for a required check, warning otherwise), `dependabot-alert` (error), `codeql-alert` (GitHub rule severity), and `codeql-pr` (error for a required failing check, warning otherwise). Pending checks and closed/merged PRs are not failures. Dependabot findings include the manifest, advisory, vulnerable range, and patched version when available. Healthy Dependabot update PRs are not security-alert findings.
+
+The linter uses Gavel's existing GitHub credentials. Security endpoints require Dependabot alerts and Code scanning alerts read access. Missing permissions or disabled security APIs fail the audit visibly, retaining findings collected from successful sources. `--fix` cannot mutate GitHub. Standard JSON, baselines, and rule exclusions apply.
+
+This is the fastest command for:
+
+- Checking whether a PR is green
+- Following checks until completion
+- Pulling failed log tails into the CLI
+- Getting the exact command that re-runs the PR's failures locally
+- Seeing exactly which files a conflicting PR conflicts on
+
+A PR that GitHub reports as `CONFLICTING` renders a **Merge conflicts** section naming every conflicting path, how it conflicts, and the commands that clear it:
+
+```
+✖ Merge conflicts main ← feat/widget (2 files)
+├── go.mod (content)
+├── docs/api.md (modify/delete)
+╰── Resolve locally
+    ├── $ git fetch origin main
+    ├── $ git switch feat/widget
+    ╰── $ git rebase origin/main
+```
+
+No GitHub API returns the conflicting paths, so gavel replays the merge locally with `git merge-tree` against the same two commits GitHub merges — the PR head and the base branch's *current* tip. It needs a checkout whose remote points at the PR's repository; without one the section says so rather than showing an empty list. Nothing is written to your working tree, index, or refs.
+
+The exit code is `1` whenever the PR cannot merge — a failing check, a failing job, a failing gavel shard, or a merge conflict — and `0` only when it is clear on all four. A merge conflict is the one signal `--actions` and `--comments` never scope away: it blocks the merge whichever checks you asked about. `--fail-fast` is unaffected; it still stops only on a definitive check or job failure, because a conflict is cleared by pushing a rebased branch rather than by waiting.
+
+When the PR published gavel results, each failing shard renders its failing tests and lint violations plus a **Reproduce locally** block:
+
+```
+└─ ✖ gavel-test  passed: 41 failed: 2  total: 43
+   ├─ Test failures (2)
+   ├─ Lint summary: 3 of 47 violations
+   ├─ Reproduce locally
+   │  $ gavel test --pr 42
+   │  $ gavel lint --pr 42
+   └─ View full results: https://github.com/owner/repo/actions/runs/…
+```
+
+`--pr` downloads every gavel artifact on the PR, merges the shards into `.gavel/pr-<n>.json`, and narrows the run to those failures — the same narrowing `--failed` applies to a local run. It accepts `42`, `#42`, `owner/repo#42`, or a PR URL, and cannot be combined with `--failed` or `--baseline`.
+
+Common workflows:
+
+```bash
+gavel pr status
+gavel pr status 42
+gavel pr status https://github.com/owner/repo/pull/123
+gavel pr status --follow --interval 30s
+gavel pr status --follow --actions 'CI / Test' --fail-fast   # stop the moment Test goes red
+gavel pr status --follow --comments '@coderabbit'            # wait until those threads resolve
+gavel pr status --logs --tail-logs 50
+gavel test --pr 42        # re-run just the tests that failed on PR #42
+gavel lint --pr 42        # re-run just the linters that flagged PR #42
+```
+
+`--follow` gates on the dimensions you filtered on, ANDed together: `--actions` waits for
+the selected checks to reach `COMPLETED`, `--comments` waits for the selected review threads
+to be resolved, and with neither the gate is the whole status rollup. `--fail-fast` returns
+at the first definitive failure (`FAILURE`, `TIMED_OUT`, `STARTUP_FAILURE`) rather than
+holding the watch open for slower checks — useful when a later scan takes minutes longer
+than the check you care about.
+
+A selector that matches nothing is an error under `--follow` too, not a silent success: an
+empty filtered set used to satisfy the gate, so a typo — or a poll issued before GitHub had
+registered a freshly pushed commit's checks — returned exit 0 immediately.
+
+When stderr is not a terminal, each poll prints a one-line heartbeat rather than repainting
+the whole status table; the full report is still printed once, at the end.
+
+#### Fixing a PR with `--ai-fix`
+
+`--ai-fix` hands the status snapshot to an agent through the `pr.fix` prompt. The agent edits files, gavel commits and pushes each turn to the PR's head branch, and the prompt's `workflow.verify.commands` re-poll `gavel pr status <url>` until the PR is green or `--ai-fix-max-iterations` runs out.
+
+A PR that conflicts with its base is rebased first — never merged. Before the first turn, gavel starts `git rebase` onto the base commit GitHub merges against, which stops on the first conflicting commit. The prompt opens with a **Merge conflicts** section listing the paths GitHub's merge conflicts on. The agent resolves each stop, `git add`s the files and runs `git rebase --continue` until the rebase finishes; gavel commits nothing while a rebase is in progress. Once it has finished, gavel force-pushes the rebased branch with a lease on the head the run started from, so a push someone made in the meantime fails the run instead of being overwritten. Until then, cheap git checks run ahead of the CI poll: no rebase still in progress, the base an ancestor of the new head, no merge commits on the branch, and no conflict markers left — so an unresolved stop is fed back to the agent by name.
+
+Without `--worktree` the fix runs in your checkout, which must be clean and contain the PR head. `--worktree` moves the run into a fresh git worktree branched from the PR head under the user cache directory (`…/gavel/worktrees/<repo>/pr-<n>-<ts>`), so your branch and uncommitted work are never touched. The worktree is removed when the run ends. It is ordinary captain `setup:` isolation, so the same block can be declared under `pr.fix` in `.gavel.yaml` instead.
+
+```bash
+gavel pr status 42 --ai-fix              # fix in the current checkout
+gavel pr status 42 --ai-fix --worktree   # fix in an isolated worktree at the PR head
+```
+
+### Status options
+
+| Flag | Description |
+|------|-------------|
+| `-R` / `--repo` | GitHub repository (`owner/repo`) |
+| `--follow` | Keep watching until the dimensions you filtered on settle (see below) |
+| `--fail-fast` | With `--follow`, return at the first definitive failure instead of waiting for the rest |
+| `--interval` | Poll interval (default: `30s`) |
+| `--logs` | Fetch and include failed job logs (uses extra API quota) |
+| `--tail-logs` | Last N output lines per job log or step excerpt (default `100`, use `0` for all) |
+| `--comments` | Filter review comments by MatchItem patterns over comment ID and `@author`/`@bot` tokens |
+| `--actions` | Filter workflow actions by MatchItem patterns over run/workflow ID, YAML path, workflow name, or job/check name |
+
+GitHub Actions logs show named groups in the terminal, including nested groups in step excerpts. Group headings do not count toward `--tail-logs`.
+
+## Recommend reviewers
+
+Use `pr blame` to identify reviewers based on ownership rules and the people who previously changed the affected code:
+
+```bash
+gavel pr blame
+gavel pr blame 42
+gavel pr blame 42 --since 90d
+gavel pr blame acme/widgets#42 --json
+gavel pr blame https://github.com/acme/widgets/pull/42 --limit 10
+gavel pr blame https://dev.azure.com/acme/product/_git/service/pullrequest/27
+gavel pr blame 27 --repo https://dev.azure.com/acme/product/_git/service --json
+gavel pr blame 42 --history-limit 50 --exclude former-maintainer
+```
+
+Run from a GitHub or hosted Azure DevOps checkout with a remote pointing at the PR's base repository and full Git history. With no argument, the command selects the current branch's PR. Modern `dev.azure.com` and legacy `visualstudio.com` PR URLs are supported. It fetches missing PR commits without changing the working tree, index, branches, or remote-tracking refs. Fork heads are fetched from the source repository. Shallow history is rejected because it would produce incomplete recommendations.
+
+Each recommendation includes the affected files and its supporting evidence:
+
+- **ADO reviewer policies:** automatically included reviewers from native policy evaluations for the selected PR. Required and optional rules are distinguished, groups stay groups, and the policy ID, evaluation status and configured path filters appear as PR-level evidence. Queued human reviews remain recommendations. Rules that ADO marks inapplicable, disabled or deleted are excluded. Broken evaluations and stale merge snapshots produce an error.
+- **CODEOWNERS:** effective owners from the base branch tip. Gavel searches `.github/CODEOWNERS`, `CODEOWNERS`, then `docs/CODEOWNERS`, taking the first existing file and the last matching rule for each path. Rules with no owners clear earlier ownership. Invalid ownership syntax is reported as an error.
+- **Changed lines:** authors of replaced or deleted lines at the PR's merge base.
+- **Insertion context:** authors of the existing lines immediately adjacent to pure insertions, counted separately from changed lines.
+- **File history:** historical author contributions to each changed file, following renames. The default is the most recent 100 commits per file, ending at the merge base.
+
+Candidates rank by required policies, applicable policies, owned files, changed lines, adjacent lines, file commits, and file coverage, in that order. Stable identity ordering breaks ties. A commit touching several changed files contributes once per file. The PR's own commits are excluded from the historical evidence. New files use ownership rules; binary files and pure renames can use file history without line blame.
+
+Use `--since 90d`, `--since now-30d` or `--since 2026-01-01` to count only historical contributions committed on or after the cutoff. This filters file commits, changed-line blame and insertion context by committer date. CODEOWNERS and native ADO reviewer policies remain applicable. `--history-limit` caps the matching file commits after filtering by date. JSON output includes the resolved UTC cutoff as `since`.
+
+Git authors are resolved to GitHub accounts and combined with matching ownership entries. Authors without a linked GitHub account retain their Git name and email. The PR author, accounts marked `[bot]`, and explicit exclusions are omitted. Teams remain team recommendations; Gavel does not expand their membership or validate reviewer permissions. The command only recommends reviewers and sends no review requests.
+
+For ADO, Git authors retain their names and email addresses; matching policy identities are combined by email. ADO uses its native branch policies for ownership enforcement. A CODEOWNERS file in an ADO repo is supplementary repository convention and does not represent an ADO-enforced policy. Authentication uses `AZURE_DEVOPS_EXT_PAT` when configured, otherwise the existing Azure CLI login.
+
+| Flag | Description |
+|------|-------------|
+| `-R` / `--repo` | GitHub `owner/repo` or hosted ADO repository URL; requires a matching local remote |
+| `--limit` | Maximum recommendations to return (default: `5`) |
+| `--history-limit` | Maximum historical commits per changed file (default: `100`) |
+| `--since` | Inclusive date or duration cutoff for historical contributions; ownership rules still apply |
+| `--exclude` | Additional logins, email addresses or ADO identity IDs to omit |
+| `--json` | Include candidate totals, compared commits, and per-file evidence in structured output |
+
+## List and dashboard
+
+List pull requests with filtering, a live browser dashboard, and macOS menu bar indicator.
+
+```bash
+gavel pr list
+gavel pr list --ui                            # serve the live dashboard
+gavel pr list --open                          # serve and open the dashboard in the browser
+gavel pr list --menu-bar                      # macOS menu bar status indicator
+gavel pr list --state merged --since 30d
+gavel pr list --any --status                  # all authors, with check status
+gavel pr list owner/repo another/repo         # specific repos
+gavel pr list --all --org myorg               # all repos in org
+```
+
+| Flag | Description |
+|------|-------------|
+| `--author` | GitHub username (default: `@me`) |
+| `--since` | Show PRs updated since (e.g. `7d`, `now-30d`, `2024-01-01`) |
+| `--state` | PR state: `open` (default), `closed`, `merged`, `all` |
+| `--all` | List PRs across all repos in the org |
+| `--any` | Show PRs from all authors |
+| `--bots` | Include bot-authored PRs |
+| `--org` | GitHub org for `--all` (auto-detected from git remote) |
+| `--limit` | Maximum PRs to return (default: `50`) |
+| `--status` | Show GitHub Actions check status counts |
+| `--logs` | Fetch failed job log tails (requires `--status -v`) |
+| `--url` | Show PR URL instead of number |
+| `--ui` | Serve the PR dashboard with live updates |
+| `--open` | Serve and open the PR dashboard in the browser |
+| `--menu-bar` | Show macOS menu bar status indicator; warn and keep serving if menu bar support was not compiled in |
+| `--interval` | Poll interval for `--ui`/`--menu-bar` (default: `60s`) |
+| `--addr` | Interface to bind the `--ui`/`--menu-bar` server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
+| `--port` | UI port (default: `9092`, `0` to auto-scan upward for a free port) |
+
+The dashboard opens a browser only with `--open`. This also applies to `gavel serve`: use `gavel serve --open` to open it at startup. Menu bar builds require macOS, `CGO_ENABLED=1`, and `-tags gavel_menubar` (or `task build:prod`).
+
+See [Azure DevOps support](/docs/azure-devops-pr-support) and [PR-linked TODOs](/docs/pr-todos).
+
+## Inspect an exact Actions run or job
+
+Paste the run or job URL from GitHub Actions. These targets work for pushes to the default branch and for runs without an associated pull request.
+
+```bash
+gavel pr status https://github.com/acme/widgets/actions/runs/123/job/456 --logs
+gavel pr status https://github.com/acme/widgets/actions/runs/123 --follow
+```
+
+A job URL selects only that job, including a job from an earlier run attempt. Other jobs do not delay its completion or change its exit status. A run URL selects every job in the run. `--logs` includes failed, timed out, and cancelled job logs; `--follow` waits for the selected target to finish. Failures and cancellations return a nonzero exit code.
+
+Use `--head-sha HEAD` to require the workflow's source commit to match the local checkout. PR-only options `--whole-pr`, `--comments`, `--ai-fix`, `--worktree`, and `--rules` require a PR target.
+
+For a GitHub PR whose merge state is blocked, use `gavel pr status 123 --rules --json` to include effective branch rulesets. JSON status also includes auto-merge state and legacy branch protection requirements when configured. Inspect these requirements alongside checks and review threads before merging.
+
+## Verify checks after merging
+
+Query a specific repository's default branch to find its current source commit and check URLs. JSON output includes `headSha` and `checks`, so verification can distinguish the merged commit from the PR's earlier checks.
+
+```bash
+gavel pr list --ci acme/widgets --json
+```
+
+Without repository arguments, `--ci` lists default-branch status across the selected organization. `--since` limits repositories by their most recent push and `--failed-only` keeps failing repositories.
+
+## Resolve an addressed review thread
+
+After addressing a review finding, obtain its native `threadId` from `gavel pr status 123 --json`, then resolve it on that explicit PR:
+
+```bash
+gavel pr resolve 123 --thread PRRT_example --repo acme/widgets
+```
+
+Gavel checks that the thread belongs to the selected PR and that the current viewer can resolve it before sending the mutation. An already resolved thread succeeds without another mutation.

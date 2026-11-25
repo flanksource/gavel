@@ -48,7 +48,7 @@ func stampAttemptSubtree(t *parsers.Test, stamp attemptStamp, cmd string, framew
 		Started: stamp.Started, Ended: stamp.Ended, Duration: t.Duration,
 		PID: stamp.PID, ProcessKey: stamp.Usage.Key, Command: cmd, Framework: framework, ExitCode: &code,
 		Passed: t.Passed, Failed: t.Failed, Skipped: t.Skipped, Pending: t.Pending, TimedOut: t.TimedOut,
-		Message: t.Message, Stdout: t.Stdout, Stderr: t.Stderr,
+		Message: t.Message, Stdout: t.Stdout, Stderr: t.Stderr, Log: t.Log,
 		CPUPercent: stamp.Usage.PeakCPUPercent, RSS: stamp.Usage.PeakRSSBytes,
 		SharedProcess: stamp.SharedProcess,
 	}

@@ -11,7 +11,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/verify"
-	"github.com/flanksource/repomap"
 	"github.com/hairyhenderson/toml"
 )
 
@@ -31,7 +30,7 @@ type configLayer struct {
 }
 
 // DiscoverConfigs walks the standard gavel config hierarchy layer-by-layer
-// (home dir → git root → cwd), collecting the native betterleaks/gitleaks
+// (verify.GavelConfigDirs: home dir → git root's parent → git root → cwd), collecting the native betterleaks/gitleaks
 // config in each directory plus any extra paths declared by that layer's
 // `.gavel.yaml`. Relative `secrets.configs` entries resolve from the
 // directory containing the `.gavel.yaml` that declared them.
@@ -72,40 +71,18 @@ func discoverConfigLayers(workDir string) []configLayer {
 		logger.V(2).Infof("betterleaks: failed to load config trace for %s: %v", workDir, err)
 	}
 
-	seen := make(map[string]struct{}, 3)
-	layers := make([]configLayer, 0, 3)
-	addLayer := func(dir string) {
-		if dir == "" {
-			return
-		}
-		abs, err := filepath.Abs(dir)
-		if err == nil {
-			dir = abs
-		}
-		if _, ok := seen[dir]; ok {
-			return
-		}
-		seen[dir] = struct{}{}
-
-		layer := configLayer{dir: dir}
-		if cfg, ok := sourceConfigs[filepath.Join(dir, ".gavel.yaml")]; ok {
-			layer.cfg = cfg
-		}
-		layers = append(layers, layer)
+	absWorkDir, err := filepath.Abs(workDir)
+	if err != nil {
+		absWorkDir = workDir
 	}
-
-	if home, err := os.UserHomeDir(); err == nil {
-		addLayer(home)
+	dirs := verify.GavelConfigDirs(absWorkDir)
+	layers := make([]configLayer, 0, len(dirs))
+	for _, dir := range dirs {
+		layers = append(layers, configLayer{
+			dir: dir.Dir,
+			cfg: sourceConfigs[filepath.Join(dir.Dir, verify.GavelConfigFileName)],
+		})
 	}
-	if gitRoot := repomap.FindGitRoot(workDir); gitRoot != "" {
-		addLayer(gitRoot)
-	}
-	if abs, err := filepath.Abs(workDir); err == nil {
-		addLayer(abs)
-	} else {
-		addLayer(workDir)
-	}
-
 	return layers
 }
 
@@ -172,16 +149,25 @@ func resolveBaseConfig(workDir string, configs []string) (string, error) {
 
 	var merged tomlConfig
 	for _, p := range configs {
-		data, err := os.ReadFile(p)
+		cfg, err := loadTOMLConfig(p, maxExtendDepth)
 		if err != nil {
-			return "", fmt.Errorf("read %s: %w", p, err)
-		}
-		var cfg tomlConfig
-		if err := toml.Unmarshal(data, &cfg); err != nil {
-			return "", fmt.Errorf("parse %s: %w", p, err)
+			return "", err
 		}
 		merged = mergeTOMLConfigs(merged, cfg)
 	}
+	// betterleaks applies extend.disabledRules only to rules of an extended
+	// config; inlined rules are local to this file, so drop disabled ones here.
+	disabled := make(map[string]struct{}, len(merged.Extend.DisabledRules))
+	for _, id := range merged.Extend.DisabledRules {
+		disabled[id] = struct{}{}
+	}
+	enabled := merged.Rules[:0]
+	for _, rule := range merged.Rules {
+		if _, off := disabled[rule.ID]; !off {
+			enabled = append(enabled, rule)
+		}
+	}
+	merged.Rules = enabled
 
 	tmpDir, err := linters.ScratchDir(workDir, "betterleaks")
 	if err != nil {
@@ -196,6 +182,41 @@ func resolveBaseConfig(workDir string, configs []string) (string, error) {
 		return "", fmt.Errorf("write %s: %w", out, err)
 	}
 	return out, nil
+}
+
+// maxExtendDepth bounds extend.path chains so a cycle fails instead of recursing forever.
+const maxExtendDepth = 4
+
+// loadTOMLConfig parses path and inlines its extend.path chain: the extended
+// file (resolved relative to the file declaring it) is loaded first and the
+// declaring config merged over it, then Path is cleared. A merged config may
+// then carry useDefault from another layer without also naming a path, which
+// betterleaks rejects, and no relative path outlives the file it was written for.
+func loadTOMLConfig(path string, depth int) (tomlConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return tomlConfig{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var cfg tomlConfig
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return tomlConfig{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if cfg.Extend.Path == "" {
+		return cfg, nil
+	}
+	if depth == 0 {
+		return tomlConfig{}, fmt.Errorf("%s: extend.path chain deeper than %d", path, maxExtendDepth)
+	}
+	extended := cfg.Extend.Path
+	if !filepath.IsAbs(extended) {
+		extended = filepath.Join(filepath.Dir(path), extended)
+	}
+	parent, err := loadTOMLConfig(extended, depth-1)
+	if err != nil {
+		return tomlConfig{}, fmt.Errorf("%s extend.path: %w", path, err)
+	}
+	cfg.Extend.Path = ""
+	return mergeTOMLConfigs(parent, cfg), nil
 }
 
 func writeScanConfig(opts ResolveConfigOptions, base string) (string, error) {
@@ -297,6 +318,7 @@ type tomlAllowlist struct {
 //     rules across configs, not override them).
 //   - Extend.DisabledRules: unioned and deduped.
 //   - Extend.UseDefault/Path/URL: last-write-wins (override only if set).
+//     Path is already inlined and cleared by loadTOMLConfig on resolve.
 func mergeTOMLConfigs(base, override tomlConfig) tomlConfig {
 	if override.Title != "" {
 		base.Title = override.Title

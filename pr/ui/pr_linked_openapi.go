@@ -27,7 +27,9 @@ func addPRLinkedOpenAPI(document map[string]any) error {
 		"responses": map[string]any{
 			"200": map[string]any{"description": "Merge accepted, or GitHub auto-merge enabled"},
 			"400": map[string]any{"description": "Invalid PR URL or merge method"},
-			"502": map[string]any{"description": "Host rejected the action"},
+			"409": map[string]any{"description": "GitHub can't rebase the branch; rebaseNotAllowed is set so a squash or merge commit can be offered"},
+			"422": map[string]any{"description": "GitHub refused the merge; nothing was merged"},
+			"502": map[string]any{"description": "Host request failed; the outcome may be unknown"},
 		},
 	}}
 	return nil

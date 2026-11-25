@@ -1,10 +1,5 @@
-// Package tsc implements a gavel linter that runs the TypeScript compiler
-// in type-check-only mode and surfaces compile errors as violations.
-//
-// It shells out to `node` running an embedded wrapper script (tsc-json.cjs)
-// that uses the TypeScript compiler API to emit diagnostics as JSON. The
-// wrapper resolves the `typescript` package from the project's own
-// node_modules so the user's pinned compiler version is used.
+// Package tsc reports TypeScript compiler diagnostics using tsrs when
+// installed, or the project's TypeScript package via a Node wrapper.
 package tsc
 
 import (
@@ -16,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/flanksource/clicky"
@@ -24,6 +20,7 @@ import (
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/verify"
 )
 
 // The wrapper is named .cjs so Node always treats it as CommonJS, even when
@@ -36,6 +33,7 @@ var tscJSONScript []byte
 // TSC implements the Linter interface for the TypeScript compiler.
 type TSC struct {
 	linters.RunOptions
+	Engine verify.TSCEngine
 }
 
 func NewTSC(workDir string) *TSC {
@@ -45,6 +43,38 @@ func NewTSC(workDir string) *TSC {
 func (t *TSC) SetOptions(opts linters.RunOptions) { t.RunOptions = opts }
 
 func (t *TSC) Name() string { return "tsc" }
+
+func (t *TSC) ExecutableCandidates(workDir string) []string {
+	if t.Engine == verify.TSCEngineTypeScript {
+		return []string{"node"}
+	}
+	binaryName := "tsrs"
+	if runtime.GOOS == "windows" {
+		binaryName += ".cmd"
+	}
+	marker := filepath.Join("node_modules", ".bin", binaryName)
+	if root := utils.FindNearestProjectRoot(workDir, []string{marker}); root != "" {
+		return []string{filepath.Join(root, marker), "tsrs", "node"}
+	}
+	return []string{"tsrs", "node"}
+}
+
+func (t *TSC) compiler() string {
+	if t.Executable != "" {
+		return t.Executable
+	}
+	for _, name := range t.ExecutableCandidates(t.WorkDir) {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+	return "node"
+}
+
+func isTSRS(binary string) bool {
+	base := strings.ToLower(filepath.Base(binary))
+	return base == "tsrs" || base == "tsrs.exe" || base == "tsrs.cmd"
+}
 
 // ProjectRootMarkers anchors tsc at the nearest tsconfig.json so the embedded
 // wrapper's ts.findConfigFile() call resolves to the right project.
@@ -120,15 +150,15 @@ func (t *TSC) resolveScript() (string, error) {
 }
 
 func (t *TSC) DryRunCommand() (string, []string) {
-	nodePath, err := exec.LookPath("node")
-	if err != nil {
-		nodePath = "node"
+	binary := t.compiler()
+	if isTSRS(binary) {
+		return binary, tsrsAPIArgs()
 	}
 	path, err := t.resolveScript()
 	if err != nil {
-		return nodePath, []string{"<gavel-tsc-wrapper>"}
+		return binary, []string{"<gavel-tsc-wrapper>"}
 	}
-	return nodePath, append([]string{path}, t.nativeArgs()...)
+	return binary, append([]string{path}, t.nativeArgs()...)
 }
 
 func (t *TSC) nativeArgs() []string {
@@ -140,24 +170,24 @@ func (t *TSC) nativeArgs() []string {
 }
 
 func (t *TSC) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violation, error) {
+	binary := t.compiler()
+	if isTSRS(binary) {
+		return t.runTSRS(ctx, binary)
+	}
+
 	scriptPath, err := t.resolveScript()
 	if err != nil {
 		return nil, err
 	}
 
-	nodePath, err := exec.LookPath("node")
-	if err != nil {
-		return nil, fmt.Errorf("tsc wrapper failed to launch (is node installed?): %w", err)
-	}
-
 	args := append([]string{scriptPath}, t.nativeArgs()...)
-	cmd := t.CommandContext(ctx, t.Name(), nodePath, args...)
+	cmd := t.CommandContext(ctx, t.Name(), binary, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = t.WrapWriter(&stdout)
 	cmd.Stderr = t.WrapWriter(&stderr)
 
-	logger.Infof("Executing: %s", formatCommand(nodePath, args, t.WorkDir))
+	logger.Infof("Executing: %s", formatCommand(binary, args, t.WorkDir))
 
 	runErr := cmd.Run()
 	if runErr != nil {
@@ -167,11 +197,7 @@ func (t *TSC) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violatio
 		return nil, fmt.Errorf("tsc wrapper failed: %w\nStderr:\n%s", runErr, stderr.String())
 	}
 
-	gitRoot := utils.FindGitRoot(t.WorkDir)
-	if gitRoot == "" {
-		gitRoot = t.WorkDir
-	}
-	return parseViolations(stdout.Bytes(), t.WorkDir, gitRoot, io.Discard)
+	return parseViolations(stdout.Bytes(), t.WorkDir, utils.GitRoot(t.WorkDir), io.Discard)
 }
 
 // formatCommand renders the command path, args, and cwd for logging.

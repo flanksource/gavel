@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
+
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/testrunner/outline"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/workspace"
 )
 
 type testOutlineOptions struct {
 	Paths        []string `json:"paths,omitempty" args:"true"`
 	AISummary    bool     `json:"ai_summary,omitempty" flag:"ai-summary" help:"Generate one-line AI summaries of what each test verifies"`
 	Frameworks   []string `json:"frameworks,omitempty" flag:"framework" help:"Limit to frameworks: go, ginkgo, jest, vitest, playwright, fixture"`
-	FixtureFiles []string `json:"fixture_files,omitempty" flag:"fixture-files" help:"Markdown fixture globs; overrides .gavel.yaml fixtures.files"`
+	FixtureFiles []string `json:"fixture_files,omitempty" flag:"fixture-files" help:"Fixture file globs; overrides .gavel.yaml fixtures.files"`
 	Duplication  bool     `json:"duplication,omitempty" flag:"duplication" default:"true" help:"Compute per-test duplication via jscpd"`
 	History      bool     `json:"history,omitempty" flag:"history" default:"true" help:"Join run history from .gavel snapshots"`
 }
@@ -28,8 +31,8 @@ Optionally pass package or file paths to limit the outline. Paths are matched
 relative to --cwd.`)
 }
 
-func runTestOutline(opts testOutlineOptions) (any, error) {
-	workDir, err := getWorkingDir()
+func runTestOutline(ctx context.Context, opts testOutlineOptions) (any, error) {
+	dirs, err := workspace.From(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +45,8 @@ func runTestOutline(opts testOutlineOptions) (any, error) {
 		frameworks = append(frameworks, framework)
 	}
 	return outline.Build(outline.Options{
-		WorkDir:      workDir,
+		WorkDir:      dirs.Invocation,
+		StateRoot:    dirs.StateRoot,
 		Paths:        opts.Paths,
 		Frameworks:   frameworks,
 		FixtureFiles: opts.FixtureFiles,
@@ -57,7 +61,9 @@ func normalizeOutlineFramework(name string) (parsers.Framework, error) {
 }
 
 func init() {
-	cmd := clicky.AddNamedCommand("outline", testCmd, testOutlineOptions{}, runTestOutline)
+	cmd := clicky.AddNamedCommandWithContext("outline", testCmd, testOutlineOptions{}, runTestOutline)
+	cmd.Use = "outline [flags] [path...]"
 	cmd.Short = "Static outline of tests with size, complexity, duplication, and run history"
+	cmd.Example = "  gavel test outline ./testrunner\n  gavel test outline --framework go ./cmd/gavel"
 	cmd.Flags().SetInterspersed(true)
 }

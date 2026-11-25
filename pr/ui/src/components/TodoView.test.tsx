@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { Project, SessionStats, TodoItem, TodoListResponse } from '../types';
@@ -10,9 +10,16 @@ import type { WorkspaceTodos } from './todos/useWorkspaceTodos';
 // The toolbar is clicky-ui's FilterBar, which drags in @floating-ui/react and is
 // unstable under jsdom (see TodoSession.test.tsx). What is under test here is the
 // workspace sections the list renders beneath it, so the row is stubbed out.
+const toolbar = vi.hoisted(() => ({ props: {} as { selecting?: boolean; onSelectingChange?: (selecting: boolean) => void } }));
 vi.mock('./todos/TodoToolbar', () => ({
-  TodoToolbar: () => <div data-testid="todo-toolbar" />,
+  TodoToolbar: (props: typeof toolbar.props) => {
+    toolbar.props = props;
+    return <div data-testid="todo-toolbar" />;
+  },
 }));
+
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock('../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
 
 const useSessionStats = vi.hoisted(() => vi.fn(() => ({ stats: null as SessionStats | null, elapsedMs: 0, error: '' })));
 vi.mock('./todos/TodoSessionTimer', async (importOriginal) => ({
@@ -24,7 +31,7 @@ vi.mock('./todos/useWorkspaceTodos', async importOriginal => ({
   ...(await importOriginal<object>()),
   useWorkspaceTodos: workspaceHook,
 }));
-vi.mock('./todos/CreateTodoDialog', () => ({ CreateTodoDialog: () => null }));
+vi.mock('./todos/CreateTodoDialog', () => ({ useOpenCreateTodo: () => vi.fn() }));
 
 // The full-width pane's two halves are stubbed: DataTable and the detail's
 // tabs both pull in @floating-ui/react, and what is under test here is which of
@@ -47,7 +54,10 @@ const { MenubarTodos } = await import('./MenubarTodos');
 const gavel: Project = { name: 'gavel', dir: '/repos/gavel', repos: [] } as Project;
 const captain: Project = { name: 'captain', dir: '/repos/captain', repos: [] } as Project;
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  viewport.mobile = false;
+});
 
 function todo(ref: string): TodoItem {
   return { ref, title: `todo ${ref}`, status: 'pending', priority: 'medium' };
@@ -61,6 +71,8 @@ describe.each(['desktop', 'compact'])('%s TODO list virtualization', variant => 
     });
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(64);
     vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(400);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400);
     const todos = listProps(defaultTodoFilters());
     const items = Array.from({ length: 200 }, (_, index) => ({ ...todo(`item-${index}`), sessionId: `session-${index}` }));
     todos.workspaces = [gavel];
@@ -100,7 +112,6 @@ function listProps(filters: TodoFilters): WorkspaceTodos {
     select: vi.fn(),
     loadingList: false,
     listReady: true,
-    errorsByDir: {},
     detail: null,
     error: '',
     selection: undefined as unknown as TodoSelection,
@@ -142,6 +153,69 @@ describe('TodoWorkspaceList workspace sections', () => {
       workspaces: { [gavel.dir]: 'exclude', [captain.dir]: 'exclude' },
     });
     expect(screen.getByText('No workspaces match the filter')).toBeTruthy();
+  });
+});
+
+function selectionOf(keys: string[]): TodoSelection {
+  return {
+    selection: new Set(keys),
+    isSelected: () => false,
+    toggleSelected: vi.fn(),
+    setGroupSelected: vi.fn(),
+    clearSelection: vi.fn(),
+    replaceSelection: vi.fn(),
+    targets: [],
+  };
+}
+
+describe('TodoWorkspaceList on a phone', () => {
+  function renderPhone(overrides: Partial<WorkspaceTodos> = {}) {
+    viewport.mobile = true;
+    const todos = { ...listProps(defaultTodoFilters()), selection: selectionOf([]), setFilters: vi.fn(), ...overrides } as WorkspaceTodos;
+    return { todos, ...render(<TodoWorkspaceList todos={todos} projectsLoaded />) };
+  }
+
+  it('hides the row and group checkboxes until select mode is entered', () => {
+    renderPhone();
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+
+    act(() => toolbar.props.onSelectingChange?.(true));
+    expect(toolbar.props.selecting).toBe(true);
+    expect(screen.getByRole('checkbox', { name: 'Select every visible todo in gavel' })).toBeTruthy();
+  });
+
+  it('stays in select mode while anything is checked', () => {
+    renderPhone({ selection: selectionOf([`${gavel.dir}\tg1`]) });
+    expect(screen.getByRole('checkbox', { name: 'Select every visible todo in gavel' })).toBeTruthy();
+  });
+
+  it('gives the menubar list the same select mode', () => {
+    viewport.mobile = true;
+    const todos = { ...listProps(defaultTodoFilters()), selection: selectionOf([]), setFilters: vi.fn() } as WorkspaceTodos;
+    workspaceHook.mockReturnValue(todos);
+    render(<MenubarTodos projects={todos.workspaces} projectsLoaded />);
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+
+    act(() => toolbar.props.onSelectingChange?.(true));
+    expect(screen.getByRole('checkbox', { name: 'Select every visible todo in gavel' })).toBeTruthy();
+  });
+
+  it('keeps desktop checkboxes unconditional', () => {
+    render(<TodoWorkspaceList todos={{ ...listProps(defaultTodoFilters()), selection: selectionOf([]) }} projectsLoaded />);
+    expect(screen.getByRole('checkbox', { name: 'Select every visible todo in gavel' })).toBeTruthy();
+  });
+
+  it('heads each workspace with only the counts that need action, each applying its status filter', () => {
+    const failing = { ...emptyCounts, total: 12, open: 12, draft: 4, failed: 3, ask: 1, verified: 4 };
+    const base = listProps(defaultTodoFilters());
+    const { todos } = renderPhone({
+      workspaces: [gavel],
+      byDir: { [gavel.dir]: { ...base.byDir[gavel.dir], counts: failing } },
+    });
+    expect(screen.getByText('gavel')).toBeTruthy();
+    expect(screen.queryByText('12')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '3 failed' }));
+    expect(todos.setFilters).toHaveBeenCalledWith({ ...defaultTodoFilters(), statuses: { failed: 'include' } });
   });
 });
 

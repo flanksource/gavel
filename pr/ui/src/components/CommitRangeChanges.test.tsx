@@ -4,6 +4,9 @@ import type { TodoCommitFile } from '../types';
 import { CommitRangeChanges, type CommitRangeRequest } from './CommitRangeChanges';
 import { queryTestWrapper } from './todos/queryTestWrapper';
 
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock('../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
+
 vi.mock('@flanksource/clicky-ui/data', async importOriginal => ({
   ...(await importOriginal<typeof import('@flanksource/clicky-ui/data')>()),
   GitDiffPanel: ({ loading, payload, error }: { loading: boolean; payload: { diff: string } | null; error: string }) => (
@@ -48,6 +51,7 @@ function stub(overrides: { files?: (url: URL) => Response; diff?: (url: URL) => 
 const requested = (fetchMock: ReturnType<typeof stub>) => fetchMock.mock.calls.map(([input]) => String(input));
 
 afterEach(() => {
+  viewport.mobile = false;
   vi.unstubAllGlobals();
 });
 
@@ -135,5 +139,20 @@ describe('CommitRangeChanges', () => {
     render(<CommitRangeChanges options={options} filesRequest={filesRequest} diffRequest={diffRequest} />, { wrapper: queryTestWrapper() });
 
     expect(await screen.findByText(/response has no files list/)).toBeTruthy();
+  });
+
+  it("pages a phone between the file list and one file's full-width diff", async () => {
+    viewport.mobile = true;
+    const fetchMock = stub();
+    render(<CommitRangeChanges options={options} filesRequest={filesRequest} diffRequest={diffRequest} />, { wrapper: queryTestWrapper() });
+
+    fireEvent.click(await screen.findByText('a.md'));
+    expect(await screen.findByText('diff:docs/a.md')).toBeTruthy();
+    expect(screen.queryByText('main.go')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to files' }));
+    expect(screen.getByText('main.go')).toBeTruthy();
+    expect(screen.queryByTestId('diff-panel')).toBeNull();
+    expect(requested(fetchMock)).toEqual(['/api/example/files?range=all', '/api/example/diff?range=all&file=docs%2Fa.md']);
   });
 });

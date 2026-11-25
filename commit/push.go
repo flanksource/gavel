@@ -14,6 +14,17 @@ import (
 	"github.com/flanksource/gavel/pr/model"
 )
 
+// PushMode selects the commits --push publishes and seeds the PR from.
+type PushMode string
+
+const (
+	// PushModeCommits publishes the commits ahead of the branch's upstream.
+	PushModeCommits PushMode = ""
+	// PushModeBranch publishes the whole branch: every commit ahead of the
+	// default branch, so an already-pushed branch can still get its PR.
+	PushModeBranch PushMode = "branch"
+)
+
 // pushTargetKind tags how we arrived at the chosen branch to push to.
 type pushTargetKind int
 
@@ -21,7 +32,7 @@ const (
 	pushTargetNone        pushTargetKind = iota
 	pushTargetBranchMatch                // open PR's head branch equals local branch
 	pushTargetAncestorPR                 // open PR's head is ancestor of HEAD — fast-forward safe
-	pushTargetNewPR                      // no suitable PR; will create one
+	pushTargetNewPR                      // create a new PR
 )
 
 type pushTarget struct {
@@ -38,26 +49,34 @@ type pushDeps struct {
 	isAncestor          func(workDir, ref, head string) bool
 	gitPush             func(workDir, refspec string) error
 	rebaseOnto          func(workDir, upstreamBranch string) error
-	pickPR              func(header string, prs []github.PRListItem) (*github.PRListItem, error)
+	pickPR              func(ctx context.Context, header string, prs []github.PRListItem) (pushTarget, error)
 	generatePRPrompt    func(ctx context.Context, in PRContentInput) (PRContent, error)
 	aheadCommits        func(workDir, branch, defaultBase string) ([]CommitResult, error)
 	confirmProtectedRef func(branch string) bool
-	enableAutoMerge     func(github.Options, string, string) error
+	enableAutoMerge     func(github.Options, *model.CreatePRResult, string) error
 }
 
-func defaultPushDeps() pushDeps {
+func defaultPushDeps(ctx context.Context, opts Options) pushDeps {
 	return pushDeps{
-		searchPRs:           github.SearchPRs,
-		defaultBranch:       github.DefaultBranch,
-		createPR:            github.CreatePR,
-		isAncestor:          gitIsAncestor,
-		gitPush:             runGitPush,
-		rebaseOnto:          rebaseOnto,
-		pickPR:              choosePR,
-		generatePRPrompt:    GeneratePRContent,
-		aheadCommits:        loadAheadCommits,
-		confirmProtectedRef: confirmProtectedBranchPush,
-		enableAutoMerge:     github.EnableAutoMerge,
+		searchPRs:     github.SearchPRs,
+		defaultBranch: github.DefaultBranch,
+		createPR:      github.CreatePR,
+		isAncestor:    gitIsAncestor,
+		gitPush: func(workDir, refspec string) error {
+			return runGitPush(remoteRef{WorkDir: workDir, Remote: opts.target.remoteName(), Ref: refspec})
+		},
+		rebaseOnto: func(workDir, branch string) error {
+			return rebaseOnto(ctx, remoteRef{WorkDir: workDir, Remote: opts.target.remoteName(), Ref: branch})
+		},
+		pickPR:           choosePR,
+		generatePRPrompt: GeneratePRContent,
+		aheadCommits:     loadAheadCommits,
+		confirmProtectedRef: func(branch string) bool {
+			return confirmProtectedBranchPush(ctx, branch)
+		},
+		enableAutoMerge: func(opts github.Options, pr *model.CreatePRResult, method string) error {
+			return github.EnableAutoMerge(opts, github.MergeOptions{NodeID: pr.NodeID, Method: method})
+		},
 	}
 }
 
@@ -77,9 +96,9 @@ func isProtectedBranch(name string) bool {
 
 // confirmProtectedBranchPush prompts the user before pushing to a
 // protected remote branch. Returns true if the user confirmed.
-func confirmProtectedBranchPush(branch string) bool {
+func confirmProtectedBranchPush(ctx context.Context, branch string) bool {
 	header := fmt.Sprintf("Pushing to protected branch %q bypasses PR review. Proceed?", branch)
-	idx, ok := promptSelectIndex(context.Background(), header, []string{
+	idx, ok := promptSelectIndex(ctx, header, []string{
 		fmt.Sprintf("No, cancel push to %s", branch),
 		fmt.Sprintf("Yes, push directly to %s", branch),
 	})
@@ -103,6 +122,9 @@ var pushDepsForTest *pushDeps
 // still something to seed PR title/body generation with. If HEAD has no
 // commits ahead of upstream either, returns ErrNothingToPush.
 func pushAfterCommit(ctx context.Context, opts Options, result *Result) error {
+	if err := opts.resolveTarget(); err != nil {
+		return err
+	}
 	var deps pushDeps
 	if pushDepsForTest != nil {
 		deps = *pushDepsForTest
@@ -121,7 +143,13 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 		return nil
 	}
 
-	ghOpts := github.Options{WorkDir: opts.WorkDir}
+	if err := opts.resolveTarget(); err != nil {
+		return err
+	}
+	ghOpts, err := opts.pushGithubOptions()
+	if err != nil {
+		return err
+	}
 	branch, err := gitCurrentBranch(opts.WorkDir)
 	if err != nil {
 		return fmt.Errorf("resolve current branch: %w", err)
@@ -130,28 +158,48 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 		return fmt.Errorf("cannot push from detached HEAD")
 	}
 
-	if len(result.Commits) == 0 {
-		base, baseErr := deps.defaultBranch(ghOpts)
+	prSeed := result
+	if len(result.Commits) == 0 || opts.PushMode == PushModeBranch || opts.Target != "" {
+		base, baseErr := opts.pushBase(deps, ghOpts)
 		if baseErr != nil {
 			return fmt.Errorf("resolve default branch: %w", baseErr)
 		}
 		baseRef := ""
 		if base != "" {
-			baseRef = "origin/" + base
+			baseRef = opts.target.remoteName() + "/" + base
 		}
-		ahead, aErr := deps.aheadCommits(opts.WorkDir, branch, baseRef)
+		// An empty branch makes the ahead base the default branch rather
+		// than the branch's own upstream.
+		aheadBranch := branch
+		if opts.PushMode == PushModeBranch || opts.Target != "" {
+			aheadBranch = ""
+		}
+		if opts.Target != "" && !validRef(opts.WorkDir, baseRef) {
+			return fmt.Errorf("--target base %q is not available locally; fetch %s first", baseRef, opts.target.remoteName())
+		}
+		ahead, aErr := deps.aheadCommits(opts.WorkDir, aheadBranch, baseRef)
 		if aErr != nil {
 			return fmt.Errorf("read ahead commits: %w", aErr)
+		}
+		if opts.DryRun && !result.PushOnly {
+			for _, c := range result.Commits {
+				if c.Hash == "" {
+					ahead = append(ahead, c)
+				}
+			}
 		}
 		if len(ahead) == 0 {
 			return ErrNothingToPush
 		}
-		result.Commits = ahead
-		// In dry-run mode, runSingleCommit/runCommitAll would have printed
-		// the commit preview; here we print it ourselves so the user sees
-		// what's about to be pushed before the "would push ..." line.
-		if opts.DryRun {
-			printDryRunPreview(result)
+		prSeed = &Result{Commits: ahead}
+		if len(result.Commits) == 0 {
+			result.Commits = ahead
+			// In dry-run mode, runSingleCommit/runCommitAll would have printed
+			// the commit preview; here we print it ourselves so the user sees
+			// what's about to be pushed before the "would push ..." line.
+			if opts.DryRun {
+				printDryRunPreview(result)
+			}
 		}
 	}
 
@@ -163,43 +211,57 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 		return nil
 	}
 
-	target, candidates, err := decidePushTarget(ctx, ghOpts, branch, deps)
+	if opts.target.head != "" {
+		branch = opts.target.head
+	}
+	target, candidates, err := decidePushTarget(opts, ghOpts, branch, deps)
 	if err != nil {
 		return err
+	}
+
+	if target.kind == pushTargetAncestorPR && len(candidates) > 1 {
+		target, err = deps.pickPR(ctx, "Multiple open PRs could accept this push — select one:", candidates)
+		if err != nil {
+			return fmt.Errorf("pick PR: %w", err)
+		}
+		if target.kind == pushTargetNone {
+			return fmt.Errorf("push cancelled")
+		}
 	}
 
 	if opts.AutoMerge && target.kind != pushTargetNewPR {
 		logger.Warnf("--auto-merge only applies to newly opened PRs; pushing to an existing PR, auto-merge not changed")
 	}
 
+	var pushed *PushedPR
 	switch target.kind {
 	case pushTargetBranchMatch:
-		return executeExistingPRPush(opts, deps, target.pr, "branch-match")
+		pushed, err = executeExistingPRPush(opts, deps, target.pr, "branch-match")
 	case pushTargetAncestorPR:
-		if len(candidates) > 1 {
-			picked, perr := deps.pickPR("Multiple open PRs could accept this push — select one:", candidates)
-			if perr != nil {
-				return fmt.Errorf("pick PR: %w", perr)
-			}
-			if picked == nil {
-				return fmt.Errorf("push cancelled")
-			}
-			target.pr = picked
-		}
-		return executeExistingPRPush(opts, deps, target.pr, "ancestor-match")
+		pushed, err = executeExistingPRPush(opts, deps, target.pr, "ancestor-match")
 	case pushTargetNewPR:
-		return executeNewPRPush(ctx, opts, ghOpts, deps, branch, result)
+		pushed, err = executeNewPRPush(ctx, opts, ghOpts, deps, branch, prSeed)
 	}
-	return nil
+	result.PR = pushed
+	return err
 }
 
-func decidePushTarget(ctx context.Context, ghOpts github.Options, branch string, deps pushDeps) (pushTarget, []github.PRListItem, error) {
+func decidePushTarget(opts Options, ghOpts github.Options, branch string, deps pushDeps) (pushTarget, []github.PRListItem, error) {
 	prs, _, err := deps.searchPRs(ghOpts, github.PRSearchOptions{
 		Author: "@me",
 		State:  "open",
 	})
 	if err != nil {
 		return pushTarget{}, nil, fmt.Errorf("search open PRs: %w", err)
+	}
+	if opts.target.base != "" {
+		matching := make(github.PRSearchResults, 0, len(prs))
+		for _, pr := range prs {
+			if pr.Target == opts.target.base {
+				matching = append(matching, pr)
+			}
+		}
+		prs = matching
 	}
 
 	for i := range prs {
@@ -208,7 +270,11 @@ func decidePushTarget(ctx context.Context, ghOpts github.Options, branch string,
 		}
 	}
 
-	cands := findAncestorPRs(ghOpts.WorkDir, prs, deps.isAncestor)
+	if opts.target.head != "" {
+		return pushTarget{kind: pushTargetNewPR}, nil, nil
+	}
+	opts.WorkDir = ghOpts.WorkDir
+	cands := findAncestorPRs(opts, prs, deps.isAncestor)
 	switch len(cands) {
 	case 0:
 		return pushTarget{kind: pushTargetNewPR}, nil, nil
@@ -219,33 +285,33 @@ func decidePushTarget(ctx context.Context, ghOpts github.Options, branch string,
 	}
 }
 
-func findAncestorPRs(workDir string, prs github.PRSearchResults, isAncestor func(string, string, string) bool) []github.PRListItem {
+func findAncestorPRs(opts Options, prs github.PRSearchResults, isAncestor func(string, string, string) bool) []github.PRListItem {
 	var out []github.PRListItem
 	for _, pr := range prs {
 		if pr.Source == "" {
 			continue
 		}
-		// The PR head must exist locally as origin/<branch>; if it doesn't,
+		// The PR head must exist locally on the selected remote; if it doesn't,
 		// skip rather than failing — that PR isn't a clean target.
-		ref := "origin/" + pr.Source
-		if isAncestor(workDir, ref, "HEAD") {
+		ref := opts.target.remoteName() + "/" + pr.Source
+		if isAncestor(opts.WorkDir, ref, "HEAD") {
 			out = append(out, pr)
 		}
 	}
 	return out
 }
 
-func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, reason string) error {
+func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, reason string) (*PushedPR, error) {
 	if opts.DryRun {
-		fmt.Fprintf(dryRunOutput, "would push HEAD:%s (%s → PR #%d %s)\n", pr.Source, reason, pr.Number, pr.URL)
-		return nil
+		fmt.Fprintf(dryRunOutput, "would push HEAD:%s (%s → PR #%d %s; remote %s)\n", pr.Source, reason, pr.Number, pr.URL, opts.target.remoteName())
+		return nil, nil
 	}
 	if err := pushHEADTo(opts, deps, pr.Source); err != nil {
-		return err
+		return nil, err
 	}
 	logger.Infof("Pushed to PR #%d (%s): %s", pr.Number, pr.Source, pr.URL)
 	printExistingPRSummary(pr)
-	return nil
+	return &PushedPR{Number: pr.Number, URL: pr.URL, Title: pr.Title, Base: pr.Target, Branch: pr.Source}, nil
 }
 
 // pushHEADTo rebases HEAD onto origin/<branch> and pushes it there, confirming
@@ -253,7 +319,7 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 func pushHEADTo(opts Options, deps pushDeps, branch string) error {
 	refspec := "HEAD:" + branch
 	if opts.DryRun {
-		fmt.Fprintf(dryRunOutput, "would push %s\n", refspec)
+		fmt.Fprintf(dryRunOutput, "would push %s (remote %s)\n", refspec, opts.target.remoteName())
 		return nil
 	}
 	if isProtectedBranch(branch) && !deps.confirmProtectedRef(branch) {
@@ -268,10 +334,13 @@ func pushHEADTo(opts Options, deps pushDeps, branch string) error {
 	return nil
 }
 
-func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) (err error) {
-	base, baseErr := deps.defaultBranch(ghOpts)
+// executeNewPRPush pushes HEAD and opens a PR for it, returning the PR. A PR
+// that opened but whose auto-merge could not be enabled is returned with the
+// error, since it exists either way.
+func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) (*PushedPR, error) {
+	base, baseErr := opts.pushBase(deps, ghOpts)
 	if baseErr != nil {
-		return fmt.Errorf("resolve default branch: %w", baseErr)
+		return nil, fmt.Errorf("resolve default branch: %w", baseErr)
 	}
 
 	prIn := PRContentInput{
@@ -279,7 +348,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	}
 	content, err := deps.generatePRPrompt(ctx, prIn)
 	if err != nil {
-		return fmt.Errorf("generate PR title/body: %w", err)
+		return nil, fmt.Errorf("generate PR title/body: %w", err)
 	}
 
 	// When the user is on a protected branch (e.g. main/master), pushing
@@ -287,16 +356,21 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	// name as the head ref instead so the new PR is opened from a fresh
 	// topic branch.
 	headBranch := branch
-	if isProtectedBranch(branch) {
+	if opts.target.head != "" {
+		headBranch = opts.target.head
+	} else if isProtectedBranch(branch) || branch == base {
 		if content.Branch == "" {
-			return fmt.Errorf("on protected branch %q, but AI did not suggest a branch name", branch)
+			return nil, fmt.Errorf("on protected branch %q, but AI did not suggest a branch name", branch)
 		}
 		headBranch = content.Branch
+	}
+	if headBranch == base {
+		return nil, fmt.Errorf("PR topic branch %q must differ from base", headBranch)
 	}
 	refspec := "HEAD:" + headBranch
 
 	if opts.DryRun {
-		fmt.Fprintf(dryRunOutput, "would push %s and open PR against %s\n", refspec, base)
+		fmt.Fprintf(dryRunOutput, "would push %s and open PR against %s (remote %s)\n", refspec, base, opts.target.remoteName())
 		fmt.Fprintf(dryRunOutput, "title: %s\n", content.Title)
 		if content.Body != "" {
 			fmt.Fprintf(dryRunOutput, "body:\n%s\n", content.Body)
@@ -304,7 +378,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		if opts.AutoMerge {
 			fmt.Fprintf(dryRunOutput, "would enable auto-merge (%s) on the new PR\n", opts.MergeType)
 		}
-		return nil
+		return nil, nil
 	}
 
 	// Guard against pushing directly to a protected remote branch. This
@@ -312,20 +386,20 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	// branch on the non-protected path) collides with main/master/etc.
 	if isProtectedBranch(headBranch) {
 		if !deps.confirmProtectedRef(headBranch) {
-			return fmt.Errorf("push to protected branch %q cancelled", headBranch)
+			return nil, fmt.Errorf("push to protected branch %q cancelled", headBranch)
 		}
 	}
 
 	// Skip the rebase when we're pushing to a brand-new branch derived
 	// from HEAD: there's nothing remote to reconcile against.
-	if headBranch == branch {
+	if headBranch == branch || opts.Target != "" {
 		if err := deps.rebaseOnto(opts.WorkDir, base); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if err := deps.gitPush(opts.WorkDir, refspec); err != nil {
-		return fmt.Errorf("git push %s: %w", refspec, err)
+		return nil, fmt.Errorf("git push %s: %w", refspec, err)
 	}
 
 	created, err := deps.createPR(ghOpts, model.CreatePRInput{
@@ -335,19 +409,20 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		Base:  base,
 	})
 	if err != nil {
-		return fmt.Errorf("create PR: %w", err)
+		return nil, fmt.Errorf("create PR: %w", err)
 	}
 	logger.Infof("Opened PR #%d against %s: %s", created.Number, created.Base, created.URL)
+	pushed := &PushedPR{Number: created.Number, URL: created.URL, Title: created.Title, Base: created.Base, Branch: headBranch, Created: true}
 
 	if opts.AutoMerge {
-		if err := deps.enableAutoMerge(ghOpts, created.NodeID, opts.MergeType); err != nil {
-			return fmt.Errorf("enable auto-merge on PR #%d: %w", created.Number, err)
+		if err := deps.enableAutoMerge(ghOpts, created, opts.MergeType); err != nil {
+			return pushed, fmt.Errorf("enable auto-merge on PR #%d: %w", created.Number, err)
 		}
 		logger.Infof("Enabled auto-merge (%s) on PR #%d", opts.MergeType, created.Number)
 	}
 
 	printNewPRSummary(created, content)
-	return nil
+	return pushed, nil
 }
 
 // printNewPRSummary renders the just-opened PR's title, URL, and body on
@@ -411,10 +486,10 @@ func gitIsAncestor(workDir, ref, head string) bool {
 	return false
 }
 
-func runGitPush(workDir, refspec string) error {
-	cmd := exec.Command("git", "push", "origin", refspec)
-	if workDir != "" {
-		cmd.Dir = workDir
+func runGitPush(opts remoteRef) error {
+	cmd := exec.Command("git", "push", opts.Remote, opts.Ref)
+	if opts.WorkDir != "" {
+		cmd.Dir = opts.WorkDir
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -423,14 +498,18 @@ func runGitPush(workDir, refspec string) error {
 
 // --- PR picker ---
 
-func choosePR(header string, prs []github.PRListItem) (*github.PRListItem, error) {
-	items := make([]string, len(prs))
+func choosePR(ctx context.Context, header string, prs []github.PRListItem) (pushTarget, error) {
+	items := make([]string, len(prs)+1)
 	for i, pr := range prs {
 		items[i] = fmt.Sprintf("#%d  %s  (%s → %s)", pr.Number, pr.Title, pr.Source, pr.Target)
 	}
-	index, ok := promptSelectIndex(context.Background(), header, items)
+	items[len(prs)] = "Create new PR"
+	index, ok := promptSelectIndex(ctx, header, items)
 	if !ok {
-		return nil, nil
+		return pushTarget{kind: pushTargetNone}, nil
 	}
-	return &prs[index], nil
+	if index == len(prs) {
+		return pushTarget{kind: pushTargetNewPR}, nil
+	}
+	return pushTarget{kind: pushTargetAncestorPR, pr: &prs[index]}, nil
 }

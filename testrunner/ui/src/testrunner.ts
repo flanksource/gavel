@@ -53,7 +53,7 @@ export { CopyAIPromptButton, DownloadMenu } from './components/ExportControls';
 // Run helpers.
 export { apiBase, apiUrl, basePath } from './config';
 export { buildLintRerunBody } from './lintRerun';
-export { buildExportRoute, buildRoute, defaultStatusFilter, parseRoute } from './routes';
+export { buildExportRoute, buildRoute, parseRoute } from './routes';
 export type { ExportFormat, RouteState, TabKey } from './routes';
 export { isLintOnlyPhase, processLinksByPid, stripTestTaskGroup, timeoutArgValue } from './utils';
 export type { ProcessStepLink } from './utils';

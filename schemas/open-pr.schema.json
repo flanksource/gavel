@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:gavel:project-action:open-pr:v2",
+  "title": "Open PR options",
+  "description": "Commit the staged files, if any, push, and open or update the pull request. Leave options unset to use the command defaults.",
+  "type": "object",
+  "additionalProperties": false,
+  "x-columns": "auto",
+  "x-column-min-width": "18rem",
+  "x-order": [
+    "push",
+    "target",
+    "auto-merge",
+    "merge-type"
+  ],
+  "properties": {
+    "push": {
+      "type": "string",
+      "enum": [
+        "true",
+        "branch"
+      ],
+      "default": "true",
+      "title": "What to push",
+      "description": "Commits ahead of the branch's upstream, or the whole branch with the PR seeded from every commit ahead of the default branch — for a branch already pushed without a PR.",
+      "x-enum-labels": {
+        "true": "Commits ahead of upstream",
+        "branch": "Whole branch"
+      },
+      "x-enum-display": "segmented",
+      "x-clicky-order": 10
+    },
+    "target": {
+      "type": "string",
+      "pattern": "^[^\\s-][^\\s]*$",
+      "title": "Target",
+      "description": "[remote/]base[:topic] for the PR and push, e.g. zim/main:feat/new-topic. Remote defaults to origin; topic defaults to the current branch. Leave blank for the default base.",
+      "x-clicky-order": 20
+    },
+    "auto-merge": {
+      "type": "boolean",
+      "default": false,
+      "title": "Enable auto-merge",
+      "description": "Let GitHub or Azure DevOps complete a newly opened PR once required checks and approvals pass. Applies only to new PRs.",
+      "x-clicky-order": 30
+    },
+    "merge-type": {
+      "type": "string",
+      "enum": [
+        "rebase",
+        "squash",
+        "merge"
+      ],
+      "default": "rebase",
+      "title": "Auto-merge method",
+      "description": "How an auto-merged PR lands.",
+      "x-enum-labels": {
+        "rebase": "Rebase",
+        "squash": "Squash",
+        "merge": "Merge commit"
+      },
+      "x-enum-display": "segmented",
+      "x-clicky-order": 40
+    }
+  }
+}

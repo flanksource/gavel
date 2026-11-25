@@ -1,0 +1,66 @@
+---
+title: Lint
+description: Run selected linters as an executable fixture gate.
+parent: fixture-step-reference
+order: 3
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+import FixtureExample from "../../src/components/site/FixtureExample";
+
+Use the `lint` step to run selected linters as an executable fixture gate.
+
+## Example
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Lint example
+steps:
+  - id: source_checks
+    kind: lint
+    files: [./pkg/parser]
+    linters: [golangci-lint]
+    timeout: 2m
+```
+
+````markdown
+# Lint example
+
+## Source checks
+
+```yaml lint
+files: [./pkg/parser]
+linters: [golangci-lint]
+timeout: 2m
+```
+````
+
+</FixtureExample>
+
+Save the YAML variant as `lint.fixture.yaml`. Inspect it with `gavel fixtures outline lint.fixture.yaml`, then run `gavel fixtures lint.fixture.yaml` against your source paths. For Markdown, use `lint.fixture.md` with the same commands.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+Use existing source paths and configure the selected linters for your project. Each tool's setup is documented under [Lint execution](/docs/lint-execution).
+
+</Prerequisites>
+
+Keys use lint CLI spelling, with `files` replacing positional arguments. Native tool configuration stays in its own files. Embedded steps exclude interactive triage and source-repair options; use them to report findings and enforce a gate.
+
+## Results and lifetime
+
+Tool findings appear as child results and a persisted run artifact links to full evidence. Summary outputs include test-style counts and `lintViolations`. Tool errors and violations are distinct evidence within the step.
+
+The Markdown equivalent is a `yaml lint` fence. Dedicated tools are indexed in [Lint execution](/docs/lint-execution).
+
+## Complete step reference
+
+Use Tree or Table to browse global fields and this kind's configuration separately. Expand nested fields or additional metadata when available. Shared behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="lint" />
+

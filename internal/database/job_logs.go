@@ -5,13 +5,14 @@ package database
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/sdk/status"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
@@ -23,11 +24,11 @@ func OpenBlobs(ctx context.Context) (blob.Store, error) {
 	if err != nil || store != nil {
 		return store, err
 	}
-	dir, err := os.UserCacheDir()
+	dir, err := status.CacheDir()
 	if err != nil {
 		return nil, fmt.Errorf("find the cache directory for the blob store: %w", err)
 	}
-	return blob.Local(filepath.Join(dir, "gavel", "blobs")), nil
+	return blob.Local(filepath.Join(dir, "blobs")), nil
 }
 
 // OrgBlobs is org's part of store: orgs/<org>/.
@@ -38,6 +39,11 @@ func OrgBlobs(store blob.Store, org uuid.UUID) blob.Store {
 // JobLogKey is the key of a job's gzipped logs in its organization's blobs.
 func JobLogKey(jobID int64) string {
 	return fmt.Sprintf("joblogs/%d.log.gz", jobID)
+}
+
+type inlineJob struct {
+	org uuid.UUID
+	id  int64
 }
 
 // moveInlineJobLogs writes the logs of every job_log_caches row that still holds them inline
@@ -77,17 +83,13 @@ func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 	if _, err := pool.ExecContext(ctx, `ALTER TABLE public.job_log_caches ADD COLUMN IF NOT EXISTS log_key text NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("add job_log_caches.log_key: %w", err)
 	}
-	type job struct {
-		org uuid.UUID
-		id  int64
-	}
 	rows, err := pool.QueryContext(ctx, `SELECT `+orgColumn+`, job_id FROM public.job_log_caches WHERE logs_gz IS NOT NULL`)
 	if err != nil {
 		return fmt.Errorf("list inline job logs: %w", err)
 	}
-	var jobs []job
+	var jobs []inlineJob
 	for rows.Next() {
-		var j job
+		var j inlineJob
 		if err := rows.Scan(&j.org, &j.id); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("list inline job logs: %w", err)
@@ -97,15 +99,19 @@ func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return fmt.Errorf("list inline job logs: %w", err)
 	}
-	dropInline := func() error {
-		if _, err := pool.ExecContext(ctx, `ALTER TABLE public.job_log_caches DROP COLUMN logs_gz`); err != nil {
-			return fmt.Errorf("drop job_log_caches.logs_gz: %w", err)
+	if len(jobs) > 0 {
+		if err := writeInlineJobLogs(ctx, pool, orgColumn, jobs); err != nil {
+			return err
 		}
-		return nil
 	}
-	if len(jobs) == 0 {
-		return dropInline()
+	// The schema migration keeps columns it no longer declares, so the emptied column is dropped here.
+	if _, err := pool.ExecContext(ctx, `ALTER TABLE public.job_log_caches DROP COLUMN IF EXISTS logs_gz`); err != nil {
+		return fmt.Errorf("drop job_log_caches.logs_gz: %w", err)
 	}
+	return nil
+}
+
+func writeInlineJobLogs(ctx context.Context, pool *sql.DB, orgColumn string, jobs []inlineJob) error {
 	store, err := OpenBlobs(ctx)
 	if err != nil {
 		return fmt.Errorf("move inline job logs: %w", err)
@@ -124,5 +130,5 @@ func moveInlineJobLogs(ctx context.Context, dsn string) (returnErr error) {
 			return fmt.Errorf("record moved logs of job %d: %w", j.id, err)
 		}
 	}
-	return dropInline()
+	return nil
 }

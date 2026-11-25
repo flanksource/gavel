@@ -89,7 +89,7 @@ func TestHostedTodoVisibility(t *testing.T) {
 		_, err = repo.AddRelationship(asCreator, linkedPrivate.ID, linkedPublic.ID, native.RelationshipDependsOn, linkedPrivate.Version, "test")
 		require.NoError(t, err)
 
-		linked, err := repo.ListPRLinkedIssues(asMember, workspace.ID, prURL)
+		linked, err := repo.ListPRLinkedIssues(asMember, native.PRLinkedIssuesQuery{URL: prURL, WorkspaceID: workspace.ID})
 		require.NoError(t, err)
 		require.Len(t, linked, 1)
 		assert.Equal(t, linkedPublic.ID, linked[0].Issue.ID)

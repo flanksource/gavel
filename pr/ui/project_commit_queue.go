@@ -1,20 +1,25 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/flanksource/gavel/projects"
+
 	cexec "github.com/flanksource/clicky/exec"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/commit"
 	gavelctx "github.com/flanksource/gavel/context"
 	"github.com/flanksource/gavel/internal/taskhistory"
+	"github.com/flanksource/gavel/status"
 	"github.com/google/uuid"
 )
 
@@ -36,6 +41,9 @@ type projectCommitTaskDetails struct {
 	Options map[string]any `json:"options,omitempty"`
 	// Worktree is the request's worktree, so a retry commits in the same one.
 	Worktree string `json:"worktree,omitempty"`
+	// IndexPatch is the staged snapshot the commit lands, kept until it is
+	// committed so a retry commits the same staging.
+	IndexPatch string `json:"indexPatch,omitempty"`
 }
 
 type projectCommitGroupDetails struct {
@@ -52,6 +60,11 @@ type commitQueueRequest struct {
 	options  map[string]any
 	worktree string
 	workDir  string
+	// indexPatch is the staged snapshot the commit lands; snapshot lists the
+	// staged paths enqueue still has to write into it (empty on a retry,
+	// whose snapshot already exists).
+	indexPatch string
+	snapshot   []string
 }
 
 type commitQueueEntry struct {
@@ -89,7 +102,7 @@ func (e *commitQueueConflictError) Error() string {
 
 // projectCommitQueue is the queue of one project working directory, so each
 // worktree serializes its own commits and file claims.
-func (s *Server) projectCommitQueue(project Project, workDir string) *commitQueue {
+func (s *Server) projectCommitQueue(project projects.Project, workDir string) *commitQueue {
 	key := project.Name + "\x00" + workDir
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -106,7 +119,7 @@ func (s *Server) projectCommitQueue(project Project, workDir string) *commitQueu
 
 // labels tag a generation with its project and, for a linked worktree, the
 // worktree path, so the dashboard can list each worktree's commit runs.
-func (q *commitQueue) labels(project Project) map[string]string {
+func (q *commitQueue) labels(project projects.Project) map[string]string {
 	labels := map[string]string{"project": project.Name, "action": string(projectActionCommit)}
 	if q.workDir != project.ResolvedDir() {
 		labels["worktree"] = q.workDir
@@ -114,15 +127,15 @@ func (q *commitQueue) labels(project Project) map[string]string {
 	return labels
 }
 
-func (s *Server) enqueueCommitGroup(project Project, request projectActionRequest) (projectCommitRun, error) {
+func (s *Server) enqueueCommitGroup(ctx context.Context, project projects.Project, request projectActionRequest) (projectCommitRun, error) {
 	queued, err := s.commitQueueActionArgs(project, request)
 	if err != nil {
 		return projectCommitRun{}, err
 	}
-	return s.projectCommitQueue(project, queued.workDir).enqueue(s, project, []commitQueueRequest{queued})
+	return s.projectCommitQueue(project, queued.workDir).enqueue(ctx, s, project, []commitQueueRequest{queued})
 }
 
-func (s *Server) commitQueueActionArgs(project Project, request projectActionRequest) (commitQueueRequest, error) {
+func (s *Server) commitQueueActionArgs(project projects.Project, request projectActionRequest) (commitQueueRequest, error) {
 	action := request.Action
 	if action != projectActionCommit && action != projectActionOpenPR {
 		return commitQueueRequest{}, fmt.Errorf("unknown commit queue action %q", action)
@@ -140,22 +153,19 @@ func (s *Server) commitQueueActionArgs(project Project, request projectActionReq
 }
 
 func (s *Server) commitQueueArgs(workDir string, request projectActionRequest) (commitQueueRequest, error) {
-	action := request.Action
+	action, options := request.Action, request.Options
+	// open-pr's options are its push flags (the open-pr schema); the staged
+	// files are committed with the default commit options.
+	var pushArgs []string
 	if action == projectActionOpenPR {
-		if request.Options != nil {
-			return commitQueueRequest{}, errors.New("advanced options are not supported for open-pr")
+		var err error
+		if pushArgs, err = s.openPRPushArgs(options); err != nil {
+			return commitQueueRequest{}, err
 		}
 		if len(request.Files) == 0 {
-			// Push-only: gavel commit --push skips the commit when nothing is
-			// staged. --stage=staged stops the default session staging from
-			// picking up a session id inherited by the server process.
-			return commitQueueRequest{
-				action: action,
-				files:  []string{},
-				args:   []string{"commit", "--work-dir", workDir, "--precommit=fail", "--stage=staged", "--push"},
-			}, nil
+			return pushOnlyCommitRequest(workDir, pushArgs, options), nil
 		}
-		request.Action = projectActionCommit
+		request.Action, request.Options = projectActionCommit, nil
 	}
 	args, err := s.projectActionArgs(workDir, request)
 	if err != nil {
@@ -165,11 +175,85 @@ func (s *Server) commitQueueArgs(workDir string, request projectActionRequest) (
 	if err != nil {
 		return commitQueueRequest{}, err
 	}
-	if action == projectActionOpenPR {
-		position := len(args) - len(files)
-		args = slices.Concat(args[:position], []string{"--push"}, args[position:])
+	queued := commitQueueRequest{action: action, files: files, options: options, indexPatch: request.indexPatch}
+	if queued.indexPatch == "" {
+		if queued.snapshot, err = stagedCommitPaths(workDir, files); err != nil {
+			return commitQueueRequest{}, err
+		}
+		if queued.indexPatch, err = commit.IndexPatchFile(workDir, uuid.NewString()); err != nil {
+			return commitQueueRequest{}, err
+		}
+	} else if _, err := os.Stat(queued.indexPatch); errors.Is(err, os.ErrNotExist) {
+		// A run deletes its snapshot only once the commit lands, so a failed
+		// open-pr without one still owes its push.
+		if action == projectActionOpenPR {
+			return pushOnlyCommitRequest(workDir, pushArgs, options), nil
+		}
+		return commitQueueRequest{}, fmt.Errorf("staged snapshot of %s was already committed; nothing to retry", strings.Join(files, ", "))
+	} else if err != nil {
+		return commitQueueRequest{}, fmt.Errorf("read staged snapshot of %s: %w", strings.Join(files, ", "), err)
 	}
-	return commitQueueRequest{action: action, files: files, args: args, options: request.Options}, nil
+	// The positional files trail args; the snapshot replaces them, so a
+	// commit lands exactly what was staged, line selections included.
+	queued.args = slices.Concat(args[:len(args)-len(files)], []string{"--index-patch", queued.indexPatch})
+	queued.args = append(queued.args, pushArgs...)
+	return queued, nil
+}
+
+// openPRPushArgs are the gavel commit flags that push and open the PR: a bare
+// --push without options, else the open-pr schema's options as flags.
+func (s *Server) openPRPushArgs(options map[string]any) ([]string, error) {
+	if options == nil {
+		return []string{"--push"}, nil
+	}
+	if s.projectActionOptionsProvider == nil {
+		return nil, errors.New("project action options provider is not configured")
+	}
+	args, err := s.projectActionOptionsProvider.Args(string(projectActionOpenPR), options)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(args, func(arg string) bool { return strings.HasPrefix(arg, "--push=") }) {
+		args = append([]string{"--push"}, args...)
+	}
+	return args, nil
+}
+
+// pushOnlyCommitRequest pushes what HEAD already has: gavel commit --push skips
+// the commit when nothing is staged, and --stage=staged stops the default
+// session staging from picking up a session id inherited by the server process.
+func pushOnlyCommitRequest(workDir string, pushArgs []string, options map[string]any) commitQueueRequest {
+	return commitQueueRequest{
+		action:  projectActionOpenPR,
+		files:   []string{},
+		options: options,
+		args:    slices.Concat([]string{"commit", "--work-dir", workDir, "--stage=staged"}, pushArgs),
+	}
+}
+
+// stagedCommitPaths checks every file is a staged change and returns the
+// paths its snapshot covers, with each rename's previous path.
+func stagedCommitPaths(workDir string, files []string) ([]string, error) {
+	result, err := gatherProjectStatus(workDir, status.Options{NoRepomap: true, NoResults: true})
+	if err != nil {
+		return nil, fmt.Errorf("gather project status: %w", err)
+	}
+	entries := make(map[string]status.FileStatus, len(result.Files))
+	for _, file := range result.Files {
+		entries[file.Path] = file
+	}
+	var paths []string
+	for _, file := range files {
+		entry := entries[file]
+		if entry.State != status.StateStaged && entry.State != status.StateBoth {
+			return nil, fmt.Errorf("%q has no staged changes; stage it before committing", file)
+		}
+		paths = append(paths, file)
+		if entry.PreviousPath != "" {
+			paths = append(paths, entry.PreviousPath)
+		}
+	}
+	return paths, nil
 }
 
 func commitGroupFiles(request projectActionRequest) ([]string, error) {
@@ -186,7 +270,7 @@ func commitGroupFiles(request projectActionRequest) ([]string, error) {
 // enqueue appends requests, in order, to the project's current generation as
 // one atomic batch: every file is checked for conflicts before any commit
 // starts, and all of them land in the same run.
-func (q *commitQueue) enqueue(s *Server, project Project, requests []commitQueueRequest) (projectCommitRun, error) {
+func (q *commitQueue) enqueue(ctx context.Context, s *Server, project projects.Project, requests []commitQueueRequest) (projectCommitRun, error) {
 	if len(requests) == 0 {
 		return projectCommitRun{}, fmt.Errorf("no commits to queue for project %s", project.Name)
 	}
@@ -194,6 +278,10 @@ func (q *commitQueue) enqueue(s *Server, project Project, requests []commitQueue
 	if duplicates := q.duplicateFilesLocked(requests); len(duplicates) > 0 {
 		q.mu.Unlock()
 		return projectCommitRun{}, &commitQueueConflictError{files: duplicates}
+	}
+	if err := q.snapshotLocked(ctx, requests); err != nil {
+		q.mu.Unlock()
+		return projectCommitRun{}, err
 	}
 	generation := q.ensureGenerationLocked(s, project)
 	entries := make([]*commitQueueEntry, 0, len(requests))
@@ -204,7 +292,7 @@ func (q *commitQueue) enqueue(s *Server, project Project, requests []commitQueue
 		if predecessors := predecessorsLocked(generation); len(predecessors) > 0 {
 			opts = append(opts, clickytask.WithDependencies(predecessors...))
 		}
-		entry.task = executeProjectAction(generation.group.Context(), q.workDir, request.args, io.Discard, generation.group.Group, opts...)
+		entry.task = executeProjectCommit(s, generation.group.Context(), q.workDir, request.args, generation.group.Group, opts...)
 		entry.task.SetName(projectCommitTaskName(request.action, request.files))
 		entry.task.SetDescription(strings.Join(request.files, ", "))
 		generation.entries = append(generation.entries, entry)
@@ -248,6 +336,28 @@ func (q *commitQueue) duplicateFilesLocked(requests []commitQueueRequest) []stri
 	return duplicates
 }
 
+// snapshotLocked moves each new request's staged changes out of the index into
+// its patch, so staging done after it is queued cannot leak into the commit.
+// A failure restages the snapshots already taken: the batch queues whole or
+// not at all.
+func (q *commitQueue) snapshotLocked(ctx context.Context, requests []commitQueueRequest) error {
+	var taken []commitQueueRequest
+	for _, request := range requests {
+		if len(request.snapshot) == 0 {
+			continue
+		}
+		err := commit.SnapshotStagedPatch(ctx, commit.SnapshotOptions{WorkDir: q.workDir, Paths: request.snapshot, PatchFile: request.indexPatch})
+		if err != nil {
+			for _, done := range taken {
+				err = errors.Join(err, commit.RestoreStagedPatch(context.WithoutCancel(ctx), q.workDir, done.indexPatch))
+			}
+			return err
+		}
+		taken = append(taken, request)
+	}
+	return nil
+}
+
 func predecessorsLocked(generation *commitQueueGeneration) []*clickytask.Task {
 	predecessors := make([]*clickytask.Task, 0, len(generation.entries))
 	for _, entry := range generation.entries {
@@ -256,7 +366,7 @@ func predecessorsLocked(generation *commitQueueGeneration) []*clickytask.Task {
 	return predecessors
 }
 
-func (q *commitQueue) ensureGenerationLocked(s *Server, project Project) *commitQueueGeneration {
+func (q *commitQueue) ensureGenerationLocked(s *Server, project projects.Project) *commitQueueGeneration {
 	if q.current != nil && !commitQueueTerminal(q.current.group.Status()) {
 		return q.current
 	}
@@ -284,11 +394,12 @@ func (q *commitQueue) details(generation *commitQueueGeneration) projectCommitGr
 	details := projectCommitGroupDetails{Entries: make([]projectCommitTaskDetails, 0, len(generation.entries))}
 	for _, entry := range generation.entries {
 		details.Entries = append(details.Entries, projectCommitTaskDetails{
-			TaskID:   entry.task.ID(),
-			Action:   entry.action,
-			Files:    append([]string{}, entry.files...),
-			Options:  entry.options,
-			Worktree: entry.worktree,
+			TaskID:     entry.task.ID(),
+			Action:     entry.action,
+			Files:      append([]string{}, entry.files...),
+			Options:    entry.options,
+			Worktree:   entry.worktree,
+			IndexPatch: entry.indexPatch,
 		})
 	}
 	return details
@@ -353,7 +464,7 @@ func commitQueueTerminal(status clickytask.Status) bool {
 }
 
 func (s *Server) handleCommitQueue(w http.ResponseWriter, r *http.Request) {
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
@@ -363,10 +474,10 @@ func (s *Server) handleCommitQueue(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	run, err := s.enqueueCommitGroup(project, request)
+	run, err := s.enqueueCommitGroup(projectGitLockContext(r), project, request)
 	if err != nil {
 		var conflict *commitQueueConflictError
-		if errors.As(err, &conflict) {
+		if errors.As(err, &conflict) || errors.Is(err, commit.ErrGitLockHeld) {
 			respondError(w, http.StatusConflict, err.Error())
 			return
 		}

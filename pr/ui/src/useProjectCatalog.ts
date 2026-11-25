@@ -30,16 +30,23 @@ const emptyRuns: TestRunsResponse = { projects: [] };
 // `configured` excludes hidden projects, so a hidden project that still has runs
 // in the history would reappear as a history-only entry; `hiddenDirs` lists the
 // directories of hidden projects to keep it out.
-export function useProjectCatalog({ configured, hiddenDirs, selectedName, enabled }: {
+//
+// `history` lists the runs and every history-only project. Without it the runs
+// still load while the selected project is not a configured one, and only that
+// project is merged in, so a link to a history-only project opens it.
+export function useProjectCatalog({ configured, hiddenDirs, selectedName, enabled, history }: {
   configured: Project[];
   hiddenDirs: string[];
   selectedName: string;
   enabled: boolean;
+  history: boolean;
 }): ProjectCatalog {
   const [streamError, setStreamError] = useState('');
   const visible = useDocumentVisible();
   const queryClient = useQueryClient();
-  const queryEnabled = enabled && visible;
+  const selectsHistoryOnly = selectedName !== '' && !configured.some(project => project.name === selectedName);
+  const loadRuns = enabled && (history || selectsHistoryOnly);
+  const queryEnabled = loadRuns && visible;
   const runsQuery = useQuery({
     queryKey: queryKeys.testRuns(),
     queryFn: async ({ signal }) => parseLatestRuns(
@@ -48,13 +55,14 @@ export function useProjectCatalog({ configured, hiddenDirs, selectedName, enable
     enabled: queryEnabled,
     staleTime: 30_000,
   });
-  const latestRuns = enabled ? (runsQuery.data ?? emptyRuns) : emptyRuns;
+  const latestRuns = loadRuns ? (runsQuery.data ?? emptyRuns) : emptyRuns;
 
   const projects = useMemo(() => {
     const merged = new Map(configured.map(project => [project.name, project]));
     const hidden = new Set(hiddenDirs);
     for (const project of latestRuns.projects) {
       if (merged.has(project.name) || hidden.has(project.dir)) continue;
+      if (!history && project.name !== selectedName) continue;
       merged.set(project.name, {
         name: project.name,
         dir: project.dir,
@@ -62,7 +70,7 @@ export function useProjectCatalog({ configured, hiddenDirs, selectedName, enable
       });
     }
     return [...merged.values()];
-  }, [latestRuns.projects, configured, hiddenDirs]);
+  }, [latestRuns.projects, configured, hiddenDirs, history, selectedName]);
 
   useEffect(() => {
     if (queryEnabled) return;
@@ -79,27 +87,31 @@ export function useProjectCatalog({ configured, hiddenDirs, selectedName, enable
     };
 
     const stream = openEventStream('/api/tests/stream');
-    stream.addEventListener('message', event => {
+    const onMessage = (event: Event) => {
       try {
         apply(JSON.parse((event as MessageEvent<string>).data));
       } catch {
         setStreamError('Latest test and lint runs received an invalid update.');
       }
-    });
+    };
+    stream.addEventListener('message', onMessage);
     stream.onerror = () => {
       setStreamError(current => current || 'Latest test and lint runs disconnected; reconnecting…');
     };
-    return () => stream.close();
+    return () => {
+      stream.removeEventListener('message', onMessage);
+      stream.close();
+    };
   }, [queryClient, queryEnabled]);
 
   const queryError = runsQuery.failureReason ?? runsQuery.error;
 
   return {
     projects,
-    runs: latestRuns.projects,
+    runs: history ? latestRuns.projects : [],
     selected: projects.find(project => project.name === selectedName) ?? null,
-    loading: enabled && runsQuery.data === undefined && runsQuery.isPending,
-    error: enabled ? streamError || (queryError instanceof Error ? queryError.message : '') : '',
+    loading: loadRuns && runsQuery.data === undefined && runsQuery.isPending,
+    error: loadRuns ? streamError || (queryError instanceof Error ? queryError.message : '') : '',
   };
 }
 

@@ -1,0 +1,38 @@
+kind: Fixture
+name: Query-backed table picker
+# `lab` is a named connection, inline so the example needs no catalog entry.
+# Its URL stays on the server; the picker lists it as `lab (sqlite)`.
+connections:
+  lab: {type: sqlite, url: "file::memory:"}
+params:
+  type: object
+  required: [db, table]
+  properties:
+    db:
+      type: string
+      title: Database
+      format: connection
+      x-connection-types: [sqlite]
+    table:
+      type: string
+      title: Table
+      # Runs against the connection picked in `db`, once it is picked; @q is
+      # the text typed into the field.
+      x-query:
+        connection: db
+        sql: |
+          SELECT value, label, icon, badges FROM (
+            SELECT 'orders' AS value, 'Orders' AS label, 'ph:table-thin' AS icon, 'pk,fk' AS badges
+            UNION ALL SELECT 'order_items', 'Order items', 'ph:table-thin', 'fk'
+            UNION ALL SELECT 'customers', 'Customers', 'ph:users-thin', '[{"label":"pii","tone":"danger"}]'
+          ) WHERE value LIKE '%' || @q || '%'
+          ORDER BY value
+steps:
+  - id: picked
+    name: Picked table
+    kind: query
+    connection: "{{.params.db}}"
+    # Inside `query`, .params is the step's own params, bound as arguments.
+    params: {table: "{{.params.table}}"}
+    query: SELECT {{.params.table}} AS name
+    cel: row.name in ['orders', 'order_items', 'customers']

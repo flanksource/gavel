@@ -33,7 +33,7 @@ type vitestListItem struct {
 // vitest collects tests by importing test modules without executing the tests
 // themselves. Size and complexity are not computed for JS tests.
 func collectVitestTests(ctx context.Context, workDir string, filters []string) ([]*Entry, error) {
-	pkgs, err := runners.NewVitest(workDir).DiscoverPackages(workDir, true)
+	pkgs, err := runners.NewVitest(workDir).DiscoverPackages(runners.TestOptions{Cwd: workDir, Recursive: true})
 	if err != nil {
 		return nil, fmt.Errorf("discover vitest packages: %w", err)
 	}

@@ -31,6 +31,12 @@ export function promptCatalogQuery(scopeQuery: string) {
   });
 }
 
+// promptCatalogOptions are picker options over the catalog's prompt ids, the
+// title alongside when it says more than the id.
+export function promptCatalogOptions(entries: readonly PromptCatalogEntry[]) {
+  return entries.map(entry => ({ value: entry.id, label: entry.title && entry.title !== entry.id ? `${entry.id} — ${entry.title}` : entry.id }));
+}
+
 // withDefaults attaches each registered prompt's built-in document so the page
 // can diff an override against it; named todos prompts have no default.
 export function withDefaults(

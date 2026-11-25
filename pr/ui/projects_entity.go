@@ -7,10 +7,15 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
+
+	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/projects"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons/logger"
 	gavelctx "github.com/flanksource/gavel/context"
+	"github.com/flanksource/gavel/filters"
 	"github.com/flanksource/gavel/procfile"
 	"github.com/flanksource/gavel/todos/query"
 )
@@ -23,11 +28,11 @@ var projectsTodoCounts = countProjectsTodos
 // statusForProjectErr maps the shared CRUD sentinel errors onto HTTP codes.
 func statusForProjectErr(err error) int {
 	switch {
-	case errors.Is(err, ErrProjectNotFound):
+	case errors.Is(err, projects.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, ErrProjectExists):
+	case errors.Is(err, projects.ErrExists):
 		return http.StatusConflict
-	case errors.Is(err, ErrProjectInvalid):
+	case errors.Is(err, projects.ErrInvalid):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
@@ -37,22 +42,23 @@ func statusForProjectErr(err error) int {
 // newProjectInfo resolves a stored Project into the wire shape returned by the
 // projects entity: the directory is ~-expanded, hasProcfile reflects the
 // directory's current contents, and counts is the project's own entry from
-// loadProjectTodoCounts.
-func newProjectInfo(ctx context.Context, p Project, counts todoCountsResult) (projectInfo, error) {
+// loadProjectTodoCounts. A project the caller hides is marked and carries no counts.
+func newProjectInfo(ctx context.Context, p projects.Project, counts todoCountsResult, hidden bool) (projectInfo, error) {
 	dir := p.ResolvedDir()
 	stopFile := rpchttp.Track(ctx, "file")
 	hasProcfile := dir != "" && procfile.Find(dir, "") != ""
 	stopFile()
 	info := projectInfo{
-		Name:        p.Name,
-		Short:       query.ShortProjectName(p.Name),
-		Dir:         dir,
-		Repos:       p.Repos,
-		HasProcfile: hasProcfile,
-		TodoBackend: "db",
-		Hidden:      p.Hidden,
+		Name:          p.Name,
+		Short:         query.ShortProjectName(p.Name),
+		Dir:           dir,
+		Repos:         p.Repos,
+		ReposInferred: p.ReposInferred,
+		HasProcfile:   hasProcfile,
+		TodoBackend:   "db",
+		Hidden:        hidden,
 	}
-	if p.Hidden {
+	if hidden {
 		return info, nil
 	}
 	if counts.Err != nil {
@@ -67,8 +73,8 @@ func newProjectInfo(ctx context.Context, p Project, counts todoCountsResult) (pr
 // result that cannot be matched to its project is reported on every project
 // rather than risk showing one project another's counts. Hidden projects are
 // not shown with counts, so they are not queried and get an empty result.
-func loadProjectTodoCounts(ctx context.Context, ps []Project) []todoCountsResult {
-	visible := slices.DeleteFunc(slices.Clone(ps), func(p Project) bool { return p.Hidden })
+func loadProjectTodoCounts(ctx context.Context, ps []projects.Project, hidden workspaceSet) []todoCountsResult {
+	visible := slices.DeleteFunc(slices.Clone(ps), func(p projects.Project) bool { return hidden.has(p.ResolvedDir()) })
 	stopDB := rpchttp.Track(ctx, "db")
 	counts := projectsTodoCounts(ctx, visible)
 	stopDB()
@@ -82,7 +88,7 @@ func loadProjectTodoCounts(ctx context.Context, ps []Project) []todoCountsResult
 	}
 	next := 0
 	for i, p := range ps {
-		if !p.Hidden {
+		if !hidden.has(p.ResolvedDir()) {
 			out[i], next = counts[next], next+1
 		}
 	}
@@ -96,11 +102,11 @@ func loadProjectTodoCounts(ctx context.Context, ps []Project) []todoCountsResult
 // entry instead of failing the list: the projects payload also drives Processes
 // and PRs, so one unreachable workspace must not blank the whole dashboard. The
 // failure stays loud — logged, and visible in the response.
-func listProjectInfos(ctx context.Context, ps []Project) []projectInfo {
-	counts := loadProjectTodoCounts(ctx, ps)
+func listProjectInfos(ctx context.Context, ps []projects.Project, hidden workspaceSet) []projectInfo {
+	counts := loadProjectTodoCounts(ctx, ps, hidden)
 	out := make([]projectInfo, len(ps))
 	for i, p := range ps {
-		info, err := newProjectInfo(ctx, p, counts[i])
+		info, err := newProjectInfo(ctx, p, counts[i], hidden.has(p.ResolvedDir()))
 		if err != nil {
 			logger.Errorf("load project %q native TODOs: %v", p.Name, err)
 			info.Error = err.Error()
@@ -112,18 +118,28 @@ func listProjectInfos(ctx context.Context, ps []Project) []projectInfo {
 
 // handleProjects is the collection endpoint of the projects entity:
 //
-//	GET  /api/projects → list (clicky table when negotiated, else []projectInfo)
+//	GET  /api/projects → list (clicky table when negotiated, else []projectInfo);
+//	                     ?exclude=hidden-projects drops the projects that filter holds
 //	POST /api/projects → create (409 if the name is already taken)
 //
 // Per-entity reads and mutations live in handleProjectByName.
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		excluded, err := s.excludedValues(r, filters.KindWorkspace)
+		if err != nil {
+			respondError(w, filterErrorStatus(err), err.Error())
+			return
+		}
 		out, err := s.projectList(r.Context())
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		out = slices.DeleteFunc(out, func(p projectInfo) bool { return workspaceSet(excluded).has(p.Dir) })
+		s.mu.RLock()
+		withRepoIcons(out, s.prs)
+		s.mu.RUnlock()
 		if wantsClicky(r) {
 			writeProjectsClicky(w, out)
 			return
@@ -135,13 +151,40 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := CreateProject(p); err != nil {
+		created, err := createProject(r.Context(), p)
+		if err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return
 		}
-		respondJSON(w, http.StatusCreated, p)
+		respondJSON(w, http.StatusCreated, created)
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+type projectRepoIcon struct {
+	Repo        string `json:"repo"`
+	HomepageURL string `json:"homepageUrl"`
+}
+
+// withRepoIcons sets each project's RepoIcon from the homepages its tracked
+// PRs report. Only those homepages pass the favicon endpoint's knownHomepage
+// guard, so a project whose repos have no tracked PR keeps its letter avatar.
+func withRepoIcons(projects []projectInfo, prs github.PRSearchResults) {
+	homepages := make(map[string]string, len(prs))
+	for _, pr := range prs {
+		if pr.RepoHomepageURL != "" {
+			homepages[strings.ToLower(pr.Repo)] = pr.RepoHomepageURL
+		}
+	}
+	for i := range projects {
+		projects[i].RepoIcon = nil
+		for _, repo := range projects[i].Repos {
+			if homepage, ok := homepages[strings.ToLower(repo)]; ok {
+				projects[i].RepoIcon = &projectRepoIcon{Repo: repo, HomepageURL: homepage}
+				break
+			}
+		}
 	}
 }
 
@@ -156,13 +199,19 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		stopFile := rpchttp.Track(r.Context(), "file")
-		p, err := GetProject(name)
+		p, err := getProject(r.Context(), name)
 		stopFile()
 		if err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return
 		}
-		info, err := newProjectInfo(r.Context(), p, loadProjectTodoCounts(r.Context(), []Project{p})[0])
+		hidden, err := hiddenProjects(r.Context(), s)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		counts := loadProjectTodoCounts(r.Context(), []projects.Project{p}, hidden)[0]
+		info, err := newProjectInfo(r.Context(), p, counts, hidden.has(p.ResolvedDir()))
 		if err != nil {
 			writeTodoError(w, http.StatusInternalServerError, fmt.Errorf("load project %q native TODOs: %w", p.Name, err))
 			return
@@ -178,14 +227,14 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := UpdateProject(name, p); err != nil {
+		updated, err := updateProject(r.Context(), name, p)
+		if err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return
 		}
-		p.Name = name // echo the entity id the path identified
-		respondJSON(w, http.StatusOK, p)
+		respondJSON(w, http.StatusOK, updated)
 	case http.MethodDelete:
-		if err := DeleteProject(name); err != nil {
+		if err := deleteProject(r.Context(), name); err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return
 		}
@@ -195,37 +244,9 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleProjectHidden is POST /api/projects/{name}/hidden {"hidden": bool}. A
-// narrow endpoint so the full-record PUT never owns the flag. Hiding also
-// stops the git tracker scanning the project's directory; a process without a
-// tracker has nothing to stop.
-func (s *Server) handleProjectHidden(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Hidden *bool `json:"hidden"`
-	}
-	if err := decodeStrict(r, &body); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if body.Hidden == nil {
-		respondError(w, http.StatusBadRequest, `"hidden" is required`)
-		return
-	}
-	p, err := SetProjectHidden(r.PathValue("name"), *body.Hidden)
-	if err != nil {
-		respondError(w, statusForProjectErr(err), err.Error())
-		return
-	}
-	if p.Hidden {
-		if err := s.untrackProjectGit(p); err != nil {
-			respondError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	respondJSON(w, http.StatusOK, listProjectInfos(r.Context(), []Project{p})[0])
-}
-
-func (s *Server) untrackProjectGit(p Project) error {
+// untrackProjectGit stops the git tracker scanning dir, a project the user just
+// hid; a process without a tracker has nothing to stop.
+func (s *Server) untrackProjectGit(dir string) error {
 	tracker, err := s.context().GitTracker()
 	if errors.Is(err, gavelctx.ErrNoGitTracker) {
 		return nil
@@ -233,20 +254,18 @@ func (s *Server) untrackProjectGit(p Project) error {
 	if err != nil {
 		return err
 	}
-	if err := tracker.Untrack(p.ResolvedDir()); err != nil {
-		return fmt.Errorf("stop tracking git state of hidden project %q: %w", p.Name, err)
+	if err := tracker.Untrack(dir); err != nil {
+		return fmt.Errorf("stop tracking git state of hidden project %s: %w", dir, err)
 	}
 	return nil
 }
 
-func decodeProject(r *http.Request) (Project, error) {
-	var p Project
+func decodeProject(r *http.Request) (projects.Project, error) {
+	var p projects.Project
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		return Project{}, fmt.Errorf("invalid json: %w", err)
+		return projects.Project{}, fmt.Errorf("invalid json: %w", err)
 	}
-	// The create and update handlers echo the decoded project back, so it has to
-	// carry the same non-null repos list the collection endpoint serves.
-	return p.withRepos(), nil
+	return p, nil
 }
 
 func respondJSON(w http.ResponseWriter, status int, v any) {

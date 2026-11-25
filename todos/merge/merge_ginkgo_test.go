@@ -172,7 +172,7 @@ func proposalJSON(fields map[string]any) string {
 
 func options(agent *stubAgent, mutate ...func(*Options)) Options {
 	opts := Options{
-		WorkDir: "/repo",
+		WorkDir: GinkgoT().TempDir(),
 		Base:    api.Spec{Model: api.Model{Name: "api:claude-sonnet-5"}},
 		Saved:   captainconfig.Config{AI: captainconfig.AIDefaults{DefaultModel: "api:claude-sonnet-5"}},
 		Runtime: captaincli.AIRuntimeOptions{},

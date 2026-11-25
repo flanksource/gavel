@@ -24,8 +24,13 @@ async function sessionRequest(url: string, signal: AbortSignal | undefined, cont
   }
 }
 
+// The named server-side filter that drops hidden workspaces from the flat list.
+export const HIDDEN_PROJECTS_FILTER = 'hidden-projects';
+
 export const todoQueryKeys = {
   list: (dir: string) => ['todos', 'list', { dir: queryDir(dir) }] as const,
+  // The flat, all-workspace list. Its scope is the exclude filter, not a dir.
+  workspaceList: (exclude: string) => ['todos', 'list', { exclude }] as const,
   item: (dir: string, ref: string) => ['todos', 'item', { dir: queryDir(dir), ref }] as const,
   globalItem: (ref: string) => ['todos', 'item', 'global', { ref }] as const,
   launch: (dir: string, ref: string) => ['todos', 'launch', { dir: queryDir(dir), ref }] as const,
@@ -63,14 +68,37 @@ export function todoListQueryOptions(dir: string) {
       signal,
       `Failed to load todos for ${queryDir(dir) || 'the default workspace'}`,
     ),
-    staleTime: 30_000,
+    staleTime: Infinity,
   });
+}
+
+// One DB-backed request for every visible workspace; each item carries the
+// `dir` of the workspace it belongs to.
+export function workspaceTodoListQueryOptions(exclude = HIDDEN_PROJECTS_FILTER) {
+  return queryOptions({
+    queryKey: todoQueryKeys.workspaceList(exclude),
+    queryFn: async ({ signal }) => {
+      const context = 'Failed to load todos';
+      const list = await fetchTodoJSON<TodoListResponse>(`/api/todos?exclude=${encodeURIComponent(exclude)}`, signal, context);
+      if (!list?.counts || !Array.isArray(list.items)) throw new Error(`${context}: response omitted counts or items`);
+      const missing = list.items.find(item => !item.dir?.trim());
+      if (missing) throw new Error(`${context}: todo ${missing.ref} omitted its workspace directory`);
+      return list;
+    },
+    staleTime: Infinity,
+  });
+}
+
+export function invalidateTodoLists(client: QueryClient, dir: string) {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: todoQueryKeys.list(dir), exact: true }),
+    client.invalidateQueries({ queryKey: todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER), exact: true }),
+  ]);
 }
 
 export function todoItemQueryOptions(
   dir: string,
   ref: string,
-  options: { pollWhileActive?: boolean; intervalMs?: number } = {},
 ) {
   return queryOptions({
     queryKey: todoQueryKeys.item(dir, ref),
@@ -83,10 +111,8 @@ export function todoItemQueryOptions(
         `Failed to load todo ${ref}`,
       );
     },
-    staleTime: 5_000,
-    refetchInterval: options.pollWhileActive
-      ? query => query.state.data?.status === 'in_progress' ? (options.intervalMs ?? 1_000) : false
-      : false,
+    staleTime: Infinity,
+    refetchInterval: false,
     refetchIntervalInBackground: false,
   });
 }
@@ -105,7 +131,7 @@ export function todoGlobalItemQueryOptions(ref: string) {
       if (!todo.cwd?.trim() && !todo.dir?.trim()) throw new Error(`Failed to resolve todo ${ref}: response omitted its workspace directory`);
       return todo;
     },
-    staleTime: 5_000,
+    staleTime: Infinity,
   });
 }
 
@@ -114,6 +140,13 @@ export function setTodoQueryData(client: QueryClient, dir: string, todo: TodoIte
   client.setQueryData<TodoListResponse>(todoQueryKeys.list(dir), current => {
     if (!current) return current;
     return { ...current, items: current.items.map(item => item.ref === todo.ref ? todo : item) };
+  });
+  client.setQueryData<TodoListResponse>(todoQueryKeys.workspaceList(HIDDEN_PROJECTS_FILTER), current => {
+    if (!current) return current;
+    return {
+      ...current,
+      items: current.items.map(item => item.ref === todo.ref && item.dir === dir.trim() ? { ...todo, dir: item.dir } : item),
+    };
   });
 }
 
@@ -125,29 +158,15 @@ async function fetchSessionStats(dir: string, sessionId: string, signal: AbortSi
   return response.json() as Promise<SessionStats>;
 }
 
-// sessionStatsQueryOptions polls one agent session's rolled-up stats. A running
-// session polls fast and a finished one stops for good, because its totals are
-// final. `expectLive` covers the third case — a session that has produced no log
-// or DB row yet. That is only worth retrying while a run is actually expected to
-// start; for a settled todo whose session was pruned it would poll forever, and a
-// list showing many such todos would poll forever in parallel.
-export function sessionStatsQueryOptions({ dir, sessionId, expectLive = true }: {
+export function sessionStatsQueryOptions({ dir, sessionId }: {
   dir: string;
   sessionId: string;
-  expectLive?: boolean;
 }) {
   return queryOptions({
     queryKey: todoQueryKeys.sessionStats(dir, sessionId),
     queryFn: ({ signal }) => fetchSessionStats(dir, sessionId, signal),
-    // Settled totals do not move, so a row that only wants the final duration and
-    // cost re-reads them rarely instead of on every remount.
-    staleTime: expectLive ? 1_500 : 300_000,
-    refetchInterval: query => {
-      const stats = query.state.data;
-      if (stats?.inProgress) return 2_000;
-      if (!stats?.found) return expectLive ? 4_000 : false;
-      return false;
-    },
+    staleTime: Infinity,
+    refetchInterval: false,
   });
 }
 
@@ -164,19 +183,11 @@ export async function fetchTodoSessionDetail(dir: string, ref: string, signal?: 
   return body;
 }
 
-// SETTLED_ATTEMPTS_POLL_MS is how often a todo whose attempts have all finished
-// is re-read: a new attempt can still be started elsewhere (the CLI, another tab).
-const SETTLED_ATTEMPTS_POLL_MS = 15_000;
-
-function attemptsSettled(detail: TodoSessionDetailResponse | undefined) {
-  return !!detail && detail.attempts.every(attempt => attempt.phase === 'finished');
-}
-
-export function sessionDetailQueryOptions(dir: string, ref: string, intervalMs: number) {
+export function sessionDetailQueryOptions(dir: string, ref: string) {
   return queryOptions({
     queryKey: todoQueryKeys.sessionDetail(dir, ref),
     queryFn: ({ signal }) => fetchTodoSessionDetail(dir, ref, signal),
-    staleTime: Math.min(intervalMs, 1_500),
-    refetchInterval: query => attemptsSettled(query.state.data) ? Math.max(intervalMs, SETTLED_ATTEMPTS_POLL_MS) : intervalMs,
+    staleTime: Infinity,
+    refetchInterval: false,
   });
 }

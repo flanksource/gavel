@@ -95,7 +95,7 @@ func (ds *DetailSyncer) syncAll(ctx context.Context) {
 		sem <- struct{}{}
 		go func(item github.PRListItem) {
 			defer func() { <-sem }()
-			ds.syncPR(item)
+			ds.syncPR(ctx, item)
 		}(pr)
 
 		time.Sleep(200 * time.Millisecond)
@@ -107,29 +107,12 @@ func (ds *DetailSyncer) syncAll(ctx context.Context) {
 	}
 }
 
-func (ds *DetailSyncer) syncPR(pr github.PRListItem) {
+func (ds *DetailSyncer) syncPR(ctx context.Context, pr github.PRListItem) {
 	key := prKey(pr)
 	ds.cache.SetStatus(key, PRSyncStatus{State: SyncSyncing, Phase: "metadata"})
 	ds.srv.notify()
 
-	detail := ds.srv.fetchPRDetail(pr.Repo, pr.Number)
-
-	if detail.Error != "" {
-		ds.cache.SetStatus(key, PRSyncStatus{
-			State:      SyncError,
-			LastSynced: time.Now(),
-			Error:      detail.Error,
-		})
-		ds.srv.notify()
-		return
-	}
-
-	ds.cache.Put(key, detail, pr.UpdatedAt)
-	ds.cache.SetStatus(key, PRSyncStatus{
-		State:      SyncUpToDate,
-		LastSynced: time.Now(),
-	})
-	ds.srv.notify()
+	ds.srv.loadPRDetail(ctx, pr.Repo, pr.Number, prDetailFetch{})
 }
 
 func (ds *DetailSyncer) checkRateLimit() bool {

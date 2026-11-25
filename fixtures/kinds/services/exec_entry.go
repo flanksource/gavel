@@ -143,7 +143,14 @@ func (s *execService) observe(ctx context.Context) map[string]any {
 // status (a crash during the fixture) is reported.
 func (s *execService) stop() error {
 	pgid := -s.cmd.Process.Pid
+	requested := true
+	select {
+	case <-s.done:
+		requested = false
+	default:
+	}
 	signalErr := signalGroup(pgid, syscall.SIGTERM)
+	requested = requested && signalErr == nil
 	var forced error
 	deadline := time.Now().Add(stopGrace)
 	for groupAlive(pgid) && time.Now().Before(deadline) {
@@ -168,9 +175,9 @@ func (s *execService) stop() error {
 	}
 	waitErr := s.waitErr
 	var exit *exec.ExitError
-	if errors.As(waitErr, &exit) {
-		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() &&
-			(status.Signal() == syscall.SIGTERM || status.Signal() == syscall.SIGKILL) {
+	if requested && errors.As(waitErr, &exit) {
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok &&
+			((status.Signaled() && (status.Signal() == syscall.SIGTERM || status.Signal() == syscall.SIGKILL)) || status.ExitStatus() == 128+int(syscall.SIGTERM)) {
 			waitErr = nil
 		}
 	}

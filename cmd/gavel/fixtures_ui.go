@@ -21,21 +21,28 @@ type fixtureUIOptions struct {
 type fixtureUIRunRequest struct {
 	Runner *fixtures.RunnerOptions
 	UI     fixtureUIOptions
+	// Resume and Command are the run's RunOptions.FixtureResume and
+	// FixtureCommand. The resume is the first run's alone: a UI rerun of the
+	// whole fixture must not resume, so it stays off Runner.
+	Resume  *fixtures.Resume
+	Command *fixtures.RerunBase
 }
 
 func fixtureUIRunOptions(request fixtureUIRunRequest) (testrunner.RunOptions, bool) {
 	opts := testrunner.RunOptions{
-		WorkDir:       request.Runner.WorkDir,
-		UI:            request.UI.UI,
-		Addr:          request.UI.Addr,
-		Dev:           request.UI.Dev,
-		Fixtures:      true,
-		FixtureFiles:  append([]string(nil), request.Runner.Paths...),
-		FixturesOnly:  true,
-		FixtureRunner: request.Runner,
-		SkipHooks:     true,
-		AutoStop:      request.UI.AutoStop,
-		IdleTimeout:   request.UI.IdleTimeout,
+		WorkDir:        request.Runner.WorkDir,
+		UI:             request.UI.UI,
+		Addr:           request.UI.Addr,
+		Dev:            request.UI.Dev,
+		Fixtures:       true,
+		FixtureFiles:   append([]string(nil), request.Runner.Paths...),
+		FixturesOnly:   true,
+		FixtureRunner:  request.Runner,
+		FixtureResume:  request.Resume,
+		FixtureCommand: request.Command,
+		SkipHooks:      true,
+		AutoStop:       request.UI.AutoStop,
+		IdleTimeout:    request.UI.IdleTimeout,
 	}
 	if request.Runner.Display != nil {
 		opts.ShowPassed = request.Runner.Display.ShowPassed

@@ -119,7 +119,7 @@ func applySnapshotState(node *api.VerifyNode, state fixtures.ExecutionState) {
 		node.Skipped = true
 	case fixtures.ExecutionTimedOut:
 		node.Failed, node.TimedOut = true, true
-	case fixtures.ExecutionRunning:
+	case fixtures.ExecutionRunning, fixtures.ExecutionWaiting:
 		node.Running = true
 	default:
 		node.Pending = true

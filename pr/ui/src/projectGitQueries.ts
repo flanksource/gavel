@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { readLocalCache, writeLocalCache } from './localQueryCache';
 import { fetchJSON, queryKeys } from './query';
 import type { ProjectGit, ProjectGitSummary } from './types';
+import type { RebaseContext } from './types/branchRebase';
 
 // The last good git summary seeds the first render of the next page load. Git
 // queries never poll: the server pushes each project's generation over
@@ -49,8 +50,9 @@ export function useProjectGitSummary({ enabled }: { enabled: boolean }): Project
 // The git stream refetches on every change; a page showing how fresh the state
 // is also re-reads it every refetchIntervalMs, since an unchanged scan advances
 // no generation.
-export function useProjectGit(projectName: string, { refetchIntervalMs }: { refetchIntervalMs?: number } = {}) {
+export function useProjectGit(projectName: string, { refetchIntervalMs, enabled = true }: { refetchIntervalMs?: number; enabled?: boolean } = {}) {
   return useQuery<ProjectGit>({
+    enabled,
     refetchInterval: refetchIntervalMs ?? false,
     queryKey: queryKeys.projectGit(projectName),
     queryFn: async ({ signal }) => parseProjectGit(await fetchJSON<unknown>({
@@ -59,6 +61,20 @@ export function useProjectGit(projectName: string, { refetchIntervalMs }: { refe
       context: `Load git state of ${projectName}`,
     })),
     staleTime: Infinity,
+  });
+}
+
+export function useProjectRebaseContext({ projectName, worktree, generation, enabled = true }: {
+  projectName: string; worktree?: string; generation?: number; enabled?: boolean;
+}) {
+  return useQuery<RebaseContext>({
+    queryKey: ['projects', projectName, 'rebase', worktree, generation],
+    queryFn: ({ signal }) => fetchJSON({
+      url: `/api/projects/${encodeURIComponent(projectName)}/branch/rebase?worktree=${encodeURIComponent(worktree ?? '')}`,
+      signal, context: 'Load rebase options',
+    }),
+    enabled: enabled && !!worktree,
+    retry: false,
   });
 }
 
@@ -81,7 +97,9 @@ export function parseProjectGitSummaries(payload: unknown): ProjectGitSummary[] 
       || typeof entry.base !== 'string'
       || !hasNumbers(entry, ['adds', 'dels', 'worktrees', 'branches', 'uncommittedBranches'])
       || !Number.isSafeInteger(entry.uncommittedBranches) || Number(entry.uncommittedBranches) < 0
-      || (entry.error !== undefined && typeof entry.error !== 'string')) {
+      || (entry.error !== undefined && typeof entry.error !== 'string')
+      || (entry.branch !== undefined && typeof entry.branch !== 'string')
+      || (entry.lastActivityAt !== undefined && (typeof entry.lastActivityAt !== 'string' || Number.isNaN(Date.parse(entry.lastActivityAt))))) {
       throw new Error(`Load project git summary: invalid entry ${JSON.stringify(entry)}`);
     }
   }
@@ -95,6 +113,8 @@ export function parseProjectGit(payload: unknown): ProjectGit {
     || typeof payload.base !== 'string'
     || typeof payload.currentBranch !== 'string'
     || typeof payload.baseCheckedOut !== 'boolean'
+    || (payload.upstream !== undefined && typeof payload.upstream !== 'string')
+    || !hasNumbers(payload, ['upstreamAhead', 'upstreamBehind'])
     || !Array.isArray(payload.worktrees)
     || !Array.isArray(payload.branches)
     || typeof payload.computedAt !== 'string'

@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "dependencies": {
+    "@flanksource/facet": "^0.1.75"
+  }
+}

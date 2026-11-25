@@ -39,9 +39,18 @@ jobs:
 
       - uses: ./.github/actions/setup-task
 
+      # The tsc lint check resolves its imports from these UI projects' dependencies.
+      - name: Install test runner dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: testrunner/ui
+
+      - name: Install PR UI dependencies
+        run: pnpm install --no-frozen-lockfile
+        working-directory: pr/ui
+
       - name: Install site dependencies
         run: npm ci
-        working-directory: site
+        working-directory: docs
 
       - name: Install golangci-lint
         shell: bash
@@ -56,6 +65,23 @@ jobs:
           install -m 0755 "$tmp/golangci-lint-${version#v}-linux-amd64/golangci-lint" "$HOME/.local/bin/golangci-lint"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/golangci-lint" version
+
+      # .uir.yaml enables the uir linter. uir publishes no release binaries and
+      # its go.mod has a replace directive (so `go install …@version` is refused);
+      # build the pinned tag's CLI instead. web/dist only feeds `uir serve`'s
+      # embedded UI, which linting never uses, so an empty placeholder suffices.
+      - name: Install uir
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=v1.13.0
+          src="$(mktemp -d)"
+          trap 'rm -rf "$src"' EXIT
+          git clone --quiet --depth 1 --branch "$version" https://github.com/flanksource/uir.git "$src"
+          mkdir -p "$src/web/dist" "$HOME/.local/bin"
+          touch "$src/web/dist/.keep"
+          (cd "$src" && GOWORK=off go build -o "$HOME/.local/bin/uir" ./cmd/uir)
+          "$HOME/.local/bin/uir" --version
 
       - name: Build gavel from source
         run: |

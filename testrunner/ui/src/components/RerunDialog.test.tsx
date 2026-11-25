@@ -65,6 +65,23 @@ describe('RerunDialog', () => {
     expect(screen.getByText(/--- FAIL: TestA/)).toBeTruthy();
   });
 
+  it('shows each command the rerun ran above its output and copies them as cd-prefixed shell lines', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const commands = [
+      { cwd: '/repo/a', argv: ['go', 'test', './a'], line: 'go test ./a', shell: "cd /repo/a && go test ./a" },
+      { cwd: '/repo/b', argv: ['ginkgo', '--focus', 'Suite X'], line: "ginkgo --focus 'Suite X'", shell: "cd /repo/b && ginkgo --focus 'Suite X'" },
+    ];
+    render(<RerunDialog open onClose={() => {}} streamUrl="/api/rerun/stream" />);
+
+    act(() => FakeEventSource.last().emit('message', { ...frame('running'), commands }));
+
+    const header = document.querySelector('[data-rerun-commands]')!;
+    expect(header.textContent).toBe("$ go test ./a$ ginkgo --focus 'Suite X'");
+    await act(async () => screen.getByRole('button', { name: 'Copy rerun commands' }).click());
+    expect(writeText).toHaveBeenCalledWith(commands.map(c => c.shell).join('\n'));
+  });
+
   it('says so when a rerun finished without writing any output', () => {
     render(<RerunDialog open onClose={() => {}} streamUrl="/api/rerun/stream" />);
     expect(screen.getByText('Waiting for output...')).toBeTruthy();

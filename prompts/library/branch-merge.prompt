@@ -46,6 +46,8 @@ permissions:
     Bash(git push:*): deny
     Bash(git reset:*): deny
     Bash(git merge:*): deny
+    Bash(gavel git merge:*): deny
+    "Bash({{shq gavelExecutable}} git merge:*)": deny
     Bash(git checkout:*): deny
     Bash(git switch:*): deny
     Bash(git branch:*): deny
@@ -70,29 +72,20 @@ workflow:
       # Every fix is committed: landing only carries commits.
       - test -z "$(git status --porcelain)"
   after:
-    # Runs once, in the main checkout, only after verify passed. Rebasing made
-    # the history linear, so incremental landing is a plain fast-forward.
-    # Commands carrying user values are block scalars (a quoted value holding
-    # ": " or " #" would break the YAML), and branch with shell rather than
-    # Handlebars blocks so the frontmatter stays valid YAML before rendering.
     - when: onVerify
       cwd: "{{repo}}"
       commands:
         - |-
-          case {{shq mode}} in
-            squash) git merge --squash {{shq branch}} ;;
-            incremental) git merge --ff-only {{shq branch}} ;;
-            *) echo "mode must be squash or incremental, got "{{shq mode}} >&2; exit 1 ;;
-          esac
-        - |-
-          [ {{shq mode}} != squash ] || if [ -n {{shq message}} ]; then git commit -m {{shq message}}; else git commit --no-edit; fi
-        - |-
-          git worktree remove {{shq worktree}}
-        - |-
-          git branch -D {{shq branch}}
+          {{shq gavelExecutable}} git merge --base={{shq base}} --mode={{shq mode}} --message={{shq message}} --worktree={{shq worktree}} -- {{shq branch}}
 ---
 ## Rebase `{{branch}}` onto `{{base}}`
 
+{{#if failure}}
+Gavel aborted the previous attempt and restored the target checkout. Git reported:
+
+{{failure}}
+
+{{/if}}
 {{#if conflicts}}
 Landing `{{branch}}` into `{{base}}` failed on these files:
 

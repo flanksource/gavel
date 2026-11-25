@@ -9,8 +9,11 @@ import (
 	"github.com/flanksource/clicky/task"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
 
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/processruntime"
+	"github.com/flanksource/gavel/slots"
 )
 
 func parseYAMLDocument(body string) []*fixtures.FixtureNode {
@@ -93,6 +96,42 @@ steps:
 		Expect(err).ToNot(HaveOccurred())
 		Expect(results[0].Status).To(Equal(task.StatusPASS), results[0].Error+results[0].CELTrace)
 	})
+
+	DescribeTable("limits a command by the step's declared timeout, else by the configured runtime timeout",
+		func(body string, outcome types.GomegaMatcher) {
+			configured := "200ms"
+			results, _, err := fixtures.RunNodes(context.Background(), parseYAMLDocument(body), fixtures.RunOptions{
+				WorkDir:        GinkgoT().TempDir(),
+				ProcessRuntime: processruntime.Options{Slots: slots.Limits{Global: 1}, Timeout: &configured},
+			})
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(results[0].Status).To(outcome, results[0].Error)
+		},
+		Entry("a longer step timeout", "kind: Fixture\nsteps:\n  - { id: x, kind: exec, script: 'sleep 1', timeout: 30s }\n", Equal(task.StatusPASS)),
+		Entry("a longer document default", "kind: Fixture\ndefaults: { timeout: 30s }\nsteps:\n  - { id: x, kind: exec, script: 'sleep 1' }\n", Equal(task.StatusPASS)),
+		Entry("a longer step timeout on a pty", "kind: Fixture\nsteps:\n  - { id: x, kind: exec, terminal: pty, script: 'sleep 1', timeout: 30s }\n", Equal(task.StatusPASS)),
+		Entry("no declared timeout", "kind: Fixture\nsteps:\n  - { id: x, kind: exec, script: 'sleep 1' }\n", Not(Equal(task.StatusPASS))),
+		Entry("no declared timeout on a pty", "kind: Fixture\nsteps:\n  - { id: x, kind: exec, terminal: pty, script: 'sleep 1' }\n", Not(Equal(task.StatusPASS))),
+	)
+
+	// The command exits 0 when it is interrupted, so only the timeout fails it.
+	DescribeTable("fails a command that passed its runtime timeout, whatever its exit code",
+		func(body string) {
+			configured := "200ms"
+			results, _, err := fixtures.RunNodes(context.Background(), parseYAMLDocument(body), fixtures.RunOptions{
+				WorkDir:        GinkgoT().TempDir(),
+				ProcessRuntime: processruntime.Options{Slots: slots.Limits{Global: 1}, Timeout: &configured},
+			})
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(results[0].Status).To(Equal(task.StatusERR))
+			Expect(results[0].Error).To(ContainSubstring("command timed out after 200ms"))
+		},
+		Entry("a process", "kind: Fixture\nsteps:\n  - { id: x, kind: exec, script: \"trap 'exit 0' INT; for i in 1 2 3 4 5 6 7 8 9 10; do sleep 0.2; done\" }\n"),
+		Entry("a process that expects the exit code of an interrupt", "kind: Fixture\nsteps:\n  - { id: x, kind: exec, exitCode: 130, script: \"trap 'exit 130' INT; for i in 1 2 3 4 5 6 7 8 9 10; do sleep 0.2; done\" }\n"),
+		Entry("a pty", "kind: Fixture\nsteps:\n  - { id: x, kind: exec, terminal: pty, script: \"trap 'exit 0' INT HUP; for i in 1 2 3 4 5 6 7 8 9 10; do sleep 0.2; done\" }\n"),
+	)
 
 	It("fails a step that scripts input without a pty", func() {
 		nodes := parseYAMLDocument("kind: Fixture\nsteps:\n  - { id: x, kind: exec, script: 'read a', input: [{ expect: a, keys: [enter] }] }\n")

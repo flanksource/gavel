@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/pr/provider"
+	"github.com/flanksource/gavel/projects"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -54,6 +56,12 @@ func (s *Server) afterPRAction(repo string, number int) {
 	if s.detailCache != nil && repo != "" && number != 0 {
 		s.detailCache.Invalidate(SyncStatusKey(repo, number))
 	}
+	s.requestPoll()
+}
+
+// requestPoll asks the poller for a full list fetch; one already requested
+// covers this request too.
+func (s *Server) requestPoll() {
 	select {
 	case s.refreshCh <- struct{}{}:
 	default:
@@ -63,6 +71,14 @@ func (s *Server) afterPRAction(repo string, number int) {
 type prMergePayload struct {
 	URL string `json:"url"`
 	model.MergeInput
+}
+
+// prMergeRefusal is the body of a merge the host refused: nothing was merged.
+// RebaseNotAllowed tells the UI to offer squash or a merge commit instead.
+type prMergeRefusal struct {
+	Error            string `json:"error"`
+	Detail           string `json:"detail,omitempty"`
+	RebaseNotAllowed bool   `json:"rebaseNotAllowed,omitempty"`
 }
 
 // handlePRMerge completes a linked hosted PR using its native merge strategy.
@@ -94,8 +110,23 @@ func (s *Server) handlePRMerge(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = client.MergePR(r.Context(), number, body.MergeInput)
 	}
-	if err != nil {
+	var rejected *github.GraphQLError
+	refusal, status := prMergeRefusal{}, 0
+	switch {
+	case errors.Is(err, github.ErrRebaseNotAllowed):
+		refusal.Error = "GitHub can't rebase this branch onto its base: its commits don't replay cleanly (the branch holds a merge commit or a commit conflicts). Squash it or create a merge commit instead."
+		refusal.RebaseNotAllowed, status = true, http.StatusConflict
+	case errors.As(err, &rejected):
+		refusal.Error, status = "GitHub refused the merge: "+strings.Join(rejected.Messages, "; "), http.StatusUnprocessableEntity
+	case err != nil:
 		writeJSONError(w, http.StatusBadGateway, err)
+		return
+	}
+	if status != 0 {
+		refusal.Detail = err.Error()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(refusal) //nolint:errcheck
 		return
 	}
 	s.afterPRAction(repo, number)
@@ -163,7 +194,7 @@ func (s *Server) handlePRUpdateBranch(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, github.ErrUpdateBranchConflict):
 		conflict := prUpdateConflict{Error: err.Error(), Conflict: true}
-		rebase, blocked := s.prRebaseRequest(body.Repo, body.Number)
+		rebase, blocked := s.prRebaseRequest(r.Context(), body.Repo, body.Number)
 		if blocked != nil {
 			logger.Warnf("update branch PR %s#%d: AI rebase unavailable: %v", body.Repo, body.Number, blocked)
 			conflict.RebaseBlocked = blocked.Error()
@@ -184,12 +215,12 @@ func (s *Server) handlePRUpdateBranch(w http.ResponseWriter, r *http.Request) {
 // and fetches the PR's head and base into it. The rebase force-pushes the head
 // branch, so a PR from a fork — whose branch is not on the checkout's remote —
 // is refused rather than pushed somewhere else.
-func (s *Server) prRebaseRequest(repo string, number int) (*prRebaseRequest, error) {
-	projects, err := LoadProjects(LoadProjectsOptions{})
+func (s *Server) prRebaseRequest(ctx context.Context, repo string, number int) (*prRebaseRequest, error) {
+	ps, err := visibleProjects(ctx, s)
 	if err != nil {
 		return nil, err
 	}
-	project, ok := ProjectForRepo(projects, repo)
+	project, ok := projects.ForRepo(ps, repo)
 	if !ok {
 		return nil, fmt.Errorf("no project has a local checkout of %s; add one to rebase it with AI", repo)
 	}

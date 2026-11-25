@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { projectStatusResponse as statusResponse } from './ProjectStatusView.fixture';
+import { projectStatusResponse as statusResponse, statusWithStates } from './ProjectStatusView.fixture';
 import { ProjectStatusView } from './ProjectStatusView';
 
 const WORKTREE = '/work/gavel-feat';
@@ -12,7 +12,7 @@ const ENCODED = '%2Fwork%2Fgavel-feat';
 /* oxlint-disable clicky-ui/prefer-clicky-components --
    Raw elements are the test doubles for clicky-ui's Button/SplitButton: the real
    SplitButton mounts floating-ui, which crashes under vitest. */
-vi.mock('@flanksource/clicky-ui/components', () => ({
+vi.mock('@flanksource/clicky-ui/components', async () => ({
   Button: ({ children, onClick, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
     <button onClick={onClick} {...props}>{children}</button>
   ),
@@ -20,6 +20,8 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
     <button type="button" onClick={onClick} disabled={disabled} title={title}>{label}</button>
   ),
   Modal: () => null,
+  DropdownMenu: (await import('./projectTreeDoubles')).DropdownMenuDouble,
+  ConfirmDialog: (await import('./projectTreeDoubles')).ConfirmDialogDouble,
   JsonSchemaForm: () => null,
   SplitPane: ({ left, right }: { left: ReactNode; right: ReactNode }) => <div>{left}{right}</div>,
   FilterBar: () => null,
@@ -103,11 +105,10 @@ describe('ProjectStatusView in a linked worktree', () => {
   });
 
   it('queues the commit with the worktree in the request body', async () => {
-    const fetchMock = stubFetch();
+    const fetchMock = stubFetch(url => url.includes('/status') ? statusWithStates({ 'one.go': 'staged' }) : undefined);
     renderWorktree();
 
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select one.go' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit selected (1)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit staged (1)' }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
     const call = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!;
@@ -119,7 +120,7 @@ describe('ProjectStatusView in a linked worktree', () => {
     const fetchMock = stubFetch(url => url.includes('/ignore') ? { path: 'generated', directory: true, rule: '/generated/', added: true } : undefined);
     renderWorktree();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Ignore directory generated' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Ignore generated/' }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
     const call = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!;

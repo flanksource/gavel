@@ -46,25 +46,16 @@ func TestRegistryDetectAll(t *testing.T) {
 	}
 
 	registry := DefaultRegistry(tmpDir)
-	frameworks, err := registry.DetectAll()
-
+	frameworks, err := registry.DetectAll(tmpDir, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if len(frameworks) == 0 {
-		t.Error("expected at least one framework to be detected")
+	opts := frameworks[GoTest]
+	if opts == nil {
+		t.Fatalf("expected GoTest to be detected, got %v", frameworks)
 	}
-
-	// Should detect GoTest at minimum
-	found := false
-	for _, fw := range frameworks {
-		if fw == GoTest {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected GoTest to be detected")
+	if opts.Cwd != tmpDir {
+		t.Errorf("expected GoTest options rooted at %s, got %s", tmpDir, opts.Cwd)
 	}
 }
 

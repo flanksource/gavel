@@ -1,0 +1,50 @@
+---
+title: UIR
+description: SQL architecture rules with native configuration fragments.
+parent: lint-execution
+order: 11
+---
+
+## Configuration and execution
+
+Install UIR on PATH, then run `gavel lint uir --dry-run` to inspect the command or `gavel lint uir` to execute it. Gavel invokes `uir lint --format json --no-progress` from the selected project; UIR validates and merges its own configuration.
+
+UIR reads `~/.uir.yaml` and YAML fragments in `~/.uir.d/` first, followed by ancestor and project configuration. Within each directory, `.uir.yaml` precedes the `.yaml` and `.yml` fragments directly inside `.uir.d/`, ordered by filename. Later definitions replace matching rule IDs. Explicit `include_tests: false` overrides an inherited true value.
+
+## Rules configured through Gavel
+
+Save this native UIR document under `lint.linters.uir.config` in `.gavel.yaml`:
+
+```yaml
+lint:
+  linters:
+    uir:
+      config:
+        version: 1
+        lint:
+          include_tests: true
+          rules:
+            - id: parameter-count
+              query: SELECT symbol.name AS name FROM func:* WHERE symbol.metrics.param_count > 4
+              message: '{{.name}} has more than four parameters'
+              severity: warning
+      runtime:
+        timeout: 5m
+```
+
+Run the configuration from a Go module:
+
+```sh
+gavel lint uir --dry-run
+gavel lint uir
+```
+
+`config` contains a complete native UIR document, including `version` and `lint`. Each rule supplies an `id`, SQL `query` and template `message`; optional `severity` is `error`, `warning` or `info`. `include_tests` controls whether test declarations are analyzed. Gavel passes this document through to UIR without duplicating UIR's rule validation or merge logic.
+
+Gavel writes a unique `.uir.d/gavel-*.yaml` fragment before launching UIR, with a top-level `_expires` RFC3339 timestamp set to the effective linter deadline. With no deadline, its lifetime is five minutes. Gavel removes its own fragment when execution finishes. If a run is interrupted, UIR deletes expired leftovers during its next configuration discovery and excludes their entire configuration. Future-dated fragments load normally and remain available to the active run. Files without `_expires` are persistent. Invalid timestamps and deletion failures stop execution.
+
+## Findings and filtering
+
+Gavel applies its usual file scopes, Git ignores and baselines after UIR analyzes the project. Selecting a `.uir.yaml` file or `.uir.d/` fragment reports its owning project. Fileless coverage warnings remain visible. Error findings and execution errors fail the command; warning-only runs succeed. Dry-run does not write fragments.
+
+`gavel lint uir --generated=false --tags integration,feature` suppresses generated-file findings in Gavel and passes `--tags=integration,feature` to UIR. Use a UIR binary supporting `uir lint --tags`. The tags control syntax selection and typed loading and participate in analysis freshness checks. Generated sources remain available for resolving types. Omitting `--generated` preserves existing behavior. See [Generated sources and build tags](/docs/lint-source-options) for the shared controls and defaults.

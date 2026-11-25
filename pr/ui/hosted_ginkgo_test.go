@@ -28,7 +28,7 @@ func hostedError(resp *http.Response) string {
 var _ = Describe("hosted mode routes", func() {
 	It("serves the allowlisted routes", func() {
 		base := hostedTestServer()
-		for _, path := range []string{"/api/settings/schema", "/favicon.svg", "/manifest.webmanifest", "/prs", "/todos/abc"} {
+		for _, path := range []string{"/api/settings/schema", "/favicon.svg", "/manifest.webmanifest", "/prs", "/todos/abc", "/comments?thread=abc"} {
 			resp := doRequest(newRequest(http.MethodGet, base+path, nil, nil))
 			Expect(resp.StatusCode).To(Equal(http.StatusOK), path)
 		}

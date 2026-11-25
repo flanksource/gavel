@@ -8,7 +8,6 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/flanksource/repomap"
-	"github.com/google/cel-go/common/types"
 )
 
 // FilterResult holds the result of applying exclude filters to a commit
@@ -116,7 +115,7 @@ func evalCommitCELRules(config *repomap.CompiledExcludeConfig, commit models.Com
 		if err != nil {
 			continue
 		}
-		if boolVal, ok := result.(types.Bool); ok && boolVal == types.True {
+		if matched, ok := result.Value().(bool); ok && matched {
 			return true, fmt.Sprintf("CEL rule '%s'", config.Rules[i].When)
 		}
 	}

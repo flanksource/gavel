@@ -18,7 +18,7 @@ func TestPlaywrightDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewPlaywright(tmp)
-		if got, _ := r.Detect(tmp); !got {
+		if got, _ := detected(r, tmp); !got {
 			t.Fatal("expected detect=true")
 		}
 	})
@@ -29,7 +29,7 @@ func TestPlaywrightDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewPlaywright(tmp)
-		if got, _ := r.Detect(tmp); !got {
+		if got, _ := detected(r, tmp); !got {
 			t.Fatal("expected detect=true for playwright-ct.config")
 		}
 	})
@@ -40,7 +40,7 @@ func TestPlaywrightDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewPlaywright(tmp)
-		if got, _ := r.Detect(tmp); !got {
+		if got, _ := detected(r, tmp); !got {
 			t.Fatal("expected detect=true when playwright dep + spec file present")
 		}
 	})
@@ -48,7 +48,7 @@ func TestPlaywrightDetect(t *testing.T) {
 		tmp := t.TempDir()
 		writePackageJSON(t, tmp, `{"name":"x","devDependencies":{"@playwright/test":"^1.40.0"}}`)
 		r := NewPlaywright(tmp)
-		if got, _ := r.Detect(tmp); got {
+		if got, _ := detected(r, tmp); got {
 			t.Fatal("expected detect=false when dep is declared but no spec files exist")
 		}
 	})
@@ -56,7 +56,7 @@ func TestPlaywrightDetect(t *testing.T) {
 		tmp := t.TempDir()
 		writePackageJSON(t, tmp, `{"name":"x"}`)
 		r := NewPlaywright(tmp)
-		if got, _ := r.Detect(tmp); got {
+		if got, _ := detected(r, tmp); got {
 			t.Fatal("expected detect=false")
 		}
 	})
@@ -71,7 +71,7 @@ func TestPlaywrightDiscoverPackages_Monorepo(t *testing.T) {
 	}
 	writePackageJSON(t, filepath.Join(tmp, "packages/shared"), `{"name":"shared"}`)
 	r := NewPlaywright(tmp)
-	pkgs, err := r.DiscoverPackages(tmp, true)
+	pkgs, err := r.DiscoverPackages(TestOptions{Cwd: tmp, Recursive: true})
 	if err != nil {
 		t.Fatalf("DiscoverPackages: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestPlaywrightBuildCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewPlaywright(tmp)
-	tr, err := r.BuildCommand(".")
+	tr, err := r.BuildCommand(TestOptions{Cwd: tmp, Packages: []string{"./."}})
 	if err != nil {
 		t.Fatal(err)
 	}

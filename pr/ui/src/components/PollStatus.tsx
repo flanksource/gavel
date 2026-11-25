@@ -2,6 +2,7 @@ import { Button } from '@flanksource/clicky-ui/components';
 import { UiClock, UiPause, UiPlay, UiRefresh, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { RateLimit } from '../types';
 import { Spinner } from '../icons/Spinner';
+import { timeAgo } from '../utils';
 
 interface Props {
   fetchedAt: string;
@@ -18,7 +19,7 @@ interface Props {
 // pause/resume + refresh control, and the GitHub rate-limit gauge with a
 // health dot. Counts live in the toolbar; this is just liveness.
 export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, onRefresh, onPause, networkBusy }: Props) {
-  const ago = fetchedAt ? timeAgoShort(fetchedAt) : 'never';
+  const ago = fetchedAt ? timeAgo(fetchedAt) : 'never';
   const countdown = fetchedAt
     ? Math.max(0, nextFetchIn - Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 1000))
     : nextFetchIn;
@@ -67,14 +68,4 @@ export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, o
       )}
     </div>
   );
-}
-
-function timeAgoShort(iso: string): string {
-  const d = new Date(iso);
-  const s = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (s < 5) return 'just now';
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }

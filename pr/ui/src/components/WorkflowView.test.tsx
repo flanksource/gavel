@@ -11,7 +11,8 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   ),
 }));
 
-vi.mock('@flanksource/clicky-ui/icons', () => ({
+vi.mock('@flanksource/clicky-ui/icons', async importOriginal => ({
+  ...await importOriginal<typeof import('@flanksource/clicky-ui/icons')>(),
   UiChevronDown: () => <span>down</span>,
   UiChevronRight: () => <span>right</span>,
   UiLinkExternal: () => <span>external</span>,
@@ -21,6 +22,13 @@ vi.mock('../icons/Spinner', () => ({ Spinner: () => <span>loading</span> }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('WorkflowRunView stale run', () => {
+  it.each([['GitHub returned status 502', true], [undefined, false]])('when stale is %s shows the warning: %s', (stale, shown) => {
+    render(<WorkflowRunView run={{ databaseId: 11, name: 'CI', status: 'completed', conclusion: 'success', stale }} repo="acme/widget" />);
+    expect(!!screen.queryByText('not current: GitHub unavailable')).toBe(shown);
+  });
 });
 
 describe('WorkflowRunView job log fallback', () => {

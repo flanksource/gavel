@@ -1,7 +1,9 @@
 package testui
 
 import (
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
@@ -32,7 +34,7 @@ func TestMergeRerunTestsAppendsAttemptsToMatchingLeaves(t *testing.T) {
 		}},
 	}}
 
-	merged := mergeRerunTests(existing, incoming)
+	merged := MergeRerunTests(existing, incoming)
 	if len(merged) != 1 {
 		t.Fatalf("want 1 merged test, got %d", len(merged))
 	}
@@ -73,8 +75,8 @@ func TestMergeRerunTestsRenumbersAcrossMultipleReruns(t *testing.T) {
 		Attempts: []parsers.TestAttempt{{Sequence: 1, RunKind: "rerun", Passed: true}},
 	}}
 
-	afterOne := mergeRerunTests(history, rerunOne)
-	afterTwo := mergeRerunTests(afterOne, rerunTwo)
+	afterOne := MergeRerunTests(history, rerunOne)
+	afterTwo := MergeRerunTests(afterOne, rerunTwo)
 
 	atts := afterTwo[0].Attempts
 	if len(atts) != 3 {
@@ -91,7 +93,7 @@ func TestMergeRerunTestsAppendsUnknownTests(t *testing.T) {
 	existing := []parsers.Test{{Framework: parsers.GoTest, PackagePath: "./pkg/a", Name: "Keep", Passed: true}}
 	incoming := []parsers.Test{{Framework: parsers.GoTest, PackagePath: "./pkg/a", Name: "Brand new", Failed: true}}
 
-	merged := mergeRerunTests(existing, incoming)
+	merged := MergeRerunTests(existing, incoming)
 	if len(merged) != 2 {
 		t.Fatalf("want 2 tests after merge (1 kept + 1 appended), got %d", len(merged))
 	}
@@ -120,7 +122,7 @@ func TestMergeRerunTestsRecursesIntoChildren(t *testing.T) {
 		},
 	}}
 
-	merged := mergeRerunTests(existing, incoming)
+	merged := MergeRerunTests(existing, incoming)
 	if len(merged) != 1 || len(merged[0].Children) != 1 {
 		t.Fatalf("expected one suite with one spec, got %+v", merged)
 	}
@@ -130,5 +132,20 @@ func TestMergeRerunTestsRecursesIntoChildren(t *testing.T) {
 	}
 	if len(spec.Attempts) != 2 {
 		t.Errorf("want 2 attempts on child spec, got %d", len(spec.Attempts))
+	}
+}
+
+// A retry from a fixture step reads the run on screen, so what the step last
+// recorded must replace what it recorded before.
+func TestMergeRerunTestsTakesTheLatestAttemptsStateAndDetail(t *testing.T) {
+	started := time.Now()
+	existing := []parsers.Test{{
+		Framework: parsers.Fixture, Name: "summary", Failed: true, Aborted: true, Running: true, Waiting: true, Started: &started,
+		Detail: map[string]any{"outputs": "old"}, Context: "old", FailureDetail: &parsers.FailureDetail{}, Progress: &parsers.TestProgress{},
+	}}
+	incoming := parsers.Test{Framework: parsers.Fixture, Name: "summary", Warned: true, Detail: map[string]any{"outputs": "new"}, Context: "new"}
+
+	if got := MergeRerunTests(existing, []parsers.Test{incoming}); !reflect.DeepEqual(got, []parsers.Test{incoming}) {
+		t.Fatalf("merged = %#v\nwant %#v", got, incoming)
 	}
 }

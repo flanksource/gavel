@@ -1,15 +1,18 @@
-import { useState } from 'react';
-import { Modal, Field, Button, Select } from '@flanksource/clicky-ui/components';
+import { useCallback, useState } from 'react';
+import { Modal, Field, Button, Select, useModal, useToast, type HostedModalProps, type ModalFormDefinition } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoStatus, TodoVisibility } from '../../types';
 import { currentAuthMode } from '../../query';
 import { todoVisibilityVisible } from '../../hostedUI';
 import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel } from './format';
 import { TodoBodyField } from './TodoBodyField';
-import { useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
-import { RunAfterCreation, RunCreationRecovery, useRunAfterCreation } from './RunAfterCreation';
+import { createTodoSubmissionResult, useCreateTodoMutation, type CreateTodoResponse } from './todoMutations';
+import { RunAfterCreation, useRunAfterCreation, type RunAfterCreationState } from './RunAfterCreation';
 import { TodoPRField, todoPRLink } from './TodoPRLink';
 import { TodoVisibilitySelect } from './TodoVisibility';
+import { prTodoHref, prTodoRunRecoveryFormKey } from './prTodoDraft';
+
+export const newTodoFormKey = 'todo:create';
 
 // initialDir picks the workspace to preselect: the current todo's workspace when
 // it's a configured one, otherwise the first workspace.
@@ -26,9 +29,7 @@ export interface CreateTodoParent {
   dir: string;
 }
 
-type CreateTodoFormProps = {
-  onClose: () => void;
-  onCreated: (dir: string, todo: TodoItem) => void;
+type CreateTodoTarget = {
   // defaultDir preselects the workspace (the current todo's) when the dialog opens.
   defaultDir?: string;
 } & (
@@ -36,16 +37,21 @@ type CreateTodoFormProps = {
   | { parent: CreateTodoParent; workspaces?: undefined }
 );
 
-// CreateTodoDialog is a modal form for adding a todo to a chosen workspace, or
-// as a child of `parent`. The form mounts on open, so each opening starts from a
-// fresh draft while prop changes during editing (a re-filtered workspaces list,
-// a new selection) leave the draft alone.
-export function CreateTodoDialog({ open, ...props }: CreateTodoFormProps & { open: boolean }) {
-  if (!open) return null;
-  return <CreateTodoForm {...props} />;
-}
+// CreateTodoDraft is what an opener hands the hosted form. onOpen backs the
+// success toast's "Open todo" so the host can select the todo in place.
+export type CreateTodoDraft = CreateTodoTarget & { onOpen?: (dir: string, todo: TodoItem) => void };
 
-function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: CreateTodoFormProps) {
+type CreateTodoDialogProps = CreateTodoTarget & {
+  hosted: HostedModalProps;
+  onResult: (dir: string, result: CreateTodoResponse, run: RunAfterCreationState['submitted']) => void;
+};
+
+// CreateTodoDialog is the form for adding a todo to a chosen workspace, or as a
+// child of `parent`. It submits in the background: the hosted modal minimizes
+// into a "Submitting…" card while the request runs, and reopens with the draft
+// and the error if the server refuses it.
+export function CreateTodoDialog({ hosted, onResult, workspaces, parent, defaultDir }: CreateTodoDialogProps) {
+  const { modalProps, submit: submitHosted } = hosted;
   const [chosenDir, setDir] = useState(() => initialDir(defaultDir, workspaces ?? []));
   const dir = parent ? parent.dir : chosenDir;
   const [title, setTitle] = useState('');
@@ -56,33 +62,32 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
   const [error, setError] = useState('');
   const showVisibility = todoVisibilityVisible(currentAuthMode());
   const [visibility, setVisibility] = useState<TodoVisibility>('private');
-  const [created, setCreated] = useState<CreateTodoResponse | null>(null);
   const runAfter = useRunAfterCreation({ dir, status });
-  // The paste listener lives only while the form is mounted, i.e. while open.
-  const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
+  // The form stays mounted while minimized, so pasting elsewhere must not attach.
+  const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: !modalProps.minimized });
   const createTodo = useCreateTodoMutation(dir);
   const busy = createTodo.isPending;
 
   async function submit() {
-    if (!title.trim() || !dir || busy || created) return;
+    if (!title.trim() || !dir || busy || runAfter.blocked) return;
     setError('');
     try {
+      const runFields = runAfter.capture();
       // /api/todos/new accepts both JSON and multipart; post the image bytes as
       // multipart when screenshots are attached, otherwise the lighter JSON path.
       const fields = {
-        title, body, priority, status, pr: todoPRLink(prURL),
-        ...(runAfter.step ? { step: runAfter.step } : {}),
+        title, body, priority, status, ...runFields, pr: todoPRLink(prURL),
         ...(parent ? { parent: parent.ref } : {}),
         ...(showVisibility ? { visibility } : {}),
       };
-      const result = await createTodo.mutateAsync(attachments.length
+      const mutation = attachments.length
         ? { body: todoFormData(fields, attachments) }
-        : {
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(fields),
-          });
-      if (result.run?.status === 'failed') setCreated(result);
-      else onCreated(dir, result.todo);
+        : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) };
+      await submitHosted({
+        draft: {},
+        request: () => createTodoSubmissionResult(() => createTodo.mutateAsync(mutation)),
+        onSuccess: result => onResult(dir, result, runFields.step ? { dir, ...runFields, step: runFields.step } : null),
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create todo');
     }
@@ -90,19 +95,18 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
 
   return (
     <Modal
-      open
-      onClose={onClose}
-      title={parent ? 'New child todo' : 'New todo'}
+      {...modalProps}
+      title={parent ? 'New child todo' : modalProps.title}
+      error={error || modalProps.error}
       size="xl"
-      footer={created ? undefined :
+      footer={
         <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} loading={busy} disabled={!title.trim() || !dir}>Add todo</Button>
+          <Button variant="outline" onClick={modalProps.onClose}>Cancel</Button>
+          <Button onClick={submit} loading={busy} disabled={!title.trim() || !dir || runAfter.blocked}>Add todo</Button>
         </div>
       }
     >
-      {created ? <RunCreationRecovery result={created} dir={dir} step={runAfter.step} onDone={() => onCreated(dir, created.todo)} /> : <div className="space-y-3">
-        {error && <div className="text-sm text-destructive">{error}</div>}
+      <div className="space-y-3">
         {parent ? (
           <Field label="Child of">
             <div className={`${inputClass} truncate`} title={parent.title}>{parent.title}</div>
@@ -157,7 +161,40 @@ function CreateTodoForm({ onClose, workspaces, parent, onCreated, defaultDir }: 
         <Field label="Screenshot">
           <ScreenshotPicker previews={previews} onAdd={add} onRemove={remove} disabled={busy} />
         </Field>
-      </div>}
+      </div>
     </Modal>
   );
+}
+
+function HostedCreateTodoDialog({ initialDraft, modalProps, submit }: HostedModalProps) {
+  const draft = initialDraft as CreateTodoDraft;
+  const { onOpen } = draft;
+  const { openModal } = useModal();
+  const { toast } = useToast();
+
+  function onResult(dir: string, result: CreateTodoResponse, run: RunAfterCreationState['submitted']) {
+    if (result.run?.status === 'failed' && run) {
+      openModal(prTodoRunRecoveryFormKey, { result, run });
+      return;
+    }
+    const { todo } = result;
+    toast({
+      tone: 'success',
+      message: <>Todo created. {onOpen
+        ? <Button type="button" variant="link" size="sm" className="h-auto p-0 text-inherit underline" onClick={() => onOpen(dir, todo)}>Open todo</Button>
+        : <a className="underline" href={prTodoHref(todo.ref)}>Open todo</a>}</>,
+    });
+  }
+
+  return <CreateTodoDialog {...draft} hosted={{ initialDraft, modalProps, submit }} onResult={onResult} />;
+}
+
+export const todoForms = {
+  [newTodoFormKey]: { title: 'New todo', Form: HostedCreateTodoDialog },
+} satisfies Record<string, ModalFormDefinition>;
+
+/** Opens the new-todo form in the app's modal host. */
+export function useOpenCreateTodo() {
+  const { openModal } = useModal();
+  return useCallback((draft: CreateTodoDraft) => openModal(newTodoFormKey, draft), [openModal]);
 }

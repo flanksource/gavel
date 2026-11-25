@@ -232,6 +232,62 @@ describe('ProjectCommitTasks', () => {
     expect(onComplete).not.toHaveBeenCalled();
   });
 
+  it('shows a successful run as one line until it is expanded', async () => {
+    const terminal = snapshots.map(snapshot => ({
+      ...snapshot, status: 'success', controls: [], startedAt: '2026-11-19T10:00:00Z', finishedAt: '2026-11-19T10:00:16.5Z',
+    }));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => ({
+      ok: true,
+      json: async () => String(input).includes('/tasks?')
+        ? [{ id: 'commit-run-1', name: 'Commit gavel', status: 'success', total: 1, completed: 1, failed: 0, running: 0 }]
+        : terminal,
+    }) as Response));
+
+    renderWithClient(createClient(),
+      <ProjectCommitTasks projectName="gavel" onLockedFilesChange={vi.fn()} onErrorChange={vi.fn()} onComplete={vi.fn()} onRunChange={vi.fn()} />,
+    );
+
+    const summary = await screen.findByRole('button', { name: /Commit gavel/ });
+    expect({
+      text: summary.textContent,
+      expanded: summary.getAttribute('aria-expanded'),
+      progress: screen.queryByRole('button', { name: 'Stop group' }),
+    }).toEqual({ text: 'Commit gavelCommit one.go1/116.5 s', expanded: 'false', progress: null });
+
+    fireEvent.click(summary);
+    expect(summary.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Stop group' })).toBeTruthy();
+  });
+
+  const PR_URL = 'https://github.com/acme/gavel/pull/42';
+  const withPR = (status: string) => snapshots.map(snapshot => ({
+    ...snapshot, status, controls: [],
+    ...(snapshot.type === 'task' ? { details: { pr: { number: 42, url: PR_URL, title: 'feat: one', created: true } } } : {}),
+  }));
+
+  it.each([
+    { name: 'beside a successful run\'s one-line summary', status: 'success' },
+    { name: 'above a failed run\'s expanded progress', status: 'failed' },
+  ])('links the PR the run opened $name', async ({ status }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => withPR(status) }) as Response));
+    renderWithClient(createClient(),
+      <ProjectCommitTasks projectName="gavel" preferredRunId="commit-run-1" onLockedFilesChange={vi.fn()} onErrorChange={vi.fn()} onComplete={vi.fn()} onRunChange={vi.fn()} />,
+    );
+
+    const link = await screen.findByRole('link', { name: 'PR #42' });
+    expect({ href: link.getAttribute('href'), target: link.getAttribute('target'), title: link.getAttribute('title') })
+      .toEqual({ href: PR_URL, target: '_blank', title: 'Opened "feat: one"' });
+  });
+
+  it('keeps a failed run expanded so its retry stays in reach', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => failedSnapshots }) as Response));
+    renderWithClient(createClient(),
+      <ProjectCommitTasks projectName="gavel" preferredRunId="commit-run-1" onLockedFilesChange={vi.fn()} onErrorChange={vi.fn()} onComplete={vi.fn()} onRunChange={vi.fn()} />,
+    );
+    expect(await screen.findByRole('button', { name: 'Retry group' })).toBeTruthy();
+    expect(document.querySelector('[data-commit-run-summary]')).toBeNull();
+  });
+
   it('coalesces duplicate controls while a matching mutation is pending', async () => {
     const client = createClient();
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');

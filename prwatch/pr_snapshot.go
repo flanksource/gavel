@@ -60,7 +60,21 @@ func downloadPRSnapshot(opts github.Options, prNumber int, fetchPR prFetcher, do
 	if len(artifacts) == 0 {
 		return nil, fmt.Errorf("PR #%d has no gavel result artifacts — no gavel sticky comment found on the PR", pr.Number)
 	}
+	merged, err := mergeArtifactSnapshots(opts, artifacts, download)
+	if err != nil {
+		return nil, fmt.Errorf("PR #%d: %w", pr.Number, err)
+	}
+	return merged, nil
+}
 
+// MergeArtifactSnapshots downloads each artifact and concatenates their tests
+// and lint into one snapshot — the unified view across a PR's matrix shards.
+// An artifact without a results payload is skipped; none having one fails.
+func MergeArtifactSnapshots(opts github.Options, artifacts []github.GavelArtifact) (*testui.Snapshot, error) {
+	return mergeArtifactSnapshots(opts, artifacts, github.DownloadArtifact)
+}
+
+func mergeArtifactSnapshots(opts github.Options, artifacts []github.GavelArtifact, download artifactDownloader) (*testui.Snapshot, error) {
 	merged := &testui.Snapshot{}
 	found := 0
 	for _, artifact := range artifacts {
@@ -87,7 +101,7 @@ func downloadPRSnapshot(opts github.Options, prNumber int, fetchPR prFetcher, do
 		merged.Status.LintRun = merged.Status.LintRun || len(snap.Lint) > 0
 	}
 	if found == 0 {
-		return nil, fmt.Errorf("PR #%d: none of the %d gavel artifacts contained a results payload", pr.Number, len(artifacts))
+		return nil, fmt.Errorf("none of the %d gavel artifacts contained a results payload", len(artifacts))
 	}
 	return merged, nil
 }

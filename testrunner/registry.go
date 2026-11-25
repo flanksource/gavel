@@ -72,20 +72,19 @@ func (r *Registry) GetParser(name string) (parsers.ResultParser, bool) {
 	return parser, ok
 }
 
-// DetectAll returns all frameworks that are detected in the working directory.
-func (r *Registry) DetectAll() ([]Framework, error) {
-	var detected []Framework
-
+// DetectAll asks every runner to parse argv against cwd and returns the
+// options of each framework present there.
+func (r *Registry) DetectAll(cwd string, argv []string) (map[Framework]*runners.TestOptions, error) {
+	detected := map[Framework]*runners.TestOptions{}
 	for framework, runner := range r.runners {
-		found, err := runner.Detect(r.workDir)
+		opts, err := runner.Detect(cwd, argv)
 		if err != nil {
 			return nil, fmt.Errorf("failed to detect %s: %w", framework, err)
 		}
-		if found {
-			detected = append(detected, framework)
+		if opts != nil {
+			detected[framework] = opts
 		}
 	}
-
 	return detected, nil
 }
 

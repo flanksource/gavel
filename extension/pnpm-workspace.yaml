@@ -1,0 +1,7 @@
+allowBuilds:
+  "@flanksource/clicky-ui": true
+  esbuild: set this to true or false
+  sharp: set this to true or false
+minimumReleaseAgeExclude:
+  - '@flanksource/clicky-ui@0.3.60 || 0.3.75'
+  - '@flanksource/page-runtime@0.1.1'

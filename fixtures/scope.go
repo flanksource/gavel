@@ -12,7 +12,7 @@ import (
 
 	"github.com/flanksource/gavel/internal/safefs"
 
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // StepScope is the state one fixture run shares across its steps: the
@@ -30,7 +30,20 @@ type StepScope struct {
 	background []namedBackground
 	tmpDir     string
 	failed     string
+	resumed    bool
 	closed     bool
+}
+
+// beforeResume reports whether step id comes before from in a run resumed at
+// from: true for every step until from itself is reached, in file order, but
+// for the params step, which every run resolves.
+func (s *StepScope) beforeResume(id, from string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id == from {
+		s.resumed = true
+	}
+	return !s.resumed && id != ParamsStepID
 }
 
 // MarkFailed records the first typed step that failed; later steps are skipped.
@@ -271,7 +284,7 @@ func renderGoTemplate(text string, vars map[string]any) (string, error) {
 	if !strings.Contains(text, "{{") {
 		return text, nil
 	}
-	out, err := gomplate.RunTemplate(vars, gomplate.Template{Template: text})
+	out, err := gomplate.RunTemplate(vars, gomplate.Template{Template: text, Strict: true})
 	if err != nil {
 		return "", fmt.Errorf("render %q: %w", text, err)
 	}

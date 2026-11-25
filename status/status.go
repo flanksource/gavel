@@ -164,7 +164,7 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	raw, err := runGitStatus(ctx, workDir, opts.GitConfig, len(cfg.Commit.GitIgnore) > 0)
+	raw, err := runGitStatus(ctx, workDir, opts.GitConfig)
 	if err != nil {
 		return nil, err
 	}

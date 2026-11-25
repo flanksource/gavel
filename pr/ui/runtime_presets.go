@@ -50,7 +50,7 @@ func (s *Server) handleSettingsRuntimePresets(w http.ResponseWriter, r *http.Req
 
 func (s *Server) runtimePresetDir(r *http.Request) (string, error) {
 	if project := strings.TrimSpace(r.URL.Query().Get("project")); project != "" {
-		configured, err := GetProject(project)
+		configured, err := getProject(r.Context(), project)
 		if err != nil {
 			return "", err
 		}

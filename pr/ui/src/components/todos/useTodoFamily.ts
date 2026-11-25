@@ -11,11 +11,11 @@ const loading: TodoFamilyStatus = { state: 'loading' };
 // the listing is fetched whole, so children and candidate parents need no
 // request of their own. Spread the result onto TodoDetail.
 //
-// `familyStatus` says whether that list can be trusted: before the first batch
+// `familyStatus` says whether that list can be trusted: before the first list
 // arrives, or after it fails, the family is empty because nothing is known, not
 // because the todo has no children.
-export function useTodoFamily({ byDir, selected, detail, select, listReady, error, errorsByDir }:
-  Pick<WorkspaceTodos, 'byDir' | 'selected' | 'detail' | 'select' | 'listReady' | 'error' | 'errorsByDir'>) {
+export function useTodoFamily({ byDir, selected, detail, select, listReady, error }:
+  Pick<WorkspaceTodos, 'byDir' | 'selected' | 'detail' | 'select' | 'listReady' | 'error'>) {
   const items = (selected ? byDir[selected.dir]?.items : undefined) ?? noTodos;
   const family = useMemo(() => (detail ? {
     childTodos: childrenOf(items, detail.id),
@@ -23,8 +23,7 @@ export function useTodoFamily({ byDir, selected, detail, select, listReady, erro
     parentCandidates: parentCandidates(items, detail),
   } : { childTodos: noTodos, parentTodo: null, parentCandidates: noTodos }), [items, detail]);
   const dir = selected?.dir;
-  const workspaceError = dir === undefined ? undefined : errorsByDir[dir]?.message;
-  const message = workspaceError ?? (listReady ? '' : error);
+  const message = listReady ? '' : error;
   const familyStatus = useMemo<TodoFamilyStatus>(() => {
     if (message) return { state: 'error', message };
     return listReady ? ready : loading;
@@ -52,7 +51,7 @@ function useStableMap<V>(next: Map<string, V>, same: (x: V, y: V) => boolean): M
   const stable = sameEntries(kept.current, next, same) ? kept.current : next;
   useEffect(() => {
     kept.current = stable;
-  });
+  }, [stable]);
   return stable;
 }
 

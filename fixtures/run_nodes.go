@@ -3,12 +3,21 @@ package fixtures
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/flanksource/clicky/task"
-	"github.com/goccy/go-yaml"
+	dbcontext "github.com/flanksource/commons-db/context"
+	flanksourceContext "github.com/flanksource/commons/context"
 )
+
+// withRunSecrets is ctx keeping every secret resolved under it until the run
+// ends, so a connection its setups and steps share is authorized once. ctx's
+// own logger is kept: NewContext would set the standard one over it.
+func withRunSecrets(ctx context.Context) context.Context {
+	return dbcontext.NewContext(ctx, flanksourceContext.WithLogger(flanksourceContext.LoggerFromContext(ctx))).WithSecretTTL(0)
+}
 
 // RunNodes executes every test node in a fixture tree and returns one result per
 // test, in tree order, plus the execution snapshot the run ended on.
@@ -38,6 +47,7 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	if opts.ProcessRuntime.Isolated() {
 		return runNodesIsolated(ctx, nodes, opts)
 	}
+	ctx = withRunSecrets(ctx)
 	if opts.Context == nil {
 		opts.Context = ctx
 	}
@@ -53,12 +63,23 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	if err := reporter.Publish(ctx); err != nil {
 		return nil, nil, fmt.Errorf("fixtures: publish queued fixture progress: %w", err)
 	}
+	setup, err := prepareNodeSetup(ctx, nodes, opts)
+	if err != nil {
+		return nil, nil, err
+	}
 	ownScope := opts.Scope == nil
 	if ownScope {
-		opts.Scope = NewStepScope(scopeSeed(opts.Setup, firstFrontMatter(nodes), nil))
+		seed := opts.Setup
+		if setup != nil {
+			seed = setup.prepared()
+		}
+		opts.Scope = NewStepScope(scopeSeed(seed, firstFrontMatter(nodes), nil))
+	}
+	if err := setup.attach(opts.Scope, ownScope); err != nil {
+		return nil, nil, errors.Join(err, setup.setups.cleanup())
 	}
 	previous := append([]FixtureResult(nil), opts.PreviousResults...)
-	results, err := runNodeTree(ctx, nodes, opts, reporter, &previous)
+	results, err := runNodeTree(ctx, nodes, opts, reporter, &previous, setup)
 	if ownScope {
 		results = append(results, teardownResults(ctx, opts.Scope)...)
 	}
@@ -66,7 +87,7 @@ func RunNodes(ctx context.Context, nodes []*FixtureNode, opts RunOptions) ([]Fix
 	return results, &snapshot, err
 }
 
-func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, reporter *ExecutionReporter, previous *[]FixtureResult) ([]FixtureResult, error) {
+func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, reporter *ExecutionReporter, previous *[]FixtureResult, setup *nodeSetup) ([]FixtureResult, error) {
 	var results []FixtureResult
 	for _, node := range nodes {
 		if node == nil {
@@ -81,14 +102,17 @@ func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, rep
 			nodeOpts.Progress = func(done, total int) error {
 				return reporter.UpdateFixture(ctx, node, done, total)
 			}
-			result := RunNode(ctx, *node.Test, nodeOpts)
+			nodeCtx := withFixtureOutput(withFixtureWaiting(ctx, func(waiting bool) error {
+				return reporter.SetFixtureWaiting(ctx, node, waiting)
+			}), reporter.OutputWriter(ctx, node))
+			result := setup.run(nodeCtx, *node.Test, nodeOpts)
 			results = append(results, result)
 			*previous = append(*previous, result)
 			if err := reporter.CompleteFixture(ctx, node, result); err != nil {
 				return results, err
 			}
 		}
-		childResults, err := runNodeTree(ctx, node.Children, opts, reporter, previous)
+		childResults, err := runNodeTree(ctx, node.Children, opts, reporter, previous, setup)
 		results = append(results, childResults...)
 		if err != nil {
 			return results, err
@@ -108,6 +132,7 @@ func runNodeTree(ctx context.Context, nodes []*FixtureNode, opts RunOptions, rep
 // that is torn down before RunNode returns, folding a background verdict into
 // the result's children and a teardown failure into its error.
 func RunNode(ctx context.Context, test FixtureTest, opts RunOptions) FixtureResult {
+	ctx = withRunSecrets(ctx)
 	var result FixtureResult
 	if opts.Scope == nil {
 		opts.Scope = NewStepScope(scopeSeed(opts.Setup, test.FrontMatter, nil))
@@ -183,9 +208,9 @@ func SplitFrontMatter(markdown string) (*FrontMatter, string, error) {
 		return nil, "", fmt.Errorf("unterminated YAML front matter: no closing --- delimiter")
 	}
 
-	var frontMatter FrontMatter
-	if err := yaml.Unmarshal([]byte(strings.Join(frontMatterLines, "\n")), &frontMatter); err != nil {
-		return nil, "", fmt.Errorf("failed to parse YAML front-matter: %w", err)
+	frontMatter, err := unmarshalFrontMatter([]byte(strings.Join(frontMatterLines, "\n")))
+	if err != nil {
+		return nil, "", err
 	}
 
 	var contentLines []string
@@ -195,7 +220,7 @@ func SplitFrontMatter(markdown string) (*FrontMatter, string, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, "", err
 	}
-	return &frontMatter, strings.Join(contentLines, "\n"), nil
+	return frontMatter, strings.Join(contentLines, "\n"), nil
 }
 
 // maxFrontMatterLineBytes bounds one scanned line. A fixture document can embed

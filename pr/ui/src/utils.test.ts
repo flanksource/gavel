@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { aggregateGavelShards, failedTestsLabel } from './utils';
+import { describe, expect, it, vi } from 'vitest';
+import { aggregateGavelShards, failedTestsLabel, timeAgo } from './utils';
 import type { GavelResultsSummary } from './types';
 
 function makeShard(overrides: Partial<GavelResultsSummary> = {}): GavelResultsSummary {
@@ -46,5 +46,25 @@ describe('failedTestsLabel', () => {
     ['all timed out', { testsFailed: 2, testsTimedOut: 2 }, '2 failed (2 timed out)'],
   ])('renders %s', (_name, counts, expected) => {
     expect(failedTestsLabel(counts)).toBe(expected);
+  });
+});
+
+describe('timeAgo', () => {
+  const now = Date.parse('2026-11-18T12:00:00Z');
+  const at = (secondsAgo: number) => new Date(now - secondsAgo * 1000).toISOString();
+  it.each([
+    [2, 'just now'],
+    [42, '42s ago'],
+    [5 * 60, '5m ago'],
+    [3 * 3600, '3h ago'],
+    [2 * 86400, '2d ago'],
+  ])('formats %ss before now as %s', (secondsAgo, expected) => {
+    vi.useFakeTimers({ now });
+    expect(timeAgo(at(secondsAgo))).toBe(expected);
+    vi.useRealTimers();
+  });
+
+  it('names an unparseable timestamp instead of printing NaN', () => {
+    expect(timeAgo('not a date')).toBe('unknown');
   });
 });

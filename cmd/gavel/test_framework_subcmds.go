@@ -9,6 +9,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var testFrameworkHelp = map[parsers.Framework]struct{ title, scope, example string }{
+	parsers.GoTest:     {"Go tests", "Pass Go package directories or a _test.go file.", "./pkg/parser -- -run TestParser -count=1"},
+	parsers.Ginkgo:     {"Ginkgo specs", "Pass Go package directories or a Ginkgo spec file.", "./pkg/parser -- --label-filter integration --focus Parser"},
+	parsers.Jest:       {"Jest tests", "Pass a Jest project directory or a test file.", "./web -- --testNamePattern parser"},
+	parsers.Vitest:     {"Vitest tests", "Pass a Vitest project directory or a test file.", "./web -- --testNamePattern parser"},
+	parsers.Playwright: {"Playwright tests", "Pass a Playwright project directory or a spec file.", "./web -- --project chromium --grep login"},
+}
+
 // registerTestFrameworkSubcommands wires `gavel test <framework>` commands.
 // Each subcommand mirrors `gavel test`'s flag surface (clicky re-binds them
 // against a fresh RunOptions) and pins Frameworks before delegating to
@@ -19,7 +27,6 @@ func registerTestFrameworkSubcommands() {
 		panic("testCmd must be initialized before registering framework subcommands")
 	}
 	for _, fw := range parsers.AllFrameworks {
-		fw := fw
 		name := frameworkSubcommandName(fw)
 		var flags testCommandFlags
 		var sub *cobra.Command
@@ -31,7 +38,14 @@ func registerTestFrameworkSubcommands() {
 			opts.Frameworks = []string{string(fw)}
 			return runTests(opts, detach)
 		})
-		sub.Short = fmt.Sprintf("Run only %s tests", fw)
+		help, ok := testFrameworkHelp[fw]
+		if !ok {
+			panic(fmt.Sprintf("missing framework help for %s", fw))
+		}
+		sub.Use = fmt.Sprintf("%s [flags] [path...] [-- %s args...]", name, fw)
+		sub.Short = "Run " + help.title
+		sub.Long = sub.Short + ".\n\n" + help.scope + " Use --focus for a test name pattern, or put runner arguments after --."
+		sub.Example = "  " + sub.CommandPath() + " " + help.example
 		bindTestCommandFlags(sub, &flags)
 		if err := sub.Flags().MarkHidden("framework"); err != nil {
 			panic(fmt.Sprintf("hide --framework on %s subcommand: %v", name, err))

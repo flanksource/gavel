@@ -82,6 +82,7 @@ func stepEnvelopeProperties(traces map[string]any) map[string]any {
 		"traces":          traces,
 		"id":              map[string]any{"type": "string", "description": "Step id; later steps read its outputs as steps.<id>."},
 		"name":            map[string]any{"type": "string"},
+		"if":              map[string]any{"type": "string", "description": "CEL gate over env, steps and earlier steps' outputs by id; false skips the step."},
 		"cel":             map[string]any{"type": "string", "description": "CEL verdict over the step's outputs, env and steps."},
 		"export":          map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": `Env vars for later steps: NAME: "{{.outputs.x}}"; "*" exports a map; "" suppresses a kind default.`},
 		"override":        map[string]any{"type": "boolean", "description": "Allow re-exporting a name an earlier step exported."},
@@ -128,6 +129,7 @@ func DocumentSchema(overrides map[string]json.RawMessage) (map[string]any, error
 			"name":     map[string]any{"type": "string"},
 			"defaults": defaults,
 			"setup":    map[string]any{"type": "object", "description": "Same as the markdown front-matter setup:."},
+			"params":   map[string]any{"type": "object", "description": "JSON Schema of the run parameters, asked as a leading `params` form step unless --param/--params satisfy it."},
 			"env":      map[string]any{"type": "object", "additionalProperties": map[string]any{"type": []string{"string", "number", "boolean"}}},
 			"traces":   traces,
 			"steps":    map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"oneOf": branches}},
@@ -158,6 +160,14 @@ func stepBranchSchema(name string, raw json.RawMessage, traces map[string]any) (
 		if value, ok := config[key]; ok {
 			branch[key] = value
 		}
+	}
+	if name == "exec" {
+		branch["required"] = required[1:]
+		constraints, _ := branch["allOf"].([]any)
+		branch["allOf"] = append(constraints, map[string]any{"anyOf": []any{
+			map[string]any{"required": []string{"kind"}},
+			map[string]any{"required": []string{"exec"}},
+		}})
 	}
 	if branch["definitions"] != nil || branch["$defs"] != nil {
 		branch["$id"] = "kind://" + name + ".json"

@@ -10,7 +10,7 @@ import (
 
 	"github.com/flanksource/gavel/internal/safefs"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -47,8 +47,8 @@ var _ = Describe("runInteractiveStaging", func() {
 		}
 		var resetCalled bool
 		var added []string
-		resetAllStagedFn = func(string) error { resetCalled = true; return nil }
-		addFilesFunc = func(_ string, files []string) error { added = files; return nil }
+		resetAllStagedFn = func(context.Context, string) error { resetCalled = true; return nil }
+		addFilesFunc = func(_ context.Context, opts addFilesOptions) error { added = opts.Files; return nil }
 
 		paths, err := runInteractiveStaging(context.TODO(), opts)
 		Expect(err).ToNot(HaveOccurred())
@@ -77,12 +77,12 @@ var _ = Describe("runInteractiveStaging", func() {
 		var rmPaths []string
 		var rmCalledBeforeAdd bool
 		var addCalled bool
-		gitRmCachedFunc = func(_ string, paths []string) error {
+		gitRmCachedFunc = func(_ context.Context, _ string, paths []string) error {
 			rmPaths = paths
 			rmCalledBeforeAdd = !addCalled
 			return nil
 		}
-		addFilesFunc = func(_ string, _ []string) error { addCalled = true; return nil }
+		addFilesFunc = func(_ context.Context, _ addFilesOptions) error { addCalled = true; return nil }
 
 		_, err := runInteractiveStaging(context.TODO(), opts)
 		Expect(err).ToNot(HaveOccurred())
@@ -359,41 +359,30 @@ func writeRepoFile(dir, name, content string) {
 }
 
 func updateKey(m treeModel, key string) (treeModel, tea.Cmd) {
-	msg := tea.KeyMsg{Runes: []rune(key)}
+	msg := tea.KeyPressMsg{Text: key}
 	switch key {
 	case "up":
-		msg.Type = tea.KeyUp
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
-		msg.Type = tea.KeyDown
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyDown}
 	case "left":
-		msg.Type = tea.KeyLeft
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyLeft}
 	case "right":
-		msg.Type = tea.KeyRight
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyRight}
 	case "enter":
-		msg.Type = tea.KeyEnter
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
-		msg.Type = tea.KeyEsc
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyEscape}
 	case "backspace":
-		msg.Type = tea.KeyBackspace
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: tea.KeyBackspace}
 	case "ctrl+u":
-		msg.Type = tea.KeyCtrlU
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
 	case "ctrl+c":
-		msg.Type = tea.KeyCtrlC
-		msg.Runes = nil
+		msg = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	case " ":
-		msg.Type = tea.KeySpace
-	default:
-		msg.Type = tea.KeyRunes
+		msg.Code = tea.KeySpace
 	}
-	out, cmd := m.handleKey(msg)
+	out, cmd := m.Update(msg)
 	return out.(treeModel), cmd
 }
 
@@ -440,9 +429,9 @@ func installOrchestratorStubs() func() {
 	prevPicker := runTreePickerFunc
 	prevSummaries := startCandidateSummariesFunc
 	gatherStatusFunc = func(string) (*status.Result, error) { return &status.Result{}, nil }
-	resetAllStagedFn = func(string) error { return nil }
-	addFilesFunc = func(string, []string) error { return nil }
-	gitRmCachedFunc = func(string, []string) error { return nil }
+	resetAllStagedFn = func(context.Context, string) error { return nil }
+	addFilesFunc = func(context.Context, addFilesOptions) error { return nil }
+	gitRmCachedFunc = func(context.Context, string, []string) error { return nil }
 	runTreePickerFunc = func([]status.FileStatus, string, <-chan status.AISummaryUpdate) (treePickerResult, error) {
 		return treePickerResult{}, nil
 	}

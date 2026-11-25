@@ -93,6 +93,10 @@ func buildPromptDetailResponse(input promptDetailInput) promptDetailResponse {
 func (s *Server) handleSettingsPromptDetail(w http.ResponseWriter, r *http.Request) {
 	desc, ok := findRegisteredPrompt(r.PathValue("id"))
 	if !ok {
+		if strings.HasPrefix(r.PathValue("id"), libraryPromptPrefix) {
+			s.handleLibraryPromptDetail(w, r)
+			return
+		}
 		respondError(w, http.StatusNotFound, "unknown prompt "+r.PathValue("id"))
 		return
 	}
@@ -169,7 +173,7 @@ func (s *Server) putPromptDetail(w http.ResponseWriter, r *http.Request, desc pr
 			return
 		}
 		*ov = verify.PromptSpec{}
-		if err := verify.SaveGavelConfig(dir, cfg); err != nil {
+		if err := verify.SaveGavelConfig(filepath.Join(dir, verify.GavelConfigFileName), cfg); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

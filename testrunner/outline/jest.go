@@ -14,7 +14,7 @@ import (
 )
 
 func collectJestTests(ctx context.Context, workDir string, filters []string) ([]*Entry, error) {
-	packages, err := runners.NewJest(workDir).DiscoverPackages(workDir, true)
+	packages, err := runners.NewJest(workDir).DiscoverPackages(runners.TestOptions{Cwd: workDir, Recursive: true})
 	if err != nil {
 		return nil, fmt.Errorf("discover jest packages: %w", err)
 	}
