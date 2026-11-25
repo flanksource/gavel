@@ -101,3 +101,7 @@ go.work.sum
 /.new
 pr/ui/test-results/
 /pico.save
+/site/
+!/docs/content/public/media/*.png
+go.work*
+/.telltale/

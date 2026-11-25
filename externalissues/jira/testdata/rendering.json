@@ -1,0 +1,23 @@
+{
+  "key": "EXAMPLE-42",
+  "summary": "For <customers> use *literal*",
+  "url": "https://example.test/browse/EXAMPLE-42",
+  "status": {"name": "Open"},
+  "assignee": {"accountId": "alex", "displayName": "Alex", "url": "https://example.test/people/alex"},
+  "project": {"key": "EXAMPLE", "name": "Example", "url": "https://example.test/project"},
+  "description": "A useful description with <customers> and *literal* text.",
+  "labels": ["imports", "retry"],
+  "customfield_team": {"id": "team-internal-id", "name": "Platform", "url": "https://example.test/team", "active": false},
+  "customfield_unknown": {"nested": "retained", "count": 9007199254740993},
+  "customfield_doc": {"type": "doc", "version": 1, "content": [
+    {"type": "paragraph", "content": [{"type": "text", "text": "Use "}, {"type": "text", "text": "run()", "marks": [{"type": "code"}]}, {"type": "text", "text": "."}]},
+    {"type": "bulletList", "content": [{"type": "listItem", "content": [
+      {"type": "paragraph", "content": [{"type": "text", "text": "Parent"}]},
+      {"type": "bulletList", "content": [{"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Child"}]}]}]}
+    ]}]}
+  ]},
+  "customfield_null": null,
+  "customfield_false": false,
+  "comments": [{"id": "comment-1", "author": {"accountId": "alex", "displayName": "Alex", "url": "https://example.test/people/alex"}, "created": "2026-01-01T10:00:00Z", "updated": "2026-01-02T11:00:00Z", "body": "private comment body"}],
+  "attachment": [{"id": "file-1", "filename": "report.pdf", "content": "https://example.test/report.pdf", "mimeType": "application/pdf", "size": 2048, "author": {"displayName": "Alex"}}]
+}

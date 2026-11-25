@@ -72,7 +72,7 @@ func TestRenderRunGroup(t *testing.T) {
 	if !strings.Contains(string(req.Prompt.SchemaJSON), `"event"`) {
 		t.Errorf("run envelope schema missing event: %s", req.Prompt.SchemaJSON)
 	}
-	if req.Prompt.SchemaStrictness != api.SchemaStrictnessRetry {
+	if req.Prompt.SchemaStrictness != api.SchemaStrictnessRepair {
 		t.Errorf("run schema strictness = %q, want retry", req.Prompt.SchemaStrictness)
 	}
 	if strings.Contains(req.Prompt.User, "conforms to this JSON Schema") {
@@ -114,7 +114,7 @@ func TestRenderFoldsFrontmatter(t *testing.T) {
 	if !strings.Contains(string(req.Prompt.SchemaJSON), `"updated"`) {
 		t.Errorf("plan envelope schema does not enumerate the plan events: %s", req.Prompt.SchemaJSON)
 	}
-	if req.Prompt.SchemaStrictness != api.SchemaStrictnessRetry {
+	if req.Prompt.SchemaStrictness != api.SchemaStrictnessRepair {
 		t.Errorf("plan schema strictness = %q, want retry", req.Prompt.SchemaStrictness)
 	}
 	if req.Prompt.Source != "todos.plan" {

@@ -8,11 +8,10 @@ import type { GavelResultsSummary, PRItem } from '../types';
 // clicky-ui's SplitButton / DropdownMenu pull @floating-ui/react, which resolves
 // a duplicate React 18 under vitest and crashes on render (see PRActions.test.tsx).
 // Stub the components so the test exercises PRDetailPanel's own close-button
-// wiring, not clicky internals. useListMenuSelection is called unconditionally
-// by CreateTodoFromPRDialog (which PRDetailPanel always mounts, closed) before
-// its own `if (!open) return null` — its return value is unused while closed,
-// so the stub only needs to avoid throwing.
+// wiring, not clicky internals.
+const openModal = vi.hoisted(() => vi.fn());
 vi.mock('@flanksource/clicky-ui/components', () => ({
+  useModal: () => ({ openModal }),
   Button: ({ children, onClick, title, disabled, ...rest }: any) => (
     <button onClick={onClick} title={title} disabled={disabled} aria-label={rest['aria-label']}>{children}</button>
   ),
@@ -73,6 +72,27 @@ describe('PRDetailPanel', () => {
 
     expect(screen.queryByLabelText('Close pull request details')).toBeNull();
   });
+
+  it('fires onRefresh from the refresh button and disables it while loading', () => {
+    const onRefresh = vi.fn();
+    const { rerender } = renderPRDetail(<PRDetailPanel pr={makePR()} detail={null} loading={false} onRefresh={onRefresh} />);
+
+    fireEvent.click(screen.getByLabelText('Refresh pull request status'));
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <PRDetailPanel pr={makePR()} detail={null} loading onRefresh={onRefresh} />
+      </QueryClientProvider>,
+    );
+    expect((screen.getByLabelText('Refresh pull request status') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('omits the refresh button when onRefresh is not provided', () => {
+    renderPRDetail(<PRDetailPanel pr={makePR()} detail={null} loading={false} />);
+
+    expect(screen.queryByLabelText('Refresh pull request status')).toBeNull();
+  });
 });
 
 function makeGavelShard(overrides: Partial<GavelResultsSummary> = {}): GavelResultsSummary {
@@ -94,6 +114,24 @@ function makeGavelShard(overrides: Partial<GavelResultsSummary> = {}): GavelResu
 // reason it produced nothing is the only useful thing to show; falling back to
 // "No test, lint, or bench data" reads as if the artifact was never found.
 describe('Gavel Results section', () => {
+  it('names the shards whose results are not from the head commit', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard({ stickyId: 'gavel-unit' }), makeGavelShard({ stickyId: 'gavel-e2e', artifactId: 2, outdated: true })] }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('From an earlier run, not the head commit: gavel-e2e')).toBeTruthy();
+  });
+
+  it('reports workflow runs that could not be loaded', () => {
+    renderPRDetail(<PRDetailPanel pr={makePR()} detail={{ runs: {}, runsError: 'load workflow run 42: status 403' }} loading={false} />);
+
+    expect(screen.getByRole('alert').textContent).toContain('load workflow run 42: status 403');
+  });
+
   const crashMessage = 'pre-build: compiling Go test binaries failed (exit 1)';
 
   it('shows the crash reason, exit code and log tail instead of the no-data text', () => {
@@ -169,17 +207,73 @@ describe('Gavel Results section', () => {
       />,
     );
 
-    // The failing leaf appears in the tree row and again in the detail panel
-    // that carries its message — both come from clicky-ui's test runner, with
-    // the first failure already selected.
+    // The failing test opens as a clicky-ui test runner list row carrying its
+    // message, and the violation as a `gavel lint`-style line under its linter and file.
     expect(screen.getAllByText('saves records').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/expected record to persist/).length).toBeGreaterThan(0);
-    // The lint tree groups linter → rule → file exactly as the results page does.
-    expect(screen.getAllByText('golangci-lint').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('errcheck').length).toBeGreaterThan(0);
+    const file = document.querySelector('[data-lint-list-linter="golangci-lint"] [data-lint-list-file="pkg/store/save.go"]');
+    const line = file?.querySelector('[data-lint-line]');
+    expect([line?.querySelector('[data-lint-location]')?.textContent, line?.querySelector('[data-lint-message]')?.textContent])
+      .toEqual(['pkg/store/save.go:23 (errcheck)', 'return value is not checked']);
     // Counts stay exact even though the payload carries only a sample.
     expect(screen.getByText('showing 1 of 2')).toBeTruthy();
     expect(screen.getByText('showing 1 of 3')).toBeTruthy();
+  });
+
+  it('previews the first five failures across all shards in the overview, linking the rest to the merged results', () => {
+    const failing = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ name: `${prefix}${i + 1}`, failed: true, message: `${prefix} ${i + 1} broke` }));
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [
+            makeGavelShard({ artifactId: 1, stickyId: 'gavel-pg15', testsTotal: 3, testsFailed: 3, failures: failing('Pg15Case', 3) }),
+            makeGavelShard({ artifactId: 2, stickyId: 'gavel-pg16', testsTotal: 4, testsFailed: 4, failures: failing('Pg16Case', 4) }),
+          ],
+        }}
+        loading={false}
+      />,
+    );
+
+    const rows = Array.from(document.querySelectorAll('[data-test-list-row]')).map(row => row.querySelector('[title]')?.getAttribute('title'));
+    const showAll = new URL(screen.getByRole('link', { name: /Show all 7/ }).getAttribute('href')!, 'http://dashboard');
+    expect({
+      rows,
+      path: showAll.pathname,
+      filter: showAll.searchParams.get('filter'),
+      shards: showAll.searchParams.getAll('shard'),
+    }).toEqual({
+      rows: ['Pg15Case1', 'Pg15Case2', 'Pg15Case3', 'Pg16Case1', 'Pg16Case2'],
+      path: `/results/${makePR().repo}/1,2/tests`,
+      filter: 'failed',
+      shards: ['1:gavel-pg15', '2:gavel-pg16'],
+    });
+  });
+
+  it('previews the first five failures as a bare list, without a view toolbar, and links the rest to the full results view', () => {
+    const failures = Array.from({ length: 7 }, (_, i) => ({ name: `TestCase${i + 1}`, failed: true, message: `case ${i + 1} broke` }));
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard({ artifactId: 4242, testsTotal: 9, testsPassed: 2, testsFailed: 7, failures })] }}
+        loading={false}
+      />,
+    );
+
+    const rows = Array.from(document.querySelectorAll('[data-test-list-row]')).map(row => row.querySelector('[title]')?.getAttribute('title'));
+    const showAll = screen.getByRole('link', { name: /Show all 7/ });
+    expect({
+      rows,
+      showing: screen.getByText('showing 5 of 7') !== null,
+      href: new URL(showAll.getAttribute('href')!, 'http://dashboard').pathname + new URL(showAll.getAttribute('href')!, 'http://dashboard').searchParams.get('filter'),
+      toolbar: document.querySelector('[data-test-list-toolbar]'),
+    }).toEqual({
+      rows: ['TestCase1', 'TestCase2', 'TestCase3', 'TestCase4', 'TestCase5'],
+      showing: true,
+      href: `/results/${makePR().repo}/4242/testsfailed`,
+      toolbar: null,
+    });
   });
 
   // A linter that could not run reports zero violations, so it never reaches
@@ -277,6 +371,29 @@ describe('Gavel Results section', () => {
 
     expect(screen.getByTitle('3 failed (1 timed out)')).toBeTruthy();
     expect(screen.getByTitle('2 failed')).toBeTruthy();
+  });
+
+  it('links the multi-shard lint card to every mergeable shard merged into one filterable results page', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [
+            makeGavelShard({ artifactId: 11, stickyId: 'gavel-lint', lintLinters: 7, lintViolations: 1300 }),
+            makeGavelShard({ artifactId: 12, stickyId: 'gavel-test', lintLinters: 1, lintViolations: 12 }),
+            makeGavelShard({ artifactId: 13, stickyId: 'gavel-crashed', error: 'exit status 2' }),
+          ],
+        }}
+        loading={false}
+      />,
+    );
+
+    const href = screen.getByText('Lint').closest('a')!.getAttribute('href')!;
+    const url = new URL(href, 'http://dashboard');
+    expect({ path: url.pathname, shards: url.searchParams.getAll('shard') }).toEqual({
+      path: `/results/${makePR().repo}/11,12/lint`,
+      shards: ['11:gavel-lint', '12:gavel-test'],
+    });
   });
 
   it('omits the reproduce block for a shard with nothing to re-run', () => {

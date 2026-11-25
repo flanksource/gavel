@@ -265,7 +265,7 @@ var _ = Describe("treeModel gitignore action", func() {
 			moveCursorTo(&m, "a/x.log")
 
 			m, _ = updateKey(m, "i")
-			plain := stripANSI(m.View())
+			plain := stripANSI(m.View().Content)
 
 			Expect(plain).To(ContainSubstring("ignore:"))
 			Expect(plain).To(ContainSubstring("f=file"))

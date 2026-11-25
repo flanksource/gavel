@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/projects"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/bulk"
 	todoentity "github.com/flanksource/gavel/todos/entity"
@@ -175,11 +176,11 @@ func todoEntityWorkspaces(ctx context.Context) ([]query.Workspace, error) {
 		}
 		return workspaces, nil
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	ps, err := visibleProjects(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return TodoWorkspaces(projects), nil
+	return projects.TodoWorkspaces(ps), nil
 }
 
 // todoEntityDefaultDir is the workspace an action naming none acts on: this host's working
@@ -201,7 +202,7 @@ func todoEntityWorkspace(ctx context.Context, dir string) (todoruntime.Workspace
 	if entityServer(ctx) != nil {
 		return todoruntime.WorkspaceOptions{}, errEntityHostFiles
 	}
-	project, err := ProjectForDir(dir)
+	project, err := projectForDir(ctx, dir)
 	if err != nil {
 		return todoruntime.WorkspaceOptions{}, err
 	}
@@ -214,18 +215,18 @@ func todoEntityWorkspace(ctx context.Context, dir string) (todoruntime.Workspace
 // repositories, named repo:<id>.
 func todoEntityProjectDir(ctx context.Context, name string) (string, error) {
 	if s := entityServer(ctx); s != nil {
-		projects, err := s.projectList(ctx)
+		infos, err := s.projectList(ctx)
 		if err != nil {
 			return "", err
 		}
-		for _, project := range projects {
+		for _, project := range infos {
 			if project.Name == name {
 				return project.Dir, nil
 			}
 		}
-		return "", fmt.Errorf("%w: %q is not one of this organization's repositories", ErrProjectNotFound, name)
+		return "", fmt.Errorf("%w: %q is not one of this organization's repositories", projects.ErrNotFound, name)
 	}
-	project, err := GetProject(name)
+	project, err := getProject(ctx, name)
 	if err != nil {
 		return "", err
 	}

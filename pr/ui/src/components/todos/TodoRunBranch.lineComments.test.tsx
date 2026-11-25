@@ -12,7 +12,7 @@ vi.mock('@flanksource/clicky-ui/data', async importOriginal => ({
     <div>
       {onLineAction && (
         // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test stand-in for the diff gutter button.
-        <button type="button" onClick={() => onLineAction({ side: 'old', line: 3, content: 'old line' })}>gutter plus</button>
+        <button type="button" onClick={(event) => onLineAction({ side: 'old', line: 3, content: 'old line', element: event.currentTarget })}>gutter plus</button>
       )}
       {lineWidgets?.map(widget => <div key={widget.key}>{widget.node}</div>)}
     </div>

@@ -26,7 +26,7 @@ var _ = Describe("review thread pagination", func() {
 		DeferCleanup(server.Close)
 		GinkgoT().Setenv("GITHUB_API_URL", server.URL)
 		pr := &graphQLPR{ID: "PR_node", ReviewThreads: graphQLReviewThreads{PageInfo: graphQLPageInfo{HasNextPage: true, EndCursor: "cursor-1"}, Nodes: []graphQLReviewThreadNode{{ID: "thread-1"}}}}
-		Expect(completeReviewThreads("test-token", pr)).To(Succeed())
+		Expect(completeReviewThreads(GinkgoT().Context(), "test-token", pr)).To(Succeed())
 		Expect(requests).To(Equal(1))
 		Expect(pr.ReviewThreads.Nodes).To(HaveLen(2))
 		comments := pr.toPRInfo().ReviewThreads

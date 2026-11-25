@@ -27,7 +27,8 @@ func TestUIRSkipPreservesNestedModuleExecution(t *testing.T) {
 			repo := newNestedUIRSkipFixture(t)
 			export := filepath.Join(repo, "uir-run.json")
 			_, err := runTests(testrunner.RunOptions{
-				Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+				Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+				Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 				UIRSkip: true, UIRBinary: newNestedFakeUIR(t, test.selective), UIRExport: export, UIRInputContext: "postgres=test",
 			}, false)
 			if err != nil {

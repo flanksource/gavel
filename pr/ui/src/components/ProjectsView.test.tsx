@@ -16,7 +16,7 @@ vi.mock('../eventHub', () => ({
   openEventStream: (url: string) => new EventSource(url),
 }));
 
-vi.mock('./ProcControl', () => ({ ProcControl: () => null }));
+vi.mock('./ProcControl', () => ({ ProcStatusIcon: () => null, ProcPorts: () => null }));
 vi.mock('./TodoBadge', () => ({ TodoBadge: () => null }));
 vi.mock('./GitChangesBadge', () => ({ GitChangesBadge: () => null }));
 vi.mock('./RelativeTime', () => ({ RelativeTime: ({ iso }: { iso: string }) => <span>{iso}</span> }));
@@ -54,7 +54,7 @@ function ProjectsTab({ configured, selectedName, selectedRunId, enabled = true, 
   resultsEnabled?: boolean;
   projectRef?: string;
 }) {
-  const catalog = useProjectCatalog({ configured, hiddenDirs: [], selectedName, enabled: enabled && historyEnabled });
+  const catalog = useProjectCatalog({ configured, hiddenDirs: [], selectedName, enabled, history: historyEnabled });
   return (
     <div>
       <ProjectsSidebar
@@ -87,7 +87,7 @@ function ProjectsTab({ configured, selectedName, selectedRunId, enabled = true, 
 }
 
 function CatalogProbe({ name, enabled = true }: { name: string; enabled?: boolean }) {
-  const catalog = useProjectCatalog({ configured: [project], hiddenDirs: [], selectedName: 'gavel', enabled });
+  const catalog = useProjectCatalog({ configured: [project], hiddenDirs: [], selectedName: 'gavel', enabled, history: true });
   return <div data-testid={name}>{catalog.runs.length}</div>;
 }
 
@@ -105,11 +105,17 @@ function renderWithClient(ui: ReactElement, client = createClient()) {
 
 function stubRunHistory(payload: unknown) {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => payload }) as Response));
-  vi.stubGlobal('EventSource', vi.fn(() => ({
-    addEventListener: (type: string, listener: EventListener) => streamListeners.set(type, listener),
-    close: vi.fn(),
-    onerror: null,
-  })));
+  // A `function` implementation: vitest mocks of arrow functions cannot be called with `new`.
+  vi.stubGlobal('EventSource', vi.fn(function () {
+    return {
+      addEventListener: (type: string, listener: EventListener) => streamListeners.set(type, listener),
+      removeEventListener: (type: string, listener: EventListener) => {
+        if (streamListeners.get(type) === listener) streamListeners.delete(type);
+      },
+      close: vi.fn(),
+      onerror: null,
+    };
+  }));
 }
 
 afterEach(() => {
@@ -223,7 +229,7 @@ describe('projects tab', () => {
       signal = init?.signal ?? undefined;
       return new Promise<Response>(() => {});
     }));
-    vi.stubGlobal('EventSource', vi.fn(() => ({ addEventListener: vi.fn(), close: vi.fn(), onerror: null })));
+    vi.stubGlobal('EventSource', vi.fn(function () { return { addEventListener: vi.fn(), removeEventListener: vi.fn(), close: vi.fn(), onerror: null }; }));
     const client = createClient();
     const view = renderWithClient(<CatalogProbe name="probe" />, client);
     await waitFor(() => expect(signal).toBeDefined());

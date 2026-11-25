@@ -4,6 +4,7 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/testrunner/runners"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"os"
@@ -61,7 +62,7 @@ var _ = Describe("Shared test runtime", func() {
 		runner, ok := registry.Get(framework)
 		Expect(ok).To(BeTrue())
 		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir}}
-		run, err := o.buildCommand(runner, ".", nil)
+		run, err := o.buildCommand(runner, ".", runners.TestOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(run.Process.Env["RUNTIME_KEY"]).To(Equal("inherited"))
 		Expect(run.Process.Timeout).To(Equal(7 * time.Second))

@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/goccy/go-yaml"
 )
 
 // ParseMarkdownFixtures parses markdown files containing test fixtures
@@ -109,6 +107,8 @@ func parseTableRow(headers, values []string) (*FixtureNode, error) {
 			fixture.TestArch = value
 		case "skip":
 			fixture.TestSkip = value
+		case "if":
+			fixture.If = value
 		case "cli args", "args", "arguments":
 			fixture.Args = strings.Split(value, " ")
 		case "exit code", "exitcode", "expected exit code":
@@ -208,9 +208,9 @@ func parseFrontMatter(file *os.File) (*FrontMatter, string, error) {
 
 	// Parse YAML front-matter
 	frontMatterYAML := strings.Join(frontMatterLines, "\n")
-	var frontMatter FrontMatter
-	if err := yaml.Unmarshal([]byte(frontMatterYAML), &frontMatter); err != nil {
-		return nil, "", fmt.Errorf("failed to parse YAML front-matter: %w", err)
+	frontMatter, err := unmarshalFrontMatter([]byte(frontMatterYAML))
+	if err != nil {
+		return nil, "", err
 	}
 
 	// Collect remaining content
@@ -224,12 +224,12 @@ func parseFrontMatter(file *os.File) (*FrontMatter, string, error) {
 	}
 
 	if len(contentLines) == 0 {
-		return &frontMatter, "", nil
+		return frontMatter, "", nil
 	}
 	// Blank lines stand in for the front matter so that line numbers in the
 	// content are the file's own.
 	padding := strings.Repeat("\n", len(frontMatterLines)+2)
-	return &frontMatter, padding + strings.Join(contentLines, "\n"), nil
+	return frontMatter, padding + strings.Join(contentLines, "\n"), nil
 }
 
 // parseMarkdownContentWithSourceDir parses markdown content with source directory context
@@ -338,6 +338,9 @@ func ParseMarkdownContentWithTree(name, content, sourceDir string, frontMatter *
 
 	if err := expandGlobInRows(fileTree, sourceDir); err != nil {
 		return nil, fmt.Errorf("expand row globs: %w", err)
+	}
+	if err := lowerMarkdownParams(fileTree, frontMatter, strings.TrimSuffix(name, filepath.Ext(name)), sourceDir); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 
 	return fileTree, nil

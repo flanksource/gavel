@@ -51,10 +51,12 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	if err != nil {
 		return todos.RunAdmission{}, err
 	}
-	placement := promptrun.Placement{Sessions: p.launchSessions(launch)}
 	if preparation.Resume && launch.issue.ActivePromptRunID != nil {
 		previousRun, err := p.captain.GetPromptRun(ctx, *launch.issue.ActivePromptRunID)
 		if err != nil {
+			return todos.RunAdmission{}, err
+		}
+		if err := checkResumeProvider(previousRun, preparation.Requested); err != nil {
 			return todos.RunAdmission{}, err
 		}
 		if !terminalPromptRun(previousRun.State) {
@@ -62,9 +64,29 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		}
 		// A terminal operation gets a new prompt run, but continuation keeps the
 		// authoritative Captain/provider session identity.
-		placement = promptrun.Placement{SessionID: previousRun.SessionID}
+		return p.admitLaunch(ctx, launch, promptrun.Placement{SessionID: previousRun.SessionID})
 	}
-	return p.admitLaunch(ctx, launch, placement)
+	sessions, err := p.launchSessions(ctx, launch)
+	if err != nil {
+		return todos.RunAdmission{}, err
+	}
+	return p.admitLaunch(ctx, launch, promptrun.Placement{Sessions: sessions})
+}
+
+// checkResumeProvider refuses a resume whose run resolved a provider family
+// other than the one holding the conversation it continues: the previous
+// provider session id is meaningless to any other family's agent.
+func checkResumeProvider(previousRun *captaindb.PromptRun, requested captaindb.PromptRunRuntimeSelection) error {
+	prior := previousRun.Runtime.Resolved
+	same, err := todos.SameProviderFamily(prior.Provider, requested.Provider)
+	if err != nil {
+		return fmt.Errorf("resume Captain prompt run %s: %w", previousRun.ID, err)
+	}
+	if !same {
+		return fmt.Errorf("%w: Captain prompt run %s ran %s/%s; a %s/%s run cannot resume it",
+			todos.ErrRunResumeProviderMismatch, previousRun.ID, prior.Provider, prior.Model, requested.Provider, requested.Model)
+	}
+	return nil
 }
 
 // planLaunch resolves the step and identity a dispatch runs under, settling an
@@ -147,14 +169,17 @@ func (p *Provider) checkLaunchVersion(ctx context.Context, todo *types.TODO, lau
 
 // launchSessions is the session tree a fresh run is admitted on: the TODO's
 // root and this dispatch's operation session under it.
-func (p *Provider) launchSessions(launch *launchPlan) []captaindb.CreateSessionInput {
+func (p *Provider) launchSessions(ctx context.Context, launch *launchPlan) ([]captaindb.CreateSessionInput, error) {
 	issue := launch.issue
-	root := p.todoRootSessionInput(native.CreateIssueInput{ID: issue.ID, Title: issue.Title, Body: issue.Body})
+	root, err := p.todoRootSessionInputForIssue(ctx, issue)
+	if err != nil {
+		return nil, err
+	}
 	operation := p.todoOperationSessionInput(issue, todoOperationSessionOptions{
 		ID: launch.identity.SessionID, Operation: string(launch.step), Provider: launch.executorName(),
 		CWD: launch.cwd, Prompt: launch.promptMarkdown(),
 	})
-	return []captaindb.CreateSessionInput{root, operation}
+	return []captaindb.CreateSessionInput{root, operation}, nil
 }
 
 func (launch *launchPlan) executorName() string {

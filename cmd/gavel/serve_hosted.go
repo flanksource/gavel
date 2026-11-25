@@ -59,6 +59,11 @@ func githubNotConnected() (string, error) {
 }
 
 func runHostedDashboard(opts DashboardOptions) error {
+	stopTelltale, err := startDashboardTelltale(true)
+	if err != nil {
+		return err
+	}
+	defer stopTelltale()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	opened, err := shared.Shared(ctx, shared.WithMigrations())
@@ -84,7 +89,7 @@ func runHostedDashboard(opts DashboardOptions) error {
 	if err != nil {
 		return err
 	}
-	go http.Serve(listener, stack.handler) //nolint:errcheck
+	go http.Serve(listener, dashboardHTTPHandler(stack.handler)) //nolint:errcheck
 	logger.Infof("Hosted dashboard at %s (listening on %s)", opts.PublicURL, listener.Addr())
 
 	if opts.SSHAddr != "" {
@@ -228,6 +233,9 @@ func hostedDashboard(ctx context.Context, opts DashboardOptions, db *gorm.DB, ca
 			})
 		}
 		srv.SetAuthConfig(authConfig)
+		if err := srv.StartWorkspaceData(ctx, db); err != nil {
+			return nil, err
+		}
 		if app != nil {
 			ui.NewPoller(srv, orgPRSearch(srv, store, cache, scope.OrgID), interval).Start(ctx)
 			go syncReposEvery(ctx, store, scope.OrgID, repoSyncInterval)

@@ -37,13 +37,15 @@ var goVersionsCommand = func(ctx context.Context, module string) ([]byte, error)
 }
 
 // runGoModTidy runs `go mod tidy` in modDir. Swappable for tests.
-var runGoModTidy = func(modDir string) error {
-	cmd := exec.Command("go", "mod", "tidy")
-	cmd.Dir = modDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("go mod tidy: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+var runGoModTidy = func(ctx context.Context, modDir string) error {
+	return runMaintenanceTask(ctx, "go mod tidy", func(ctx context.Context) error {
+		cmd := exec.CommandContext(ctx, "go", "mod", "tidy")
+		cmd.Dir = modDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("go mod tidy: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	})
 }
 
 func realLatestGoVersion(ctx context.Context, module string) (string, error) {

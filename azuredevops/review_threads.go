@@ -1,6 +1,7 @@
 package azuredevops
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,17 +23,21 @@ type reviewThread struct {
 		} `json:"rightFileStart"`
 	} `json:"threadContext"`
 	Comments []struct {
-		ID      int64     `json:"id"`
-		Body    string    `json:"content"`
-		Kind    string    `json:"commentType"`
-		Deleted bool      `json:"isDeleted"`
-		Created time.Time `json:"publishedDate"`
+		ID      int64           `json:"id"`
+		Body    string          `json:"content"`
+		Kind    json.RawMessage `json:"commentType"`
+		Deleted bool            `json:"isDeleted"`
+		Created time.Time       `json:"publishedDate"`
 		Author  struct {
 			Name   string `json:"displayName"`
 			Login  string `json:"uniqueName"`
 			Avatar string `json:"imageUrl"`
 		} `json:"author"`
 	} `json:"comments"`
+}
+
+func isTextComment(kind json.RawMessage) bool {
+	return string(kind) == `"text"` || string(kind) == "1"
 }
 
 func threadResolved(status json.RawMessage) (bool, error) {
@@ -63,7 +68,7 @@ func (c *Client) ReviewThreads(ctx context.Context, number int) ([]model.PRComme
 			continue
 		}
 		for _, comment := range thread.Comments {
-			if comment.Deleted || comment.Kind != "text" || comment.Body == "" {
+			if comment.Deleted || !isTextComment(comment.Kind) || comment.Body == "" {
 				continue
 			}
 			resolved, err := threadResolved(thread.Status)
@@ -73,7 +78,12 @@ func (c *Client) ReviewThreads(ctx context.Context, number int) ([]model.PRComme
 			if thread.ID <= 0 || comment.ID <= 0 {
 				return nil, fmt.Errorf("azure review response is missing a native thread or comment ID")
 			}
-			item := model.PRComment{ID: comment.ID, ThreadID: strconv.Itoa(thread.ID), CanResolve: true, Body: comment.Body, Author: comment.Author.Login, AvatarURL: comment.Author.Avatar, CreatedAt: comment.Created, IsResolved: resolved, IsReviewThread: true, URL: fmt.Sprintf("%s/pullrequest/%d?discussionId=%d", c.repo.URL(), number, thread.ID)}
+			item := model.PRComment{
+				ID: comment.ID, ThreadID: strconv.Itoa(thread.ID), CanResolve: true,
+				Body: comment.Body, Author: cmp.Or(comment.Author.Login, comment.Author.Name), AuthorName: comment.Author.Name,
+				AvatarURL: comment.Author.Avatar, CreatedAt: comment.Created, IsResolved: resolved, IsReviewThread: true,
+				URL: fmt.Sprintf("%s/pullrequest/%d?discussionId=%d", c.repo.URL(), number, thread.ID),
+			}
 			if thread.Context != nil {
 				item.Path = thread.Context.Path
 				if thread.Context.Right != nil {

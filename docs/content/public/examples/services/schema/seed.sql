@@ -1,0 +1,1 @@
+INSERT INTO public.messages DEFAULT VALUES;

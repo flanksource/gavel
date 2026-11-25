@@ -1,0 +1,68 @@
+---
+title: Test
+description: Execute native test suites as a fixture step.
+parent: fixture-step-reference
+order: 2
+---
+
+import FixtureKindReference from "../../src/components/site/FixtureKindReference";
+import Prerequisites from "../../src/components/site/Prerequisites";
+import FixtureExample from "../../src/components/site/FixtureExample";
+
+Use the `test` step to execute native test suites as a fixture step.
+
+## Example
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Test example
+steps:
+  - id: regressions
+    kind: test
+    paths: [./pkg/parser]
+    framework: [go]
+    test-timeout: 2m
+    show-passed: true
+```
+
+````markdown
+# Test example
+
+## Regressions
+
+```yaml test
+paths: [./pkg/parser]
+framework: [go]
+test-timeout: 2m
+show-passed: true
+```
+````
+
+</FixtureExample>
+
+Save the YAML variant as `tests.fixture.yaml`. Inspect it with `gavel fixtures outline tests.fixture.yaml`, then run `gavel fixtures tests.fixture.yaml` against your package paths. For Markdown, use `tests.fixture.md` with the same commands.
+
+## Configuration and prerequisites
+
+<Prerequisites>
+
+Install the selected test framework's toolchain and dependencies, and replace the example package path with an existing test package. See [Test execution](/docs/test-execution) for framework setup.
+
+</Prerequisites>
+
+Keys use test CLI spelling, with `paths` replacing positional arguments. Choose framework names from [Test execution](/docs/test-execution), and use real package paths. Embedded test steps do not recurse into fixture discovery or launch a separate UI.
+
+## Results and lifetime
+
+Runner results become children of this step. Available summary outputs include `total`, `passed`, `failed`, `warned`, and `skipped`; the run artifact points to the full snapshot. A failed suite fails the fixture verdict.
+
+The Markdown equivalent is a `yaml test` fence. See [Runner steps](/docs/fixture-runner-steps) for embedding behavior.
+
+## Complete step reference
+
+Use Tree or Table to browse global fields and this kind's configuration separately. Expand nested fields or additional metadata when available. Shared behavior is documented in [Step policies](/docs/fixture-step-policies).
+
+<FixtureKindReference kind="test" />
+

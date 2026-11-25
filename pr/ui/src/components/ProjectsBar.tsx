@@ -9,15 +9,18 @@ import {
   UiDebugStepOver,
   UiError,
   UiEyeClosed,
-  UiFolder,
+  UiGitBranch,
   UiPass,
   UiWarningTriangle,
   type IconProps,
 } from '@flanksource/clicky-ui/icons';
 import type { ProjectGitSummaryView } from '../projectGitQueries';
 import type { Project, ProcStatus } from '../types';
-import { ProcControl } from './ProcControl';
+import { ageShort, timeAgo } from '../utils';
+import { ListingCard } from './ListingCard';
+import { ProcPorts, ProcStatusIcon } from './ProcControl';
 import { RelativeTime } from './RelativeTime';
+import { RepoIcon } from './RepoIcon';
 import { ProjectGitBadges, projectGitBadgesState } from './ProjectGitBadges';
 import type { ProjectRuns, TestRunView } from './tests/types';
 
@@ -110,7 +113,7 @@ export function ProjectsBar(props: Props) {
   );
 }
 
-function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, procStatus, gitSummary, runsLoading, historyEnabled, onToggle, onOpen, onSelectRun, onChanged, onSettings, onHide }: Props & {
+function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, procStatus, gitSummary, runsLoading, historyEnabled, onToggle, onOpen, onSelectRun, onSettings, onHide }: Props & {
   project: Project;
   projectRuns: TestRunView[];
   open: boolean;
@@ -118,35 +121,42 @@ function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, pr
   onOpen: () => void;
 }) {
   const Chevron = open ? UiChevronDown : UiChevronRight;
-  const key = project.repos[0] || project.name;
-  const projectActive = selected === project.name && !selectedRunId;
+  const gitState = projectGitBadgesState(gitSummary, project.name);
+  const summary = gitState.status === 'ready' && !gitState.summary.error ? gitState.summary : undefined;
+  const status = procStatus[project.name];
 
   return (
     <div>
-      <div className={`transition-colors ${projectActive ? 'bg-primary/10' : 'hover:bg-muted'}`}>
-        <div className="flex items-center gap-1 pr-3">
-          {historyEnabled ? (
-            <Button variant="ghost" size="icon" type="button" onClick={onToggle} aria-label={`${open ? 'Collapse' : 'Expand'} ${project.name} runs`} className="h-7 w-7 shrink-0 rounded-none text-muted-foreground">
-              <Chevron />
-            </Button>
-          ) : <span className="h-7 w-7 shrink-0" />}
-          <Button variant="ghost" type="button" onClick={onOpen} aria-label={`Open ${project.name} project`} className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-none py-1.5 pr-2 text-left">
-            <UiFolder className="shrink-0 text-muted-foreground" />
-            <span className="truncate text-sm font-medium text-foreground" title={project.dir}>{project.name}</span>
-            {historyEnabled && <span className="text-[10px] tabular-nums text-muted-foreground" title={`${projectRuns.length} test and lint runs`}>{projectRuns.length}</span>}
+      <ListingCard
+        label={`Open ${project.name} project`}
+        selected={selected === project.name && !selectedRunId}
+        onSelect={onOpen}
+        icon={<RepoIcon repo={project.repoIcon?.repo ?? project.repos[0] ?? project.name} homepageUrl={project.repoIcon?.homepageUrl} size={28} />}
+        status={status?.hasProcfile ? <ProcStatusIcon status={status} compact /> : undefined}
+        title={project.name}
+        titleHint={project.dir}
+        titleBadges={historyEnabled && <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground" title={`${projectRuns.length} test and lint runs`}>{projectRuns.length}</span>}
+        meta={summary?.branch ? (
+          <span className="inline-flex min-w-0 items-center gap-1" title={`Primary checkout on ${summary.branch}`}>
+            <UiGitBranch className="size-3 shrink-0" aria-label="Branch" />
+            <span className="truncate">{summary.branch}</span>
+          </span>
+        ) : undefined}
+        badges={<>
+          <ProjectGitBadges state={gitState} />
+          <ProcPorts project={project} status={status} />
+        </>}
+        age={summary?.lastActivityAt ? <span title={`Last commit or edit ${timeAgo(summary.lastActivityAt)}`}>{ageShort(summary.lastActivityAt)}</span> : undefined}
+        leading={historyEnabled ? (
+          <Button variant="ghost" size="icon" type="button" onClick={onToggle} aria-label={`${open ? 'Collapse' : 'Expand'} ${project.name} runs`} className="h-7 w-7 shrink-0 text-muted-foreground">
+            <Chevron />
           </Button>
-          <Button variant="ghost" size="icon" type="button" onClick={() => onSettings(project)} title={`Edit ${project.name} .gavel.yaml`} aria-label={`Edit ${project.name} settings`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
-            <UiCog />
-          </Button>
-          <Button variant="ghost" size="icon" type="button" onClick={() => onHide(project)} title={`Hide ${project.name} from project lists`} aria-label={`Hide ${project.name} project`} className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground">
-            <UiEyeClosed />
-          </Button>
-        </div>
-        <div className="flex flex-wrap items-center gap-1 pl-14 pr-3">
-          <ProjectGitBadges state={projectGitBadgesState(gitSummary, project.name)} />
-          <ProcControl repo={key} project={project} status={procStatus[project.name]} onChanged={onChanged} />
-        </div>
-      </div>
+        ) : undefined}
+        menuItems={[
+          { label: 'Edit settings…', icon: UiCog, title: `Edit ${project.name} .gavel.yaml`, onSelect: () => onSettings(project) },
+          { label: 'Hide project', icon: UiEyeClosed, title: `Hide ${project.name} from project lists`, onSelect: () => onHide(project) },
+        ]}
+      />
       {historyEnabled && open && (
         <div role="group" aria-label={`${project.name} test and lint runs`}>
           {projectRuns.length > 0 ? projectRuns.map(run => (

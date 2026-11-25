@@ -35,7 +35,6 @@ describe('linked TODO PR status', () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(status)));
     vi.stubGlobal('fetch', fetchMock);
     renderStatus();
-    expect(screen.getByRole('link', { name: 'PR #27' }).getAttribute('href')).toBe(pr.url);
     expect(fetchMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'PR status and actions' }));
     expect(await screen.findByText('Fix validation')).toBeTruthy();

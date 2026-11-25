@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -28,10 +30,8 @@ func withProject(t *testing.T, name, repo, procfileBody string) string {
 			t.Fatalf("write Procfile: %v", err)
 		}
 	}
-	orig := projectsPath
-	projectsPath = filepath.Join(t.TempDir(), "projects.json")
-	t.Cleanup(func() { projectsPath = orig })
-	if err := SaveProjects([]Project{{Name: name, Dir: dir, Repos: []string{repo}}}); err != nil {
+	useProjectsFileT(t, filepath.Join(t.TempDir(), "projects.json"))
+	if err := seedProjects([]projects.Project{{Name: name, Dir: dir, Repos: []string{repo}}}); err != nil {
 		t.Fatalf("SaveProjects: %v", err)
 	}
 	return dir
@@ -64,11 +64,11 @@ func TestHandleProjectsCreate(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST status = %d, want 201; body = %q", rec.Code, rec.Body.String())
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	ps, err := loadProjects(context.Background())
 	if err != nil {
 		t.Fatalf("LoadProjects: %v", err)
 	}
-	if _, ok := projectByName(projects, "infra"); !ok {
+	if _, ok := projects.ByName(ps, "infra"); !ok {
 		t.Error("POST /api/projects did not persist the new project")
 	}
 }
@@ -82,11 +82,11 @@ func TestHandleProjectsCreateConflict(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("POST duplicate name status = %d, want 409; body = %q", rec.Code, rec.Body.String())
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	ps, err := loadProjects(context.Background())
 	if err != nil {
 		t.Fatalf("LoadProjects: %v", err)
 	}
-	if p, _ := projectByName(projects, "gavel"); p.Dir == "/elsewhere" {
+	if p, _ := projects.ByName(ps, "gavel"); p.Dir == "/elsewhere" {
 		t.Error("conflicting create overwrote the existing project")
 	}
 }

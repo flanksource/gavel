@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/clicky/sse"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/blob"
@@ -106,7 +108,7 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if query.Has("project") {
-		p, err := GetProject(project)
+		p, err := getProject(r.Context(), project)
 		if err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return
@@ -147,7 +149,7 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 // pointer file is a few hundred bytes, but the run it names carries the whole
 // test tree and lint violation set, and there is one per project per request.
 func collectTestRuns(ctx context.Context) ([]projectRuns, error) {
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	projects, err := visibleProjects(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +207,7 @@ func pointerRunID(pointer *snapshots.Pointer) string {
 	if pointer == nil || strings.TrimSpace(pointer.Path) == "" {
 		return ""
 	}
-	stem := strings.TrimSuffix(filepath.Base(pointer.Path), ".json")
+	stem := snapshots.SnapshotStem(filepath.Base(pointer.Path))
 	if stem == "" || stem == snapshots.PointerLast {
 		return ""
 	}
@@ -265,7 +267,7 @@ func timeFromNanos(ts int64) time.Time {
 // groupRuns projects the current runs onto the live project list. Every project
 // gets a non-nil Runs slice: a nil slice marshals to JSON null, which breaks the
 // client's ProjectRuns.runs (typed TestRunView[], non-null) on `.runs.length`.
-func groupRuns(projects []Project, byDir map[string][]testRunView) []projectRuns {
+func groupRuns(projects []projects.Project, byDir map[string][]testRunView) []projectRuns {
 	out := make([]projectRuns, 0, len(projects))
 	for _, p := range projects {
 		dir := p.ResolvedDir()

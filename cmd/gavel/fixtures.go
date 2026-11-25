@@ -65,6 +65,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 	t = t.Add(h("USAGE")).
 		Add(code("  gavel fixtures [flags] <fixture-file-or-glob> [fixture-file-or-glob...]")).NewLine().
 		Add(code("  gavel fixtures --ui checks.fixture.md")).Add(dim("  # stream the typed execution tree in the test UI")).NewLine().
+		Add(code("  gavel fixtures --from-step deploy checks.fixture.yaml")).Add(dim("  # rerun from a step, reusing the newest run's earlier results")).NewLine().
 		Add(h("ARGUMENTS")).
 		Add(kv("fixture-files", "One or more markdown fixture files or doublestar glob patterns. At least one is required.")).
 		Append("    ").Add(dim("Quote globs when you want Gavel to expand them instead of your shell.")).NewLine()
@@ -436,8 +437,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  gavel fixtures --no-progress tests.md")).Add(dim("    # Disable progress display")).NewLine().
 		Add(code("  gavel fixtures outline tests.md")).Add(dim("          # Parse and outline without running fixtures")).NewLine().
 		Add(code("  gavel fixtures --schema")).Add(dim("                  # Print the fixture/test JSON schemas and exit")).NewLine().
-		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
-		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
+		Add(renderHelpFlagGroups(cmd))
 
 	return t
 }

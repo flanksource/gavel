@@ -18,8 +18,11 @@ import (
 var ErrNoHistory = errors.New("no test history found in .gavel; run gavel test once")
 
 type Options struct {
+	// WorkDir anchors Paths and test work dirs.
 	WorkDir string
-	Paths   []string
+	// StateRoot is the directory whose .gavel holds the run snapshots.
+	StateRoot string
+	Paths     []string
 }
 
 type Report struct {
@@ -68,15 +71,15 @@ type entryKey struct {
 }
 
 func Load(opts Options) (*Report, error) {
-	if opts.WorkDir == "" {
-		return nil, errors.New("history.Load: workDir is required")
+	if opts.WorkDir == "" || opts.StateRoot == "" {
+		return nil, errors.New("history.Load: WorkDir and StateRoot are required")
 	}
 	workDir, err := filepath.Abs(opts.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workdir: %w", err)
 	}
 
-	runs, err := loadRunSnapshots(workDir)
+	runs, err := loadRunSnapshots(opts.StateRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -135,9 +138,9 @@ func Load(opts Options) (*Report, error) {
 	return report, nil
 }
 
-// loadRunSnapshots returns workDir's per-run snapshots, oldest first.
-func loadRunSnapshots(workDir string) ([]runSnapshot, error) {
-	loaded, err := snapshots.LoadRuns(workDir)
+// loadRunSnapshots returns stateRoot's per-run snapshots, oldest first.
+func loadRunSnapshots(stateRoot string) ([]runSnapshot, error) {
+	loaded, err := snapshots.LoadRuns(stateRoot)
 	if err != nil {
 		return nil, err
 	}

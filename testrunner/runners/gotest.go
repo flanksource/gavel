@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/utils"
 )
@@ -20,9 +19,8 @@ var (
 
 // GoTest implements the test runner for go test.
 type GoTest struct {
-	workDir   string
-	parser    parsers.ResultParser
-	buildTags []string
+	workDir string
+	parser  parsers.ResultParser
 }
 
 // NewGoTest creates a new Go test runner.
@@ -43,25 +41,39 @@ func (r *GoTest) Parser() parsers.ResultParser {
 	return r.parser
 }
 
-// FocusArgs maps a common focus pattern to go test's native name filter.
-func (r *GoTest) FocusArgs(pattern string) []string {
-	return []string{"-run", pattern}
+// GoFlags are go test's own flags that map onto TestOptions.
+var GoFlags = []FlagSpec{
+	{Names: []string{"tags"}, Kind: TagsFlag},
+	{Names: []string{"bench"}, Kind: BenchFlag},
+	{Names: []string{"p"}, Kind: ParallelFlag},
 }
 
-func (r *GoTest) BuildTagsArgs(tags []string) []string {
-	return []string{"-tags=" + strings.Join(tags, ",")}
+func (r *GoTest) Flags() []FlagSpec { return GoFlags }
+
+// Detect parses argv and reports go test when a *_test.go file exists under
+// cwd or the starting paths.
+func (r *GoTest) Detect(cwd string, argv []string) (*TestOptions, error) {
+	return detect(r, cwd, argv, goTestFilesPresent, r.ownsFile)
 }
 
-func (r *GoTest) SetBuildTags(tags []string) {
-	r.buildTags = append([]string(nil), tags...)
+// ownsFile: go test runs a Go source file's package, and a test file that is
+// not a Ginkgo spec file.
+func (r *GoTest) ownsFile(file string) (string, bool, error) {
+	if !strings.HasSuffix(file, ".go") {
+		return "", false, nil
+	}
+	if strings.HasSuffix(file, "_test.go") && hasGinkgoImports(file) {
+		return "", false, nil
+	}
+	return filepath.Dir(file), true, nil
 }
 
-// Detect checks if go test is used (looks for *_test.go files). We
-// deliberately do NOT gate on go.mod presence — a nested repo without its
-// own module, or a workDir inside a module whose go.mod sits above
-// the nearest .git boundary, still has runnable test files and should be
-// surfaced. `go test` emits a useful error at run time if no module exists.
-func (r *GoTest) Detect(workDir string) (bool, error) {
+// goTestFilesPresent looks for *_test.go files. We deliberately do NOT gate
+// on go.mod presence — a nested repo without its own module, or a workDir
+// inside a module whose go.mod sits above the nearest .git boundary, still
+// has runnable test files and should be surfaced. `go test` emits a useful
+// error at run time if no module exists.
+func goTestFilesPresent(workDir string) (bool, error) {
 	root, _ := filepath.Abs(workDir)
 	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -89,7 +101,7 @@ func (r *GoTest) Detect(workDir string) (bool, error) {
 
 // packageHasNonGinkgoTests checks if a package has at least one test file
 // that is not a Ginkgo test (using the shared AST-based import check).
-func (r *GoTest) packageHasNonGinkgoTests(pkgDir string) (bool, error) {
+func packageHasNonGinkgoTests(pkgDir string, tags []string) (bool, error) {
 	entries, err := os.ReadDir(pkgDir)
 	if err != nil {
 		return false, err
@@ -97,7 +109,7 @@ func (r *GoTest) packageHasNonGinkgoTests(pkgDir string) (bool, error) {
 
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
-			matched, err := matchesBuildConstraints(pkgDir, entry.Name(), r.buildTags)
+			matched, err := matchesBuildConstraints(pkgDir, entry.Name(), tags)
 			if err != nil {
 				return false, err
 			}
@@ -177,84 +189,69 @@ func (r *GoTest) PackageHasRunnableTests(packagePath string) bool {
 // When recursive is false, only the given directory is checked. No go.mod gate
 // here for the same reason as Detect — `go test` surfaces the error itself if
 // the package is not inside a module.
-func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
+func (r *GoTest) DiscoverPackages(opts TestOptions) ([]string, error) {
+	walk := func(dir string, recursive bool) ([]string, error) {
+		return walkGoPackages(dir, recursive, func(pkgDir string) (bool, error) {
+			return packageHasNonGinkgoTests(pkgDir, opts.Tags)
+		})
+	}
+	return discoverPackages(opts, walk, r.ownsFile)
+}
+
+// walkGoPackages returns the absolute package directories at or below dir for
+// which has reports tests, skipping directories the go tool ignores.
+func walkGoPackages(dir string, recursive bool, has func(pkgDir string) (bool, error)) ([]string, error) {
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
 	if !recursive {
-		hasTests, err := r.packageHasNonGinkgoTests(workDir)
-		if err != nil {
+		ok, err := has(root)
+		if err != nil || !ok {
 			return nil, err
 		}
-		if hasTests {
-			return []string{r.getRelativePath(workDir)}, nil
-		}
-		return nil, nil
+		return []string{root}, nil
 	}
-
 	var packages []string
 	seen := make(map[string]bool)
-	root, _ := filepath.Abs(workDir)
-
-	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
+	err = utils.WalkGitIgnoredBounded(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-
 		if d.IsDir() {
 			if path != root && isGoIgnoredDir(d.Name()) {
 				return fs.SkipDir
 			}
 			return nil
 		}
-
-		if strings.HasSuffix(d.Name(), "_test.go") {
-			pkgDir := filepath.Dir(path)
-			if !seen[pkgDir] {
-				seen[pkgDir] = true
-				hasTests, err := r.packageHasNonGinkgoTests(pkgDir)
-				if err != nil {
-					return err
-				}
-				if hasTests {
-					relPath := r.getRelativePath(pkgDir)
-					packages = append(packages, relPath)
-				}
-			}
+		if !strings.HasSuffix(d.Name(), "_test.go") {
+			return nil
 		}
-
+		pkgDir := filepath.Dir(path)
+		if seen[pkgDir] {
+			return nil
+		}
+		seen[pkgDir] = true
+		ok, err := has(pkgDir)
+		if err != nil || !ok {
+			return err
+		}
+		packages = append(packages, pkgDir)
 		return nil
 	})
-
 	return packages, err
 }
 
-// PackageHasTests checks if a package has non-Ginkgo go test files.
-func (r *GoTest) PackageHasTests(packagePath string) (bool, error) {
-	dir := filepath.Join(r.workDir, packagePath)
-	return r.packageHasNonGinkgoTests(dir)
-}
-
-// BuildCommand builds the go test command for a package.
-func (r *GoTest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error) {
-	// Build command args: standard flags, then extra args, then package path
-	args := []string{"test", "-json"}
-	args = append(args, extraArgs...)
-	args = append(args, packagePath)
-
-	// Build command using exec.Process (but don't execute)
-	process := exec.NewExec("go", args...).WithCwd(r.workDir).WithProcessGroup()
-	process.SucceedOnNonZero = true // go test returns non-zero on test failures
-
+// BuildCommand builds the go test command for opts.Packages.
+func (r *GoTest) BuildCommand(opts TestOptions) (*TestRun, error) {
+	process, err := GoTestCommand(opts, nil)
+	if err != nil {
+		return nil, err
+	}
 	return &TestRun{
 		Framework: parsers.GoTest,
-		Package:   Package(packagePath),
+		Package:   Package(strings.Join(opts.Packages, " ")),
 		Parser:    r.parser,
 		Process:   process,
 	}, nil
-}
-
-// getRelativePath returns the relative path from workDir to the target directory.
-func (r *GoTest) getRelativePath(dir string) string {
-	if relPath, err := filepath.Rel(r.workDir, dir); err == nil {
-		return "./" + filepath.ToSlash(relPath)
-	}
-	return dir
 }

@@ -18,7 +18,7 @@ func TestVitestDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewVitest(tmp)
-		if got, _ := r.Detect(tmp); !got {
+		if got, _ := detected(r, tmp); !got {
 			t.Fatal("expected detect=true")
 		}
 	})
@@ -29,7 +29,7 @@ func TestVitestDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewVitest(tmp)
-		if got, _ := r.Detect(tmp); !got {
+		if got, _ := detected(r, tmp); !got {
 			t.Fatal("expected detect=true for vitest.workspace")
 		}
 	})
@@ -40,7 +40,7 @@ func TestVitestDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewVitest(tmp)
-		if got, _ := r.Detect(tmp); !got {
+		if got, _ := detected(r, tmp); !got {
 			t.Fatal("expected detect=true when vitest dep + test file present")
 		}
 	})
@@ -48,7 +48,7 @@ func TestVitestDetect(t *testing.T) {
 		tmp := t.TempDir()
 		writePackageJSON(t, tmp, `{"name":"x","devDependencies":{"vitest":"^1.0.0"}}`)
 		r := NewVitest(tmp)
-		if got, _ := r.Detect(tmp); got {
+		if got, _ := detected(r, tmp); got {
 			t.Fatal("expected detect=false when vitest is declared but no tests exist")
 		}
 	})
@@ -59,7 +59,7 @@ func TestVitestDetect(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := NewVitest(tmp)
-		if got, _ := r.Detect(tmp); got {
+		if got, _ := detected(r, tmp); got {
 			t.Fatal("expected detect=false for bare vite config without vitest dep")
 		}
 	})
@@ -79,7 +79,7 @@ func TestVitestDiscoverPackages_Monorepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewVitest(tmp)
-	pkgs, err := r.DiscoverPackages(tmp, true)
+	pkgs, err := r.DiscoverPackages(TestOptions{Cwd: tmp, Recursive: true})
 	if err != nil {
 		t.Fatalf("DiscoverPackages: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestVitestBuildCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewVitest(tmp)
-	tr, err := r.BuildCommand(".")
+	tr, err := r.BuildCommand(TestOptions{Cwd: tmp, Packages: []string{"./."}})
 	if err != nil {
 		t.Fatal(err)
 	}

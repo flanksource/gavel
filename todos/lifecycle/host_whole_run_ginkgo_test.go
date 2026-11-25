@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/captain/pkg/captainconfig"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/sandbox/substraterun"
+	lifecycleengine "github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/lifecycle"
 	. "github.com/onsi/ginkgo/v2"
@@ -77,7 +78,7 @@ var _ = Describe("a local step on a sandbox that runs it whole", func() {
 				}
 			}
 		}
-		engine, err := lifecycle.New(def)
+		engine, err := lifecycleengine.New(def)
 		Expect(err).NotTo(HaveOccurred())
 		host.Def = engine
 		sandbox = &environmentSandbox{agent: &scriptedProvider{events: scriptedTurn(`{"success":true,"event":"completed","comment":"Built it."}`, true)}}

@@ -42,15 +42,14 @@ function parseSessionMessageResponse(payload: unknown): SessionMessageResponse {
 }
 
 /** Sends to the live session, or resumes a finished one; Captain decides which. */
-export async function postSessionMessage({ sessionId, text, messageId }: {
+export async function postSessionMessage({ sessionId, text }: {
   sessionId: string;
   text: string;
-  messageId: string;
 }): Promise<SessionMessageResponse> {
   const payload = await mutationJSON<unknown>({
     url: sessionMessageUrl(sessionId),
     method: 'POST',
-    body: { text, messageId },
+    body: { text },
     context: SEND_CONTEXT,
   });
   return parseSessionMessageResponse(payload);
@@ -92,7 +91,7 @@ export function useSessionMessageComposer(session: AgentSession, { startTimeoutM
   const chat = chatQuery.data ?? undefined;
 
   const send = useMutation({
-    mutationFn: (text: string) => postSessionMessage({ sessionId: session.id, text, messageId: crypto.randomUUID() }),
+    mutationFn: (text: string) => postSessionMessage({ sessionId: session.id, text }),
     ...action,
     onSuccess: response => {
       sawLive.current = processActive;

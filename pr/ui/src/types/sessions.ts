@@ -140,8 +140,7 @@ export interface TodoSessionAttempt {
   // attempt that was never verified) — see todo_session_detail.go's
   // todoAttemptDetail.Verification.
   verification: VerifyReport | null;
-  // The run's recorded workspace; absent until the run finishes, and for a run
-  // that reported none.
+  // Recorded after setup, before the first turn; updated with the final outcome.
   workspace?: TodoRunWorkspace;
   // How the run's commits were landed; absent until `todos land` records one.
   landing?: TodoRunLanding;

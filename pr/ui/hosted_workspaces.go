@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/sandbox"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/google/uuid"
@@ -123,7 +125,7 @@ func (w HostedWorkspaces) repo(ctx context.Context, org uuid.UUID, ref string) (
 		return sandbox.Repo{}, err
 	}
 	if len(repos) == 0 {
-		return sandbox.Repo{}, fmt.Errorf("%w: todo workspace %q %w", ErrProjectNotFound, ref, errHostedWorkspace)
+		return sandbox.Repo{}, fmt.Errorf("%w: todo workspace %q %w", projects.ErrNotFound, ref, errHostedWorkspace)
 	}
 	return repos[0], nil
 }
@@ -136,6 +138,11 @@ func (w HostedWorkspaces) GitDir(ctx context.Context, org uuid.UUID, ref string)
 		return "", err
 	}
 	return w.Sources.GitDir(ctx, repo)
+}
+
+// rootPath is the todo workspace root of org's repository id: its checkout directory.
+func (w HostedWorkspaces) rootPath(org, id uuid.UUID) string {
+	return filepath.Join(w.Sources.DataDir, "workspaces", org.String(), id.String())
 }
 
 func (w HostedWorkspaces) repoID(org uuid.UUID, ref string) (uuid.UUID, bool) {
@@ -153,13 +160,25 @@ func (w HostedWorkspaces) repoID(org uuid.UUID, ref string) (uuid.UUID, bool) {
 }
 
 // projectList is the dashboard's projects: the organization's repositories in hosted mode,
-// the host's registered projects otherwise.
+// the host's registered projects otherwise. Each is marked hidden when the caller's
+// hidden-projects filter holds it, and a hidden one carries no TODO counts.
 func (s *Server) projectList(ctx context.Context) ([]projectInfo, error) {
-	if s.workspaces != nil {
-		return s.workspaces.Projects(ctx, s.orgID())
-	}
-	if s.hosted {
+	if s.hosted && s.workspaceData == nil && s.workspaces == nil {
 		return nil, errNoHostedWorkspaces
 	}
-	return listProjects(ctx)
+	hidden, err := hiddenProjects(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	if s.workspaceData != nil {
+		return s.catalogProjectCounts(ctx, hidden)
+	}
+	if s.workspaces != nil {
+		projects, err := s.workspaces.Projects(ctx, s.orgID())
+		for i := range projects {
+			projects[i].Hidden = hidden.has(projects[i].Dir)
+		}
+		return projects, err
+	}
+	return listProjects(ctx, hidden)
 }

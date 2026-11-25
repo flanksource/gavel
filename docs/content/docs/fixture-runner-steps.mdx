@@ -1,0 +1,209 @@
+---
+title: Runner steps
+description: Use fixture files to orchestrate gavel test, gavel lint, output visibility, and Go or Ginkgo integration.
+order: 8
+parent: fixtures-overview
+---
+
+import FixtureExample from "../../src/components/site/FixtureExample";
+import FixtureDocumentReference from "../../src/components/site/FixtureDocumentReference";
+
+Runner steps let a YAML fixture call Gavel's own test and lint engines with `kind: test` and `kind: lint`. Markdown uses `yaml test` and `yaml lint` fences for the same runners. This is useful for pre-commit checks, release gates, and todo verification because failures become fixture children that can be rendered, summarized, or fed back to an agent.
+
+## Test steps
+
+Declare a `kind: test` step with the options you would pass to `gavel test`. Save the YAML variant as `tests.fixture.yaml`, or the Markdown variant as `tests.fixture.md`.
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Run package tests
+steps:
+  - kind: test
+    paths: [./examples/sample-app]
+    framework: [go]
+    test-timeout: 2m
+    show-passed: true
+```
+
+````markdown
+## Run package tests
+
+```yaml test
+paths: [./examples/sample-app]
+framework: [go] # [!code focus] [!code note:runner filter]
+test-timeout: 2m # [!code highlight]
+show-passed: true # [!code info] [!code note:visible pass nodes]
+```
+````
+
+</FixtureExample>
+
+`paths` scopes the run to one package, `framework` restricts discovery to Go tests, and `test-timeout` sets the package timeout. `show-passed` keeps passing tests visible as child nodes, which is useful for a release gate. Both variants pass the same options to the test runner.
+
+The YAML body is unmarshaled onto the same option shape as `gavel test`, with UI-only and combined-lint options excluded from the embedded contract. Common keys include:
+
+- `paths`
+- `framework`
+- `changed`
+- `since`
+- `failed`
+- `baseline`
+- `extra-args`
+- `test-timeout`
+- `timeout`
+
+## Lint steps
+
+Use a `kind: lint` step for the lint engine. Its Markdown equivalent is a `yaml lint` or bare `lint` fence.
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Lint changed Go files
+steps:
+  - kind: lint
+    linters: [golangci-lint]
+    changed: true
+    timeout: 5m
+```
+
+````markdown
+## Lint changed Go files
+
+```yaml lint
+linters: [golangci-lint]
+changed: true # [!code focus] [!code note:changed only]
+timeout: 5m # [!code warning]
+```
+````
+
+</FixtureExample>
+
+`linters` limits execution to `golangci-lint`, `changed` reports only changed/new violations, and `timeout` bounds each linter invocation so a slow tool does not stall the fixture.
+
+Common lint keys include:
+
+- `linters`
+- `files`
+- `ignore`
+- `fix`
+- `changed`
+- `since`
+- `baseline`
+- `failed`
+- `timeout`
+- `group-by`
+
+UI and detach options such as `ui`, `addr`, and `detach` are ignored inside fixture runner steps. A test step also does not recurse into fixture discovery.
+
+Use separate `kind: test` and `kind: lint` steps when a workflow needs both tests and lint. In Markdown definitions of done, use separate `yaml test` and `yaml lint` fences. Runner failures and findings become child results under the fixture step, with a run artifact linking to `.gavel/run-*.json`. The complete allowed keys are in [Fixture file reference](/docs/fixture-reference).
+
+## Output visibility
+
+`gavel fixtures` uses the same visibility ladder as `gavel test`:
+
+```bash
+gavel fixtures tests.fixture.yaml
+gavel fixtures -v tests.fixture.yaml # [!code highlight] [!code note:show passed]
+gavel fixtures -vv tests.fixture.yaml # [!code highlight] [!code note:show commands]
+gavel fixtures -vvv tests.fixture.yaml # [!code focus] [!code note:show debug context]
+gavel fixtures --show-passed tests.fixture.yaml
+gavel fixtures --show-stdout Always tests.fixture.yaml
+gavel fixtures --show-stderr OnFailure tests.fixture.yaml
+```
+
+Lines 2-4 increase verbosity step by step. Lines 5-7 use explicit switches, which are easier to put in scripts because they do not depend on shorthand levels.
+
+- `-v` shows passed fixture results.
+- `-vv` also shows executed commands.
+- `-vvv` also shows CEL variables and stdout/stderr by default.
+- `--show-passed`, `--show-stdout`, and `--show-stderr` provide explicit control.
+- `--update-golden` rewrites mismatched `@file` stdout/stderr expectations.
+
+## Programmatic use
+
+Import the default fixture types when using `exec`, `yaml test`, or `yaml lint` fixtures.
+
+```go
+package myproject_test
+
+import (
+	"testing"
+
+	"github.com/flanksource/gavel/fixtures"
+	_ "github.com/flanksource/gavel/fixtures/types"
+)
+
+func TestFixtures(t *testing.T) {
+	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
+		Paths: []string{"fixtures/**/*.fixture.yaml", "fixtures/**/*.fixture.md"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.RunTesting(t) // [!code highlight]
+}
+```
+
+Import the runner and register built-in fixture types with the blank import. `Paths` includes YAML and Markdown fixtures. `RunTesting(t)` reports fixture failures through Go's testing API.
+
+[`Runner.RunTesting`](https://pkg.go.dev/github.com/flanksource/gavel/fixtures#Runner.RunTesting) mirrors markdown structure as nested [`testing.T.Run`](https://pkg.go.dev/testing#T.Run) nodes when `t` supports subtests. Gomega users can call [`Runner.RunGomega`](https://pkg.go.dev/github.com/flanksource/gavel/fixtures#Runner.RunGomega) with [`gomega.NewWithT(t)`](https://pkg.go.dev/github.com/onsi/gomega#NewWithT). Ginkgo users can call [`Runner.RunGinkgo`](https://pkg.go.dev/github.com/flanksource/gavel/fixtures#Runner.RunGinkgo) inside one spec or [`Runner.RegisterGinkgoSpecs`](https://pkg.go.dev/github.com/flanksource/gavel/fixtures#Runner.RegisterGinkgoSpecs) during spec registration to turn fixture files, sections, tables, and rows into [`Describe`](https://pkg.go.dev/github.com/onsi/ginkgo/v2#Describe) and [`It`](https://pkg.go.dev/github.com/onsi/ginkgo/v2#It) nodes.
+
+<Callout variant="info" title="Shared setup">
+  [`Runner.RegisterGinkgoSpecs`](https://pkg.go.dev/github.com/flanksource/gavel/fixtures#Runner.RegisterGinkgoSpecs) uses an ordered container with [`BeforeAll`](https://pkg.go.dev/github.com/onsi/ginkgo/v2#BeforeAll) and [`AfterAll`](https://pkg.go.dev/github.com/onsi/ginkgo/v2#AfterAll), so build and daemon setup run once while table rows still show up as individual specs.
+</Callout>
+
+## Schema
+
+<FixtureDocumentReference />
+
+## Example workflow
+
+This workflow combines lint, tests, and a formatting command. Save the YAML version as `precommit.fixture.yaml`; the Markdown variant follows the bundled `examples/precommit.fixture.md`:
+
+<FixtureExample>
+
+```yaml
+kind: Fixture
+name: Precommit checks
+steps:
+  - kind: lint
+    linters: [golangci-lint]
+    files: [./examples/sample-app]
+  - kind: test
+    paths: [./examples/sample-app]
+    framework: [go]
+    test-timeout: 2m
+  - kind: exec
+    script: test -z "$(gofmt -l "$GIT_ROOT_DIR/examples/sample-app")"
+```
+
+````markdown
+## Lint
+
+```yaml lint
+linters: [golangci-lint]
+files: [./examples/sample-app] # [!code focus]
+```
+
+## Test
+
+```yaml test
+paths: [./examples/sample-app]
+framework: [go]
+test-timeout: 2m # [!code highlight]
+```
+
+## Formatting is clean
+
+```bash
+test -z "$(gofmt -l "$GIT_ROOT_DIR/examples/sample-app")" # [!code info] [!code word:$GIT_ROOT_DIR]
+```
+````
+
+</FixtureExample>
+
+The lint step runs one configured linter against the sample app. The test step runs the Go test engine against the same app. The formatting step is a shell assertion: `gofmt -l` prints files that need formatting, so `test -z` passes only when the output is empty.

@@ -33,6 +33,10 @@ type DetailCache struct {
 	mu      sync.RWMutex
 	entries map[string]*detailCacheEntry
 	status  map[string]*PRSyncStatus
+	// started counts fetches begun; settled is, per PR, the newest fetch whose
+	// detail was cached or that an invalidation overtook.
+	started uint64
+	settled map[string]uint64
 	maxSize int
 }
 
@@ -40,6 +44,7 @@ func NewDetailCache() *DetailCache {
 	return &DetailCache{
 		entries: make(map[string]*detailCacheEntry),
 		status:  make(map[string]*PRSyncStatus),
+		settled: make(map[string]uint64),
 		maxSize: 100,
 	}
 }
@@ -51,17 +56,41 @@ func (c *DetailCache) Get(key string) (*detailCacheEntry, bool) {
 	return e, ok
 }
 
-func (c *DetailCache) Put(key string, detail prDetail, prUpdatedAt time.Time) {
+// Begin starts a fetch and returns the ticket its Put must present.
+func (c *DetailCache) Begin() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.started++
+	return c.started
+}
+
+// Put records the outcome of the fetch that ticket began. It reports false, and
+// changes nothing, when a fetch begun later was already cached or the PR was
+// invalidated meanwhile. A failed fetch keeps the last good detail.
+func (c *DetailCache) Put(key string, ticket uint64, detail prDetail) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ticket <= c.settled[key] {
+		return false
+	}
+	status := &PRSyncStatus{State: SyncUpToDate, LastSynced: time.Now()}
+	if problem := detail.problem(); problem != "" {
+		status.State, status.Error = SyncError, problem
+	}
+	c.status[key] = status
+	if detail.Error != "" {
+		return true
+	}
+	c.settled[key] = ticket
 	if len(c.entries) >= c.maxSize {
 		c.evictOldest()
 	}
 	c.entries[key] = &detailCacheEntry{
 		Detail:      detail,
 		FetchedAt:   time.Now(),
-		PRUpdatedAt: prUpdatedAt,
+		PRUpdatedAt: detail.PR.UpdatedAt,
 	}
+	return true
 }
 
 func (c *DetailCache) IsStale(key string, currentUpdatedAt time.Time) bool {
@@ -106,6 +135,7 @@ func (c *DetailCache) AllStatuses() map[string]PRSyncStatus {
 func (c *DetailCache) Invalidate(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.settled[key] = c.started
 	delete(c.entries, key)
 	delete(c.status, key)
 }

@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/flanksource/gavel/todos/lifecycle"
+	"github.com/flanksource/gavel/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 )
 
@@ -50,7 +51,7 @@ func todoRunAgentTools() []string {
 func todoRunInputSchemas(steps []lifecycle.Step) (map[string]json.RawMessage, error) {
 	out := map[string]json.RawMessage{}
 	for _, step := range steps {
-		raw, err := todoprompt.InputSchema(lifecycle.Class(step))
+		raw, err := todoprompt.InputSchema(lifecycle1.Class(step))
 		if err != nil {
 			return nil, fmt.Errorf("input schema for step %s: %w", step.Name, err)
 		}

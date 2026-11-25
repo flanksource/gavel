@@ -41,6 +41,7 @@ export interface PRItem {
   repo: string;
   repoAvatarUrl?: string;
   repoHomepageUrl?: string;
+  repoDefaultBranch?: string;
   source: string;
   target: string;
   state: string;
@@ -64,9 +65,6 @@ export interface SearchConfig {
   // Its repos constrain PRs while its directory constrains workspace-backed
   // surfaces such as Todos.
   project?: string;
-  // GitHub org logins the user has chosen to hide from the chooser and
-  // exclude from default-org resolution. Persists across daemon restarts.
-  ignoredOrgs?: string[];
 }
 
 // Project associates one or more repos with a local workspace directory where
@@ -75,6 +73,11 @@ export interface Project {
   name: string;
   dir: string;
   repos: string[];
+  // Set when repos were derived from the directory's upstream/origin GitHub
+  // remotes because none were registered.
+  reposInferred?: boolean;
+  // The first of repos whose homepage a tracked PR reports; its favicon is the project's icon.
+  repoIcon?: { repo: string; homepageUrl: string };
   hasProcfile?: boolean;
   // Hidden projects are returned by /api/projects but left out of every project
   // list and not tracked for git state; only the project picker lists them.
@@ -253,12 +256,20 @@ export interface StatusCheck {
   detailsUrl?: string;
 }
 
+export interface LogHeading {
+  title: string;
+  line: number;
+  endLine: number;
+  depth: number;
+}
+
 export interface Step {
   name: string;
   status: string;
   conclusion: string;
   number: number;
   logs?: string;
+  logHeadings?: LogHeading[];
 }
 
 export interface Job {
@@ -271,6 +282,7 @@ export interface Job {
   url?: string;
   steps?: Step[];
   logs?: string;
+  logHeadings?: LogHeading[];
 }
 
 export interface WorkflowRun {
@@ -280,6 +292,8 @@ export interface WorkflowRun {
   conclusion: string;
   url?: string;
   jobs?: Job[];
+  // stale says why this is an earlier copy of the run. Absent when current.
+  stale?: string;
 }
 
 export interface PRComment {
@@ -304,6 +318,8 @@ export interface GavelResultsSummary {
   stickyId?: string;
   artifactId: number;
   artifactUrl: string;
+  // outdated marks results whose run is not one of the PR head's.
+  outdated?: boolean;
   testsPassed: number;
   testsFailed: number;
   // testsTimedOut is the subset of testsFailed that timed out; omitted when zero.
@@ -334,6 +350,8 @@ export interface GavelResultsSummary {
 export interface PRDetail {
   pr?: PRInfo;
   runs?: Record<string, WorkflowRun>;
+  // runsError says which workflow runs could not be loaded.
+  runsError?: string;
   comments?: PRComment[];
   // One summary per gavel sticky comment on the PR (typically one per
   // matrix shard). Order matches the order of the sticky comments.

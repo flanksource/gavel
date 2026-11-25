@@ -328,7 +328,7 @@ var _ = Describe("treeModel View rendering", func() {
 		m, _ = updateKey(m, "down")
 		m, _ = updateKey(m, " ")
 
-		out := m.View()
+		out := m.View().Content
 		Expect(out).To(ContainSubstring("\x1b["), "expected ANSI SGR escapes in tree picker output")
 		Expect(out).To(ContainSubstring("▶ "), "cursor row must use the ▶ marker")
 
@@ -354,7 +354,7 @@ var _ = Describe("treeModel View rendering", func() {
 	It("renders the help line and header counts in plain semantics", func() {
 		m := newTreeModel(files)
 		m.height = 30
-		plain := stripANSI(m.View())
+		plain := stripANSI(m.View().Content)
 		Expect(plain).To(ContainSubstring("Select files to commit"))
 		Expect(plain).To(ContainSubstring("(0 / 3 selected)"))
 		Expect(plain).To(ContainSubstring("/=filter"))
@@ -372,16 +372,16 @@ var _ = Describe("treeModel View rendering", func() {
 		m.summaryUpdates = updates
 		nodeAtPath(m, "cmd/gavel/main.go").Selected = true
 
-		Expect(stripANSI(m.View())).To(ContainSubstring("⏳ ai"))
+		Expect(stripANSI(m.View().Content)).To(ContainSubstring("⏳ ai"))
 		updates <- status.AISummaryUpdate{Index: 0, Status: status.AISummaryStatusRunning}
 		model, next := m.Update(m.Init()())
 		m = model.(treeModel)
-		Expect(stripANSI(m.View())).To(ContainSubstring("⟳ ai"))
+		Expect(stripANSI(m.View().Content)).To(ContainSubstring("⟳ ai"))
 
 		updates <- status.AISummaryUpdate{Index: 0, Status: status.AISummaryStatusDone, Summary: "stream chooser summaries"}
 		model, next = m.Update(next())
 		m = model.(treeModel)
-		plain := stripANSI(m.View())
+		plain := stripANSI(m.View().Content)
 		Expect(plain).To(ContainSubstring("main.go  unstaged · stream chooser summaries"))
 		Expect(nodeAtPath(m, "cmd/gavel/main.go").Selected).To(BeTrue())
 
@@ -407,7 +407,7 @@ var _ = Describe("treeModel View rendering", func() {
 		})
 		m = model.(treeModel)
 		Expect(cmd).To(BeNil())
-		Expect(stripANSI(m.View())).To(ContainSubstring("⚠ ai summary failed"))
+		Expect(stripANSI(m.View().Content)).To(ContainSubstring("⚠ ai summary failed"))
 
 		m, _ = updateKey(m, " ")
 		Expect(m.selectedPaths()).To(ConsistOf("failed.go"))
@@ -419,7 +419,7 @@ var _ = Describe("treeModel View rendering", func() {
 		m, _ = updateKey(m, "/")
 		m, _ = updateKey(m, "test")
 
-		plain := stripANSI(m.View())
+		plain := stripANSI(m.View().Content)
 		Expect(plain).To(ContainSubstring(`filter="test" (1 files)`))
 		Expect(plain).To(ContainSubstring("filter: test"))
 		Expect(plain).To(ContainSubstring("enter=keep"))
@@ -436,7 +436,7 @@ var _ = Describe("treeModel View rendering", func() {
 		}}
 		m := newTreeModel(aged)
 		m.height = 20
-		plain := stripANSI(m.View())
+		plain := stripANSI(m.View().Content)
 		Expect(plain).To(ContainSubstring("3h ago"),
 			"chip row should include the file's relative mtime")
 	})
@@ -450,7 +450,7 @@ var _ = Describe("treeModel View rendering", func() {
 		}}
 		m := newTreeModel(ghost)
 		m.height = 20
-		plain := stripANSI(m.View())
+		plain := stripANSI(m.View().Content)
 		Expect(plain).ToNot(ContainSubstring(" ago"),
 			"a deleted/unknown-mtime row must not render an age chip")
 	})

@@ -1,0 +1,19 @@
+---
+model: agent:gpt-6.1-sol:high
+budget:
+  maxTurns: 20
+  timeout: 30m
+prompt:
+  system: >-
+    Review pull request #{{number}} in {{workDir}}. Inspect the actual diff
+    against {{baseBranch}}, source and tests. Report actionable defects with
+    file and line references. Do not edit files, commit, push, or send messages.
+---
+Review {{url}} ({{title}}), head {{branch}} against {{baseBranch}}.
+
+Source context:
+{{statusText}}
+
+Return the lifecycle envelope with success, event and comment. Use event completed
+when the review is complete, including when it found defects; blocked if evidence
+needed to review is unavailable. Put the review findings in comment.

@@ -180,6 +180,12 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
+	uiTestProviderFor(workDir).activeRun = &captaindb.PromptRun{
+		State: captaindb.PromptRunStateSucceeded,
+		Runtime: captaindb.PromptRunRuntime{Mode: string(types.ModePlan), Resolved: captaindb.PromptRunRuntimeSelection{
+			Provider: "anthropic", Mode: "cli", Model: "claude-sonnet-5",
+		}},
+	}
 	got, _ := stubRunStart(t)
 
 	const feedback = "use a bounded queue, not unbounded"
@@ -323,7 +329,10 @@ func TestTodoAPIAnswerResumesRunStepListedUnderVerify(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	const sid = "sess-answer-verify-fold"
-	created := seedAskTodoWithRun(t, workDir, sid, types.RunPhase, &captaindb.PromptRun{State: captaindb.PromptRunStateWaiting})
+	created := seedAskTodoWithRun(t, workDir, sid, types.RunPhase, &captaindb.PromptRun{
+		State:   captaindb.PromptRunStateWaiting,
+		Runtime: captaindb.PromptRunRuntime{Resolved: captaindb.PromptRunRuntimeSelection{Provider: "anthropic"}},
+	})
 	waiting := string(captaindb.PromptRunStateWaiting)
 	created.PhaseRuns = types.PhaseRuns{
 		types.RunPhase:    {Phase: types.RunPhase, State: waiting, Active: true},
@@ -409,46 +418,12 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 		t.Errorf("resumed step = %q, want the run step that asked", gotReq.Options.Step)
 	}
 	spec := resolvedRun(t, *gotReq).Spec
-	if providerKey(spec.Model) != "openai" || spec.Name != codexModel || spec.Mode != api.ModeAgent || string(spec.Effort) != "high" {
+	if run.ProviderKey(spec.Model) != "openai" || spec.Name != codexModel || spec.Mode != api.ModeAgent || string(spec.Effort) != "high" {
 		t.Errorf("runtime = %s/%s/%s/%s, want openai/%s/agent/high — a codex session must not resume under claude",
-			providerKey(spec.Model), spec.Name, spec.Mode, spec.Effort, codexModel)
+			run.ProviderKey(spec.Model), spec.Name, spec.Mode, spec.Effort, codexModel)
 	}
 	if spec.SessionID != sid {
 		t.Errorf("session id = %q, want the todo's recorded session %q", spec.SessionID, sid)
-	}
-}
-
-// Explicit dashboard options still win over the asking run's runtime.
-func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
-	workDir := t.TempDir()
-	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created := seedAskTodoWithRun(t, workDir, "sess-answer-override", types.RunPhase, &captaindb.PromptRun{
-		State: captaindb.PromptRunStateWaiting,
-		Runtime: captaindb.PromptRunRuntime{
-			Resolved: captaindb.PromptRunRuntimeSelection{Provider: "openai", Mode: "agent", Model: "gpt-5.6-sol", Effort: "high"},
-		},
-	})
-	gotReq, _ := stubRunStart(t)
-
-	raw, err := json.Marshal(todoAnswerPayload{
-		Ref:       todos.TODOReference(created),
-		SessionID: "sess-answer-override",
-		Answer:    "use postgres",
-		Options: &todoRunPayload{
-			Spec: api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeCmux, Effort: "medium"}},
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal answer payload: %v", err)
-	}
-	rec := httptest.NewRecorder()
-	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(raw))))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
-	}
-	spec := resolvedRun(t, *gotReq).Spec
-	if spec.Mode != api.ModeCmux || spec.Name != "claude-sonnet-5" || string(spec.Effort) != "medium" {
-		t.Errorf("runtime = %s/%s/%s, want the explicitly requested cmux/claude-sonnet-5/medium", spec.Mode, spec.Name, spec.Effort)
 	}
 }
 

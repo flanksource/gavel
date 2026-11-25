@@ -17,15 +17,20 @@ import (
 )
 
 type projectDiffResponse struct {
-	Path      string `json:"path"`
-	Diff      string `json:"diff"`
+	Path string `json:"path"`
+	Diff string `json:"diff"`
+	// Staged (HEAD→index) and Unstaged (index→worktree, or the /dev/null diff
+	// of an untracked file) are set only when the target is a single file, so
+	// the UI can stage individual lines against them.
+	Staged    string `json:"staged"`
+	Unstaged  string `json:"unstaged"`
 	Truncated bool   `json:"truncated"`
 	Binary    bool   `json:"binary"`
 }
 
 func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request) {
 	stopFile := rpchttp.Track(r.Context(), "file")
-	project, err := GetProject(r.PathValue("name"))
+	project, err := getProject(r.Context(), r.PathValue("name"))
 	stopFile()
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
@@ -46,15 +51,27 @@ func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	diff, binary, err := projectWorkingTreeDiff(r.Context(), workDir, files)
+	working, err := projectWorkingTreeDiff(r.Context(), workDir, files)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	diff, truncated := gavelgit.TruncateDiff(diff)
-	respondJSON(w, http.StatusOK, projectDiffResponse{
-		Path: target, Diff: diff, Truncated: truncated, Binary: binary,
-	})
+	response := projectDiffResponse{Path: target, Binary: working.binary}
+	var truncated [3]bool
+	response.Diff, truncated[0] = gavelgit.TruncateDiff(working.diff)
+	if len(files) == 1 && files[0].Path == target {
+		response.Staged, truncated[1] = gavelgit.TruncateDiff(working.staged)
+		response.Unstaged, truncated[2] = gavelgit.TruncateDiff(working.unstaged)
+	}
+	response.Truncated = truncated[0] || truncated[1] || truncated[2]
+	respondJSON(w, http.StatusOK, response)
+}
+
+// projectWorkingDiff is the combined patch of the selected entries plus, for a
+// single file, its staged and unstaged halves.
+type projectWorkingDiff struct {
+	diff, staged, unstaged string
+	binary                 bool
 }
 
 func selectProjectDiffFiles(target string, files []status.FileStatus) (string, []status.FileStatus, error) {
@@ -76,16 +93,22 @@ func selectProjectDiffFiles(target string, files []status.FileStatus) (string, [
 	return target, selected, nil
 }
 
-func projectWorkingTreeDiff(ctx context.Context, workDir string, files []status.FileStatus) (string, bool, error) {
-	var patches []string
+func projectWorkingTreeDiff(ctx context.Context, workDir string, files []status.FileStatus) (projectWorkingDiff, error) {
+	var (
+		patches []string
+		working projectWorkingDiff
+	)
 	covered := 0
 	allBinary := true
 	for _, file := range files {
 		filePatches, fileCovered, err := projectFilePatches(ctx, workDir, file)
 		if err != nil {
-			return "", false, err
+			return projectWorkingDiff{}, err
 		}
 		covered += fileCovered
+		if len(files) == 1 && fileCovered == 1 {
+			working.staged, working.unstaged = splitFilePatches(file, filePatches)
+		}
 		for _, patch := range filePatches {
 			if strings.TrimSpace(patch) == "" {
 				continue
@@ -96,7 +119,19 @@ func projectWorkingTreeDiff(ctx context.Context, workDir string, files []status.
 			}
 		}
 	}
-	return strings.Join(patches, "\n"), covered == 1 && len(patches) > 0 && allBinary, nil
+	working.diff = strings.Join(patches, "\n")
+	working.binary = covered == 1 && len(patches) > 0 && allBinary
+	return working, nil
+}
+
+// splitFilePatches names the patches projectFilePatches rendered for one
+// file: a tracked file's staged and unstaged diffs, or an untracked file's
+// creation diff, which is unstaged.
+func splitFilePatches(file status.FileStatus, patches []string) (staged, unstaged string) {
+	if file.State == status.StateUntracked {
+		return "", patches[0]
+	}
+	return patches[0], patches[1]
 }
 
 // projectFilePatches renders one status entry as unified-diff patches and

@@ -27,6 +27,8 @@ var _ = Describe("Shared runtime layers", func() {
 		Expect(err).To(HaveOccurred())
 	},
 		Entry("unknown linter", "lint: {linters: {typo: {runtime: {cpu: 100}}}}"),
+		Entry("unknown TypeScript engine", "lint: {linters: {tsc: {engine: typo}}}"),
+		Entry("engine on another linter", "lint: {linters: {eslint: {engine: typescript}}}"),
 		Entry("unknown framework", "test: {frameworks: {typo: {runtime: {cpu: 100}}}}"),
 		Entry("invalid global duration", "runtime: {timeout: forever}"),
 	)

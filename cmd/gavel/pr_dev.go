@@ -13,6 +13,7 @@ import (
 var (
 	prDashboardDev = vitedev.App{Name: "PR dashboard", Dir: "pr/ui", Port: 5273, Entry: "/src/index.tsx"}
 	testRunnerDev  = vitedev.App{Name: "test-runner UI", Dir: "testrunner/ui", Port: 5275, Entry: "/src/index.tsx"}
+	editorDev      = vitedev.App{Name: "editor", Dir: "editor/ui", Port: 5276, Entry: "/src/index.tsx"}
 )
 
 // devProxy is the proxy a `--dev` server puts in front of app: it finds the

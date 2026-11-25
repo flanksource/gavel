@@ -2,10 +2,14 @@ package github
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
+	"github.com/flanksource/commons-db/dbtest"
 	githubcache "github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,30 +58,25 @@ func TestFetchRunJobsServesCompletedRunFromCache(t *testing.T) {
 	assert.Equal(t, want.Conclusion, got.Conclusion)
 }
 
-// TestFetchRunJobsEnrichesCachedRunWithLogs verifies the cache-poisoning fix:
-// a completed run cached WITHOUT logs must be enriched (and re-cached) when a
-// later FetchRunJobs call requests logs. We seed the job-logs cache so the
-// enrichment path attaches logs without any network call (no token is set, so
-// any HTTP attempt would fail).
-func TestFetchRunJobsEnrichesCachedRunWithLogs(t *testing.T) {
-	dsn := os.Getenv(githubcache.EnvDSN)
-	if dsn == "" {
-		t.Skipf("set %s=postgres://... to run this integration test", githubcache.EnvDSN)
-	}
-	t.Setenv(githubcache.EnvDSN, dsn)
+func TestFetchRunJobsTailsCachedRawLogs(t *testing.T) {
+	t.Setenv(githubcache.EnvDatabaseDSN, dbtest.ForT(t, dbtest.Options{Name: "gavel_log_cache"}).DSN())
+	t.Setenv(githubcache.EnvDSN, "")
 	t.Setenv(githubcache.EnvDisable, "")
-	resetSharedStoreForTest(t)
+	t.Setenv(githubcache.EnvDatabaseDisable, "")
+	migrated, err := database.Open(t.Context(), database.WithMigrations())
+	require.NoError(t, err)
+	require.NoError(t, migrated.Close())
 
-	store := githubcache.Shared()
+	store, err := githubcache.Open()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	require.False(t, store.Disabled())
 
 	const runID = int64(987654322)
 	const jobID = int64(55555)
 	const repo = "owner/repo"
 
-	// A completed, FAILED run cached without any logs (the poisoned state a
-	// prior `gavel pr status` without --logs would leave behind).
-	logless := &model.WorkflowRun{
+	legacy := &model.WorkflowRun{
 		DatabaseID: runID,
 		Name:       "CI",
 		Status:     "completed",
@@ -87,30 +86,37 @@ func TestFetchRunJobsEnrichesCachedRunWithLogs(t *testing.T) {
 			Name:       "build",
 			Status:     "completed",
 			Conclusion: "failure",
-			Steps:      []model.Step{{Name: "go test", Status: "completed", Conclusion: "failure"}},
+			Logs:       "old tail",
+			Steps:      []model.Step{{Name: "Run tests", Status: "completed", Conclusion: "failure", Logs: "old excerpt"}},
 		}},
 	}
-	payload, err := json.Marshal(logless)
+	payload, err := json.Marshal(legacy)
 	require.NoError(t, err)
-	store.PutCompletedRun(repo, runID, logless.Status, logless.Conclusion, payload)
+	store.PutCompletedRun(repo, runID, legacy.Status, legacy.Conclusion, payload)
 
-	// Seed the job-logs cache so enrichment is network-free.
-	const rawLog = "2024-01-01T00:00:00.000Z go test\n2024-01-01T00:00:01.000Z FAIL\tpkg\t0.01s"
+	const rawLog = "##[group]Run tests\n##[endgroup]\n##[group]Diagnostics\nstarting tests\nFAIL\n##[endgroup]"
 	store.PutJobLogs(jobID, repo, rawLog)
 
-	t.Setenv("GITHUB_TOKEN", "")
-	t.Setenv("GH_TOKEN", "")
-	got, err := FetchRunJobs(Options{Repo: repo}, runID, RunLogOptions{FetchLogs: true, TailLines: 100})
-	require.NoError(t, err, "FetchRunJobs must enrich from cache without a token")
-	require.Len(t, got.Jobs, 1)
-	assert.NotEmpty(t, got.Jobs[0].Logs, "failed job must have logs attached on a logs-requested cache hit")
-
-	// The enriched run must be re-persisted so a subsequent logs request is a
-	// pure cache hit.
-	require.True(t, runHasFailureLogs(got))
-	refetched, err := FetchRunJobs(Options{Repo: repo}, runID, RunLogOptions{FetchLogs: true, TailLines: 100})
-	require.NoError(t, err)
-	assert.NotEmpty(t, refetched.Jobs[0].Logs, "re-cached run must retain logs")
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	t.Setenv("GITHUB_API_URL", server.URL)
+	options := Options{Repo: repo, Cache: store, Token: "test-token"}
+	for _, request := range []struct {
+		options RunLogOptions
+		want    string
+	}{
+		{RunLogOptions{FetchLogs: true, TailLines: 1}, "FAIL"},
+		{RunLogOptions{FetchLogs: true}, "starting tests\nFAIL"},
+		{RunLogOptions{}, ""},
+	} {
+		got, err := FetchRunJobs(options, runID, request.options)
+		require.NoError(t, err)
+		assert.Equal(t, request.want, got.Jobs[0].Logs)
+		assert.Equal(t, request.want, got.Jobs[0].Steps[0].Logs)
+		if request.options.FetchLogs {
+			assert.Contains(t, got.Pretty().String(), "Diagnostics")
+		}
+	}
 }
 
 // resetSharedStoreForTest is currently a no-op: the cache.Shared() singleton

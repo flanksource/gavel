@@ -1,6 +1,7 @@
 package prwatch
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -16,7 +17,7 @@ import (
 )
 
 type PRWatchResult struct {
-	PR   *model.PRInfo                `json:"pr"`
+	PR   *model.PRInfo                `json:"pr,omitempty"`
 	Runs map[int64]*model.WorkflowRun `json:"runs,omitempty"`
 	// Conflicts is populated only while the PR is CONFLICTING, and carries the
 	// conflicting paths reconstructed locally — GitHub reports the verdict but
@@ -89,10 +90,20 @@ func (r PRWatchResult) HasTerminalFailure() bool {
 	if r.PR != nil && r.PR.StatusCheckRollup.HasFailure() {
 		return true
 	}
+	if r.PR == nil {
+		for _, run := range r.Runs {
+			if run != nil && actionsConclusionFailed(run.Conclusion) {
+				return true
+			}
+		}
+	}
 	return r.HasFailedRun()
 }
 
 func (r PRWatchResult) Pretty() api.Text {
+	if r.PR == nil {
+		return r.prettyWorkflows()
+	}
 	text := r.PR.Pretty()
 	// Conflicts come first: a blocked merge outranks every check below it, and
 	// --ai-fix reads this same rendering as its input.
@@ -110,7 +121,11 @@ func (r PRWatchResult) Pretty() api.Text {
 }
 
 func (r PRWatchResult) prettyWorkflows() api.Text {
-	if len(r.Runs) == 0 && len(r.PR.StatusCheckRollup) == 0 {
+	var checks model.StatusChecks
+	if r.PR != nil {
+		checks = r.PR.StatusCheckRollup
+	}
+	if len(r.Runs) == 0 && len(checks) == 0 {
 		return clicky.Text("  No checks found", "text-gray-500")
 	}
 
@@ -120,9 +135,15 @@ func (r PRWatchResult) prettyWorkflows() api.Text {
 	labels := runLabels(runs)
 	for _, run := range runs {
 		text = text.NewLine().Add(run.PrettyAs(labels[run.DatabaseID]))
+		if r.PR == nil {
+			text = text.NewLine().Append(fmt.Sprintf("    Run %d | %s", run.DatabaseID, run.HeadSHA), "text-gray-500")
+			if run.URL != "" {
+				text = text.NewLine().Append("    "+run.URL, "text-blue-600")
+			}
+		}
 	}
 
-	for _, check := range r.PR.StatusCheckRollup {
+	for _, check := range checks {
 		if check.RunID != 0 && r.Runs[check.RunID] != nil {
 			continue
 		}
@@ -139,6 +160,7 @@ func (r PRWatchResult) prettyWorkflows() api.Text {
 		if model.IsFailureConclusion(check.Conclusion) && check.DetailsURL != "" {
 			text = text.NewLine().Append("    "+check.DetailsURL, "text-blue-600")
 		}
+		text = text.Add(prettyCheckLint(check))
 	}
 
 	return text
@@ -302,7 +324,11 @@ func prettyCommentLine(c model.PRComment, indent string) api.Text {
 		}
 		lines[0] = lines[0] + " (" + tag + ")"
 	}
-	text = text.Append(" "+lines[0], style)
+	text = text.Append(" ", "")
+	if author := cmp.Or(c.AuthorName, c.Author); author != "" {
+		text = text.Append(author+": ", "text-blue-600")
+	}
+	text = text.Append(lines[0], style)
 	for _, line := range lines[1:] {
 		text = text.NewLine().Append(indent+"  "+line, style)
 	}

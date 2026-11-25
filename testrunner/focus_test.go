@@ -4,167 +4,226 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
-	"strings"
-	"testing"
+	"time"
 
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/testrunner/runners"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 )
 
-func TestExtractNativeFocus(t *testing.T) {
-	tests := []struct {
-		name      string
-		args      []string
-		focus     string
-		remaining []string
-		wantErr   string
-	}{
-		{name: "go spaced", args: []string{"-run", "TestFoo", "-count=1"}, focus: "TestFoo", remaining: []string{"-count=1"}},
-		{name: "go equals", args: []string{"-run=TestFoo"}, focus: "TestFoo"},
-		{name: "ginkgo spaced", args: []string{"--focus", "does work", "--label-filter", "smoke"}, focus: "does work", remaining: []string{"--label-filter", "smoke"}},
-		{name: "ginkgo equals", args: []string{"--focus=does work"}, focus: "does work"},
-		{name: "raw args stay opaque", args: []string{"--label-filter", "-run"}, remaining: []string{"--label-filter", "-run"}},
-		{name: "missing go pattern", args: []string{"-run"}, wantErr: "non-empty focus pattern"},
-		{name: "empty ginkgo pattern", args: []string{"--focus="}, wantErr: "non-empty focus pattern"},
+// parsedTestOptions parses o's argv with each framework's flags and merges
+// gavel's own flags, as Run's detection and detectAndRun do.
+func parsedTestOptions(o *TestOrchestrator, frameworks ...Framework) (map[Framework]*runners.TestOptions, error) {
+	base, err := o.baseTestOptions()
+	if err != nil {
+		return nil, err
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			focus, remaining, err := extractNativeFocus(tt.args)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("extractNativeFocus(%v) error = %v, want %q", tt.args, err, tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("extractNativeFocus(%v): %v", tt.args, err)
-			}
-			if focus != tt.focus || !reflect.DeepEqual(remaining, tt.remaining) {
-				t.Fatalf("extractNativeFocus(%v) = (%q, %v), want (%q, %v)", tt.args, focus, remaining, tt.focus, tt.remaining)
-			}
-		})
+	registry := DefaultRegistry(o.WorkDir)
+	detected := map[Framework]*runners.TestOptions{}
+	for _, fw := range frameworks {
+		runner, ok := registry.Get(fw)
+		Expect(ok).To(BeTrue(), "runner %s", fw)
+		parsed, err := runners.ParseTestArgs(base.Cwd, o.testArgv(), runner.Flags()...)
+		if err != nil {
+			return nil, err
+		}
+		merged, err := base.Merge(*parsed)
+		if err != nil {
+			return nil, err
+		}
+		detected[fw] = &merged
 	}
+	return detected, nil
 }
 
-func TestResolveFrameworkArgsMapsFocusAndSkipsUnsupported(t *testing.T) {
-	o := &TestOrchestrator{
-		RunOptions: RunOptions{PassThroughArgs: []string{"--focus", "TestFoo"}},
-		registry:   DefaultRegistry(t.TempDir()),
+// resolveFor resolves passThrough for the frameworks that have a package.
+func resolveFor(passThrough []string, packages map[Framework][]string, others ...Framework) (map[Framework]runners.TestOptions, error) {
+	o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: GinkgoT().TempDir(), PassThroughArgs: passThrough}}
+	detected, err := parsedTestOptions(o, append(lo.Keys(packages), others...)...)
+	if err != nil {
+		return nil, err
 	}
+	return o.resolveTestOptions(detected, packages)
+}
 
-	frameworks, argsByFramework, err := o.resolveFrameworkArgs(
-		[]Framework{parsers.GoTest, parsers.Ginkgo, parsers.Jest},
-		[]string{"-count=1"},
+var goAndGinkgo = map[Framework][]string{parsers.GoTest: {"./plain"}, parsers.Ginkgo: {"./specs"}}
+
+var _ = Describe("runner arguments after --", func() {
+	DescribeTable("read a focus in any position and spelling for go test and Ginkgo alike",
+		func(passThrough []string) {
+			resolved, err := resolveFor(passThrough, goAndGinkgo)
+			Expect(err).NotTo(HaveOccurred())
+			focus := runners.FileSelection{Regex: []string{"TestFoo"}}
+			Expect(resolved).To(HaveLen(2))
+			for fw, opts := range resolved {
+				Expect(opts.Focus).To(Equal(focus), "%s", fw)
+				Expect(opts.ExtraArgs).To(Equal([]string{"-count=1"}), "%s", fw)
+			}
+		},
+		Entry("go spaced, before an unknown flag", []string{"-run", "TestFoo", "-count=1"}),
+		Entry("go equals, after an unknown flag", []string{"-count=1", "-run=TestFoo"}),
+		Entry("ginkgo spaced", []string{"--focus", "TestFoo", "-count=1"}),
+		Entry("ginkgo equals", []string{"-count=1", "--focus=TestFoo"}),
+		Entry("native -ginkgo.focus", []string{"-ginkgo.focus=TestFoo", "-count=1"}),
+		Entry("native --ginkgo.focus spaced", []string{"-count=1", "--ginkgo.focus", "TestFoo"}),
+		Entry("vitest -t", []string{"-t", "TestFoo", "-count=1"}),
+		Entry("vitest --testNamePattern", []string{"-count=1", "--testNamePattern=TestFoo"}),
 	)
-	if err != nil {
-		t.Fatalf("resolveFrameworkArgs: %v", err)
-	}
-	if !reflect.DeepEqual(frameworks, []Framework{parsers.GoTest, parsers.Ginkgo}) {
-		t.Fatalf("frameworks = %v, want go test + ginkgo", frameworks)
-	}
-	if got, want := argsByFramework[parsers.GoTest], []string{"-count=1", "-run", "TestFoo"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("go test args = %v, want %v", got, want)
-	}
-	if got, want := argsByFramework[parsers.Ginkgo], []string{"-count=1", "--focus", "TestFoo"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("ginkgo args = %v, want %v", got, want)
-	}
-	if _, ok := argsByFramework[parsers.Jest]; ok {
-		t.Fatalf("jest should be excluded from a focused run: %v", argsByFramework)
-	}
-}
 
-func TestResolveFrameworkArgsPassThroughRequiresSingleFramework(t *testing.T) {
-	o := &TestOrchestrator{
-		RunOptions: RunOptions{PassThroughArgs: []string{"--label-filter", "smoke"}},
-		registry:   DefaultRegistry(t.TempDir()),
-	}
+	DescribeTable("reject a focus flag without a pattern",
+		func(passThrough []string, message string) {
+			_, err := resolveFor(passThrough, goAndGinkgo)
+			Expect(err).To(MatchError(ContainSubstring(message)))
+		},
+		Entry("missing go pattern", []string{"-run"}, "-run requires a value"),
+		Entry("empty ginkgo pattern", []string{"--focus="}, "requires a non-empty value"),
+	)
 
-	_, _, err := o.resolveFrameworkArgs([]Framework{parsers.GoTest, parsers.Ginkgo}, nil)
-	if err == nil || !strings.Contains(err.Error(), "exactly one selected framework") {
-		t.Fatalf("expected ambiguous pass-through error, got %v", err)
-	}
+	It("selects tests in jest and vitest from a go test focus", func() {
+		resolved, err := resolveFor([]string{"-run=TestFoo"}, map[Framework][]string{parsers.Jest: {"./web"}, parsers.Vitest: {"./app"}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(lo.Keys(resolved)).To(ConsistOf(parsers.Jest, parsers.Vitest))
+		for fw, opts := range resolved {
+			Expect(opts.Focus).To(Equal(runners.FileSelection{Regex: []string{"TestFoo"}}), "%s", fw)
+			Expect(opts.ExtraArgs).To(BeEmpty(), "%s", fw)
+		}
+	})
 
-	frameworks, argsByFramework, err := o.resolveFrameworkArgs([]Framework{parsers.Ginkgo}, []string{"--trace"})
-	if err != nil {
-		t.Fatalf("single-framework pass-through: %v", err)
-	}
-	if !reflect.DeepEqual(frameworks, []Framework{parsers.Ginkgo}) {
-		t.Fatalf("frameworks = %v", frameworks)
-	}
-	if got, want := argsByFramework[parsers.Ginkgo], []string{"--trace", "--label-filter", "smoke"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("ginkgo args = %v, want %v", got, want)
-	}
-}
+	It("treats go test and Ginkgo as one family: a Ginkgo-only flag is not unknown, and narrows to Ginkgo", func() {
+		resolved, err := resolveFor([]string{"--label-filter", "smoke"}, goAndGinkgo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(lo.Keys(resolved)).To(Equal([]Framework{parsers.Ginkgo}))
+		Expect(resolved[parsers.Ginkgo].LabelFilter).To(Equal("smoke"))
+		Expect(resolved[parsers.Ginkgo].ExtraArgs).To(BeEmpty())
+	})
 
-func TestResolveFrameworkArgsErrorsWhenNoRunnerSupportsFocus(t *testing.T) {
-	o := &TestOrchestrator{
-		RunOptions: RunOptions{PassThroughArgs: []string{"-run=TestFoo"}},
-		registry:   DefaultRegistry(t.TempDir()),
-	}
+	It("passes unknown arguments to go test and Ginkgo together", func() {
+		resolved, err := resolveFor([]string{"--trace"}, goAndGinkgo)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved[parsers.GoTest].ExtraArgs).To(Equal([]string{"--trace"}))
+		Expect(resolved[parsers.Ginkgo].ExtraArgs).To(Equal([]string{"--trace"}))
+	})
 
-	_, _, err := o.resolveFrameworkArgs([]Framework{parsers.Jest, parsers.Vitest}, nil)
-	if err == nil || !strings.Contains(err.Error(), "not supported by any detected framework") {
-		t.Fatalf("expected unsupported focus error, got %v", err)
-	}
-}
+	It("rejects unknown arguments across framework families, naming only frameworks with packages", func() {
+		_, err := resolveFor([]string{"--trace"},
+			map[Framework][]string{parsers.GoTest: {"./plain"}, parsers.Vitest: {"./app"}},
+			parsers.Ginkgo, parsers.Jest)
+		Expect(err).To(MatchError(And(
+			ContainSubstring("(--trace) need one framework family"),
+			ContainSubstring("got 2 (go test, vitest) for"),
+		)))
+	})
+})
 
-func TestApplyFailedFilterReturnsPerFrameworkFocusPatterns(t *testing.T) {
-	snapshot := testui.Snapshot{Tests: []parsers.Test{
-		{Name: "TestFoo", PackagePath: "./go", Framework: parsers.GoTest, Failed: true},
-		{Name: "does work", PackagePath: "./ginkgo", Framework: parsers.Ginkgo, Failed: true},
-	}}
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "failed.json")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write snapshot: %v", err)
-	}
+var _ = Describe("build tags", func() {
+	It("carries tags to the Go frameworks without removing unsupported frameworks", func() {
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: GinkgoT().TempDir(), Tags: []string{"integration", "postgres"}}}
+		packages := map[Framework][]string{parsers.GoTest: {"./plain"}, parsers.Ginkgo: {"./specs"}, parsers.Jest: {"./web"}}
+		detected, err := parsedTestOptions(o, lo.Keys(packages)...)
+		Expect(err).NotTo(HaveOccurred())
+		resolved, err := o.resolveTestOptions(detected, packages)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(lo.Keys(resolved)).To(ConsistOf(parsers.GoTest, parsers.Ginkgo, parsers.Jest))
+		Expect(resolved[parsers.Ginkgo].Tags).To(Equal([]string{"integration", "postgres"}))
+		process, err := runners.GoTestCommand(resolved[parsers.GoTest].ForPackages("./plain"), nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(process.Args).To(ContainElement("-tags=integration,postgres"))
+	})
 
-	filtered, focusByFramework, err := applyFailedFilter(map[Framework][]string{
-		parsers.GoTest: {"./go", "./passing"},
-		parsers.Ginkgo: {"./ginkgo"},
-	}, path)
-	if err != nil {
-		t.Fatalf("applyFailedFilter: %v", err)
-	}
-	if got, want := filtered[parsers.GoTest], []string{"./go"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("filtered go packages = %v, want %v", got, want)
-	}
-	if got, want := filtered[parsers.Ginkgo], []string{"./ginkgo"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("filtered ginkgo packages = %v, want %v", got, want)
-	}
-	if got, want := focusByFramework[parsers.GoTest], "^(TestFoo)$"; got != want {
-		t.Fatalf("go focus = %q, want %q", got, want)
-	}
-	if got, want := focusByFramework[parsers.Ginkgo], "does work"; got != want {
-		t.Fatalf("ginkgo focus = %q, want %q", got, want)
-	}
-}
+	It("rejects tags when no selected framework supports them", func() {
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: GinkgoT().TempDir(), Tags: []string{"integration"}}}
+		packages := map[Framework][]string{parsers.Jest: {"./web"}, parsers.Vitest: {"./app"}}
+		detected, err := parsedTestOptions(o, lo.Keys(packages)...)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = o.resolveTestOptions(detected, packages)
+		Expect(err).To(MatchError(ContainSubstring("--tags is not supported")))
+	})
 
-func TestApplyFailedFilterRejectsFailedPackagesMissingFromDiscovery(t *testing.T) {
-	snapshot := testui.Snapshot{Tests: []parsers.Test{{
-		Name:        "fails in CI",
-		PackagePath: "./ci-only",
-		Framework:   parsers.Ginkgo,
-		Failed:      true,
-	}}}
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatalf("marshal snapshot: %v", err)
-	}
-	failedPath := filepath.Join(t.TempDir(), "failed.json")
-	if err := os.WriteFile(failedPath, data, 0o644); err != nil {
-		t.Fatalf("write snapshot: %v", err)
+	It("salts run-cache fingerprints with tags", func() {
+		workDir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/tags\n\ngo 1.24\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(workDir, "tags.go"), []byte("package tags\n"), 0o644)).To(Succeed())
+		plain, err := newSelectorContext(workDir, nil)
+		Expect(err).NotTo(HaveOccurred())
+		tagged, err := newSelectorContext(workDir, []string{"integration"})
+		Expect(err).NotTo(HaveOccurred())
+		plainFingerprint, err := plain.hasher.Effective("example.com/tags")
+		Expect(err).NotTo(HaveOccurred())
+		taggedFingerprint, err := tagged.hasher.Effective("example.com/tags")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(taggedFingerprint.Hex).NotTo(Equal(plainFingerprint.Hex))
+	})
+})
+
+var _ = Describe("--failed", func() {
+	writeSnapshot := func(tests ...parsers.Test) string {
+		data, err := json.Marshal(testui.Snapshot{Tests: tests})
+		Expect(err).NotTo(HaveOccurred())
+		path := filepath.Join(GinkgoT().TempDir(), "failed.json")
+		Expect(os.WriteFile(path, data, 0o644)).To(Succeed())
+		return path
 	}
 
-	_, _, err = applyFailedFilter(map[Framework][]string{
-		parsers.Ginkgo: {"./local"},
-	}, failedPath)
-	if err == nil || !strings.Contains(err.Error(), "did not match any detected packages") {
-		t.Fatalf("expected unmatched failed-package error, got %v", err)
-	}
-}
+	It("narrows to failed packages and focuses each framework on its failed tests", func() {
+		path := writeSnapshot(
+			parsers.Test{Name: "TestFoo", PackagePath: "./go", Framework: parsers.GoTest, Failed: true},
+			parsers.Test{Name: "does (work)", PackagePath: "./ginkgo", Framework: parsers.Ginkgo, Failed: true},
+			parsers.Test{Name: "renders [a] map", PackagePath: "./web", Framework: parsers.Vitest, Failed: true},
+			parsers.Test{Name: "opens page", PackagePath: "./jest", Framework: parsers.Jest, Failed: true},
+			parsers.Test{Name: "logs in", PackagePath: "./e2e", Framework: parsers.Playwright, Failed: true},
+		)
+		filtered, names, err := applyFailedFilter(map[Framework][]string{
+			parsers.GoTest:     {"./go", "./passing"},
+			parsers.Ginkgo:     {"./ginkgo"},
+			parsers.Vitest:     {"./web"},
+			parsers.Jest:       {"./jest"},
+			parsers.Playwright: {"./e2e"},
+		}, "", path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(filtered).To(Equal(map[Framework][]string{
+			parsers.GoTest: {"./go"}, parsers.Ginkgo: {"./ginkgo"}, parsers.Vitest: {"./web"}, parsers.Jest: {"./jest"}, parsers.Playwright: {"./e2e"},
+		}))
+		Expect(failedTestOptions(names)).To(Equal(map[Framework]runners.FileSelection{
+			parsers.GoTest:     {Exact: []string{"TestFoo"}},
+			parsers.Ginkgo:     {Regex: []string{`does \(work\)`}},
+			parsers.Vitest:     {Regex: []string{`renders \[a\] map$`}},
+			parsers.Jest:       {Regex: []string{`opens page$`}},
+			parsers.Playwright: {Regex: []string{`logs in$`}},
+		}))
+	})
+
+	It("rejects failed packages missing from discovery", func() {
+		path := writeSnapshot(parsers.Test{Name: "fails in CI", PackagePath: "./ci-only", Framework: parsers.Ginkgo, Failed: true})
+		_, _, err := applyFailedFilter(map[Framework][]string{parsers.Ginkgo: {"./local"}}, "", path)
+		Expect(err).To(MatchError(ContainSubstring("did not match any detected packages")))
+	})
+
+	It("unions the failures of every run started within a duration window", func() {
+		stateRoot := GinkgoT().TempDir()
+		now := time.Now().UTC()
+		record := func(age time.Duration, tests ...parsers.Test) {
+			_, err := snapshots.SavePerRun(stateRoot, &testui.Snapshot{Tests: tests}, now.Add(-age), "")
+			Expect(err).NotTo(HaveOccurred())
+		}
+		web := func(name string, failed bool) parsers.Test {
+			return parsers.Test{Name: name, PackagePath: "./web", Framework: parsers.Vitest, Failed: failed, Passed: !failed}
+		}
+		record(48*time.Hour, web("failed before the window", true))
+		record(3*time.Hour, web("times out under load", true), web("renders map", true))
+		record(time.Hour, web("renders map", true), web("times out under load", false))
+
+		filtered, names, err := applyFailedFilter(map[Framework][]string{parsers.Vitest: {"./web", "./other"}}, stateRoot, "1d")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(filtered).To(Equal(map[Framework][]string{parsers.Vitest: {"./web"}}))
+		Expect(names).To(Equal(map[Framework][]string{parsers.Vitest: {"renders map", "times out under load"}}))
+	})
+
+	It("rejects a duration window with no failed runs", func() {
+		_, _, err := applyFailedFilter(map[Framework][]string{parsers.Vitest: {"./web"}}, GinkgoT().TempDir(), "1d")
+		Expect(err).To(MatchError(ContainSubstring("no failed tests found in runs started within 1d")))
+	})
+})

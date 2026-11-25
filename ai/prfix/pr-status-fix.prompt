@@ -88,6 +88,12 @@ Fix the failures and unresolved comments visible in this PR status snapshot:
 ```
 {{statusText}}
 ```
+{{#if lifecycle}}
+This is a manual lifecycle action. Address only its source context. If the context
+reports merge conflicts, rebase onto the base branch in this isolated workspace.
+Return the lifecycle envelope with success, event (completed or blocked), and
+comment. Do not claim success when blocked or when verification failed.
+{{/if}}
 {{#if url}}
 The pull request URL is {{url}}.
 {{/if}}

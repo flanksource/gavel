@@ -1,0 +1,3 @@
+allowBuilds:
+  "@flanksource/clicky-ui": true
+  esbuild: true

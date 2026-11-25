@@ -30,7 +30,8 @@ func TestUIRSkipRealBinaryRoundTrip(t *testing.T) {
 	}
 	export := filepath.Join(repo, "uir-run.json")
 	options := testrunner.RunOptions{
-		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+		Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: binary, UIRExport: export, UIRInputContext: "postgres=test",
 	}
 	_, err := runTests(options, false)
@@ -171,7 +172,8 @@ func TestUIRSkipRunsUnskippableInventoryTestsAcrossSubprocesses(t *testing.T) {
 	export := filepath.Join(repo, "uir-run.json")
 
 	_, err := runTests(testrunner.RunOptions{
-		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+		Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: fake, UIRExport: export, UIRInputContext: "postgres=test",
 	}, false)
 	if err != nil {
@@ -232,7 +234,8 @@ func TestUIRRunAllPreservesOrdinaryGoTestSemantics(t *testing.T) {
 	}
 	repo := newUIRSkipFixture(t, false)
 	_, err := runTests(testrunner.RunOptions{
-		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+		Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: newFakeUIR(t, false, true), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
 	}, false)
 	if err != nil {
@@ -259,7 +262,8 @@ func TestUIRSkipInputInventoryFailureRunsFullWithoutExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := runTests(testrunner.RunOptions{
-		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+		Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: filepath.Join(repo, "missing-uir"), UIRExport: export, UIRInputContext: "postgres=test",
 	}, false)
 	if err != nil {
@@ -292,7 +296,8 @@ func TestUIRSkipPreservesVetFailuresInRunAllAndSelected(t *testing.T) {
 			exitCode = 0
 			t.Cleanup(func() { exitCode = oldExitCode })
 			_, runErr := runTests(testrunner.RunOptions{
-				Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+				Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+				Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 				UIRSkip: true, UIRBinary: newFakeUIR(t, false, runAll), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
 			}, false)
 			if runErr != nil {
@@ -322,7 +327,8 @@ func TestUIRInvalidSuccessfulPlanRunsFullTests(t *testing.T) {
 			}
 			export := filepath.Join(repo, "uir-run.json")
 			_, err := runTests(testrunner.RunOptions{
-				Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+				Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+				Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 				UIRSkip: true, UIRBinary: binary, UIRExport: export, UIRInputContext: "postgres=test",
 			}, false)
 			if err != nil {
@@ -347,7 +353,8 @@ func TestUIRSkipIdentityMutationBeforeExecutionFailsOpen(t *testing.T) {
 	}
 	repo := newUIRSkipFixture(t, false)
 	_, err := runTests(testrunner.RunOptions{
-		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+		Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: newFakeUIR(t, true, false), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
 	}, false)
 	if err != nil {
@@ -385,7 +392,8 @@ func TestUIRSkipRerunsFullAfterSelectedIdentityMutation(t *testing.T) {
 	exitCode = 0
 	t.Cleanup(func() { exitCode = oldExitCode })
 	_, err := runTests(testrunner.RunOptions{
-		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+		Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: newFakeUIR(t, false, false), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
 	}, false)
 	if err != nil {
@@ -412,7 +420,8 @@ func TestUIRSkipFullIdentityMutationPreservesPassingStatusWithoutBaseline(t *tes
 	repo := newUIRSkipFixture(t, false)
 	addOutputWritingTest(t, repo, false)
 	options := testrunner.RunOptions{
-		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+		Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: newFakeUIR(t, false, true), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
 	}
 	for run := 1; run <= 2; run++ {
@@ -439,7 +448,8 @@ func TestUIRSkipFullIdentityMutationPreservesFailingStatusWithoutBaseline(t *tes
 	exitCode = 0
 	t.Cleanup(func() { exitCode = oldExitCode })
 	_, err := runTests(testrunner.RunOptions{
-		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+		Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: newFakeUIR(t, false, true), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
 	}, false)
 	if err != nil {
@@ -459,7 +469,8 @@ func TestUIRSkipImportFailurePreservesPassingStatus(t *testing.T) {
 	}
 	repo := newUIRSkipFixture(t, false)
 	_, err := runTests(testrunner.RunOptions{
-		Context: context.Background(), WorkDir: repo, Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
+		Context: context.Background(), WorkDir: repo, Dirs: testWorkspaceDirs(t, repo),
+		Recursive: true, Frameworks: []string{"go"}, SkipHooks: true,
 		UIRSkip: true, UIRBinary: newFakeUIRWithImportFailure(t), UIRExport: filepath.Join(repo, "uir-run.json"), UIRInputContext: "postgres=test",
 	}, false)
 	if err != nil {

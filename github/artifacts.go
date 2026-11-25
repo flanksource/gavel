@@ -3,7 +3,6 @@ package github
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,7 +124,7 @@ func DownloadArtifact(opts Options, artifactID int64) ([]byte, error) {
 	}
 
 	path := fmt.Sprintf("/repos/%s/actions/artifacts/%d/zip", repo, artifactID)
-	result, err := cachedGet(context.Background(), opts.cacheStore(), token, path, nil)
+	result, err := cachedGet(opts.context(), opts.cacheStore(), token, path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("download artifact %d: %w", artifactID, err)
 	}

@@ -70,7 +70,7 @@ func TestGeneratePRContentRendersCaptainPromptAndSchema(t *testing.T) {
 	assert.Contains(t, agent.req.Spec.Prompt.User, "files: commit/push_prompt.go, commit/pr-content.prompt")
 	assert.NotContains(t, agent.req.Spec.Prompt.User, "%s")
 	assert.NotEmpty(t, agent.req.Spec.Prompt.SchemaJSON, "schema should be carried as SchemaJSON from the frontmatter")
-	assert.Equal(t, api.SchemaStrictnessRetry, agent.req.Spec.Prompt.SchemaStrictness,
+	assert.Equal(t, api.SchemaStrictnessRepair, agent.req.Spec.Prompt.SchemaStrictness,
 		"schemaStrictness: retry from the frontmatter must be forwarded so a schema violation is fixed by re-asking the model")
 }
 

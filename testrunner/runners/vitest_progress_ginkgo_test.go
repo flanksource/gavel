@@ -71,7 +71,7 @@ var _ = Describe("Vitest progress reporter", func() {
 		Expect(os.Mkdir(pkg, 0o755)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(pkg, "pnpm-workspace.yaml"), []byte("packages:\n  - .\n"), 0o600)).To(Succeed())
 		Expect(os.WriteFile(filepath.Join(pkg, "nested.test.js"), []byte(`test("nested", () => { expect(1).toBe(1) })`+"\n"), 0o600)).To(Succeed())
-		run, err := NewVitest(root).BuildCommand("web")
+		run, err := NewVitest(root).BuildCommand(TestOptions{Cwd: root, Packages: []string{"web"}})
 		Expect(err).NotTo(HaveOccurred())
 
 		args := run.Process.Args[slices.Index(run.Process.Args, "vitest")+1:]
@@ -92,7 +92,7 @@ var _ = Describe("Vitest progress reporter", func() {
 		dir := GinkgoT().TempDir()
 		marker := filepath.Join(GinkgoT().TempDir(), "fast-passed")
 		Expect(os.WriteFile(filepath.Join(dir, "progress.test.js"), []byte(fmt.Sprintf(vitestProgressSpec, marker)), 0o600)).To(Succeed())
-		run, err := NewVitest(dir).BuildCommand(".")
+		run, err := NewVitest(dir).BuildCommand(TestOptions{Cwd: dir, Packages: []string{"./."}})
 		Expect(err).NotTo(HaveOccurred())
 
 		// Run the built vitest arguments against the repo's vitest install,

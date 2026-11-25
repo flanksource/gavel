@@ -33,10 +33,8 @@ func stagedGoModDirs(workDir string, source stagedSource) []string {
 // Modules whose go.mod is not staged are left alone, so a commit that doesn't
 // touch dependencies never depends on module resolution. Off by default unless
 // pushing; override via opts.TidyFlag ("true"/"false") or opts.Config.Tidy.Enabled. Hard
-// failure aborts the commit so a broken go.sum can't slip through. ctx is
-// kept for signature parity with the other apply* helpers.
+// failure aborts the commit so a broken go.sum can't slip through.
 func applyGoModTidy(ctx context.Context, opts Options, source stagedSource) (stagedSource, error) {
-	_ = ctx
 	if !tidyEnabled(opts) {
 		return source, nil
 	}
@@ -65,7 +63,7 @@ func applyGoModTidy(ctx context.Context, opts Options, source stagedSource) (sta
 			return source, fmt.Errorf("hash go.sum in %s: %w", displayDir, err)
 		}
 
-		if err := runGoModTidy(modDir); err != nil {
+		if err := runGoModTidy(ctx, modDir); err != nil {
 			return source, fmt.Errorf("go mod tidy in %s: %w", displayDir, err)
 		}
 
@@ -96,7 +94,7 @@ func applyGoModTidy(ctx context.Context, opts Options, source stagedSource) (sta
 		return source, nil
 	}
 
-	if err := addFiles(opts.WorkDir, toStage); err != nil {
+	if err := addFiles(ctx, addFilesOptions{WorkDir: opts.WorkDir, Files: toStage}); err != nil {
 		return source, fmt.Errorf("stage tidy updates: %w", err)
 	}
 	refreshed, err := readStagedSource(opts.WorkDir)

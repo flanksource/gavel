@@ -1,22 +1,32 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/flanksource/clicky"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/internal/yamldiag"
 	"github.com/flanksource/gavel/processruntime"
 	"github.com/flanksource/gavel/verify"
+	"github.com/flanksource/gavel/workspace"
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 )
 
-func runFixtures(cmd *cobra.Command, args []string) error {
+func runFixtures(cmd *cobra.Command, args []string) (runError error) {
+	defer func() {
+		var diagnostic *yamldiag.Error
+		if errors.As(runError, &diagnostic) {
+			cmd.SilenceErrors = true
+		}
+	}()
 	if fixturesSchema {
 		return writeFixturesSchema(os.Stdout)
 	}
@@ -82,7 +92,24 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	params, err := fixtureRunParams(fixturesParamsFile, fixturesParams)
+	if err != nil {
+		return err
+	}
+	dirs, err := workspace.From(cmd.Context())
+	if err != nil {
+		return err
+	}
+	resumed, err := fixtureResumeFlags{FromStep: fixturesFromStep, FromRun: fixturesFromRun, Files: args, Dirs: dirs}.resume()
+	if err != nil {
+		return err
+	}
+	command, err := fixtureCommand(cmd)
+	if err != nil {
+		return err
+	}
 	runnerOpts := fixtures.RunnerOptions{
+		Params:         resumed.withParams(params),
 		TraceArchive:   archive,
 		ProcessRuntime: runtime,
 		Args:           runtimeArgs,
@@ -107,21 +134,35 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 			ShowStderr: fixtures.ParseOutputMode(fixturesShowStderr),
 		}, cmd.Flags().Changed("show-stdout"), cmd.Flags().Changed("show-stderr"))),
 	}
+	runOpts, detach := fixtureUIRunOptions(fixtureUIRunRequest{Runner: &runnerOpts, UI: fixturesUI, Resume: resumed.Resume, Command: command})
+	runOpts.Dirs = dirs
 	if fixturesUI.UI {
-		opts, detach := fixtureUIRunOptions(fixtureUIRunRequest{Runner: &runnerOpts, UI: fixturesUI})
-		_, err := runTests(opts, detach)
+		_, err = runTests(runOpts, detach)
 		return err
 	}
+	if runnerOpts.Prompter, err = fixtureTerminalPrompter(cmd.Context(), wd); err != nil {
+		return err
+	}
+	runnerOpts.Resume = resumed.Resume
 
 	runner, err := fixtures.NewRunner(runnerOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create fixture runner: %w", err)
 	}
 
+	started := time.Now().UTC()
+	reporter, err := startRunStatus(dirs)
+	if err != nil {
+		return err
+	}
 	clickytask.SetLiveRenderer(fixtureLiveRenderer{})
 	defer clickytask.SetLiveRenderer(nil)
 	tree, runErr := runner.Run()
+	runErr = errors.Join(runErr, reporter.Stop())
 	if tree != nil {
+		if err := saveFixtureRun(finishedRun{Opts: runOpts, Started: started, Err: runErr}, runner, tree); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
 		if runner.BenchmarkReport() != nil && strings.EqualFold(runnerOpts.Format, "json") {
 			data, err := os.ReadFile(runner.BenchmarkReport().Path)
 			if err != nil {
@@ -143,8 +184,8 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 }
 
 // fixtureMaxWorkers resolves fixture parallelism from --max-concurrent, but only
-// when it was actually typed. That flag is clicky's process-wide task default
-// (4); inheriting it silently would make `gavel fixtures run` parallel while
+// when it was actually typed. Inheriting the process-wide task default
+// would make `gavel fixtures run` parallel while
 // `gavel test` runs the same files serially, which is how a suite pinned to one
 // worker ends up racing depending on which entry point invoked it.
 func fixtureMaxWorkers(cmd *cobra.Command) int {

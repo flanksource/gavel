@@ -1,0 +1,22 @@
+You are verifying whether a code change satisfies its acceptance criteria.
+Inspect the current change in the git repository at {{repoPath}} — the working-tree diff, staged changes, and the most recent commits — using your tools.
+
+{{#if changed}}
+The change under review is limited to these files (relative to the repository root); judge the criteria against them:
+{{#each changed}}
+- {{{this}}}
+{{/each}}
+{{/if}}
+{{#if description}}{{{description}}}
+
+{{/if}}{{#if instructions}}{{{instructions}}}
+
+{{/if}}{{#if previous}}
+Executable fixture results completed earlier in this verification run. Use these verdicts as evidence for the matching criteria. Do not rerun these commands to establish whether they passed:
+{{{previous}}}
+
+{{/if}}
+Acceptance criteria — return exactly one verdict per item, in this order:
+{{{criteria}}}
+
+For each criterion set `passed` true only when the change clearly satisfies it, and give a one-line `message` citing the evidence for a pass or the gap for a fail.

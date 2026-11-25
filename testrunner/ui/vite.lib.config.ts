@@ -44,11 +44,18 @@ export default defineConfig(({ mode }) => {
         fileName: (_format, name) => `${name}.${jsExt}`,
       },
       rollupOptions: {
-        external: (id) => !(id.startsWith('.') || id.startsWith('/')),
+        // Every bare id is the consumer's, except a Vite `?worker` import: that
+        // is Vite-only syntax, so it is bundled (inlined) here rather than left
+        // as a specifier a non-Vite consumer cannot resolve.
+        external: (id) => !(id.startsWith('.') || id.startsWith('/') || id.includes('?worker')),
         output: {
           preserveModules: true,
           preserveModulesRoot: 'src',
-          entryFileNames: `[name].${jsExt}`,
+          // The bundled worker module sits under a node_modules path, which npm
+          // never packs; emit it as vendor/<file> so the published package
+          // keeps the file its importer references.
+          entryFileNames: (chunk) =>
+            `${chunk.name.includes('node_modules/') ? `vendor/${chunk.name.split('/').pop()}` : chunk.name}.${jsExt}`,
           chunkFileNames: `chunks/[name]-[hash].${jsExt}`,
         },
       },

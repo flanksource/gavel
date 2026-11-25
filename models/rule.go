@@ -251,7 +251,6 @@ func NewQualityRule(ruleType RuleType) *QualityRule {
 		rule.MaxNameLength = 50
 	case RuleTypeCommentQuality:
 		rule.CommentWordLimit = 10
-		rule.CommentAIModel = "claude-3-haiku-20240307"
 		rule.MinDescriptiveScore = 0.7
 	}
 
@@ -294,14 +293,6 @@ func (qr *QualityRule) GetCommentWordLimit() int {
 		return 10 // Default
 	}
 	return qr.CommentWordLimit
-}
-
-// GetCommentAIModel returns the AI model to use for comment analysis
-func (qr *QualityRule) GetCommentAIModel() string {
-	if qr.CommentAIModel == "" {
-		return "claude-3-haiku-20240307" // Default low-cost model
-	}
-	return qr.CommentAIModel
 }
 
 // GetMinDescriptiveScore returns the minimum score for descriptive comments

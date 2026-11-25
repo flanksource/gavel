@@ -35,7 +35,7 @@ func persistPromptOverride(cfg *verify.GavelConfig, ov *verify.PromptSpec, write
 		}
 		*ov = verify.PromptSpec{File: write.Path}
 	}
-	return verify.SaveGavelConfig(write.Dir, *cfg)
+	return verify.SaveGavelConfig(filepath.Join(write.Dir, verify.GavelConfigFileName), *cfg)
 }
 
 // writePromptFile writes a file-source override inside the config layer's

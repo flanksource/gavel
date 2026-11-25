@@ -1,0 +1,22 @@
+---
+title: Workspace access
+description: Grant and revoke local folder access from Gavel edit and the playground.
+---
+
+Open **Workspace access…** from the all-files menu in `gavel edit` or the playground's repository controls. Enter an absolute folder path, select **Review access**, then confirm the resolved directory. Gavel edit offers **Grant and open** to add its supported files to the current editor. Existing file selections and browser drafts are retained. Empty folders can also be opened.
+
+For example, start the editor with a fixed initial folder:
+
+```sh
+gavel edit ./documents
+```
+
+Use **Workspace access…** to review and grant another folder, then choose **Grant and open**. The playground also offers **Update workspace access** when adding a repository fails because its folder is not enabled.
+
+Saved grants allow reading and writing files and running local tools in a folder and its descendants. They are stored in Gavel's PostgreSQL database and shared by local Gavel servers using that database for the same OS user and machine. They survive restarts. PostgreSQL must be configured; database failures are shown explicitly.
+
+Folders supplied on the command line are fixed for that server session and cannot be revoked in the dialog. They are not automatically saved as persistent grants. Saved permissions do not automatically open folders in other editor sessions.
+
+Choose **Revoke access** to block subsequent file operations and close active file-watch streams. Revocation preserves unsaved browser drafts and does not stop jobs already running. Grant access again before saving a preserved draft.
+
+Access management is available only through a local browser. Remote callers and cross-origin requests are rejected, including requests through the playground proxy. No folder is granted automatically.

@@ -5,10 +5,11 @@ package shims
 import (
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/flanksource/gavel/sdk/status"
 )
 
 // Limits are the throttles derived from the shim's --cpu-limit and --mem-limit.
@@ -77,11 +78,11 @@ func injectESLint(args []string, _ Limits) ([]string, error) {
 	if hasFlag(args, "--cache") || hasFlag(args, "--no-cache") || hasFlag(args, "--cache-location") {
 		return args, nil
 	}
-	cache, err := os.UserCacheDir()
+	cache, err := status.CacheDir()
 	if err != nil {
 		return nil, fmt.Errorf("eslint cache location: %w", err)
 	}
-	return append([]string{"--cache", "--cache-location", filepath.Join(cache, "gavel", "eslint") + string(filepath.Separator)}, args...), nil
+	return append([]string{"--cache", "--cache-location", filepath.Join(cache, "eslint") + string(filepath.Separator)}, args...), nil
 }
 
 func goEnv(limits Limits, environ map[string]string) map[string]string {

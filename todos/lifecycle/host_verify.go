@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -41,7 +42,7 @@ func (h *Host) VerifyStep(ctx context.Context, todo *types.TODO, request api.Spe
 	if err != nil && status == "" {
 		// The run happened; it just could not be classified. Record the attempt
 		// under the status it already had rather than losing it.
-		status = OutcomeKeep
+		status = lifecycle.OutcomeKeep
 	}
 	if applyErr := h.OnOutcome(ctx, todo, step, outcome, status); applyErr != nil {
 		err = errors.Join(err, applyErr)

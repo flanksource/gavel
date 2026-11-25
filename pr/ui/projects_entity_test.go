@@ -7,12 +7,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/flanksource/gavel/projects"
 )
 
 func stubProjectTodoCounts(t *testing.T) {
 	t.Helper()
-	stubTodoCounts(t, func(_ context.Context, projects []Project) []todoCountsResult {
-		return make([]todoCountsResult, len(projects))
+	stubTodoCounts(t, func(_ context.Context, ps []projects.Project) []todoCountsResult {
+		return make([]todoCountsResult, len(ps))
 	})
 }
 
@@ -61,11 +63,11 @@ func TestHandleProjectUpdate(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	ps, err := loadProjects(context.Background())
 	if err != nil {
 		t.Fatalf("LoadProjects = %v", err)
 	}
-	p, ok := projectByName(projects, "gavel")
+	p, ok := projects.ByName(ps, "gavel")
 	if !ok || p.Dir != "/new" {
 		t.Errorf("after PUT, project = %+v, want dir=/new", p)
 	}
@@ -91,11 +93,11 @@ func TestHandleProjectDelete(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE status = %d, want 204; body = %q", rec.Code, rec.Body.String())
 	}
-	projects, err := LoadProjects(LoadProjectsOptions{})
+	ps, err := loadProjects(context.Background())
 	if err != nil {
 		t.Fatalf("LoadProjects = %v", err)
 	}
-	if _, ok := projectByName(projects, "gavel"); ok {
+	if _, ok := projects.ByName(ps, "gavel"); ok {
 		t.Error("DELETE did not remove the project")
 	}
 

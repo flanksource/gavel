@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { sum, type Test as ClickyTest } from '@flanksource/clicky-ui/data';
-import { ConfirmDialog, DropdownMenu } from '@flanksource/clicky-ui/components';
-import { UiFile, UiSkipForward, UiTrash } from '@flanksource/clicky-ui/icons';
+import { ConfirmDialog, DropdownMenu, SplitButton } from '@flanksource/clicky-ui/components';
+import { UiCopy, UiFile, UiRestart, UiSkipForward, UiTrash } from '@flanksource/clicky-ui/icons';
 import { CopyAIPromptButton, DownloadMenu } from '../components/ExportControls';
 import type { RouteState } from '../routes';
 import type { Test, TestEditAction, TestEditScope } from '../types';
@@ -15,9 +15,24 @@ export interface NodeActionsConfig {
   testEditSupported: boolean;
   onTestEdit: (node: Test, action: TestEditAction, scope: TestEditScope) => Promise<void>;
   testEditBusy: boolean;
+  /** Reruns a fixture file from the given step, reusing the last run's earlier steps. */
+  onRetryFromStep: (node: Test, stepId: string) => void;
+  /** Copies the command that does the same from a terminal. */
+  onCopyRerunCommand: (node: Test, stepId: string) => void;
+  /** A rerun is already running: the server accepts one at a time. */
+  rerunBusy: boolean;
+  /** The run is in progress: no command can name it until it is saved. */
+  runInProgress: boolean;
 }
 
 const EDITABLE_FRAMEWORKS = new Set(['go test', 'ginkgo', 'vitest']);
+
+/** The id of the typed fixture step a node is, or undefined for any other node. */
+export function fixtureStepId(node: Test): string | undefined {
+  if (node.framework !== 'fixture') return undefined;
+  const id = (node.detail as { step?: { id?: unknown } } | undefined)?.step?.id;
+  return typeof id === 'string' && id !== '' ? id : undefined;
+}
 
 export function canEditSource(node: Test, supported: boolean): boolean {
   return supported && node.framework !== 'task' && EDITABLE_FRAMEWORKS.has(node.framework ?? '') && !!node.file;
@@ -70,14 +85,33 @@ function SourceActions({ node, busy, onEdit }: { node: Test; busy: boolean; onEd
 /**
  * The header actions of a test node: download and AI-prompt copy of its export,
  * and, for a Go, Ginkgo or vitest test with a source file, the Skip / Delete
- * source edits.
+ * source edits, and, for a fixture step, Retry from here.
  */
 export function NodeActions({ node, config }: { node: Test; config: NodeActionsConfig }) {
   const nodeRouteState = node.framework === 'task' ? undefined : config.nodeRouteState(node);
   const failingOnly = config.failingOnlyRouteState(node);
   const failing = hasFailingContent(node);
+  const stepId = fixtureStepId(node);
   return (
     <>
+      {stepId && (
+        <SplitButton
+          label="Retry from here"
+          icon={UiRestart}
+          variant="outline"
+          size="sm"
+          primaryDisabled={config.rerunBusy}
+          onClick={() => config.onRetryFromStep(node, stepId)}
+          title="More ways to rerun this fixture from this step"
+          items={[{
+            label: 'Copy rerun command',
+            icon: UiCopy,
+            disabled: config.runInProgress,
+            title: config.runInProgress ? 'Available once the run finishes' : "Copy the command that reruns this fixture from this step, reusing the earlier steps' results",
+            onSelect: () => config.onCopyRerunCommand(node, stepId),
+          }]}
+        />
+      )}
       {nodeRouteState && <DownloadMenu routeState={nodeRouteState} title="Download this node as JSON or Markdown" />}
       {nodeRouteState && failingOnly && (
         <CopyAIPromptButton

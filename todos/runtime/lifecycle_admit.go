@@ -138,7 +138,6 @@ func (p *Provider) RunAdmitted(ctx context.Context, todo *types.TODO, admission 
 	// This dispatch is a new phase run; drop the memo so a read through this
 	// provider sees it rather than the index loaded before the launch.
 	p.dropPhaseRuns(p.workspace.ID)
-	p.dropExecutionIndex(p.workspace.ID)
 	p.markPrepared(issueID, admission.PromptRunID)
 	p.ownership.start(p.repository, admission.PromptRunID, owner)
 	return p.reloadTODO(ctx, todo, firstNonBlank(todo.CWD, p.workDir))

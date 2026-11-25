@@ -1,0 +1,173 @@
+[
+  {
+    "source": "MANUAL.md",
+    "destination": "docs/content/docs/",
+    "sourceSha256": "27822fe0a881f197e46be430b55eea3b76c252b6fc45a6d04125b5bf0933fcc6",
+    "disposition": "merged by command/topic; superseded configuration and command tree replaced by current canonical references"
+  },
+  {
+    "source": "README.md",
+    "destination": "README.md; docs/content/docs/; CONTRIBUTING.md",
+    "sourceSha256": "862fdfe61a4cc374fd7a98602faa60b5c5c7b0ef67ad5e7852d18f62490b7f8e",
+    "disposition": "short entry point; full command options and configuration preserved in topic guides"
+  },
+  {
+    "source": "SCHEMA.md",
+    "destination": "docs/content/docs/configuration-reference.mdx; CONTRIBUTING.md",
+    "sourceSha256": "0ca696357b0c8d95fa4629184261ca7973c02cce4293bf9edc6bbeb06af97e14",
+    "disposition": "configuration prose merged; regeneration moved to contributor instructions"
+  },
+  {
+    "source": "site/README.md",
+    "destination": "docs/README.md; CONTRIBUTING.md",
+    "sourceSha256": "73e6181898ff08b723720e72c24c5bdac2ce0ba9fed1017a8a9ee67aefc7fcbf",
+    "disposition": "application setup merged into contributor guide; local app entry point retained"
+  },
+  {
+    "source": "CLAUDE.md",
+    "destination": "CONTRIBUTING.md; AGENTS.md; CLAUDE.md",
+    "sourceSha256": "46b1d9ee5dc3b1831468da00bb82791a2d57ddf2b6fbf9b9668cd6619e0f94ba",
+    "disposition": "architecture and integration moved to contributor guide; thin agent entry point"
+  },
+  {
+    "source": "site/",
+    "destination": "docs/",
+    "disposition": "entire Vite app moved, including API, assets, lockfiles, local ignored files, and uncommitted edits"
+  },
+  {
+    "source": "docs/todo-run-preflight.md",
+    "destination": "docs/content/docs/todo-run-preflight.mdx",
+    "sourceSha256": "00f6d0ec318a68d644402b9e03f49b901076f008ad6811e5d82c875baf13162a",
+    "disposition": "published as canonical guide"
+  },
+  {
+    "source": "docs/pr-todos.md",
+    "destination": "docs/content/docs/pr-todos.mdx",
+    "sourceSha256": "d7abbc58e5e1d257ee641821b6ea0eb8fc67b779ef93fa81ee08b1c97cc3b238",
+    "disposition": "published as canonical guide"
+  },
+  {
+    "source": "docs/todos-triage-new.md",
+    "destination": "docs/content/docs/todos-triage-new.mdx",
+    "sourceSha256": "5742a8b756e6076e36ddd309013f35b152e2c227fc2c35d382eb5eb3775536fa",
+    "disposition": "published as canonical guide"
+  },
+  {
+    "source": "docs/postgres-performance.md",
+    "destination": "docs/content/docs/postgres-performance.mdx",
+    "sourceSha256": "d400801f93891d7cc2a1971d27949475795d6ed233d3474a996e04707bf58b3b",
+    "disposition": "published as canonical guide"
+  },
+  {
+    "source": "docs/release-notes/todo-preflight.md",
+    "destination": "docs/content/docs/todo-run-preflight.mdx",
+    "sourceSha256": "f6b003745a120e2fae96aa46c3c44752c0fd805c23b6b6c9b87ff49265f678ea",
+    "disposition": "release summary folded into the canonical preflight guide"
+  },
+  {
+    "source": "docs/azure-devops-pr-support.md",
+    "destination": "docs/content/docs/azure-devops-pr-support.mdx; CONTRIBUTING.md",
+    "sourceSha256": "245142f65a578aade6b6e52b004b25644125a2103df60e38306fc36111fcfc6c",
+    "disposition": "user contract published; implementation and historical verification retained for contributors"
+  },
+  {
+    "source": "docs/services/dbtest.md",
+    "destination": "docs/content/docs/services/service-dbtest.mdx",
+    "sourceSha256": "95408b2a6165ab38b311ad4cc5b1bed6ef16146cc42ec07eb916ed80131d21d1",
+    "disposition": "published beneath Services; examples moved to public download directory"
+  },
+  {
+    "source": "docs/services/deps.md",
+    "destination": "docs/content/docs/services/service-deps.mdx",
+    "sourceSha256": "20ac956936be765cf79a72e4a297dc18f563c52d6d243d3f4c50138171af94ee",
+    "disposition": "published beneath Services; examples moved to public download directory"
+  },
+  {
+    "source": "docs/services/exec.md",
+    "destination": "docs/content/docs/services/service-exec.mdx",
+    "sourceSha256": "7a92095e98e470972d7535d11f70928efe8748537c4587110b97371bcbcabe2d",
+    "disposition": "published beneath Services; examples moved to public download directory"
+  },
+  {
+    "source": "docs/services/git.md",
+    "destination": "docs/content/docs/services/service-git.mdx",
+    "sourceSha256": "aab7a9f37cc098e875b292e3b962edc39fab8e7a809e61477399822f572fdc54",
+    "disposition": "published beneath Services; examples moved to public download directory"
+  },
+  {
+    "source": "docs/services/README.md",
+    "destination": "docs/content/docs/fixture-kind-services.mdx",
+    "sourceSha256": "9f50b6efae82a311365e35e0d8ea57b171f3ef3e7f75d447ccbf985af4f94d7e",
+    "disposition": "overview, export semantics, and failure behavior merged into existing Services reference"
+  },
+  {
+    "source": "docs/services/examples/",
+    "destination": "docs/content/public/examples/services/",
+    "disposition": "moved intact, including the HCL and per-instance SQL bundle"
+  },
+  {
+    "source": "docs/testing-postgresql.md",
+    "destination": "CONTRIBUTING.md#postgresql-integration-testing",
+    "sourceSha256": "7a8c5e52707c514774d6c761bb39f131b8b42c4e85d35d9ab55f69cc3a8ed442",
+    "disposition": "contributor test setup"
+  },
+  {
+    "source": "docs/todo-lifecycle-host-boundary.md",
+    "destination": "CONTRIBUTING.md#captain-lifecycle-ownership",
+    "sourceSha256": "819c6a3656cc75eb6f6d54f6d1d2431dcc9245a23e27cfdb7a1bcaa36c6ca42e",
+    "disposition": "ownership contract and dated implementation/verification snapshot"
+  },
+  {
+    "source": "docs/session-data-model.md",
+    "destination": "CONTRIBUTING.md#session-architecture-snapshot",
+    "sourceSha256": "3183135a37c7d188cab80df2972554ebbeefc4605ac9ffb4edcdc677ccf44e2d",
+    "disposition": "historical architecture and defect findings retained with explicit status"
+  },
+  {
+    "source": "docs/SessionDataModel.tsx",
+    "destination": "docs/diagrams/SessionDataModel.tsx",
+    "sourceSha256": "d555df19b2b1c63142627f7eadb4d4da0d6f23d71c3a27f17272cb7f8af7dbbd",
+    "disposition": "preserved diagram artifact; not included in application TypeScript compilation"
+  },
+  {
+    "source": "docs/SessionDataModel.html",
+    "destination": "docs/content/public/diagrams/SessionDataModel.html",
+    "sourceSha256": "0e63b8195b3022ddf895689b71847493fb6d17005d8c6ea45934583be3d9b5d4",
+    "disposition": "preserved diagram artifact; not included in application TypeScript compilation"
+  },
+  {
+    "source": "README.md#test-lint-fixtures",
+    "destination": "docs/content/docs/test-execution.mdx; docs/content/docs/lint-execution.mdx; docs/content/docs/fixtures-overview.mdx; docs/content/docs/fixture-formats.mdx",
+    "disposition": "command options and workflows merged with existing format and environment references"
+  },
+  {
+    "source": "README.md#bench-summary-ui",
+    "destination": "docs/content/docs/reporting.mdx",
+    "disposition": "benchmark and replay options preserved alongside canonical artifact guidance"
+  },
+  {
+    "source": "README.md#git-configuration",
+    "destination": "docs/content/docs/git-analysis.mdx",
+    "disposition": "history and analysis commands, arch.yaml, named filters, and CEL variables"
+  },
+  {
+    "source": "README.md#agent-skills",
+    "destination": "docs/content/docs/agent-skills.mdx",
+    "disposition": "installation, skill catalog, and agent discovery"
+  },
+  {
+    "source": "MANUAL.md#shared-operating-model",
+    "destination": "docs/content/docs/cli-usage.mdx; docs/content/docs/reporting.mdx; CONTRIBUTING.md",
+    "disposition": "shared CLI/UI guidance retained; obsolete top-level verify settings and old CLI tree replaced by current schema and command map"
+  },
+  {
+    "source": "MANUAL.md#todo-lifecycle",
+    "destination": "docs/content/docs/todo-run-loop.mdx; docs/content/docs/todo-engine.mdx; docs/content/docs/todo-runtime-profiles.mdx",
+    "disposition": "current source-confirmed result envelope and tool writes, merge contract, and retired settings"
+  },
+  {
+    "source": "MANUAL.md#commands",
+    "destination": "docs/content/docs/commits.mdx; docs/content/docs/pull-requests.mdx; docs/content/docs/projects.mdx; docs/content/docs/infrastructure.mdx; docs/content/docs/utilities.mdx",
+    "disposition": "command-family workflows and common end-to-end examples"
+  }
+]

@@ -4,14 +4,31 @@ package blob
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLocalKeepsThePreviousObjectWhenReplacingItFails(t *testing.T) {
+	ctx := context.Background()
+	const key = "run.json"
+	store := Local(t.TempDir())
+	require.NoError(t, store.Write(ctx, key, strings.NewReader("previous")))
+	broken := io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(io.ErrUnexpectedEOF))
+	require.ErrorIs(t, store.Write(ctx, key, broken), io.ErrUnexpectedEOF)
+	reader, err := store.Read(ctx, key)
+	require.NoError(t, err)
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, "previous", string(data))
+}
 
 func TestLocalRefusesSymlinksThatEscapeItsRoot(t *testing.T) {
 	ctx := context.Background()

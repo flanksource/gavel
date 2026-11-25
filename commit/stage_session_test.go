@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -79,7 +80,7 @@ func TestStageSessionModeResolvesClaudeEnvID(t *testing.T) {
 	writeSessionLog(t, home, sessionID, []string{filepath.Join(dir, "app.go")})
 	t.Setenv("CLAUDE_SESSION_ID", sessionID)
 
-	err := stageFiles(dir, StageSession, verify.CommitConfig{})
+	err := stageFiles(context.Background(), dir, StageSession, verify.CommitConfig{})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"app.go"}, mustStagedFiles(t, dir))
@@ -95,7 +96,7 @@ func TestStageSessionModeFallsBackToStagedWithoutEnv(t *testing.T) {
 	dir := initCommitRepo(t)
 	writeFile(t, dir, "app.go", "package app\n")
 
-	err := stageFiles(dir, StageSession, verify.CommitConfig{})
+	err := stageFiles(context.Background(), dir, StageSession, verify.CommitConfig{})
 	require.NoError(t, err)
 
 	assert.Empty(t, mustStagedFiles(t, dir), "session fallback must not auto-stage; staged set was empty")
@@ -117,7 +118,7 @@ func TestStageSessionModeResolvesCodexRollout(t *testing.T) {
 	writeCodexRollout(t, home, sessionID, dir, []string{"app.go"})
 	t.Setenv("CODEX_THREAD_ID", sessionID)
 
-	err := stageFiles(dir, StageSession, verify.CommitConfig{})
+	err := stageFiles(context.Background(), dir, StageSession, verify.CommitConfig{})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"app.go"}, mustStagedFiles(t, dir))
@@ -146,7 +147,7 @@ func TestStageSessionModeSkipsPathsBeyondSymlink(t *testing.T) {
 	})
 	t.Setenv("CLAUDE_SESSION_ID", sessionID)
 
-	require.NoError(t, stageFiles(dir, StageSession, verify.CommitConfig{}))
+	require.NoError(t, stageFiles(context.Background(), dir, StageSession, verify.CommitConfig{}))
 	assert.Equal(t, []string{"app.go"}, mustStagedFiles(t, dir))
 }
 
@@ -174,7 +175,7 @@ func TestStageSessionModeStagesTrackedDeletions(t *testing.T) {
 	})
 	t.Setenv("CLAUDE_SESSION_ID", sessionID)
 
-	require.NoError(t, stageFiles(dir, StageSession, verify.CommitConfig{}))
+	require.NoError(t, stageFiles(context.Background(), dir, StageSession, verify.CommitConfig{}))
 	assert.Equal(t, []string{"new.go", "old.go"}, mustStagedFiles(t, dir))
 }
 

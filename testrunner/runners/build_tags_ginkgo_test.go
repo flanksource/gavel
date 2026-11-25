@@ -8,17 +8,14 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("build tag mappings", func() {
-	It("maps tags to go test", func() {
-		Expect(NewGoTest(GinkgoT().TempDir()).BuildTagsArgs([]string{"integration", "postgres"})).To(
-			Equal([]string{"-tags=integration,postgres"}),
-		)
-	})
-
-	It("maps tags to ginkgo", func() {
-		Expect(NewGinkgo(GinkgoT().TempDir()).BuildTagsArgs([]string{"integration", "postgres"})).To(
-			Equal([]string{"--tags=integration,postgres"}),
-		)
+var _ = Describe("build tags", func() {
+	It("renders parsed -tags as one -tags= flag before the packages", func() {
+		workDir := GinkgoT().TempDir()
+		opts, err := ParseTestArgs(workDir, []string{"--", "-tags", "integration,postgres"}, GoFlags...)
+		Expect(err).NotTo(HaveOccurred())
+		run, err := NewGoTest(workDir).BuildCommand(opts.ForPackages("./pkg"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(run.Process.Args).To(Equal([]string{"test", "-json", "-v", "-tags=integration,postgres", "./pkg"}))
 	})
 
 	It("excludes packages whose tests are disabled by build constraints", func() {
@@ -35,12 +32,11 @@ func TestE2E(t *testing.T) {}
 `), 0o644)).To(Succeed())
 
 		runner := NewGoTest(workDir)
-		packages, err := runner.DiscoverPackages(workDir, true)
+		packages, err := runner.DiscoverPackages(TestOptions{Cwd: workDir, Recursive: true})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(packages).To(BeEmpty())
 
-		runner.SetBuildTags([]string{"e2e"})
-		packages, err = runner.DiscoverPackages(workDir, true)
+		packages, err = runner.DiscoverPackages(TestOptions{Cwd: workDir, Recursive: true, Tags: []string{"e2e"}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(packages).To(Equal([]string{"./e2e"}))
 	})
@@ -57,12 +53,11 @@ import . "github.com/onsi/ginkgo/v2"
 `), 0o644)).To(Succeed())
 
 		runner := NewGinkgo(workDir)
-		packages, err := runner.DiscoverPackages(workDir, true)
+		packages, err := runner.DiscoverPackages(TestOptions{Cwd: workDir, Recursive: true})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(packages).To(BeEmpty())
 
-		runner.SetBuildTags([]string{"integration"})
-		packages, err = runner.DiscoverPackages(workDir, true)
+		packages, err = runner.DiscoverPackages(TestOptions{Cwd: workDir, Recursive: true, Tags: []string{"integration"}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(packages).To(Equal([]string{"./integration"}))
 	})

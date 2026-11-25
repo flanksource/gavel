@@ -1,0 +1,1 @@
+{{#if low}}Be concise.{{/if}}{{#if medium}}Think carefully before implementing.{{/if}}{{#if high}}Think hard and reason thoroughly; consider edge cases before implementing.{{/if}}{{#if xhigh}}Think very hard, reason exhaustively, and validate edge cases before implementing.{{/if}}

@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
@@ -11,6 +12,25 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 )
+
+// laggingPRClient reports each of heads in turn, then the last one, as GitHub
+// does while a push propagates to the PR.
+type laggingPRClient struct {
+	provider.Client
+	heads []string
+	state string
+	reads int
+}
+
+func (c *laggingPRClient) Status(context.Context, int, model.StatusOptions) (*model.StatusSnapshot, error) {
+	head := c.heads[min(c.reads, len(c.heads)-1)]
+	c.reads++
+	state := c.state
+	if state == "" {
+		state = "OPEN"
+	}
+	return &model.StatusSnapshot{PR: &model.PRInfo{State: state, HeadRefOID: head}}, nil
+}
 
 var _ = ginkgo.Describe("PR turn thread resolution guards", func() {
 	ginkgo.It("hands the PR hook a sandbox job rebuilds the threads its own pr_thread_addressed records", func(ctx context.Context) {
@@ -66,6 +86,35 @@ var _ = ginkgo.Describe("PR turn thread resolution guards", func() {
 		gomega.Expect(validateAddressedThreads(snapshot, "pushed", []string{"done"}, open)).To(gomega.MatchError(gomega.ContainSubstring("was not open when this run was prepared")))
 		gomega.Expect(validateAddressedThreads(snapshot, "old", []string{"addressed"}, open)).To(gomega.HaveOccurred())
 	})
+	ginkgo.Describe("reading the PR after a push", func() {
+		const previous, pushed = "previous-head", "pushed-head"
+		ginkgo.BeforeEach(func() {
+			saved := prHeadSync
+			prHeadSync.Timeout, prHeadSync.Interval = 200*time.Millisecond, time.Millisecond
+			ginkgo.DeferCleanup(func() { prHeadSync = saved })
+		})
+
+		ginkgo.It("waits for the provider to report the pushed head", func(ctx context.Context) {
+			client := &laggingPRClient{heads: []string{previous, previous, pushed}}
+			snapshot, err := (&prExecution{client: client, number: 7}).pushedStatus(ctx, pushed)
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			gomega.Expect(snapshot.PR.HeadRefOID).To(gomega.Equal(pushed))
+			gomega.Expect(client.reads).To(gomega.Equal(3))
+		})
+
+		ginkgo.It("names the head the provider still reports when it never catches up", func(ctx context.Context) {
+			_, err := (&prExecution{client: &laggingPRClient{heads: []string{previous}}, number: 7}).pushedStatus(ctx, pushed)
+			gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("PR #7 still reports head previous-head")))
+		})
+
+		ginkgo.It("fails at once when the PR is no longer open", func(ctx context.Context) {
+			client := &laggingPRClient{heads: []string{previous}, state: "MERGED"}
+			_, err := (&prExecution{client: client, number: 7}).pushedStatus(ctx, pushed)
+			gomega.Expect(err).To(gomega.MatchError(gomega.ContainSubstring("PR #7 is MERGED")))
+			gomega.Expect(client.reads).To(gomega.Equal(1))
+		})
+	})
+
 	ginkgo.DescribeTable("does not publish incomplete or failed turns", func(response *api.Response, failed bool, postErr error, allowed bool) {
 		hc := &agent.HookContext{Context: context.Background(), Phase: agent.PhaseTurn, Response: response, Failed: failed, PostErr: postErr}
 		publish, err := (&prExecution{events: []string{"completed", "blocked"}}).completedTurn(hc)

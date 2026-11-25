@@ -41,7 +41,7 @@ func runClientPRStatus(opts PRStatusOptions, target statusTarget, client provide
 	}
 	result, code := prwatch.Run(prwatch.WatchOptions{Context: ctx, PRNumber: number, Interval: interval, Follow: opts.Follow, FailFast: opts.FailFast, Logs: opts.Logs, TailLogs: opts.TailLogs, Actions: opts.Actions, Comments: opts.Comments, ExpectedHead: opts.HeadSHA, WholePR: opts.WholePR,
 		FetchSnapshot: func(ctx context.Context, watch prwatch.WatchOptions) (*prwatch.PRWatchResult, error) {
-			snapshot, err := client.Status(ctx, watch.PRNumber, model.StatusOptions{Logs: watch.Logs, TailLogs: watch.TailLogs, Threads: watch.WholePR || len(watch.Comments) > 0})
+			snapshot, err := client.Status(ctx, watch.PRNumber, model.StatusOptions{Logs: watch.Logs, TailLogs: watch.TailLogs, Threads: true})
 			if err != nil {
 				return nil, err
 			}

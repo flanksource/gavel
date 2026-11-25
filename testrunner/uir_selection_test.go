@@ -53,7 +53,7 @@ func TestSkippedOnly(t *testing.T) { if err := os.WriteFile("../skipped-ran", []
 			exact = &results[i]
 		}
 	}
-	if exact == nil || !strings.Contains(exact.Command, "-skip=^(?:TestOther)$") {
+	if exact == nil || !strings.Contains(exact.Command, "./selected -skip=^TestOther$") {
 		t.Fatalf("command is not anchored to the package exclusion: %+v", exact)
 	}
 	for _, marker := range []string{"other-ran", "skipped-ran"} {

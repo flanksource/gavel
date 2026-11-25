@@ -78,6 +78,16 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	document := projectsOpenAPI()
+	if s.launchService != nil {
+		if err := s.launchService.AddOpenAPI(document); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if err := addLifecycleOpenAPI(document); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := addTodoNewOpenAPI(document); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -90,6 +100,9 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	addConnectionsOpenAPI(document)
+	addFiltersOpenAPI(document)
+	addTodoListOpenAPI(document)
 	respondJSON(w, http.StatusOK, document)
 }
 
@@ -157,7 +170,7 @@ func projectActionRequestSchema() map[string]any {
 		"properties": map[string]any{
 			"action":  map[string]any{"type": "string", "enum": []string{"lint", "test"}},
 			"files":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"options": map[string]any{"type": "object", "additionalProperties": true},
+			"options": map[string]any{"type": "object", "additionalProperties": true, "description": "Authored overrides validated against the action's v2 schema. Omitted properties inherit project configuration and command defaults."},
 		},
 	}
 }
@@ -169,7 +182,7 @@ func projectCommitQueueRequestSchema() map[string]any {
 		"properties": map[string]any{
 			"action":   map[string]any{"type": "string", "enum": []string{"commit", "open-pr"}},
 			"files":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Files to commit; optional for open-pr, which pushes existing local commits when empty"},
-			"options":  map[string]any{"type": "object", "additionalProperties": true, "description": "Advanced commit options; not supported for open-pr"},
+			"options":  map[string]any{"type": "object", "additionalProperties": true, "description": "Authored overrides; omitted properties inherit configuration. For commit, validated against the commit v2 schema and carrying the files. For open-pr, the open-pr schema's push flags (push, target, auto-merge, merge-type), beside the files."},
 			"worktree": map[string]any{"type": "string", "description": "Absolute path of the project worktree to commit in; defaults to the project directory"},
 		},
 	}
@@ -180,10 +193,10 @@ func projectActionSchemaResponseSchema() map[string]any {
 		"type":     "object",
 		"required": []string{"schemaVersion", "action", "schema", "defaults"},
 		"properties": map[string]any{
-			"schemaVersion": map[string]any{"type": "integer"},
-			"action":        map[string]any{"type": "string", "enum": []string{"commit", "lint", "test"}},
-			"schema":        map[string]any{"type": "object", "additionalProperties": true},
-			"defaults":      map[string]any{"type": "object", "additionalProperties": true},
+			"schemaVersion": map[string]any{"type": "integer", "enum": []int{2}},
+			"action":        map[string]any{"type": "string", "enum": []string{"commit", "open-pr", "lint", "test"}},
+			"schema":        map[string]any{"type": "object", "additionalProperties": true, "description": "Embedded action schema with native Clicky form annotations."},
+			"defaults":      map[string]any{"type": "object", "additionalProperties": true, "description": "Display hints only. Do not merge these into submitted options or saved preferences."},
 		},
 	}
 }
@@ -191,10 +204,12 @@ func projectActionSchemaResponseSchema() map[string]any {
 func projectDiffResponseSchema() map[string]any {
 	return map[string]any{
 		"type":     "object",
-		"required": []string{"path", "diff", "truncated", "binary"},
+		"required": []string{"path", "diff", "staged", "unstaged", "truncated", "binary"},
 		"properties": map[string]any{
 			"path":      map[string]any{"type": "string"},
 			"diff":      map[string]any{"type": "string"},
+			"staged":    map[string]any{"type": "string", "description": "For a single-file path, its HEAD→index patch; empty for folders"},
+			"unstaged":  map[string]any{"type": "string", "description": "For a single-file path, its index→worktree patch (the /dev/null diff for an untracked file); empty for folders"},
 			"truncated": map[string]any{"type": "boolean"},
 			"binary":    map[string]any{"type": "boolean"},
 		},
@@ -230,10 +245,11 @@ func projectCommitRunSchema() map[string]any {
 func projectIgnoreRequestSchema() map[string]any {
 	return map[string]any{
 		"type":     "object",
-		"required": []string{"path", "directory"},
+		"required": []string{"path"},
 		"properties": map[string]any{
 			"path":      map[string]any{"type": "string"},
 			"directory": map[string]any{"type": "boolean"},
+			"extension": map[string]any{"type": "string", "pattern": `^\.[A-Za-z0-9._-]+$`, "description": "Ignore every file with this extension (rule *<extension>); path is then the changed file acted on. Mutually exclusive with directory"},
 		},
 	}
 }
@@ -245,6 +261,7 @@ func projectIgnoreResponseSchema() map[string]any {
 		"properties": map[string]any{
 			"path":      map[string]any{"type": "string"},
 			"directory": map[string]any{"type": "boolean"},
+			"extension": map[string]any{"type": "string"},
 			"rule":      map[string]any{"type": "string"},
 			"added":     map[string]any{"type": "boolean"},
 		},
@@ -282,6 +299,10 @@ func projectFileStatusSchema() map[string]any {
 			"testStatus":   map[string]any{"type": "object"},
 			"lintStatus":   map[string]any{"type": "object"},
 			"problems":     map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+			"linkedDependencies": map[string]any{"type": "array", "items": map[string]any{
+				"type": "object", "required": []string{"name", "target"},
+				"properties": map[string]any{"name": map[string]any{"type": "string"}, "target": map[string]any{"type": "string"}},
+			}},
 		},
 	}
 }
@@ -319,7 +340,11 @@ func projectsOpenAPI() map[string]any {
 		}}},
 		"paths": withEntries(map[string]any{
 			"/api/projects": map[string]any{
-				"get":  clickyOp("projects_list", "List projects", "list", "collection", ""),
+				"get": clickyOp("projects_list", "List projects", "list", "collection", "", map[string]any{"parameters": []any{map[string]any{
+					"name": "exclude", "in": "query", "required": false,
+					"description": "Drop the projects a workspace filter holds, e.g. hidden-projects; repeatable. Each project's hidden flag is computed from hidden-projects either way",
+					"schema":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				}}}),
 				"post": clickyOp("projects_create", "Create project", "create", "collection", "", jsonBody()),
 			},
 			"/api/projects/{name}": map[string]any{
@@ -338,6 +363,7 @@ func projectsOpenAPI() map[string]any {
 			},
 			"/api/projects/{name}/commit-queue": map[string]any{
 				"post": projectLifecycleOp("projects_commit_queue_add", "Add a serial commit task to the project's current task group", "202", "ProjectCommitRun", map[string]any{
+					"parameters": append(nameParam()["parameters"].([]any), gitLockPromptParam()),
 					"requestBody": map[string]any{
 						"required": true,
 						"content": map[string]any{"application/json": map[string]any{
@@ -366,10 +392,10 @@ func projectsOpenAPI() map[string]any {
 				}),
 			},
 			"/api/projects/{name}/actions/schema": map[string]any{
-				"get": projectLifecycleOp("projects_action_schema", "Get safe advanced commit, lint, or test options", "200", "ProjectActionSchema", map[string]any{
+				"get": projectLifecycleOp("projects_action_schema", "Get safe advanced commit, open-pr, lint, or test options", "200", "ProjectActionSchema", map[string]any{
 					"parameters": append(nameParam()["parameters"].([]any), map[string]any{
 						"name": "action", "in": "query", "required": true,
-						"schema": map[string]any{"type": "string", "enum": []string{"commit", "lint", "test"}},
+						"schema": map[string]any{"type": "string", "enum": []string{"commit", "open-pr", "lint", "test"}},
 					}),
 				}),
 			},
@@ -397,7 +423,7 @@ func projectsOpenAPI() map[string]any {
 					jsonRequestBody("ProjectIgnoreRequest"),
 					map[string]any{"parameters": append(nameParam()["parameters"].([]any), worktreeParam())}),
 			},
-		}, projectGitOpenAPIPaths()),
+		}, withEntries(projectGitOpenAPIPaths(), withEntries(projectCheckoutSwitchOpenAPIPaths(), projectIndexOpenAPIPaths()))),
 		"components": map[string]any{"schemas": withEntries(map[string]any{
 			"Project":                   projectSchema(),
 			"ProjectFileStatus":         projectFileStatusSchema(),
@@ -410,7 +436,7 @@ func projectsOpenAPI() map[string]any {
 			"ProjectDiff":               projectDiffResponseSchema(),
 			"ProjectIgnoreRequest":      projectIgnoreRequestSchema(),
 			"ProjectIgnoreResponse":     projectIgnoreResponseSchema(),
-		}, projectGitOpenAPISchemas())},
+		}, withEntries(projectGitOpenAPISchemas(), withEntries(projectCheckoutSwitchOpenAPISchemas(), projectIndexOpenAPISchemas())))},
 	}
 }
 

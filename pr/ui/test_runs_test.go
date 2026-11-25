@@ -11,13 +11,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/gavel/projects"
+
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/snapshots"
 )
 
 func TestGroupRuns(t *testing.T) {
-	projects := []Project{
+	projects := []projects.Project{
 		{Name: "with-runs", Dir: "/ws/a"},
 		{Name: "no-runs", Dir: "/ws/b"},
 	}

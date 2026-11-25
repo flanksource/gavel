@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { ComboboxOption } from '@flanksource/clicky-ui/components';
@@ -7,11 +8,24 @@ import type { BranchMergeResult, GitBranchInfo, GitWorktree, Project, ProjectGit
 import type { ProjectBranchChangesProps } from './ProjectBranchChanges';
 import { ProjectRefPane } from './ProjectRefPane';
 import { queryTestWrapper } from './todos/queryTestWrapper';
+import { useCommitStatusSlot } from './commitStatusSlot';
+import { useRebaseAction } from './rebaseAction';
+
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock('../useIsMobile', () => ({ useIsMobile: () => viewport.mobile }));
 
 vi.mock('./ProjectStatusView', () => ({
-  ProjectStatusView: ({ project, worktree, diffPath }: { project: Project; worktree?: string; diffPath?: string }) => (
-    <div>Status {project.name} in {worktree ?? 'main checkout'} diff={diffPath}</div>
-  ),
+  ProjectStatusView: function StatusView({ project, worktree, diffPath }: { project: Project; worktree?: string; diffPath?: string }) {
+    const slot = useCommitStatusSlot();
+    const rebase = useRebaseAction();
+    return (
+      <div data-testid="status-view">
+        Status {project.name} in {worktree ?? 'main checkout'} diff={diffPath}
+        {slot && createPortal(<button type="button" aria-label="Show commit details" />, slot)}
+        {rebase && <button type="button" disabled={rebase.disabled} onClick={rebase.onSelect}>{rebase.label}</button>}
+      </div>
+    );
+  },
 }));
 
 /* oxlint-disable clicky-ui/prefer-clicky-components --
@@ -20,10 +34,19 @@ vi.mock('./ProjectStatusView', () => ({
    description and trailing node, and a button that selects it. */
 vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
   ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
+  DropdownMenu: ({ trigger }: { trigger: ReactNode }) => <div>{trigger}</div>,
+  // The real SplitButton mounts floating-ui; this double renders the primary
+  // action and each menu item as a plain button.
+  SplitButton: ({ label, onClick, items }: { label: ReactNode; onClick: () => void; items: Array<{ label: ReactNode; onSelect: () => void; disabled?: boolean }> }) => (
+    <div>
+      <button type="button" onClick={onClick}>{label}</button>
+      {items.map((item, index) => <button key={index} type="button" disabled={item.disabled} onClick={item.onSelect}>{item.label}</button>)}
+    </div>
+  ),
   Combobox: ({ ariaLabel, value, options, onChange }: { ariaLabel: string; value: string; options: ComboboxOption[]; onChange: (value: string) => void }) => (
     <div role="listbox" aria-label={ariaLabel} data-value={value}>
       {options.map(option => (
-        <div key={option.value} role="option" aria-selected={option.value === value} aria-label={option.value} data-group={option.group}>
+        <div key={option.value} role="option" aria-selected={option.value === value} aria-label={option.value} data-group={option.group} data-layout={option.layout}>
           <button type="button" disabled={option.disabled} onClick={() => onChange(option.value)}>{option.selectedLabel ?? option.label}</button>
           {option.trailing as ReactNode}
         </div>
@@ -67,6 +90,9 @@ const git: ProjectGit = {
   base: 'main',
   currentBranch: 'main',
   baseCheckedOut: true,
+  upstream: 'origin/main',
+  upstreamAhead: 2,
+  upstreamBehind: 3,
   worktrees: [primary, feat, aheadClean],
   branches: [branch('feat/x', feat.path, 2), branch('feat/y', aheadClean.path, 1), branch('spike', '', 3)],
   computedAt: '2026-10-04T11:59:52Z',
@@ -118,6 +144,22 @@ afterEach(() => {
 const pickerValue = () => screen.getByRole('listbox', { name: 'Worktree or branch' }).getAttribute('data-value');
 
 describe('ProjectRefPane', () => {
+  it.each([0, 2])('reviews committed changes in the primary checkout with %s dirty files', async dirty => {
+    const checkout = { ...primary, branch: 'feat/primary', ahead: 2, changes: { ...changes, unstaged: dirty } };
+    stubGit(() => Response.json({ ...git, currentBranch: checkout.branch, baseCheckedOut: false,
+      worktrees: [checkout], branches: [branch(checkout.branch, checkout.path, checkout.ahead)] }));
+    renderPane();
+
+    const committed = await screen.findByRole('radio', { name: 'Committed changes (2 ahead)' });
+    if (dirty > 0) expect(screen.getByText('Status gavel in main checkout diff=')).toBeTruthy();
+    fireEvent.click(committed);
+    expect(screen.getByRole('button', { name: 'Branch view feat/primary' })).toBeTruthy();
+    expect(branchChanges.props).toMatchObject({ base: 'main', baseCheckedOut: false, dirtyCount: dirty, worktreePath: checkout.path });
+    await waitFor(() => expect(focusPosts.bodies).toContainEqual({ project: 'gavel' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Working changes' }));
+    expect(screen.getByText('Status gavel in main checkout diff=')).toBeTruthy();
+  });
+
   it('shows the main checkout straight away and the grouped picker once the git state loads', async () => {
     stubGit();
 
@@ -137,6 +179,12 @@ describe('ProjectRefPane', () => {
   const summaryParts = (option: HTMLElement) =>
     Array.from(option.querySelectorAll(':scope > span:last-child > span')).map(part => part.textContent);
 
+  it('uses responsive rows for branch names and their commit metadata', async () => {
+    stubGit();
+    renderPane();
+    expect((await screen.findByRole('option', { name: 'br:spike' })).getAttribute('data-layout')).toBe('responsive');
+  });
+
   it('shows each entry with its commits, uncommitted files, lines, last commit and last touched ages', async () => {
     stubGit();
     renderPane();
@@ -145,7 +193,27 @@ describe('ProjectRefPane', () => {
 
     expect(summaryParts(feature)).toEqual(['2 commits', '2 uncommitted', '+3−1', '3h', '5m']);
     expect(summaryParts(screen.getByRole('option', { name: 'br:spike' }))).toEqual(['3 commits', '+5−2', '1h']);
-    expect(summaryParts(screen.getByRole('option', { name: '@main' }))).toEqual(['2d']);
+    expect(summaryParts(screen.getByRole('option', { name: '@main' }))).toEqual(['23', '2d']);
+  });
+
+  it('shows how far the main checkout is ahead of and behind its upstream', async () => {
+    stubGit();
+    renderPane();
+
+    const main = await screen.findByRole('option', { name: '@main' });
+
+    const upstream = within(main).getByLabelText('2 commits ahead of origin/main, 3 behind');
+    expect(upstream.getAttribute('title')).toBe('2 commits ahead of origin/main, 3 behind');
+    expect(Array.from(upstream.children).map(part => part.textContent)).toEqual(['2', '3']);
+  });
+
+  it('shows no upstream counts for a main checkout level with its upstream', async () => {
+    stubGit(() => Response.json({ ...git, upstreamAhead: 0, upstreamBehind: 0 }));
+    renderPane();
+
+    const main = await screen.findByRole('option', { name: '@main' });
+
+    expect(summaryParts(main)).toEqual(['2d']);
   });
 
   it('colours added lines green and removed lines red', async () => {
@@ -162,8 +230,8 @@ describe('ProjectRefPane', () => {
     stubGit();
     const { onRefChange } = renderPane('br:spike');
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Checkout main' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Worktree feat/x' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'gavel · main' }));
+    fireEvent.click(screen.getByRole('button', { name: 'gavel · feat/x' }));
 
     expect(onRefChange.mock.calls).toEqual([[''], ['wt:/work/gavel-feat']]);
   });
@@ -320,6 +388,17 @@ describe('ProjectRefPane', () => {
     expect(onRefChange).toHaveBeenCalledWith('');
   });
 
+  it('offers Rebase… to the PR actions below the ref bar rather than as a ref bar button', async () => {
+    stubGit();
+    renderPane('wt:/work/gavel-feat');
+
+    const picker = await screen.findByRole('listbox', { name: 'Worktree or branch' });
+    const refBar = picker.closest('.\\@container\\/project-ref') as HTMLElement;
+    expect(within(refBar).queryByRole('button', { name: /Rebase/ })).toBeNull();
+    fireEvent.click(within(await screen.findByTestId('status-view')).getByRole('button', { name: 'Rebase…' }));
+    expect(await screen.findByRole('dialog', { name: 'Rebase branch' })).toBeTruthy();
+  });
+
   it('returns to the main checkout after a merge and reports what landed', async () => {
     stubGit();
     const { onRefChange } = renderPane('br:spike');
@@ -333,5 +412,35 @@ describe('ProjectRefPane', () => {
     expect(status.textContent).toContain('2 commits');
     expect(status.textContent).toContain('worktree removed');
     expect(status.textContent).toContain('branch deleted');
+  });
+
+  describe('on a phone', () => {
+    beforeEach(() => { viewport.mobile = true; });
+    afterEach(() => { viewport.mobile = false; });
+
+    it('puts the picker on one line, and the stats and age on a single small line below', async () => {
+      stubGit();
+      renderPane('wt:/work/gavel-feat');
+
+      const picker = await screen.findByRole('listbox', { name: 'Worktree or branch' });
+      const pickerRow = picker.closest('[data-slot="ref-bar-picker"]') as HTMLElement;
+      expect(within(pickerRow).queryByRole('button', { name: /Rebase/ })).toBeNull();
+
+      const summary = pickerRow.nextElementSibling as HTMLElement;
+      expect(summary.getAttribute('data-slot')).toBe('ref-bar-summary');
+      expect(summary.textContent).toMatch(/^2 commits2 uncommitted\+3−1.*git state 8s ago$/);
+      expect(summary.lastElementChild?.textContent).toBe('git state 8s ago');
+      expect(Array.from(summary.querySelectorAll('.hidden')).map(part => part.textContent)).toEqual(['3h', '5m']);
+      expect(within(pickerRow).queryByText(/git state/)).toBeNull();
+    });
+
+    it('hosts a finished commit run chip beside the picker', async () => {
+      stubGit();
+      renderPane('wt:/work/gavel-feat');
+
+      const picker = await screen.findByRole('listbox', { name: 'Worktree or branch' });
+      const pickerRow = picker.closest('[data-slot="ref-bar-picker"]') as HTMLElement;
+      expect(within(pickerRow).getByRole('button', { name: 'Show commit details' })).toBeTruthy();
+    });
   });
 });

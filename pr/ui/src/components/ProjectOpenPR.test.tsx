@@ -3,7 +3,9 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { DropdownMenuItem } from '@flanksource/clicky-ui/components';
 import { ProjectStatusView } from './ProjectStatusView';
+import { RebaseActionContext } from './rebaseAction';
 
 // The focus lease has its own spec (useGitFocus.test.tsx); here it would only
 // add a POST to the requests these tests assert on.
@@ -34,17 +36,14 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
 }));
 /* oxlint-enable clicky-ui/prefer-clicky-components */
 
-vi.mock('./ProjectActionDialog', () => ({ ProjectActionDialog: () => null }));
+const actionDialog = vi.hoisted(() => ({ props: null as null | { action: string | null; onRun: (action: string, options: Record<string, unknown>) => Promise<void> } }));
+vi.mock('./ProjectActionDialog', () => ({
+  ProjectActionDialog: (props: NonNullable<typeof actionDialog.props>) => { actionDialog.props = props; return null; },
+}));
 vi.mock('./ProjectActionRunDialog', () => ({ ProjectActionRunDialog: () => null }));
 vi.mock('./ProjectCommitTasks', () => ({ ProjectCommitTasks: () => null }));
 vi.mock('./ProjectDiffView', () => ({ ProjectDiffView: () => null }));
-vi.mock('./ProjectFileTree', () => ({
-  ProjectFileTree: ({ files, selected, onToggleFile }: {
-    files: { path: string }[];
-    selected: Set<string>;
-    onToggleFile: (path: string) => void;
-  }) => <>{files.map(file => <input key={file.path} type="checkbox" aria-label={`Select ${file.path}`} checked={selected.has(file.path)} onChange={() => onToggleFile(file.path)} />)}</>,
-}));
+vi.mock('./ProjectFileTree', () => ({ ProjectFileTree: () => null }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -54,14 +53,14 @@ afterEach(() => {
 const project = { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] };
 const changedFile = 'one.go';
 
-function renderProject() {
+function renderProject(state = 'unstaged', rebaseAction: DropdownMenuItem | null = null) {
   const status = {
     project,
     workDir: project.dir,
     branch: 'feature/project-actions',
     files: [{
       path: changedFile,
-      state: 'unstaged',
+      state,
       adds: 1,
       dels: 0,
       testStatus: { passed: 1, failed: 0, skipped: 0 },
@@ -82,7 +81,9 @@ function renderProject() {
   vi.stubGlobal('fetch', fetchMock);
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <ProjectStatusView project={project} />
+      <RebaseActionContext.Provider value={rebaseAction}>
+        <ProjectStatusView project={project} />
+      </RebaseActionContext.Provider>
     </QueryClientProvider>,
   );
   return fetchMock;
@@ -95,7 +96,7 @@ async function postedQueueRequest(fetchMock: ReturnType<typeof renderProject>) {
 }
 
 describe('Project Open PR action', () => {
-  it('queues a push-only Open PR from the standalone button when nothing is selected', async () => {
+  it('queues a push-only Open PR from the standalone button when nothing is staged', async () => {
     const fetchMock = renderProject();
     const openPR = await screen.findByRole('button', { name: 'Open PR' });
     expect(openPR.hasAttribute('disabled')).toBe(false);
@@ -108,16 +109,34 @@ describe('Project Open PR action', () => {
     });
   });
 
-  it('commits the selected files and opens a PR from the standalone button', async () => {
-    const fetchMock = renderProject();
-    fireEvent.click(await screen.findByRole('checkbox', { name: `Select ${changedFile}` }));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit & open PR (1)' }));
+  it('commits the staged files and opens a PR from the standalone button', async () => {
+    const fetchMock = renderProject('staged');
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit & open PR (1)' }));
 
     expect(await postedQueueRequest(fetchMock)).toEqual({
       url: '/api/projects/gavel/commit-queue',
       body: { action: 'open-pr', files: [changedFile] },
     });
-    expect(await screen.findByRole('button', { name: 'Commit selected (0)' })).toBeTruthy();
+  });
+
+  it('offers the ref pane\'s Rebase… on the Open PR split button', async () => {
+    const onSelect = vi.fn();
+    renderProject('unstaged', { label: 'Rebase…', onSelect });
+    const prGroup = await screen.findByRole('group', { name: 'Pull request options' });
+    fireEvent.click(within(prGroup).getByRole('button', { name: 'Rebase…' }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the advanced Open PR dialog and queues the staged files with its push options', async () => {
+    const fetchMock = renderProject('staged');
+    const prGroup = await screen.findByRole('group', { name: 'Pull request options' });
+    fireEvent.click(within(prGroup).getByRole('button', { name: 'Advanced…' }));
+    await waitFor(() => expect(actionDialog.props?.action).toBe('open-pr'));
+    await actionDialog.props!.onRun('open-pr', { push: 'branch', 'auto-merge': true });
+    expect(await postedQueueRequest(fetchMock)).toEqual({
+      url: '/api/projects/gavel/commit-queue',
+      body: { action: 'open-pr', files: [changedFile], options: { push: 'branch', 'auto-merge': true } },
+    });
   });
 
   it('no longer offers Open PR inside the Commit split button', async () => {

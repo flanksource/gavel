@@ -15,65 +15,10 @@ import (
 	"github.com/flanksource/gavel/verify"
 )
 
-// These specs cover the CodeQL findings on the pr/ui HTTP surface: reflected
-// XSS through the client-controlled Host header, unsafe quoting of the build
-// metadata script, and path traversal through the prompt-override and test-run
-// endpoints.
+// These specs cover the CodeQL findings on the pr/ui HTTP surface: unsafe
+// quoting of the build metadata script, and path traversal through the
+// prompt-override and test-run endpoints.
 var _ = Describe("pr/ui security hardening", func() {
-	Describe("react grab install page", func() {
-		// The Host header and X-Forwarded-Proto are entirely client-controlled and
-		// are reflected into the served page, so a payload must never survive as
-		// executable markup or as a JS string-literal break-out.
-		hostPayloads := map[string]string{
-			"script tag":     `a"><script>alert(1)</script>`,
-			"quote breakout": `a'+alert(1)+'b`,
-			"attribute exit": `a" onload="alert(1)`,
-		}
-
-		for name, payload := range hostPayloads {
-			It("neutralizes a "+name+" injected via the Host header", func() {
-				req := httptest.NewRequest(http.MethodGet, "/react-grab-install", nil)
-				req.Host = payload
-				rec := httptest.NewRecorder()
-
-				handleReactGrabInstall(rec, req)
-
-				body := rec.Body.String()
-				Expect(rec.Code).To(Equal(http.StatusOK))
-				Expect(body).ToNot(ContainSubstring(payload))
-				Expect(body).ToNot(ContainSubstring("<script>alert(1)</script>"))
-				Expect(body).ToNot(ContainSubstring(`onload="alert(1)`))
-				Expect(rec.Header().Get("X-Content-Type-Options")).To(Equal("nosniff"))
-			})
-
-			It("neutralizes a "+name+" injected into the plugin script", func() {
-				req := httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil)
-				req.Host = payload
-				rec := httptest.NewRecorder()
-
-				handleReactGrabPlugin(rec, req)
-
-				body := rec.Body.String()
-				Expect(rec.Code).To(Equal(http.StatusOK))
-				Expect(body).ToNot(ContainSubstring(payload))
-				// The placeholder sits inside a JS string literal; no raw quote may
-				// reach it.
-				Expect(body).To(ContainSubstring(`var GAVEL_ORIGIN = "http://`))
-			})
-		}
-
-		It("passes an ordinary origin through unchanged", func() {
-			req := httptest.NewRequest(http.MethodGet, "/react-grab-install", nil)
-			req.Host = "localhost:9092"
-			rec := httptest.NewRecorder()
-
-			handleReactGrabInstall(rec, req)
-
-			Expect(rec.Body.String()).To(ContainSubstring("http://localhost:9092/react-grab-plugin.js"))
-			Expect(rec.Body.String()).ToNot(ContainSubstring("__GAVEL_ORIGIN__"))
-		})
-	})
-
 	Describe("dashboard build-info script", func() {
 		// A build stamped with a quote must not be able to terminate the JSON
 		// string or the <script> element it is embedded in.

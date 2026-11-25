@@ -18,6 +18,8 @@ type WatchOptions struct {
 	FetchSnapshot func(context.Context, WatchOptions) (*PRWatchResult, error)
 	github.Options
 	PRNumber int
+	RunID    int64
+	JobID    int64
 	Interval time.Duration
 	Follow   bool
 	// FailFast stops --follow at the first definitive failure instead of waiting
@@ -33,6 +35,10 @@ type WatchOptions struct {
 }
 
 func Run(opts WatchOptions) (*PRWatchResult, int) {
+	if opts.RunID != 0 && (opts.PRNumber != 0 || opts.WholePR || len(opts.Comments) > 0) {
+		fmt.Fprintln(os.Stderr, "Error: an Actions run target cannot be combined with a PR number, --whole-pr or --comments")
+		return nil, 1
+	}
 	if opts.WholePR && (len(opts.Actions) > 0 || len(opts.Comments) > 0) {
 		fmt.Fprintln(os.Stderr, "Error: --whole-pr cannot be scoped to selected checks or comments")
 		return nil, 1
@@ -43,6 +49,9 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 	fetch := opts.FetchSnapshot
 	if fetch == nil {
 		fetch = fetchGitHubSnapshot
+		if opts.RunID != 0 {
+			fetch = fetchActionsSnapshot
+		}
 	}
 	logger.Debugf("starting watch (pr=%d, interval=%s, follow=%t)", opts.PRNumber, opts.Interval, opts.Follow)
 
@@ -57,7 +66,7 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		}
 		result, err := fetch(opts.Context, opts)
 		if err != nil {
-			if opts.WholePR || !opts.Follow || opts.FetchSnapshot != nil {
+			if opts.WholePR || !opts.Follow || opts.FetchSnapshot != nil || opts.RunID != 0 {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				return nil, 1
 			}
@@ -68,11 +77,15 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			continue
 		}
 
-		if result == nil || result.PR == nil {
-			fmt.Fprintln(os.Stderr, "Error: PR provider returned no PR snapshot")
+		if result == nil || result.PR == nil && len(result.Runs) == 0 {
+			fmt.Fprintln(os.Stderr, "Error: provider returned no PR or Actions snapshot")
 			return nil, 1
 		}
 		pr, runs := result.PR, result.Runs
+		if opts.WholePR && pr == nil {
+			fmt.Fprintln(os.Stderr, "Error: --whole-pr requires a PR snapshot")
+			return nil, 1
+		}
 		unresolved := result.UnresolvedComments()
 		if opts.WholePR {
 			unresolved = 0
@@ -82,7 +95,7 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 				}
 			}
 		}
-		if opts.ExpectedHead != "" && pr.HeadRefOID != opts.ExpectedHead {
+		if opts.ExpectedHead != "" && pr != nil && pr.HeadRefOID != opts.ExpectedHead {
 			fmt.Fprintf(os.Stderr, "Error: PR head %s does not match expected pushed head %s\n", pr.HeadRefOID, opts.ExpectedHead)
 			return result, 1
 		}
@@ -92,7 +105,10 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		}
 		filters := newResultFilters(opts.Comments, opts.Actions)
 
-		preChecks := len(pr.StatusCheckRollup)
+		preChecks := 0
+		if pr != nil {
+			preChecks = len(pr.StatusCheckRollup)
+		}
 		preRuns := len(runs)
 		preComments := len(result.Comments)
 		var selectorOptions []string
@@ -115,8 +131,8 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		// to a selector that pruned a non-empty set down to nothing, so a PR
 		// whose checks or comments have not appeared yet still keeps polling.
 		if filters.noActionMatch(preChecks, preRuns, result) {
-			fmt.Fprintf(os.Stderr, "Error: --actions %s matched no checks or workflows on PR #%d.\nAvailable selectors: %s\n",
-				strings.Join(opts.Actions, ","), opts.PRNumber, strings.Join(selectorOptions, ", "))
+			fmt.Fprintf(os.Stderr, "Error: --actions %s matched no checks or workflows.\nAvailable selectors: %s\n",
+				strings.Join(opts.Actions, ","), strings.Join(selectorOptions, ", "))
 			return nil, 1
 		}
 		if filters.noCommentMatch(preComments, result) {
@@ -203,6 +219,9 @@ func fetchGitHubSnapshot(ctx context.Context, opts WatchOptions) (*PRWatchResult
 	}
 	annotateReproduceCommands(gavelResults, opts.Repo, pr.Number)
 	comments := removeRenderedArtifactComments(MergeAndFilter(pr.Comments, pr.ReviewThreads), gavelResults)
+	clientOptions := opts.Options
+	clientOptions.Context = ctx
+	fetchCodeQLFindings(clientOptions, pr)
 	return &PRWatchResult{PR: pr, Runs: runs, Conflicts: github.DetectMergeConflicts(opts.Options, pr), GavelResults: gavelResults, Comments: comments}, nil
 }
 
@@ -217,6 +236,14 @@ func followDone(filters resultFilters, result *PRWatchResult, failFast bool) boo
 	if result != nil && result.PR != nil && result.PR.Provider == "azuredevops" {
 		if result.PR.State != "OPEN" {
 			return true
+		}
+		if filters.hasCommentFilters() {
+			if result.UnresolvedComments() > 0 {
+				return false
+			}
+			if !filters.hasActionFilters() {
+				return true
+			}
 		}
 		r := result.PR.MergeReadiness
 		if r == nil {
@@ -249,6 +276,13 @@ func statusExitCode(result *PRWatchResult) int {
 	if result == nil {
 		return 0
 	}
+	if result.PR == nil {
+		for _, run := range result.Runs {
+			if run != nil && (actionsConclusionFailed(run.Conclusion) || strings.EqualFold(run.Conclusion, "CANCELLED") || model.RunNeedsJobLogs(run)) {
+				return 1
+			}
+		}
+	}
 	if result.PR != nil && result.PR.Provider == "azuredevops" {
 		if result.PR.State == "OPEN" && (result.PR.MergeReadiness == nil || result.PR.MergeReadiness.State != "ready") {
 			return 1
@@ -278,6 +312,13 @@ func statusExitCode(result *PRWatchResult) int {
 	if result.PR != nil && result.PR.StatusCheckRollup.HasFailure() {
 		return 1
 	}
+	if result.PR != nil {
+		for _, check := range result.PR.StatusCheckRollup {
+			if check.LintError != "" {
+				return 1
+			}
+		}
+	}
 	for _, summary := range result.GavelResults {
 		if summary != nil && summary.HasFailure() {
 			return 1
@@ -300,14 +341,14 @@ func fetchRuns(opts WatchOptions, pr *model.PRInfo) (map[int64]*model.WorkflowRu
 		}
 		seen[runID] = true
 
-		// FetchRunJobs short-circuits via the persistent github cache when
-		// the run is already completed — and atomically attaches failed-job
-		// logs before caching when opts.Logs is set, so a previously
-		// log-less cache entry can't suppress --logs.
 		run, err := github.FetchRunJobs(opts.Options, runID, github.RunLogOptions{
 			FetchLogs: opts.Logs,
 			TailLines: opts.TailLogs,
+			Checks:    pr.StatusCheckRollup,
 		})
+		if err == nil && opts.WholePR && run.Stale != "" {
+			err = fmt.Errorf("only an earlier copy is available: %s", run.Stale)
+		}
 		if err != nil {
 			if opts.WholePR {
 				return nil, fmt.Errorf("fetch PR workflow %d: %w", runID, err)
@@ -330,13 +371,19 @@ func fetchRuns(opts WatchOptions, pr *model.PRInfo) (map[int64]*model.WorkflowRu
 }
 
 func wholePRBlocked(result *PRWatchResult) bool {
-	if result.PR.State != "OPEN" || result.HasMergeConflict() || result.PR.IsDraft || result.PR.ReviewDecision == "REVIEW_REQUIRED" || result.PR.ReviewDecision == "CHANGES_REQUESTED" {
+	pr := result.PR
+	if pr.State != "OPEN" || result.HasMergeConflict() || pr.IsDraft {
 		return true
+	}
+	if pr.Provider != "azuredevops" {
+		if pr.ReviewDecision == model.ReviewRequired || pr.ReviewDecision == "CHANGES_REQUESTED" {
+			return true
+		}
+		if pr.StatusCheckRollup.AllComplete() && pr.MergeState != "UNKNOWN" && pr.MergeState != "CLEAN" && pr.MergeState != "HAS_HOOKS" {
+			return true
+		}
 	}
 	if readiness := result.PR.MergeReadiness; readiness != nil && readiness.State != "ready" && !readiness.WaitingForBuilds && !readiness.WaitingForMerge {
-		return true
-	}
-	if pr := result.PR; pr.Provider != "azuredevops" && pr.StatusCheckRollup.AllComplete() && pr.MergeState != "UNKNOWN" && pr.MergeState != "CLEAN" && pr.MergeState != "HAS_HOOKS" {
 		return true
 	}
 	for _, summary := range result.GavelResults {

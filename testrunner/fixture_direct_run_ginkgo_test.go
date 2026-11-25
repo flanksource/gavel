@@ -57,4 +57,37 @@ var _ = Describe("direct fixture run", func() {
 		Expect(test.Passed).To(BeTrue())
 		Expect(test.Stdout).To(Equal("direct"))
 	})
+
+	// `gavel fixtures --ui` hands the runner terminal display options that
+	// hide passing results; the UI still needs every step's result.
+	It("keeps passing steps' results when the runner's display hides passed results", func() {
+		workDir := GinkgoT().TempDir()
+		fixturePath := filepath.Join(workDir, "passing.md")
+		Expect(os.WriteFile(fixturePath, []byte("---\ncodeBlocks: [bash]\n---\n\n# Passing fixture\n\n## Import\n\n### command: prints command\n\n```bash\nprintf command\n```\n\n- cel: stdout == \"command\"\n\n## Rows\n\n| Name | Command | CEL |\n| --- | --- | --- |\n| prints row | printf row | stdout == \"row\" |\n"), 0o600)).To(Succeed())
+
+		result, err := testrunner.Run(testrunner.RunOptions{
+			WorkDir:      workDir,
+			Fixtures:     true,
+			FixturesOnly: true,
+			FixtureRunner: &fixtures.RunnerOptions{
+				Paths:   []string{fixturePath},
+				WorkDir: workDir,
+				Display: &fixtures.DisplayOptions{ShowPassed: false},
+			},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		stdout := map[string]string{}
+		var collect func([]parsers.Test)
+		collect = func(tests []parsers.Test) {
+			for _, test := range tests {
+				if test.Fixture != nil {
+					stdout[test.Name] = test.Stdout
+				}
+				collect(test.Children)
+			}
+		}
+		collect(result.([]parsers.Test))
+		Expect(stdout).To(Equal(map[string]string{"prints command": "command", "prints row": "row"}))
+	})
 })

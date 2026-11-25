@@ -1,0 +1,128 @@
+package ui
+
+import (
+	"context"
+	"io"
+	"os"
+	"path/filepath"
+	"time"
+
+	cexec "github.com/flanksource/clicky/exec"
+	"github.com/flanksource/clicky/prompt"
+	clickytask "github.com/flanksource/clicky/task"
+	commonscontext "github.com/flanksource/commons/context"
+	"github.com/flanksource/gavel/commit"
+	"github.com/flanksource/gavel/verify"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+var _ = Describe("dashboard commit prompts", func() {
+	It("starts while the only worker is occupied and leaves that worker to its pre-commit tasks", func() {
+		clickytask.SetMaxConcurrent(1)
+		DeferCleanup(func() { clickytask.SetMaxConcurrent(4) })
+		occupied, release := make(chan struct{}), make(chan struct{})
+		blocker := clickytask.StartTask("occupy the worker", func(ctx commonscontext.Context, _ *clickytask.Task) (struct{}, error) {
+			close(occupied)
+			select {
+			case <-release:
+				return struct{}{}, nil
+			case <-ctx.Done():
+				return struct{}{}, ctx.Err()
+			}
+		}, clickytask.WithContext(GinkgoT().Context()), clickytask.WithCancellationDrain())
+		DeferCleanup(func() { blocker.Cancel(); _, _ = blocker.GetResult() })
+		Eventually(occupied).Should(BeClosed())
+
+		server := &Server{}
+		started, checked := make(chan struct{}), make(chan struct{})
+		server.SetProjectCommitRunner(func(ctx context.Context, _ []string, _ io.Writer) (*commit.Result, error) {
+			close(started)
+			check := clickytask.StartTask("pre-commit check", func(commonscontext.Context, *clickytask.Task) (struct{}, error) {
+				close(checked)
+				return struct{}{}, nil
+			}, clickytask.WithContext(ctx))
+			_, err := check.GetResult()
+			return nil, err
+		})
+		group := clickytask.StartGroup[cexec.ExecResult]("Commit worker test", clickytask.WithConcurrency(1))
+		DeferCleanup(group.Cancel)
+		commitTask := server.runProjectCommit(group.Context(), GinkgoT().TempDir(), []string{"commit"}, group.Group)
+		Eventually(started).Should(BeClosed())
+		Expect(checked).NotTo(BeClosed())
+		close(release)
+		Eventually(commitTask.Status).Should(Equal(clickytask.StatusSuccess))
+		Expect(checked).To(BeClosed())
+	})
+
+	It("puts the PR a commit run pushed to on its task details", func() {
+		server := &Server{}
+		pr := &commit.PushedPR{Number: 42, URL: "https://github.com/acme/widgets/pull/42", Branch: "feat/x", Created: true}
+		server.SetProjectCommitRunner(func(context.Context, []string, io.Writer) (*commit.Result, error) {
+			return &commit.Result{PR: pr}, nil
+		})
+		group := clickytask.StartGroup[cexec.ExecResult]("Commit PR test", clickytask.WithConcurrency(1))
+		DeferCleanup(group.Cancel)
+		task := server.runProjectCommit(group.Context(), GinkgoT().TempDir(), []string{"commit"}, group.Group)
+		_, err := task.GetResult()
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(clickytask.SnapshotByID(group.ID())).To(ContainElement(And(
+			WithTransform(func(s clickytask.TaskSnapshot) string { return s.ID }, Equal(task.ID())),
+			WithTransform(func(s clickytask.TaskSnapshot) any { return s.Details }, Equal(projectCommitRunDetails{PR: pr})),
+		)))
+	})
+
+	DescribeTable("handles a stale lock through the running task", func(action string) {
+		repo := createDiffRepository()
+		writeDiffFile(repo, "change.txt", "pending change\n")
+		lock := filepath.Join(repo, ".git", "index.lock")
+		Expect(os.WriteFile(lock, nil, 0o600)).To(Succeed())
+		aged := time.Now().Add(-time.Minute)
+		Expect(os.Chtimes(lock, aged, aged)).To(Succeed())
+		server := &Server{}
+		finished := make(chan error, 1)
+		server.SetProjectCommitRunner(func(ctx context.Context, _ []string, _ io.Writer) (*commit.Result, error) {
+			result, err := commit.Run(ctx, commit.Options{
+				WorkDir: repo, Files: []string{"change.txt"}, Message: "fix: example", DryRun: true,
+				LintFlag: "false", LintSecretsFlag: "false", TidyFlag: "false",
+				Config: verify.CommitConfig{Precommit: verify.PrecommitConfig{Mode: "prompt"}},
+			})
+			finished <- err
+			return result, err
+		})
+		group := clickytask.StartGroup[cexec.ExecResult]("Commit prompt test", clickytask.WithConcurrency(1))
+		DeferCleanup(group.Cancel)
+		task := server.runProjectCommit(group.Context(), repo, []string{"commit"}, group.Group)
+		var pending prompt.PromptSnapshot
+		Eventually(func(g Gomega) {
+			prompts := ensurePromptManager().List(prompt.Filter{State: "pending", Labels: map[string]string{prompt.TaskLabel: task.ID()}})
+			g.Expect(prompts).To(HaveLen(1))
+			pending = prompts[0]
+			g.Expect(pending.Title).To(ContainSubstring("Stale git lock"))
+			g.Expect(clickytask.SnapshotByID(group.ID())).To(ContainElement(WithTransform(func(s clickytask.TaskSnapshot) int { return len(s.Prompts) }, Equal(1))))
+		}, 15*time.Second).Should(Succeed())
+		switch action {
+		case "remove":
+			Expect(ensurePromptManager().Resolve(pending.ID, prompt.Answer{Values: map[string]any{"choice": "0"}})).To(Succeed())
+		case "decline":
+			Expect(ensurePromptManager().Resolve(pending.ID, prompt.Answer{Values: map[string]any{"choice": "1"}})).To(Succeed())
+		case "stop":
+			Expect(clickytask.ControlTask(GinkgoT().Context(), group.ID(), task.ID(), clickytask.ControlStop)).To(Succeed())
+		}
+		var err error
+		Eventually(finished).Should(Receive(&err))
+		_, _ = task.GetResult()
+		if action == "remove" {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(lock).NotTo(BeAnExistingFile())
+		} else {
+			Expect(err).To(HaveOccurred())
+			Expect(lock).To(BeAnExistingFile())
+		}
+		if action == "stop" {
+			Expect(task.Status()).To(Equal(clickytask.StatusCancelled))
+		}
+		Expect(ensurePromptManager().List(prompt.Filter{State: "pending", Labels: map[string]string{prompt.TaskLabel: task.ID()}})).To(BeEmpty())
+	}, Entry("remove and resume", "remove"), Entry("decline", "decline"), Entry("stop", "stop"))
+})

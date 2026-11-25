@@ -168,7 +168,7 @@ func (s *Server) handleTodoLabelDelete(w http.ResponseWriter, r *http.Request) {
 // plainly rather than returning an empty taxonomy that would look like "no
 // labels are defined".
 func (s *Server) todoLabelStore(ctx context.Context, source todoSource) (todos.LabelDefinitionProvider, error) {
-	provider, _, err := s.todoProviderContext(ctx, source)
+	provider, _, err := s.todoReadProviderContext(ctx, source)
 	if err != nil {
 		return nil, err
 	}

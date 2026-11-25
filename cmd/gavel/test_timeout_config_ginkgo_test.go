@@ -21,7 +21,7 @@ func timeoutCommand() *cobra.Command {
 	command.Flags().Duration("timeout", 10*time.Minute, "")
 	command.Flags().Duration("lint-timeout", 5*time.Minute, "")
 	command.Flags().Duration("test-timeout", 5*time.Minute, "")
-	return command
+	return withRootContext(command)
 }
 
 // writeGavelConfig points --cwd at a repo carrying the given .gavel.yaml.
@@ -44,6 +44,13 @@ func defaultFlags() testCommandFlags {
 }
 
 var _ = Describe("test timeouts from .gavel.yaml", func() {
+	It("honors the invocation directory before applying command defaults", func() {
+		writeGavelConfig("test: {options: {concurrency: 2}}\n")
+		opts, _, err := finalizeTestCommandOptions(timeoutCommand(), testrunner.RunOptions{}, defaultFlags())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opts.WorkDir).To(Equal(workingDir))
+		Expect(opts.Concurrency).To(Equal(2))
+	})
 	It("applies configured timeouts when no flag was passed", func() {
 		writeGavelConfig("test:\n  timeout: 45m\n  testTimeout: 20m\n  lintTimeout: 8m\n")
 

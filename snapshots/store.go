@@ -9,11 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/flanksource/gavel/blob"
+	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
+	"github.com/gofrs/flock"
 )
 
 // ErrInvalidRunID reports a run ID that names neither the last pointer nor a run-* snapshot.
@@ -74,20 +79,118 @@ func ReadRun(workDir, runID string) ([]byte, error) {
 		if key, err = pointerKey(pointer); err != nil {
 			return nil, err
 		}
-	} else if !strings.HasPrefix(runID, PerRunPrefix) || strings.ContainsAny(runID, `/\`) || strings.Contains(runID, "..") {
+	} else if !validRunID(runID) {
 		return nil, fmt.Errorf("%w %q: want %s or a %s* snapshot name", ErrInvalidRunID, runID, PointerLast, PerRunPrefix)
 	}
-	return readKey(store, key)
+	_, data, err := readSnapshot(store, key)
+	return data, err
+}
+
+func validRunID(runID string) bool {
+	return strings.HasPrefix(runID, PerRunPrefix) && !strings.ContainsAny(runID, `/\`) && !strings.Contains(runID, "..")
 }
 
 // pointerKey is the store key of the snapshot p names. Save records it as .gavel/<key>.
 func pointerKey(p *Pointer) (string, error) {
 	path := filepath.ToSlash(p.Path)
 	key, ok := strings.CutPrefix(path, Dir+"/")
-	if !ok || key == "" || strings.Contains(key, "/") {
+	if !ok || SnapshotStem(key) == "" || strings.ContainsAny(key, `/\`) {
 		return "", fmt.Errorf("pointer names %q, not a snapshot under %s/", p.Path, Dir)
 	}
 	return key, nil
+}
+
+func openSnapshotKey(store blob.Store, key string) (string, io.ReadCloser, error) {
+	return openSnapshot(key, func(candidate string) (io.ReadCloser, error) {
+		return store.Read(context.Background(), candidate)
+	}, blob.ErrNotFound)
+}
+
+func readSnapshot(store blob.Store, key string) (string, []byte, error) {
+	name, source, err := openSnapshotKey(store, key)
+	if err != nil {
+		return name, nil, err
+	}
+	reader, err := decodeReader(name, source)
+	if err != nil {
+		return name, nil, err
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return name, nil, fmt.Errorf("read snapshot %s: %w", name, err)
+	}
+	return name, data, nil
+}
+
+func putSnapshot(store blob.Store, key string, snap *testui.Snapshot) (string, error) {
+	config, err := compressionConfig()
+	if err != nil {
+		return "", err
+	}
+	data, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal %s: %w", key, err)
+	}
+	if snap.Status.Running || config.suffix == "" || int64(len(data)) < config.threshold {
+		return key, store.Write(context.Background(), key, bytes.NewReader(data))
+	}
+	var compressed bytes.Buffer
+	if err := compressSnapshot(&compressed, bytes.NewReader(data), config.suffix); err != nil {
+		return "", fmt.Errorf("compress %s: %w", key, err)
+	}
+	name := key + config.suffix
+	return name, store.Write(context.Background(), name, &compressed)
+}
+
+// replaceSnapshot publishes the new version before removing older encodings.
+func replaceSnapshot(store blob.Store, key string, snap *testui.Snapshot) (string, error) {
+	name, err := putSnapshot(store, key, snap)
+	if err != nil {
+		return "", err
+	}
+	return name, deleteSnapshotKeys(context.Background(), store, key, name)
+}
+
+func deleteSnapshotKeys(ctx context.Context, store blob.Store, key, keep string) error {
+	for _, candidate := range snapshotKeys(key) {
+		if candidate != keep {
+			if err := store.Delete(ctx, candidate); err != nil && !errors.Is(err, blob.ErrNotFound) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DeleteRun removes every stored encoding of a per-run snapshot.
+func DeleteRun(ctx context.Context, store blob.Store, runID string) error {
+	if !validRunID(runID) {
+		return fmt.Errorf("%w %q", ErrInvalidRunID, runID)
+	}
+	return withSnapshotLock(ctx, store, func() error {
+		return deleteSnapshotKeys(ctx, store, runID+".json", "")
+	})
+}
+
+func withSnapshotLock(ctx context.Context, store blob.Store, action func() error) (err error) {
+	dir, local := blob.LocalDirectory(store)
+	if !local {
+		return action()
+	}
+	if err := utils.MkdirOutput(dir, 0o755); err != nil {
+		return err
+	}
+	lock := flock.New(filepath.Join(dir, "snapshots.lock"), flock.SetFlag(os.O_CREATE|os.O_RDWR))
+	locked, err := lock.TryLockContext(ctx, 50*time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("lock snapshots in %s: %w", dir, err)
+	}
+	if !locked {
+		return fmt.Errorf("lock snapshots in %s: lock was not acquired", dir)
+	}
+	defer func() { err = errors.Join(err, lock.Close()) }()
+	return action()
 }
 
 func readKey(store blob.Store, key string) ([]byte, error) {

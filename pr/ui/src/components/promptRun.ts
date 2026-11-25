@@ -43,11 +43,11 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
     const settle = () => callbacks.current.onSettled?.();
     const stream = openEventStream(`/api/captain/prompt/runs/${encodeURIComponent(runId)}/stream`);
     let closed = false;
-    stream.addEventListener('run', event => {
+    const onRun = (event: Event) => {
       const { sessionId } = parseFrame<PromptRunFrame>(event);
       if (sessionId) setState(current => current.status === 'running' ? { ...current, sessionId } : current);
-    });
-    stream.addEventListener('done', event => {
+    };
+    const onDone = (event: Event) => {
       stream.close();
       const summary = parseFrame<PromptRunSummary>(event);
       if (!summary.success) {
@@ -57,8 +57,8 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
         callbacks.current.onSuccess?.();
       }
       settle();
-    });
-    stream.addEventListener('error', event => {
+    };
+    const onError = (event: Event) => {
       // A dropped connection is a data-less error the stream reconnects from
       // (the server replays the run) — unless Captain has already forgotten the
       // run, which only its snapshot route can tell; only the server's terminal
@@ -77,20 +77,27 @@ export function usePromptRun({ prompt, label, onSuccess, onSettled }: {
       const summary = JSON.parse(data) as PromptRunSummary;
       setState({ status: 'failed', runId, sessionId: summary.sessionId, error: summary.error || `The ${callbacks.current.label} failed.` });
       settle();
-    });
+    };
+    stream.addEventListener('run', onRun);
+    stream.addEventListener('done', onDone);
+    stream.addEventListener('error', onError);
     return () => {
       closed = true;
+      stream.removeEventListener('run', onRun);
+      stream.removeEventListener('done', onDone);
+      stream.removeEventListener('error', onError);
       stream.close();
     };
   }, [runId]);
 
-  const start = async (variables: Record<string, unknown>) => {
+  // `spec` layers a Captain runtime (model, mode, effort…) over the prompt's frontmatter.
+  const start = async (variables: Record<string, unknown>, { spec }: { spec?: Record<string, unknown> } = {}) => {
     setState({ status: 'starting' });
     try {
       const started = await mutationJSON<PromptRunStarted>({
         url: `/api/v1/prompt/run?args=${encodeURIComponent(prompt)}`,
         method: 'POST',
-        body: { variables },
+        body: { variables, ...(spec && Object.keys(spec).length > 0 && { spec }) },
         context: `Could not start the ${label}`,
       });
       if (!started.runId) throw new Error(`Could not start the ${label}: no run id in the response`);

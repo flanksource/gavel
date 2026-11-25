@@ -45,8 +45,18 @@ jobs:
       - name: Install Task
         uses: ./.github/actions/setup-task
 
+      # Docs specs shell out to `gavel` (e.g. `gavel fixtures outline`), so the
+      # binary under test must be the one on PATH.
       - name: Build gavel
-        run: task build:prod
+        run: |
+          task build:prod
+          echo "$PWD/.bin" >> "$GITHUB_PATH"
+
+      - name: Check editor frontend
+        working-directory: editor/ui
+        run: |
+          pnpm run check
+          pnpm test
 
       # Node + TypeScript for the jest/vitest/playwright test frameworks and
       # the tsc lint check live in these UI projects' devDependencies.
@@ -60,7 +70,7 @@ jobs:
 
       - name: Install site dependencies
         run: npm ci
-        working-directory: site
+        working-directory: docs
 
       # `gavel test` compiles all Go test binaries in a pre-build phase before
       # the timed per-package run, so a cold build cache no longer eats into the

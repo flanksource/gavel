@@ -20,3 +20,12 @@ Shared ways of working, the gavel todo workflow, and global skills come from the
 - [Commit Workflow & PR Content](.agents/memory/commit-workflow.md) — Captain prompt bridge for PR content, 40-rune title limit, interactive AI summaries, the linked-deps commit gate, and `task build:prod`
 - [Fixtures, Test History & Linter Integration](.agents/memory/fixtures-testing-and-linters.md) — fixture runner/Ginkgo seams, `gavel fixtures outline` + AI criteria nodes, `.gavel/run-*.json` test history, and signal-based linter auto-activation (react-doctor)
 - [commons-db Logging & GitHub Cache](.agents/memory/database-and-logging.md) — SQL classification and `SchemaChangeSession` live in commons-db/gorm, exact log-level overrides, and the Postgres-backed GitHub cache wiring
+
+## Repository ownership and validation
+
+- User-facing guidance belongs in `docs/content/docs`; contributor setup and architecture belong in `CONTRIBUTING.md`. Keep this file for actionable agent instructions.
+- Use the existing services kind and commons-db/dbtest for disposable fixture databases; preserve fixture-scoped environment and reverse cleanup.
+- Captain owns prompt execution, session storage, and approval admission. Gavel owns TODO links, lifecycle outcome mapping, and dashboard presentation.
+- Keep `testrunner/ui` and `pr/ui` embeds separate from the standalone docs application. Do not include incidental rebuilt bundles in feature changes.
+- After changing documentation, run tests from `docs`, check links/downloads and mobile navigation with agent-browser, and regenerate schema bundles from source when necessary.
+- No manual commits unless the user explicitly requests them. Preserve unrelated staged, unstaged, and untracked changes.

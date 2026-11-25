@@ -3,11 +3,11 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/flanksource/gavel/pr/ui"
 )
 
+const menuBarSupported = false
+
 func runMenuBar(_ *ui.Server, _ string) error {
-	return fmt.Errorf("menu bar requires a macOS build with CGO_ENABLED=1 and -tags gavel_menubar (or task build:prod)")
+	panic("runMenuBar called in a build without menu bar support")
 }

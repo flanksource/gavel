@@ -1,6 +1,9 @@
 package main
 
-import "github.com/flanksource/clicky/entity"
+import (
+	"github.com/flanksource/clicky/entity"
+	"github.com/flanksource/gavel/testrunner"
+)
 
 // clicky only wires an Options struct's long help into cobra when it satisfies
 // entity.Help exactly (`Help() api.Textable`). A near-miss signature such as
@@ -9,6 +12,7 @@ import "github.com/flanksource/clicky/entity"
 // assertions turn that into a compile failure.
 var (
 	_ entity.Help = CommitOptions{}
+	_ entity.Help = LintOptions{}
 	_ entity.Help = PRListOptions{}
 	_ entity.Help = PRStatusOptions{}
 	_ entity.Help = ProcListOptions{}
@@ -33,4 +37,5 @@ var (
 	_ entity.Help = testANSIOptions{}
 	_ entity.Help = testHistoryOptions{}
 	_ entity.Help = testOutlineOptions{}
+	_ entity.Help = testrunner.RunOptions{}
 )

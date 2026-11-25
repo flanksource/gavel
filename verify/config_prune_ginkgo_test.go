@@ -11,7 +11,7 @@ import (
 func savedConfig(cfg GavelConfig) string {
 	GinkgoHelper()
 	dir := GinkgoT().TempDir()
-	Expect(SaveGavelConfig(dir, cfg)).To(Succeed())
+	Expect(SaveGavelConfig(filepath.Join(dir, GavelConfigFileName), cfg)).To(Succeed())
 	data, err := os.ReadFile(filepath.Join(dir, GavelConfigFileName))
 	Expect(err).NotTo(HaveOccurred())
 	return string(data)
@@ -83,7 +83,7 @@ var _ = Describe("saving config", func() {
 
 		cfg, err := LoadSingleGavelConfig(path)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(SaveGavelConfig(dir, cfg)).To(Succeed())
+		Expect(SaveGavelConfig(filepath.Join(dir, GavelConfigFileName), cfg)).To(Succeed())
 
 		data, err := os.ReadFile(path)
 		Expect(err).NotTo(HaveOccurred())

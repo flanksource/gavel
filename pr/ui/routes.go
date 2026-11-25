@@ -22,6 +22,7 @@ const (
 	viewTabActivity = "activity"
 	viewTabTasks    = "tasks"
 	viewTabPrompts  = "prompts"
+	viewTabComments = "comments"
 	viewTabSessions = "sessions"
 	viewTabRuns     = "runs"
 	viewTabPlatform = "platform"
@@ -40,6 +41,7 @@ type prRouteFilters struct {
 	Checks  []string `json:"checks,omitempty"`
 	Repos   []string `json:"repos,omitempty"`
 	Authors []string `json:"authors,omitempty"`
+	Age     []string `json:"age,omitempty"`
 }
 
 type exportReport struct {
@@ -197,7 +199,7 @@ func (r exportReport) GetChildren() []api.TreeNode {
 }
 
 func renderPRFilters(f prRouteFilters) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
 	if len(f.State) > 0 {
 		parts = append(parts, "state="+strings.Join(f.State, ","))
 	}
@@ -209,6 +211,9 @@ func renderPRFilters(f prRouteFilters) string {
 	}
 	if len(f.Authors) > 0 {
 		parts = append(parts, "authors="+strings.Join(f.Authors, ","))
+	}
+	if len(f.Age) > 0 {
+		parts = append(parts, "age="+strings.Join(f.Age, ","))
 	}
 	return strings.Join(parts, " ")
 }
@@ -232,11 +237,12 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 		pathFormat = format
 	}
 
-	// projects/todos/activity/tasks/prompts/sessions/runs/platform are client-rendered SPA
-	// tabs with no server-side node path or export; accept them and any deeper
+	// These are client-rendered SPA tabs
+	// with no server-side node path or export; accept them and any deeper
 	// selected-node segments so a hard load such as /projects/{project}/runs/{runId}
 	// serves the app.
-	if tabSeg == viewTabProjects || tabSeg == viewTabTodos || tabSeg == viewTabActivity || tabSeg == viewTabTasks || tabSeg == viewTabPrompts || tabSeg == viewTabSessions || tabSeg == viewTabRuns || tabSeg == viewTabPlatform {
+	switch tabSeg {
+	case viewTabProjects, viewTabTodos, viewTabActivity, viewTabTasks, viewTabPrompts, viewTabSessions, viewTabRuns, viewTabComments, viewTabPlatform:
 		req.Tab = tabSeg
 		return req, true
 	}
@@ -309,6 +315,7 @@ func parsePRFilters(r *http.Request) prRouteFilters {
 		Checks:  splitList(r.URL.Query().Get("checks")),
 		Repos:   splitList(r.URL.Query().Get("repos")),
 		Authors: splitList(r.URL.Query().Get("authors")),
+		Age:     splitList(r.URL.Query().Get("age")),
 	}
 }
 
@@ -404,13 +411,14 @@ func findPRNode(nodes []*PRViewNode, path []string) *PRViewNode {
 }
 
 func filterPRNodes(nodes []*PRViewNode, f prRouteFilters) []*PRViewNode {
-	if len(f.State) == 0 && len(f.Checks) == 0 && len(f.Repos) == 0 && len(f.Authors) == 0 {
+	if len(f.State) == 0 && len(f.Checks) == 0 && len(f.Repos) == 0 && len(f.Authors) == 0 && len(f.Age) == 0 {
 		return nodes
 	}
 	stateSet := toSet(f.State)
 	checkSet := toSet(f.Checks)
 	repoSet := toSet(f.Repos)
 	authorSet := toSet(f.Authors)
+	now := time.Now()
 
 	out := nodes[:0:0]
 	for _, node := range nodes {
@@ -424,6 +432,9 @@ func filterPRNodes(nodes []*PRViewNode, f prRouteFilters) []*PRViewNode {
 			continue
 		}
 		if len(authorSet) > 0 && !authorSet[node.Author] {
+			continue
+		}
+		if !matchesPRAge(prAgeBucket(node.UpdatedAt, now), f.Age) {
 			continue
 		}
 		out = append(out, node)

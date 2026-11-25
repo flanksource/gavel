@@ -2,30 +2,48 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/report"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/workspace"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Lint exit code", func() {
-	DescribeTable("fails CI only on error-severity violations or a linter that failed to run",
-		func(result *linters.LinterResult, expected int) {
-			Expect(lintExitCode([]*linters.LinterResult{result})).To(Equal(expected))
-		},
+var _ = Describe("Standalone lint output", func() {
+	It("returns a persistence error when the history directory cannot be created", func() {
+		dir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(dir, ".gavel"), []byte("blocked"), 0o600)).To(Succeed())
+		_, err := finishLint(lintResultOptions{Options: LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, Started: time.Now()})
+		Expect(err).To(MatchError(ContainSubstring("persist per-run lint snapshot")))
+	})
+
+	DescribeTable("reports lint failures through the exit status without a redundant command error", func(result *linters.LinterResult, wantExit int) {
+		previousExit := exitCode
+		DeferCleanup(func() { exitCode = previousExit })
+		exitCode = 0
+		withFormat("json", func() {
+			dir := GinkgoT().TempDir()
+			value, err := finishLint(lintResultOptions{Options: LintOptions{WorkDir: dir, Dirs: workspace.Dirs{Invocation: dir, StateRoot: dir}}, Results: []*linters.LinterResult{result}, Started: time.Now()})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value).To(BeAssignableToTypeOf(&testui.Snapshot{}))
+			Expect(exitCode).To(Equal(wantExit))
+		})
+	},
+		Entry("error finding", &linters.LinterResult{Linter: "uir", Success: true, Violations: []models.Violation{{Severity: models.SeverityError}}}, 1),
+		Entry("execution failure", &linters.LinterResult{Linter: "uir", Error: "analysis failed"}, 1),
+		Entry("clean", &linters.LinterResult{Linter: "uir", Success: true}, 0),
 		Entry("warnings only", &linters.LinterResult{Linter: "react-doctor", Success: true,
 			Violations: []models.Violation{{Severity: models.SeverityWarning}, {Severity: models.SeverityInfo}}}, 0),
 		Entry("an error among warnings", &linters.LinterResult{Linter: "react-doctor", Success: true,
 			Violations: []models.Violation{{Severity: models.SeverityWarning}, {Severity: models.SeverityError}}}, 1),
-		Entry("linter crashed", &linters.LinterResult{Linter: "oxlint", Error: "exit status 2"}, 1),
 		Entry("linter not installed", &linters.LinterResult{Linter: "tsc", Skipped: true, Error: "not found on PATH"}, 0),
 	)
-})
-
-var _ = Describe("Standalone lint output", func() {
 	DescribeTable("serializes complete lint snapshots for artifact consumers",
 		func(format string, summary bool) {
 			snap := &testui.Snapshot{

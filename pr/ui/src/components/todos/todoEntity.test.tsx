@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { useTodoBulkActionMutation, type TodoBulkAction, type TodoBulkResult } from './todoEntity';
 import { todoQueryKeys } from './todoQueries';
-import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
 
 const priorityAction: TodoBulkAction = {
   name: 'priority',
@@ -38,7 +37,7 @@ const BETA = '/repos/beta';
 /** Everything a bulk action can leave behind: the workspace listing the table
  *  reads, the per-workspace list, and one detail cache per todo. */
 function seedCaches(client: QueryClient) {
-  client.setQueryData(workspaceTodoBatchKeys.list([ALPHA, BETA]), { byDir: {} });
+  client.setQueryData(todoQueryKeys.list(BETA), { todos: [] });
   client.setQueryData(todoQueryKeys.list(ALPHA), { todos: [] });
   client.setQueryData(todoQueryKeys.item(ALPHA, 'todo-1'), { ref: 'todo-1', priority: 'low' });
   client.setQueryData(todoQueryKeys.globalItem('todo-1'), { ref: 'todo-1', priority: 'low' });
@@ -83,7 +82,7 @@ describe('useTodoBulkActionMutation cache invalidation', () => {
 
     await run(priorityAction, ['todo-1']);
 
-    expect(invalidated(client, workspaceTodoBatchKeys.list([ALPHA, BETA]))).toBe(true);
+    expect(invalidated(client, todoQueryKeys.list(BETA))).toBe(false);
     expect(invalidated(client, todoQueryKeys.list(ALPHA))).toBe(true);
   });
 
@@ -100,7 +99,7 @@ describe('useTodoBulkActionMutation cache invalidation', () => {
 
     await run(priorityAction, ['todo-1']);
 
-    expect(invalidated(client, workspaceTodoBatchKeys.list([ALPHA, BETA]))).toBe(true);
+    expect(invalidated(client, todoQueryKeys.list(BETA))).toBe(true);
   });
 
   // refetchOnWindowFocus is off app-wide, so a detail pane open on a
@@ -148,7 +147,7 @@ describe('useTodoBulkActionMutation cache invalidation', () => {
 
     expect(client.getQueryData(todoQueryKeys.item(ALPHA, 'todo-1'))).toBeUndefined();
     expect(client.getQueryData(todoQueryKeys.globalItem('todo-1'))).toBeUndefined();
-    expect(invalidated(client, workspaceTodoBatchKeys.list([ALPHA, BETA]))).toBe(true);
+    expect(invalidated(client, todoQueryKeys.list(ALPHA))).toBe(true);
   });
 
   // `destructiveHint` says an action may change things irreversibly, not that

@@ -1,18 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnsiHtml, Badge } from '@flanksource/clicky-ui/data';
-import { Modal } from '@flanksource/clicky-ui/components';
+import { CopyButton, Modal } from '@flanksource/clicky-ui/components';
 
 interface OutputLine {
   text: string;
   stream: 'stdout' | 'stderr';
 }
 
+/** A process the rerun ran; `shell` reruns it from any directory. */
+export interface RerunCommand {
+  cwd?: string;
+  argv: string[];
+  line: string;
+  shell: string;
+}
+
 export type RerunStatus = 'running' | 'success' | 'failed' | 'canceled';
 
 interface StreamSnapshot {
   lines: OutputLine[];
+  commands?: RerunCommand[];
   status: RerunStatus;
   command: string;
+}
+
+function RerunCommands({ commands }: { commands: RerunCommand[] }) {
+  return (
+    <div className="flex items-start gap-2 border-b border-border bg-muted px-4 py-2" data-rerun-commands="">
+      <div className="min-w-0 flex-1 space-y-0.5 font-mono text-xs">
+        {commands.map((cmd, i) => (
+          <div key={i} className="truncate" title={cmd.cwd ? `${cmd.line}\ncwd: ${cmd.cwd}` : cmd.line}>
+            <span className="text-muted-foreground">$ </span>{cmd.line}
+          </div>
+        ))}
+      </div>
+      <CopyButton
+        value={() => commands.map(cmd => cmd.shell).join('\n')}
+        label={commands.length > 1 ? 'Copy rerun commands' : 'Copy rerun command'}
+      />
+    </div>
+  );
 }
 
 const MAX_CONNECT_ATTEMPTS = 20;
@@ -41,6 +68,7 @@ export function RerunDialog({ open, onClose, streamUrl }: Props) {
   const [lines, setLines] = useState<OutputLine[]>([]);
   const [status, setStatus] = useState<RerunStatus>('running');
   const [command, setCommand] = useState('');
+  const [commands, setCommands] = useState<RerunCommand[]>([]);
   const [error, setError] = useState<string | undefined>(undefined);
   const scrollRef = useRef<HTMLPreElement>(null);
   const autoScrollRef = useRef(true);
@@ -64,6 +92,7 @@ export function RerunDialog({ open, onClose, streamUrl }: Props) {
     setStatus('running');
     statusRef.current = 'running';
     setCommand('');
+    setCommands([]);
     setError(undefined);
     setAttempt(0);
     autoScrollRef.current = true;
@@ -76,6 +105,7 @@ export function RerunDialog({ open, onClose, streamUrl }: Props) {
     es.addEventListener('message', (e: Event) => {
       const snap = JSON.parse((e as MessageEvent<string>).data) as StreamSnapshot;
       if (snap.command) setCommand(snap.command);
+      if (snap.commands?.length) setCommands(snap.commands);
       statusRef.current = snap.status;
       setStatus(snap.status);
       if (snap.lines?.length) setLines(prev => [...prev, ...snap.lines]);
@@ -118,6 +148,7 @@ export function RerunDialog({ open, onClose, streamUrl }: Props) {
       title={<span className="truncate font-mono text-sm" title={command || 'rerun'}>{command || 'rerun'}</span>}
       headerSlot={<span data-rerun-status={status}><Badge tone={STATUS_TONE[status]} variant="soft" size="xs">{status}</Badge></span>}
     >
+      {commands.length > 0 && <RerunCommands commands={commands} />}
       <pre
         ref={scrollRef}
         onScroll={handleScroll}

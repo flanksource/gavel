@@ -20,7 +20,7 @@ type preparedPromptOptions struct {
 
 func executePreparedPrompt(ctx context.Context, options preparedPromptOptions) (response *ai.PromptResponse, err error) {
 	for _, warning := range options.Runtime.Resolution.Warnings {
-		logger.Warnf("%s: %s", options.Name, warning)
+		logger.Tracef("%s: %s", options.Name, warning)
 	}
 	agent := options.Agent
 	if agent == nil {

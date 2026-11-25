@@ -1,0 +1,20 @@
+kind: Fixture
+name: Empty database and automatic connections
+steps:
+  - id: resources
+    kind: services
+    services:
+      db:
+        dbtest: {}
+    cel: env.DATABASE_URL == db.url && env.COMMONS_DB_URL == db.url && env.COMMONS_DB_CREATE == 'false'
+  - id: connection
+    kind: exec
+    script: psql -XAtc 'SELECT current_database()'
+    cel: stdout.trim() == steps.resources.db.database
+  - id: seed
+    kind: exec
+    script: psql -X -v ON_ERROR_STOP=1 -c "CREATE TABLE messages(value text); INSERT INTO messages VALUES ('hello from fixture');"
+  - id: query
+    kind: exec
+    script: psql -XAtc 'SELECT value FROM messages'
+    stdout: "hello from fixture\n"

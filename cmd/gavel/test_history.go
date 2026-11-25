@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/testrunner/history"
+	"github.com/flanksource/gavel/workspace"
 )
 
 type testHistoryOptions struct {
@@ -11,7 +14,7 @@ type testHistoryOptions struct {
 }
 
 func (o testHistoryOptions) Help() api.Textable {
-	return clicky.Text(`Show local test execution history from .gavel/run-*.json snapshots.
+	return clicky.Text(`Show local test execution history from saved .gavel snapshots.
 
 The history report aggregates completed gavel test runs and shows executable
 test leaves grouped by package, file, and suite. Each test row includes
@@ -22,19 +25,22 @@ Optionally pass package or file paths to limit the report. Paths are matched
 relative to --cwd.`)
 }
 
-func runTestHistory(opts testHistoryOptions) (any, error) {
-	workDir, err := getWorkingDir()
+func runTestHistory(ctx context.Context, opts testHistoryOptions) (any, error) {
+	dirs, err := workspace.From(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return history.Load(history.Options{
-		WorkDir: workDir,
-		Paths:   opts.Paths,
+		WorkDir:   dirs.Invocation,
+		StateRoot: dirs.StateRoot,
+		Paths:     opts.Paths,
 	})
 }
 
 func init() {
-	cmd := clicky.AddNamedCommand("history", testCmd, testHistoryOptions{}, runTestHistory)
+	cmd := clicky.AddNamedCommandWithContext("history", testCmd, testHistoryOptions{}, runTestHistory)
+	cmd.Use = "history [flags] [path...]"
 	cmd.Short = "Show test execution history from .gavel snapshots"
+	cmd.Example = "  gavel test history ./testrunner\n  gavel test history ./testrunner/runner_test.go"
 	cmd.Flags().SetInterspersed(true)
 }

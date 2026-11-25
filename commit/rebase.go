@@ -11,10 +11,16 @@ import (
 	"github.com/flanksource/commons/logger"
 )
 
-func runGitFetch(workDir, ref string) error {
-	cmd := exec.Command("git", "fetch", "origin", ref)
-	if workDir != "" {
-		cmd.Dir = workDir
+type remoteRef struct {
+	WorkDir string
+	Remote  string
+	Ref     string
+}
+
+func runGitFetch(opts remoteRef) error {
+	cmd := exec.Command("git", "fetch", opts.Remote, opts.Ref)
+	if opts.WorkDir != "" {
+		cmd.Dir = opts.WorkDir
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -67,33 +73,36 @@ func runGitRebaseAbort(workDir string) error {
 	return nil
 }
 
-// rebaseOnto fetches origin/<upstreamBranch> then attempts to rebase HEAD
+// rebaseOnto fetches the remote branch then attempts to rebase HEAD
 // onto it. On conflict it aborts the rebase and prompts the user to retry
 // with -Xours, -Xtheirs, or cancel the push entirely.
-func rebaseOnto(workDir, upstreamBranch string) error {
-	if upstreamBranch == "" {
+func rebaseOnto(ctx context.Context, opts remoteRef) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if opts.Ref == "" {
 		return nil
 	}
-	if err := runGitFetch(workDir, upstreamBranch); err != nil {
-		return fmt.Errorf("git fetch origin %s: %w", upstreamBranch, err)
+	if err := runGitFetch(opts); err != nil {
+		return fmt.Errorf("git fetch %s %s: %w", opts.Remote, opts.Ref, err)
 	}
-	upstream := "origin/" + upstreamBranch
+	upstream := opts.Remote + "/" + opts.Ref
 
-	clean, err := runGitRebase(workDir, upstream, "")
+	clean, err := runGitRebase(opts.WorkDir, upstream, "")
 	if err != nil {
 		return err
 	}
 	if clean {
-		return nil
+		return ctx.Err()
 	}
 
-	if abortErr := runGitRebaseAbort(workDir); abortErr != nil {
+	if abortErr := runGitRebaseAbort(opts.WorkDir); abortErr != nil {
 		return fmt.Errorf("rebase conflict and abort failed: %w", abortErr)
 	}
 	logger.Warnf("Rebase onto %s hit conflicts and was aborted.", upstream)
 
 	choice, ok := promptSelectIndex(
-		context.Background(),
+		ctx,
 		fmt.Sprintf("Rebase onto %s conflicted. Retry with which strategy?", upstream),
 		[]string{
 			"Cancel push",
@@ -101,6 +110,9 @@ func rebaseOnto(workDir, upstreamBranch string) error {
 			"Retry with -Xtheirs (prefer remote changes)",
 		},
 	)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !ok || choice == 0 {
 		return fmt.Errorf("push cancelled: rebase onto %s conflicted", upstream)
 	}
@@ -109,13 +121,13 @@ func rebaseOnto(workDir, upstreamBranch string) error {
 		strategy = "theirs"
 	}
 	logger.Infof("Retrying rebase onto %s with -X%s", upstream, strategy)
-	clean, err = runGitRebase(workDir, upstream, strategy)
+	clean, err = runGitRebase(opts.WorkDir, upstream, strategy)
 	if err != nil {
 		return err
 	}
 	if !clean {
-		_ = runGitRebaseAbort(workDir)
+		_ = runGitRebaseAbort(opts.WorkDir)
 		return fmt.Errorf("rebase onto %s still conflicted with -X%s; resolve manually", upstream, strategy)
 	}
-	return nil
+	return ctx.Err()
 }

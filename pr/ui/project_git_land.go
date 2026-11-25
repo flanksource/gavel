@@ -17,6 +17,10 @@ type projectBranchMergeRequest struct {
 	Branch  string           `json:"branch"`
 	Mode    branchmerge.Mode `json:"mode"`
 	Message string           `json:"message,omitempty"`
+	// Target is the local branch to land onto; empty means the project's base
+	// branch in its primary checkout. Any other target must be checked out in
+	// one of the project's checkouts, which then receives the merge.
+	Target string `json:"target,omitempty"`
 }
 
 type projectBranchMergeResponse struct {
@@ -61,6 +65,17 @@ func (s *Server) handleProjectBranchMerge(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusBadRequest, fmt.Sprintf("mode %q must be %q or %q", request.Mode, branchmerge.Squash, branchmerge.Incremental))
 		return
 	}
+	request.Target = strings.TrimSpace(request.Target)
+	if request.Target != "" {
+		if err := gavelgit.ValidateBranchName(request.Target); err != nil {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("target: %v", err))
+			return
+		}
+		if request.Target == strings.TrimSpace(request.Branch) {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("cannot merge %s into itself", request.Target))
+			return
+		}
+	}
 	ref, ok := resolveProjectBranch(w, r, request.Branch)
 	if !ok {
 		return
@@ -84,14 +99,18 @@ func (s *Server) mergeProjectBranch(ctx context.Context, ref projectBranchRef, r
 	if err := refuseDirtyWorktree(ctx, wt); err != nil {
 		return projectBranchMergeResponse{}, err
 	}
-	commits, err := branchmerge.RangeCommits(ref.dir, "refs/heads/"+ref.base, ref.head)
+	target, checkout, err := ref.mergeTarget(request.Target)
+	if err != nil {
+		return projectBranchMergeResponse{}, err
+	}
+	commits, err := branchmerge.RangeCommits(ref.dir, "refs/heads/"+target, ref.head)
 	if err != nil {
 		return projectBranchMergeResponse{}, err
 	}
 	if len(commits) == 0 {
-		return projectBranchMergeResponse{}, fmt.Errorf("%w: %s has no commits that are not on %s", branchmerge.ErrNothingToMerge, ref.branch, ref.base)
+		return projectBranchMergeResponse{}, fmt.Errorf("%w: %s has no commits that are not on %s", branchmerge.ErrNothingToMerge, ref.branch, target)
 	}
-	opts := branchmerge.Options{Repo: ref.dir, Branch: ref.branch, Base: ref.base, Mode: request.Mode, Message: strings.TrimSpace(request.Message)}
+	opts := branchmerge.Options{Repo: checkout, Branch: ref.branch, Base: target, Mode: request.Mode, Message: strings.TrimSpace(request.Message), Autostash: true}
 	if request.Mode == branchmerge.Incremental {
 		opts.Commits = commits
 	} else if opts.Message == "" {
@@ -115,6 +134,26 @@ func (s *Server) mergeProjectBranch(ctx context.Context, ref projectBranchRef, r
 		TargetBranch: merged.TargetBranch, LandedSHA: merged.LandedSHA, Mode: request.Mode, Commits: merged.Commits,
 		WorktreeRemoved: cleaned.WorktreeRemoved, BranchDeleted: cleaned.BranchDeleted,
 	}, nil
+}
+
+// mergeTarget is the branch a merge lands onto and the checkout that has it
+// checked out: the base in the primary checkout by default, or the checkout
+// holding the requested target. A target no checkout holds is refused, since
+// the merge needs a working tree to apply in.
+func (ref projectBranchRef) mergeTarget(target string) (string, string, error) {
+	if target == "" || target == ref.base {
+		return ref.base, ref.dir, nil
+	}
+	worktrees, err := gavelgit.ListWorktrees(ref.dir)
+	if err != nil {
+		return "", "", err
+	}
+	for _, wt := range worktrees {
+		if wt.Branch == target {
+			return target, wt.Path, nil
+		}
+	}
+	return "", "", fmt.Errorf("%w: %q is not checked out in any checkout of %s; check it out to merge into it", branchmerge.ErrCheckoutNotReady, target, ref.project.Name)
 }
 
 // refuseDirtyWorktree refuses a merge whose branch is checked out in a linked

@@ -7,8 +7,9 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/gavel/lifecycle"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/lifecycle"
+	lifecycle1 "github.com/flanksource/gavel/todos/lifecycle"
 )
 
 type TodosStepsOptions struct {
@@ -30,7 +31,7 @@ func runTodosSteps(args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 	if len(args) == 0 {
-		host, err := lifecycle.NewHost(nil, workDir, lifecycle.HostCLI)
+		host, err := lifecycle1.NewHost(nil, workDir, lifecycle1.HostCLI)
 		if err != nil {
 			return err
 		}
@@ -49,7 +50,7 @@ func runTodosSteps(args []string) error {
 	if len(todoList) != 1 {
 		return fmt.Errorf("expected exactly one TODO matching %q, found %d", args[0], len(todoList))
 	}
-	host, err := lifecycle.NewHost(provider, workDir, lifecycle.HostCLI)
+	host, err := lifecycle1.NewHost(provider, workDir, lifecycle1.HostCLI)
 	if err != nil {
 		return err
 	}
@@ -81,7 +82,7 @@ func renderLifecycleSteps(def lifecycle.Lifecycle) api.Text {
 // renderTodoSteps answers "what can I do with this todo now": each step's
 // applicability and why, the one the lifecycle would run next, and the state
 // of the step's last run when it has one.
-func renderTodoSteps(title string, states []lifecycle.StepState) api.Text {
+func renderTodoSteps(title string, states []lifecycle1.StepState) api.Text {
 	tree := clicky.Text(title, "text-blue-600 font-bold")
 	for _, state := range states {
 		style := "text-gray-500"

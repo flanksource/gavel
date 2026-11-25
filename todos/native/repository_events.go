@@ -59,13 +59,13 @@ func (r *Repository) ListAliases(ctx context.Context, issueID uuid.UUID) ([]Alia
 // ListAliasesByKind reads one kind of alias for a whole workspace in a single
 // query, keyed by issue. Listing decorates every issue with its external links,
 // so the per-issue ListAliases would be an N+1 across the entire backlog.
-func (r *Repository) ListAliasesByKind(ctx context.Context, workspaceID uuid.UUID, kind string) (map[uuid.UUID][]Alias, error) {
+func (r *Repository) ListAliasesByKind(ctx context.Context, workspaceIDs []uuid.UUID, kind string) (map[uuid.UUID][]Alias, error) {
 	var aliases []Alias
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT workspace_id, alias, issue_id, COALESCE(kind, '') AS kind, created_at
 		FROM todo_issue_aliases
-		WHERE workspace_id = ? AND lower(COALESCE(kind, '')) = lower(?) AND `+inOrgWorkspace("workspace_id")+`
-		ORDER BY alias`, workspaceID, kind, r.org,
+		WHERE workspace_id IN ? AND lower(COALESCE(kind, '')) = lower(?) AND `+inOrgWorkspace("workspace_id")+`
+		ORDER BY alias`, workspaceIDs, kind, r.org,
 	).Scan(&aliases)
 	if result.Error != nil {
 		return nil, result.Error

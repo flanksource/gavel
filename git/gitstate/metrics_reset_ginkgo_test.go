@@ -17,6 +17,20 @@ func recordGitMetrics() {
 }
 
 var _ = Describe("ResetMetrics", func() {
+	It("keeps the unlabelled range counter available at zero", func() {
+		ResetMetrics()
+		families, err := prometheus.DefaultGatherer.Gather()
+		Expect(err).NotTo(HaveOccurred())
+		for _, family := range families {
+			if family.GetName() == "gavel_git_ranges_computed_total" {
+				Expect(family.GetMetric()).To(HaveLen(1))
+				Expect(family.GetMetric()[0].GetCounter().GetValue()).To(BeZero())
+				return
+			}
+		}
+		Fail("gavel_git_ranges_computed_total is missing after reset")
+	})
+
 	It("clears recorded activity while preserving the live tracker gauges and cache settings", func() {
 		before, err := Metrics(prometheus.DefaultGatherer)
 		Expect(err).NotTo(HaveOccurred())

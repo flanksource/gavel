@@ -10,6 +10,16 @@ tests exercise its own help output.
 
     gavel fixtures examples/help.fixture.md
 
+## Global and command flags
+
+| Name | Args | Exit code | CEL |
+|------|------|-----------|-----|
+| Root publishes global flags and discovers commands | --help | 0 | stdout.contains("Available Commands:") && stdout.contains("--cwd") && stdout.contains("--no-progress") && !stdout.contains("--work-dir") |
+| Lint shows command flags and points to root help | lint --help | 0 | stdout.contains("--linters") && !stdout.contains("--no-progress") && stdout.contains("Use gavel --help to show arguments available to all commands.") |
+| Cobra help uses framework-specific usage | help test go | 0 | stdout.contains("gavel test go [flags] [path...] [-- go test args...]") && stdout.contains("Use gavel --help to show arguments available to all commands.") && !stdout.contains("--no-progress") |
+| Custom fixture help uses the same footer | fixtures --help | 0 | stderr.contains("Use gavel --help to show arguments available to all commands.") && !stderr.contains("Maximum concurrent tasks") |
+| Subcommands still accept global flags | version --no-color | 0 | stdout.contains("gavel ") |
+
 ## Commands expose structured Examples
 
 | Name | Args | CEL |

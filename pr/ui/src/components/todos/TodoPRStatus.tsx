@@ -4,7 +4,6 @@ import { Button } from '@flanksource/clicky-ui/components';
 import type { PRDetail, PRItem, TodoItem } from '../../types';
 import { fetchJSON, queryKeys } from '../../query';
 import { PRActions } from '../PRActions';
-import { TodoPRBadge } from './TodoPRBadge';
 
 export function TodoPRStatus({ pr, disabled }: { pr: NonNullable<TodoItem['pr']>; disabled?: boolean }) {
   const [expanded, setExpanded] = useState(false);
@@ -26,10 +25,7 @@ export function TodoPRStatus({ pr, disabled }: { pr: NonNullable<TodoItem['pr']>
     state: info.state, isDraft: info.isDraft, mergeable: info.mergeable, url: pr.url, updatedAt: '',
   };
   return <div className="space-y-2">
-    <div className="flex flex-wrap items-center gap-2">
-      <TodoPRBadge pr={pr} link />
-      <Button variant="ghost" size="sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>PR status and actions</Button>
-    </div>
+    <Button variant="ghost" size="sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>PR status and actions</Button>
     {expanded && <section aria-label="Linked pull request" className="space-y-2 rounded-md border border-border bg-card p-3 text-xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium text-foreground">{info?.title ?? 'Pull request'}</span>

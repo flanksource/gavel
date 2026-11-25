@@ -42,16 +42,17 @@ func landingGit(commands []string) []string {
 
 var _ = Describe("branch-merge.prompt", func() {
 	const (
-		repo     = "/src/acme"
-		worktree = "/src/acme/.worktrees/topic"
-		branch   = "topic's $(echo pwned)"
-		base     = "main"
+		repo       = "/src/acme"
+		worktree   = "/src/acme/.worktrees/topic"
+		branch     = "topic's $(echo pwned)"
+		base       = "main"
+		executable = "/opt/Gavel App/gavel"
 	)
 
 	render := func(vars map[string]any) api.Spec {
 		tpl, err := promptlib.LoadFS(library.FS, "branch-merge.prompt")
 		Expect(err).NotTo(HaveOccurred())
-		data := map[string]any{"repo": repo, "worktree": worktree, "branch": branch, "base": base, "conflicts": []string{"go.mod", "cmd/main.go"}}
+		data := map[string]any{"repo": repo, "worktree": worktree, "branch": branch, "base": base, "gavelExecutable": executable, "conflicts": []string{"go.mod", "cmd/main.go"}}
 		for k, v := range vars {
 			data[k] = v
 		}
@@ -100,39 +101,26 @@ var _ = Describe("branch-merge.prompt", func() {
 		Expect(after).To(HaveLen(1))
 		Expect(after[0].EffectiveWhen()).To(Equal(api.CommitWhen("onVerify")))
 		Expect(after[0].Cwd).To(Equal(repo))
-		Expect(after[0].Commands).To(HaveLen(4))
-		Expect(after[0].Commands[0]).To(ContainSubstring(`squash) git merge --squash 'topic'\''s $(echo pwned)' ;;`))
-		Expect(after[0].Commands[1]).To(ContainSubstring(`git commit -m 'fix: it'\''s # done'`))
-		Expect(after[0].Commands[2:]).To(Equal([]string{
-			`git worktree remove '/src/acme/.worktrees/topic'`,
-			`git branch -D 'topic'\''s $(echo pwned)'`,
+		Expect(after[0].Commands).To(Equal([]string{
+			`'/opt/Gavel App/gavel' git merge --base='main' --mode='squash' --message='fix: it'\''s # done' --worktree='/src/acme/.worktrees/topic' -- 'topic'\''s $(echo pwned)'`,
 		}))
 	})
 
-	DescribeTable("lands each mode with the matching git commands",
-		func(vars map[string]any, expected []string) {
-			Expect(landingGit(render(vars).Workflow.After[0].Commands[:2])).To(Equal(expected))
-		},
-		Entry("squash with a message", map[string]any{"mode": "squash", "message": "feat: x"},
-			[]string{"merge --squash topic's $(echo pwned)", "commit -m feat: x"}),
-		Entry("squash without a message keeps git's squash message", map[string]any{"mode": "squash"},
-			[]string{"merge --squash topic's $(echo pwned)", "commit --no-edit"}),
-		Entry("incremental fast-forwards the rebased commits", map[string]any{"mode": "incremental", "message": "ignored"},
-			[]string{"merge --ff-only topic's $(echo pwned)"}),
-	)
-
-	It("refuses an unknown mode instead of landing", func() {
-		Expect(landingGit(render(map[string]any{"mode": "rebase"}).Workflow.After[0].Commands[:1])).To(Equal([]string{"exit 1"}))
+	It("uses the requested incremental mode after verification", func() {
+		after := render(map[string]any{"mode": "incremental", "message": ""}).Workflow.After
+		Expect(after[0].Commands).To(ContainElement(ContainSubstring(`--mode='incremental' --message=''`)))
 	})
 
 	It("lists the files the failed land conflicted on", func() {
 		tpl, err := promptlib.LoadFS(library.FS, "branch-merge.prompt")
 		Expect(err).NotTo(HaveOccurred())
 		req, _, err := tpl.Render(promptlib.RenderOptions{Declared: true, Data: map[string]any{
-			"repo": repo, "worktree": worktree, "branch": "topic", "base": base, "mode": "squash", "conflicts": []string{"go.mod"},
+			"repo": repo, "worktree": worktree, "branch": "topic", "base": base, "mode": "squash",
+			"gavelExecutable": executable, "conflicts": []string{"go.mod"}, "failure": "The merge was aborted",
 		}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(req.Prompt.User).To(ContainSubstring("- `go.mod`"))
+		Expect(req.Prompt.User).To(ContainSubstring("The merge was aborted"))
 		Expect(req.Prompt.User).To(ContainSubstring("git rebase main"))
 	})
 })

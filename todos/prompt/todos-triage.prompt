@@ -84,7 +84,7 @@ prompt:
     `todo_update` `status` accepts only `draft`, `pending`, `verified`, `completed`, `skipped`; statuses such as `review`, `in_progress` and `unverified` are projected from run history and are rejected.
 
     End with the final JSON object matching the provided output schema, carrying three separate top-level fields: `success` (true when what you decided was written), `event` (one of the events in step 1), and `comment` (markdown explaining the decision and the evidence for it; it becomes the run's history entry). Never JSON-encode an object or another field value into a string.
-  schemaStrictness: retry
+  schemaStrictness: repair
 permissions:
   # Triage changes TODOs only through the todo tools; the agent edits no files.
   mode: plan

@@ -12,8 +12,6 @@ import type {
 } from "@flanksource/clicky-ui/components";
 import {
   UiFolder,
-  UiGavel,
-  UiChevronRight,
   UiClose,
   UiGitBranch,
 } from "@flanksource/clicky-ui/icons";
@@ -75,7 +73,8 @@ function scopeQueryFor(layer: SettingsLayer, project: Project | null): string {
     : `project=${encodeURIComponent(project.name)}`;
 }
 
-// SettingsPage is the full-page settings surface: a schema-driven form over one
+// SettingsPage is the settings surface the host places in its main content area
+// (the dashboard's AppShell body, or a full-window container in the menubar): a schema-driven form over one
 // .gavel.yaml layer, wrapped in the redesign's chrome (layer switch, section
 // tabs, per-field provenance badges, sticky save bar). It edits a single layer
 // (never the merged view) so saving the project file never bakes in user values.
@@ -273,21 +272,12 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
     : [...sectionTabItems, tagsTabItem];
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+    <div data-settings-page="" className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex-shrink-0 border-b border-border bg-card">
         <div className="flex h-[52px] items-center gap-3 px-5">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-gradient-to-br from-primary to-indigo-500 text-white">
-              <UiGavel className="text-[15px]" />
-            </span>
-            <span className="text-sm font-bold tracking-tight text-foreground">
-              gavel
-            </span>
-          </div>
-          <UiChevronRight className="text-[13px] text-muted-foreground" />
-          <span className="text-sm font-semibold text-foreground">
+          <h1 className="text-sm font-semibold text-foreground">
             {hasProject ? `${project.name} settings` : "Settings"}
-          </span>
+          </h1>
           <div className="flex-1" />
           <LayerSwitch
             layer={layer}

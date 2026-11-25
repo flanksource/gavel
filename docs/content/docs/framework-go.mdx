@@ -1,0 +1,70 @@
+---
+title: Go tests
+description: Go packages containing ordinary testing-package tests.
+parent: test-execution
+order: 1
+---
+
+import { SchemaViewer } from "@flanksource/clicky-ui/data";
+import Prerequisites from "../../src/components/site/Prerequisites";
+import schema from "../../../gavel.schema.json";
+
+## Discovery and prerequisites
+
+<Prerequisites>
+
+Install the Go toolchain required by your project's `go.mod` and make `go` available on `PATH`.
+
+</Prerequisites>
+
+Gavel detects `_test.go` files and discovers Go packages. It runs ordinary Go tests and Ginkgo v2 suites through one `go test -json -v` command by default. See the Ginkgo page for suite-specific metadata and filters.
+
+## Execute and focus
+
+```bash
+gavel test go --dry-run .
+gavel test go .
+gavel test go ./pkg/parser -- -run TestParser -count=1
+```
+
+Replace example paths and test names with your project. Arguments after `--` go to the selected framework. Use `--tags` for build tags and `--test-timeout` for the Go command deadline. Native Go flags follow `--`. Flags such as `-run` and `-count=1` disable Go's result cache.
+
+## UIR-proved test skipping
+
+To opt in to UIR-proved ordinary Go test skipping, install the matching UIR version, index the checkout, and run:
+
+```bash
+gavel test --framework go --uir-skip --uir-binary uir \
+  --uir-export .gavel/uir-run.json \
+  --uir-input-context 'postgres=ci;redis=ci'
+```
+
+The first run establishes a complete passing baseline. Later runs use package-scoped `go test -skip` patterns only for tests UIR proves unchanged; new tests, examples, fuzz seeds, uninventoried tests, nested modules and any planning or identity failure run normally. `--uir-input-context` identifies runtime inputs Gavel cannot inspect, such as services and environment data.
+
+The file identity covers every tracked or untracked, non-ignored module file, ignored embedded/build-selected inputs, and mutable workspace or local-replace dependencies. Deliberate exclusions are the generated export/cache outputs, ignored files Go neither embeds nor compiles, and immutable module-cache and standard-library files already identified by dependency/toolchain versions. If complete input identity cannot be established, Gavel runs the full command and records no affected-test baseline. If inputs change during a selected run, Gavel discards that evidence and reruns the ordinary full command before returning success. An identity, export or import failure after a full run is a warning: the tests keep their own pass/fail status, but no baseline is recorded.
+
+## Configure the adapter
+
+```yaml
+test:
+  frameworks:
+    go:
+      runtime:
+        timeout: 5m
+        mem: 2GiB
+```
+
+`test.frameworks.go.args` supplies native runner arguments; nonempty lists replace inherited lists. Global execution and reporting options are covered by [Test execution](/docs/test-execution) and [Reporting](/docs/reporting).
+
+## Results
+
+Gavel groups interleaved `go test -json` events by package, uses Go's package pass/fail events as the package outcome, and marks results replayed from Go's test cache. Use `--failed <snapshot>` to verify a repair, and `--show-passed` to expose successful tests. The Go command deadline is separate from the whole-run deadline.
+
+## Framework configuration reference
+
+The fields below are the configuration for `test.frameworks.go`. Native framework configuration remains in its own project files.
+
+<div id="framework-go">
+  <SchemaViewer schema={schema.properties.test.properties.frameworks.additionalProperties} />
+</div>
+

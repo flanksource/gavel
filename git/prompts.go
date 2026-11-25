@@ -11,6 +11,7 @@ import "github.com/flanksource/gavel/prompts"
 // ID so the settings UI can key each descriptor to its schema node's x-prompt-id.
 func Prompts() []prompts.Prompt {
 	return []prompts.Prompt{
+		{ID: prompts.GitInitConfig, Title: "Repository configuration", Description: "Recommends repository analysis filters.", ConfigPath: prompts.GitInitConfig, Default: initConfigPrompt, UsedBy: []string{"gavel git init-config"}},
 		{
 			ID:          prompts.CommitMessage,
 			Title:       "Commit message",

@@ -139,6 +139,8 @@ func (w *metadataWatcher) handle(event fsnotify.Event) {
 // metadataJobs maps a changed path under the common dir to the scans it
 // calls for: a ref or HEAD change rescans refs (and the status of the
 // worktree whose HEAD moved), an index change rescans that worktree's status.
+// Remote refs are not watched; a fetch writing FETCH_HEAD stands in for them,
+// so a moved upstream is noticed.
 func metadataJobs(repo *trackedRepo, rel string) []jobKey {
 	refs := jobKey{root: repo.root}
 	switch {
@@ -146,7 +148,7 @@ func metadataJobs(repo *trackedRepo, rel string) []jobKey {
 		return []jobKey{refs, {root: repo.root, worktree: repo.root}}
 	case rel == "index":
 		return []jobKey{{root: repo.root, worktree: repo.root}}
-	case rel == "packed-refs" || strings.HasPrefix(rel, "refs/heads"):
+	case rel == "packed-refs" || rel == "FETCH_HEAD" || strings.HasPrefix(rel, "refs/heads"):
 		return []jobKey{refs}
 	case strings.HasPrefix(rel, "worktrees/"):
 		parts := strings.Split(rel, "/")

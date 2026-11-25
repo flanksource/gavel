@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType } from "react";
 import { Button, Select } from "@flanksource/clicky-ui/components";
-import { RuntimeBar, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
+import { RuntimeBar, runtimeSpecFields, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
 import { UiCog, type IconProps } from "@flanksource/clicky-ui/icons";
 import type { TodoRunOptions } from "../../types";
 import { Spinner } from "../../icons/Spinner";
@@ -41,18 +41,32 @@ export function TodoRunRuntimeBar({
   const inherited = effectiveTodoRuntime(options, context);
   const preset = unresolvedTodoRuntimePreset(options, context);
   if (preset) return <span className="inline-flex items-center rounded-md border border-border px-2 text-xs text-muted-foreground">Preset: {preset}</span>;
+  const families = buildRunFamilies(context);
+  const models = context.models ?? [];
+  const change = (runtime: AISpecRuntimeValue) => onChange(todoRunOptionsForRuntimeChange({ action, context, options, runtime }));
   return (
     <fieldset disabled={disabled} className="min-w-0 border-0 p-0 disabled:opacity-50">
       <RuntimeBar<AISpecRuntimeValue>
         value={spec}
         effectiveModel={inherited.model}
         effectiveMode={inherited.mode}
-        families={buildRunFamilies(context)}
-        models={context.models ?? []}
+        families={families}
+        models={models}
         reasoningEfforts={context.efforts}
         ariaLabel={`${runActionPresentation(action, context).label} runtime`}
         className="min-w-0"
-        onChange={runtime => onChange(todoRunOptionsForRuntimeChange({ action, context, options, runtime }))}
+        showTimeout
+        showCost
+        actions={{ fields: runtimeSpecFields({
+          value: spec,
+          onChange: change,
+          families,
+          models,
+          effectiveMode: inherited.mode,
+          effectiveModel: inherited.model,
+          inheritedCommits: context.promptDefaults?.[action]?.spec?.workflow?.commits,
+        }) }}
+        onChange={change}
       />
     </fieldset>
   );

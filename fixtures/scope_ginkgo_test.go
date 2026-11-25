@@ -38,6 +38,36 @@ var _ = Describe("StepContext rendering", func() {
 		_, err := step.Template(`{{.env.NOPE}}`)
 		Expect(err).To(MatchError(ContainSubstring("not set")))
 	})
+
+	Describe("config rendering", func() {
+		BeforeEach(func() {
+			Expect(step.Scope.SetOutputs("databases", map[string]any{"rows": []any{
+				map[string]any{"name": "master"}, map[string]any{"name": "uat"},
+			}})).To(Succeed())
+		})
+
+		render := func(config string) (string, error) {
+			step.Spec.Config = []byte(config)
+			out, err := renderConfig(step, nil)
+			return string(out), err
+		}
+
+		It("replaces a {$cel} object with its typed result and templates the strings around it", func() {
+			out, err := render(`{"title":"on {{.env.HOST}}","enum":{"$cel":"databases.rows.map(r, r.name)"},"n":{"$cel":"size(databases.rows) + 1"}}`)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(out).To(MatchJSON(`{"title":"on 127.0.0.1","enum":["master","uat"],"n":3}`))
+		})
+
+		DescribeTable("fails naming the config path",
+			func(config, message string) {
+				_, err := render(config)
+				Expect(err).To(MatchError(ContainSubstring(message)))
+			},
+			Entry("a $cel beside another key", `{"a":{"b":{"$cel":"1","x":2}}}`, "a: b: $cel must be the only key of its object, got 2 keys"),
+			Entry("a $cel that is not an expression", `{"a":{"$cel":3}}`, "a: $cel must be a CEL expression, got 3"),
+			Entry("an expression that does not evaluate", `{"a":[{"$cel":"nope.rows"}]}`, "a: [0]: $cel nope.rows:"),
+		)
+	})
 })
 
 var _ = Describe("StepScope teardown", func() {

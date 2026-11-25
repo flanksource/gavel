@@ -16,10 +16,10 @@ import {
   UiGitBranch,
 } from '@flanksource/clicky-ui/icons';
 import type { PRItem, PRSyncStatus, GavelResultsSummary } from '../types';
-import { reviewColor, checkSummaryText, timedOutNote } from '../utils';
+import { reviewColor, checkSummaryText, timedOutNote, ageShort } from '../utils';
+import { useNow } from '../useNow';
 import { SyncIndicator } from './SyncIndicator';
 import { Avatar } from './Avatar';
-import { RelativeTime } from './RelativeTime';
 
 interface Props {
   pr: PRItem;
@@ -27,6 +27,10 @@ interface Props {
   unread?: boolean;
   syncStatus?: PRSyncStatus;
   gavelResults?: GavelResultsSummary;
+  // The signed-in GitHub login; the author avatar is left out of their own PRs.
+  viewer?: string;
+  // Phone layout: the status icon is the row's only status indicator.
+  mobile?: boolean;
   onClick: () => void;
 }
 
@@ -129,15 +133,23 @@ function GavelBadges({ g }: { g: GavelResultsSummary }) {
   );
 }
 
-export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick }: Props) {
+// RowAge is its own leaf so the shared one-second clock re-renders the age
+// token, not the whole row.
+function RowAge({ iso }: { iso: string }) {
+  useNow();
+  return <span className="whitespace-nowrap tabular-nums" title={iso}>{ageShort(iso)}</span>;
+}
+
+export function PRRow({ pr, selected, unread, syncStatus, gavelResults, viewer, mobile, onClick }: Props) {
   const hasConflict = !pr.isDraft && pr.mergeable === 'CONFLICTING';
   const status = prStatusIcon(pr, gavelResults);
   const StatusIcon = status.icon;
+  const showAuthor = !!pr.author && pr.author.toLowerCase() !== viewer?.toLowerCase();
 
   return (
     <ListMenuItem
       active={selected}
-      accentClassName={borderColor(pr, gavelResults)}
+      accentClassName={mobile ? 'border-transparent' : borderColor(pr, gavelResults)}
       className="px-3 py-2"
       onClick={onClick}
     >
@@ -158,7 +170,7 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
         >
           #{pr.number}
         </a>
-        <span className="text-sm truncate min-w-0 flex-1 font-medium text-foreground">{pr.title}</span>
+        <span className="text-sm truncate min-w-0 flex-1 font-normal text-foreground">{pr.title}</span>
         {hasConflict && (
           <span className="text-xs text-red-500" title="Merge conflicts">
             <UiGitMerge className="text-red-500" />
@@ -176,15 +188,19 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
 
       <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
         <span className="flex min-w-0 items-center gap-1 overflow-hidden">
-          <span className="inline-flex min-w-0 items-center gap-0.5 underline decoration-dotted underline-offset-2">
+          <span className="inline-flex min-w-0 items-center gap-0.5 underline decoration-dotted underline-offset-2" title={pr.source}>
             <UiGitBranch className="text-muted-foreground/70 shrink-0" />
             <span className="truncate">{pr.source}</span>
           </span>
-          <span className="shrink-0">→</span>
-          <span className="inline-flex min-w-0 items-center gap-0.5 underline decoration-dotted underline-offset-2">
-            <UiGitBranch className="text-muted-foreground/70 shrink-0" />
-            <span className="truncate">{pr.target}</span>
-          </span>
+          {pr.target !== pr.repoDefaultBranch && (
+            <>
+              <span className="shrink-0">→</span>
+              <span className="inline-flex min-w-0 items-center gap-0.5 underline decoration-dotted underline-offset-2" title={pr.target}>
+                <UiGitBranch className="text-muted-foreground/70 shrink-0" />
+                <span className="truncate">{pr.target}</span>
+              </span>
+            </>
+          )}
         </span>
 
         {pr.isCurrent && (pr.ahead ?? 0) + (pr.behind ?? 0) > 0 && (
@@ -197,15 +213,15 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
           </span>
         )}
 
-        {hasConflict && <span className="text-red-500 font-medium">CONFLICTS</span>}
+        {!mobile && hasConflict && <span className="text-red-500 font-medium">CONFLICTS</span>}
 
-        {pr.checkStatus && <span>{checkSummaryText(pr.checkStatus)}</span>}
+        {!mobile && pr.checkStatus && <span>{checkSummaryText(pr.checkStatus)}</span>}
 
         {gavelResults && <GavelBadges g={gavelResults} />}
 
-        <span className="ml-auto inline-flex items-center gap-1.5 text-muted-foreground">
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-muted-foreground">
           {syncStatus && <SyncIndicator status={syncStatus} />}
-          {pr.author && (
+          {showAuthor && (
             <Avatar
               src={pr.authorAvatarUrl}
               alt={pr.author}
@@ -214,7 +230,7 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
               title={`@${pr.author}`}
             />
           )}
-          <RelativeTime iso={pr.updatedAt} title={pr.updatedAt} />
+          <RowAge iso={pr.updatedAt} />
         </span>
       </div>
     </ListMenuItem>

@@ -3,6 +3,7 @@ package utils
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,32 @@ func GitIgnoredPaths(paths []string, workDir string) (map[string]struct{}, error
 		}
 	}
 	return ignored, nil
+}
+
+// GitGlobalExcludesFile resolves the user-level excludes file Git applies in
+// gitRoot: core.excludesFile when configured (Git expands ~ and follows
+// includes), otherwise $XDG_CONFIG_HOME/git/ignore, defaulting XDG_CONFIG_HOME
+// to ~/.config. The file need not exist.
+func GitGlobalExcludesFile(gitRoot string) (string, error) {
+	cmd := exec.Command("git", "config", "--path", "--get", "core.excludesFile")
+	cmd.Dir = gitRoot
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(output)), nil
+	}
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+		return "", fmt.Errorf("read core.excludesFile in %q: %w: %s", gitRoot, err, strings.TrimSpace(stderr.String()))
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "git", "ignore"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve default git excludes file: %w", err)
+	}
+	return filepath.Join(home, ".config", "git", "ignore"), nil
 }
 
 // GitTopLevel resolves the native Git worktree root. Directories outside a

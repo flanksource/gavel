@@ -1,0 +1,93 @@
+---
+title: Step policies
+description: Shared IDs, assertions, exports, background lifetime, waits, and retries for typed steps.
+parent: fixture-step-reference
+order: 0
+---
+
+import { SchemaViewer } from "@flanksource/clicky-ui/data";
+import schema from "../../src/data/fixtures.schema.json";
+
+Every typed step has a common envelope alongside its kind-specific fields. These controls describe how execution is named, asserted, observed, and shared with later steps.
+
+| Field | Behavior |
+| --- | --- |
+| `kind` | Required registered kind, such as `exec`, `services`, or `test` |
+| `id` | Reference name for later `steps.<id>` CEL expressions |
+| `name` | Human-readable result label |
+| `cel` | Verdict over current outputs, environment, and earlier step results |
+| `export` | Environment names mapped to templates over outputs |
+| `override` | Explicitly permit replacing an earlier export |
+| `background` | Keep a supported kind running through fixture teardown |
+| `continueOnError` | Report the step's failure without skipping later steps. By default a failed step skips every step after it, because each may depend on it; set this on steps nothing later depends on, such as independent renders after a shared setup |
+| `timeout` | Execution deadline |
+| `wait` | Poll observable state until a verdict or deadline |
+| `retry` | Repeat execution when its configured failed-result predicate holds |
+
+## Outputs and exports
+
+```yaml
+kind: Fixture
+steps:
+  - id: first
+    kind: exec
+    exec: printf
+    args: ["%s", "ready"]
+    export:
+      MESSAGE: "{{.outputs.stdout}}"
+  - id: second
+    kind: exec
+    exec: printf
+    args: ["%s", "{{.env.MESSAGE}}"]
+    cel: stdout == steps.first.stdout && stdout == "ready"
+```
+
+Exports reach later steps. Re-exporting a name requires `override: true`. The `"*"` key exports an output map; an empty export value suppresses a kind's default export. A step's own environment declarations take precedence over values inherited from exports.
+
+Use `{{.env.NAME}}` to substitute an earlier export in a directly executed argument. A shell script can instead expand `$NAME` from its environment. <a href="/examples/step-exports.fixture.yaml" download>Download the runnable export example</a>.
+
+## Wait versus retry
+
+`wait.until` polls a kind's observation method. `failWhen` ends polling early. A wait can inspect a running service or rerun a safe command probe, depending on the kind. Kinds without observation reject waits.
+
+`retry.when` evaluates over a failed Execute result and decides whether to execute again. `attempts`, delay, backoff, and jitter bound retries. Wait and CEL evaluation occur afterward; failing those checks does not trigger another Execute attempt. Polling an existing resource and repeating a write are materially different; select the mechanism that matches the kind.
+
+## Document defaults
+
+Set shared timing in the document's `defaults` block; individual steps can refine it. The complete defaults schema documents timeout, wait, and retry fields:
+
+<div id="fixture-step-defaults">
+  <SchemaViewer schema={schema.document.properties.defaults} />
+</div>
+
+## Rerun from a step
+
+Every fixture run is saved, so a later run can start part-way through a file:
+
+```sh
+gavel fixtures --from-step summary purge.fixture.yaml
+gavel fixtures --from-step summary --from-run run-2026-11-22T13-22-21Z purge.fixture.yaml
+gavel fixtures --from-step summary --from-run .gavel/running.json purge.fixture.yaml
+```
+
+`--from-step` names the step to start at. `--from-run` names the run to reuse, as a saved run id or a snapshot file; without it, the newest saved run of the file is used. In the `--ui` dashboard, a step's **Retry from here** button does the same over the run on screen, and its menu copies the equivalent command.
+
+The steps before it are not run, however they ended:
+
+| In the earlier run | In the rerun |
+| --- | --- |
+| Passed or warned | Reused: its outputs and exports are available again |
+| Failed or timed out | Shown as warned; whatever it recorded is available |
+| Skipped | Skipped, with `{skipped: true}` as its outputs |
+| Never ran, or not in the file then | Skipped, with no outputs |
+| Ran in the background, or started a service | Not started; its recorded outputs are available |
+
+A step that reads an output the earlier run does not have fails on reading it. An id the file does not have is an error, because nothing would run.
+
+The earlier run's teardown has already happened: a service it started is stopped, and an `exec` step's `cleanup` has run. Start at the step that sets such state up when later steps depend on it. Approval forms before the step are reused, not asked again.
+
+The `params` step always resolves again, from the earlier run's answers with any `--param` or `--params` values over them, so a `setup:` that reads them is prepared again.
+
+## Lifetime and teardown
+
+`background: true` is for kinds supporting work that remains active while later steps execute. Teardown collects its verdict and releases resources. Kind-specific startup/readiness deadlines are separate from the overall step deadline. See [Services](/docs/fixture-kind-services), [Browser](/docs/fixture-kind-browser), and [Playwright](/docs/fixture-kind-playwright) for their lifetime contracts.

@@ -30,7 +30,7 @@ var _ = Describe("AI fix full spec resolution", func() {
 			Model: api.Model{Name: "agent:sonnet"},
 			Prompt: api.Prompt{
 				User: "Repair the reported failures.", AppendSystem: "Keep the change scoped.",
-				SchemaJSON: json.RawMessage(`{"type":"object"}`), SchemaStrictness: api.SchemaStrictnessRetry,
+				SchemaJSON: json.RawMessage(`{"type":"object"}`), SchemaStrictness: api.SchemaStrictnessRepair,
 			},
 			Permissions:     api.Permissions{Mode: api.PermissionAcceptEdits, Tools: api.Tools{"Bash": api.ToolPolicyDeny}},
 			Memory:          api.Memory{SkipHooks: true, SkipMemory: true},

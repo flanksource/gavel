@@ -66,7 +66,11 @@ export function ProjectDetailPane({ catalog, selectedName, selectedRunId, diffPa
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         <div className="text-center">
           <UiFolderGit className="mb-2 text-4xl" />
-          <p>{selectedName ? `Project ${selectedName} was not found` : 'Select a project to view its working tree'}</p>
+          <p>{!selectedName
+            ? 'Select a project to view its working tree'
+            : catalog.loading
+              ? `Loading ${selectedName}…`
+              : `Project ${selectedName} was not found: it is not a configured project and has no test or lint runs`}</p>
         </div>
       </div>
     );
