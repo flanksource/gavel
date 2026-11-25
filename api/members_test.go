@@ -286,3 +286,15 @@ func TestMembersFinishReadingClerkForARequestThatLeft(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, f.clerk.BackendRequests(), requests, "the next request uses the read the dropped one started")
 }
+
+// A user's GitHub ID makes their GitHub noreply address, which their hosted runs commit as.
+func TestMembersRecordTheUsersGitHubID(t *testing.T) {
+	f := newMembersFixture(t, 5*time.Minute)
+	f.clerk.User.GitHubID = 42
+	_, err := f.members.ForSession(context.Background(), api.SessionClaims{UserID: "user_ada", OrgID: "org_a", OrgSlug: "alpha", OrgRole: "org:admin"})
+	require.NoError(t, err)
+	var githubID *int64
+	require.NoError(t, f.db.Raw(`SELECT github_id FROM users WHERE clerk_user_id = 'user_ada'`).Scan(&githubID).Error)
+	require.NotNil(t, githubID)
+	assert.Equal(t, int64(42), *githubID)
+}

@@ -77,12 +77,12 @@ func TestGitHubToken(t *testing.T) {
 }
 
 func TestClerkUser(t *testing.T) {
-	clerk := clerktest.New(t, "cli", clerktest.User{ID: "user_123", Name: "Ada Lovelace", Email: "ada@example.com", GitHubLogin: "ada"})
+	clerk := clerktest.New(t, "cli", clerktest.User{ID: "user_123", Name: "Ada Lovelace", Email: "ada@example.com", GitHubLogin: "ada", GitHubID: 42})
 	backend := ClerkOrganizations{SecretKey: clerktest.SecretKey, HTTPClient: clerk.BackendClient()}
 	ctx := context.Background()
 
 	got, err := backend.User(ctx, "user_123")
-	if err != nil || got != (ClerkUser{Name: "Ada Lovelace", Email: "ada@example.com", EmailVerified: true, GitHubLogin: "ada"}) {
+	if err != nil || got != (ClerkUser{Name: "Ada Lovelace", Email: "ada@example.com", EmailVerified: true, GitHubLogin: "ada", GitHubID: 42}) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	if _, err := backend.User(ctx, "user_unknown"); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
@@ -92,8 +92,8 @@ func TestClerkUser(t *testing.T) {
 		t.Fatal("accepted an invalid user ID")
 	}
 
-	clerk.User.GitHubLogin = ""
-	if got, err := backend.User(ctx, "user_123"); err != nil || got.GitHubLogin != "" {
+	clerk.User.GitHubLogin, clerk.User.GitHubID = "", 0
+	if got, err := backend.User(ctx, "user_123"); err != nil || got.GitHubLogin != "" || got.GitHubID != 0 {
 		t.Fatalf("user without GitHub: %+v, %v", got, err)
 	}
 
