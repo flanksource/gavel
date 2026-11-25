@@ -10,6 +10,7 @@ import (
 	"io"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun/remoterun"
 	"github.com/flanksource/captain/pkg/sandbox/substraterun"
 	"github.com/flanksource/gavel/pr/provider"
@@ -48,10 +49,21 @@ func runnerRunTask(ctx context.Context, opts runTaskOptions, out io.Writer, in i
 				return remoterun.Host{}, fmt.Errorf("decode gavel's hooks from the run's host data: %w", err)
 			}
 		}
+		hooks.CommitModel = commitModel(job.Resolved.Spec.Model)
 		built, tools, err := hooks.In(job.Root, src).Build()
 		if err != nil {
 			return remoterun.Host{}, err
 		}
 		return remoterun.Host{Provider: opts.Agent, Hooks: built, Tools: tools}, nil
 	})
+}
+
+// commitModel is the selector of the run's own model, which writes the run's commit messages when
+// the repository's .gavel.yaml names none: the environment has no saved Captain settings, and the
+// organization's key covers the run's model. A commit message needs no reasoning effort.
+func commitModel(model api.Model) string {
+	if model.Mode == "" {
+		return model.Name
+	}
+	return string(model.Mode) + ":" + model.Name
 }

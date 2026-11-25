@@ -23,7 +23,10 @@ type AgentHooksOptions struct {
 	Push bool
 	// PushBranch, with Push, is the remote branch every commit is pushed to (see
 	// Options.PushBranch).
-	PushBranch   string
+	PushBranch string
+	// DefaultModel is the model selector that writes a generated commit message when neither the
+	// repository's .gavel.yaml nor the saved Captain settings name one: the run's own model.
+	DefaultModel string
 	PRTarget     *provider.RunTarget
 	ShouldCommit func(*agent.HookContext) (bool, error)
 }
@@ -65,12 +68,13 @@ func agentCommitter(opts AgentHooksOptions, keepSubject bool) func(*agent.HookCo
 			meta.SessionID = hc.Workspace().SessionID
 		}
 		run := AgentRun{
-			WorkDir:    plan.Dir,
-			Meta:       meta,
-			Fixup:      plan.Anchor,
-			DryRun:     plan.DryRun,
-			Push:       opts.Push,
-			PushBranch: opts.PushBranch,
+			WorkDir:      plan.Dir,
+			Meta:         meta,
+			Fixup:        plan.Anchor,
+			DryRun:       plan.DryRun,
+			Push:         opts.Push,
+			PushBranch:   opts.PushBranch,
+			DefaultModel: opts.DefaultModel,
 			// Captain selected the path set for this boundary; staging exactly it
 			// keeps unrelated working-tree changes out of the commit. A fixup
 			// resolves its own paths from the anchor, and the two are mutually

@@ -12,11 +12,20 @@ import (
 )
 
 func (opts Options) savedConfig() (captainconfig.Config, error) {
+	var saved captainconfig.Config
 	if opts.Saved != nil {
-		return *opts.Saved, nil
+		saved = *opts.Saved
+	} else {
+		loaded, _, err := captainconfig.Load()
+		if err != nil {
+			return loaded, err
+		}
+		saved = loaded
 	}
-	saved, _, err := captainconfig.Load()
-	return saved, err
+	if saved.AI.DefaultModel == "" {
+		saved.AI.DefaultModel = opts.DefaultModel
+	}
+	return saved, nil
 }
 
 // LoadAIConfig captures one snapshot for all AI operations and retries in this invocation.
