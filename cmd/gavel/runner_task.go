@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun/remoterun"
 	"github.com/flanksource/captain/pkg/sandbox/substraterun"
+	"github.com/flanksource/gavel/commitauthor"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/todos/lifecycle"
@@ -50,6 +52,9 @@ func runnerRunTask(ctx context.Context, opts runTaskOptions, out io.Writer, in i
 			}
 		}
 		hooks.CommitModel = commitModel(job.Resolved.Spec.Model)
+		if err := commitAs(hooks.Author); err != nil {
+			return remoterun.Host{}, err
+		}
 		built, tools, err := hooks.In(job.Root, src).Build()
 		if err != nil {
 			return remoterun.Host{}, err
@@ -66,4 +71,26 @@ func commitModel(model api.Model) string {
 		return model.Name
 	}
 	return string(model.Mode) + ":" + model.Name
+}
+
+// committer is who commits a hosted run's work: gavel, whoever the commits are by.
+var committer = commitauthor.Author{Name: "gavel", Email: "gavel@flanksource.com"}
+
+// commitAs makes every commit this process and what it starts make, gavel's commit hook,
+// Captain's squash and the agent's own git, by author, or gavel without one, and committed by
+// gavel: the environment's image sets no git identity.
+func commitAs(author *commitauthor.Author) error {
+	by := committer
+	if author != nil {
+		by = *author
+	}
+	for name, value := range map[string]string{
+		"GIT_AUTHOR_NAME": by.Name, "GIT_AUTHOR_EMAIL": by.Email,
+		"GIT_COMMITTER_NAME": committer.Name, "GIT_COMMITTER_EMAIL": committer.Email,
+	} {
+		if err := os.Setenv(name, value); err != nil {
+			return fmt.Errorf("set the run's git identity %s: %w", name, err)
+		}
+	}
+	return nil
 }

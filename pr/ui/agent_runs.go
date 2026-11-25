@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/flanksource/gavel/commitauthor"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/sandbox"
@@ -136,9 +137,30 @@ func (s *Server) remoteRunner(ctx context.Context, workspace HostedWorkspace, to
 	if err != nil {
 		return nil, fmt.Errorf("todo %q has no native ID to run under: %w", todo.ID, err)
 	}
+	scope := tenant.FromContext(ctx)
+	author, err := s.runAuthor(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
 	return &remote.SubstrateRunner{
 		Dispatcher: s.agentRuns.Dispatcher, Sources: s.agentRuns.Sources, Backend: s.agentRuns.Substrate,
-		Scope: tenant.FromContext(ctx), Repo: workspace.Repo, SHA: workspace.SHA, TodoID: id,
-		Transcripts: s.agentRuns.Transcripts.Keep, RunAPI: s.agentRuns.RunAPI,
+		Scope: scope, Repo: workspace.Repo, SHA: workspace.SHA, TodoID: id,
+		Transcripts: s.agentRuns.Transcripts.Keep, RunAPI: s.agentRuns.RunAPI, Author: author,
 	}, nil
+}
+
+// runAuthor is who the commits of a run scope's user starts are by, as their commit identity
+// says; nil, making gavel the author, when the run has no user or no email of theirs is known.
+func (s *Server) runAuthor(ctx context.Context, scope tenant.Scope) (*commitauthor.Author, error) {
+	if scope.UserID == nil || s.orgDB == nil {
+		return nil, nil
+	}
+	identity, err := commitauthor.Store{DB: s.orgDB}.Get(ctx, *scope.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("find who the run's commits are by: %w", err)
+	}
+	if author, ok := identity.Author(); ok {
+		return &author, nil
+	}
+	return nil, nil
 }

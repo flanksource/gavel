@@ -25,6 +25,7 @@ import (
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/budget"
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/commitauthor"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/tenant"
@@ -356,4 +357,18 @@ func runAPIFor(t *testing.T, key []byte) http.Handler {
 		_, _ = w.Write([]byte(`{"run":"` + run.String() + `"}`))
 	})
 	return mux
+}
+
+// The run's commits are by the user who started it: serve sends who that is with gavel's hooks.
+func TestSubstrateRunnerSendsTheRunsAuthorWithItsHooks(t *testing.T) {
+	env := &environment{t: t}
+	hosted := newHostedRun(t, env)
+	hosted.runner.Author = &commitauthor.Author{Name: "ada", Email: "42+ada@users.noreply.github.com"}
+
+	_, err := hosted.runner.Run(t.Context(), step())
+	require.NoError(t, err)
+	var sent lifecycle.RunHooks
+	require.NoError(t, json.Unmarshal(env.in.HostData, &sent))
+	assert.Equal(t, &commitauthor.Author{Name: "ada", Email: "42+ada@users.noreply.github.com"}, sent.Author)
+	assert.Equal(t, map[string]string{"GAVEL_ISSUE_ID": "todo-1"}, sent.Env, "the step's own hook data stays")
 }

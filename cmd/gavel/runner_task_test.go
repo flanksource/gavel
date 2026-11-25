@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/captain/pkg/promptrun/remoterun"
 	"github.com/flanksource/captain/pkg/sandbox/substraterun"
+	"github.com/flanksource/gavel/commitauthor"
 	"github.com/flanksource/gavel/pr/model"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/sandbox/runclient"
@@ -244,4 +245,64 @@ func TestRunTaskCommitsWithTheRunsModel(t *testing.T) {
 	model := api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent, Effort: api.EffortHigh}
 	assert.Equal(t, "agent:claude-sonnet-5", commitModel(model), "a commit message needs no reasoning effort")
 	assert.Equal(t, "claude-sonnet-5", commitModel(api.Model{Name: "claude-sonnet-5"}))
+}
+
+// gitIdentityAgent answers every turn with done, keeping the git identity its environment has,
+// as git run by the agent, gavel's commit hook or Captain's squash would see it.
+type gitIdentityAgent struct{ seen map[string]string }
+
+func (gitIdentityAgent) GetModel() string        { return "claude-sonnet-5" }
+func (gitIdentityAgent) GetRuntime() api.Runtime { return api.RuntimeOf(api.Anthropic, api.ModeAgent) }
+func (gitIdentityAgent) Execute(context.Context, api.Spec) (*api.Response, error) {
+	return nil, fmt.Errorf("the git identity agent only streams")
+}
+func (a gitIdentityAgent) ExecuteStream(context.Context, api.Spec) (<-chan captainai.Event, error) {
+	for _, name := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		a.seen[name] = os.Getenv(name)
+	}
+	ch := make(chan captainai.Event, 2)
+	ch <- captainai.Event{Kind: captainai.EventText, Text: "done"}
+	ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+	close(ch)
+	return ch, nil
+}
+
+// runTaskSeeingGitIdentity runs a task with hooks and returns the git identity its run saw.
+func runTaskSeeingGitIdentity(t *testing.T, hooks lifecycle.RunHooks) map[string]string {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(name, "")
+	}
+	dir := substrateTaskDir(t, hooks)
+	agent := gitIdentityAgent{seen: map[string]string{}}
+	stdoutR, stdoutW := io.Pipe()
+	stdinR, stdinW := io.Pipe()
+	ran := make(chan error, 1)
+	go func() {
+		ran <- runnerRunTask(context.Background(), runTaskOptions{Dir: dir, Agent: agent}, stdoutW, stdinR)
+		_ = stdoutW.Close()
+	}()
+	_, err := remoterun.Relay(t.Context(), promptrun.Input{}, func(api.Spec) error { return nil }, stdoutR, stdinW)
+	_ = stdinW.Close()
+	require.NoError(t, err)
+	require.NoError(t, <-ran)
+	return agent.seen
+}
+
+func TestRunTaskCommitsAsTheUserWhoStartedTheRunWithGavelCommitting(t *testing.T) {
+	seen := runTaskSeeingGitIdentity(t, lifecycle.RunHooks{Author: &commitauthor.Author{Name: "ada", Email: "42+ada@users.noreply.github.com"}})
+	assert.Equal(t, map[string]string{
+		"GIT_AUTHOR_NAME": "ada", "GIT_AUTHOR_EMAIL": "42+ada@users.noreply.github.com",
+		"GIT_COMMITTER_NAME": "gavel", "GIT_COMMITTER_EMAIL": "gavel@flanksource.com",
+	}, seen)
+}
+
+// The environment's image sets no git identity, so without a known author gavel is the author.
+func TestRunTaskCommitsAsGavelWithoutAnAuthor(t *testing.T) {
+	seen := runTaskSeeingGitIdentity(t, lifecycle.RunHooks{})
+	assert.Equal(t, map[string]string{
+		"GIT_AUTHOR_NAME": "gavel", "GIT_AUTHOR_EMAIL": "gavel@flanksource.com",
+		"GIT_COMMITTER_NAME": "gavel", "GIT_COMMITTER_EMAIL": "gavel@flanksource.com",
+	}, seen)
 }

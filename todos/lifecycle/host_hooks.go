@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/commit"
+	"github.com/flanksource/gavel/commitauthor"
 	"github.com/flanksource/gavel/pr/provider"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/tools"
@@ -60,6 +61,9 @@ type RunHooks struct {
 	// repository's .gavel.yaml nor the saved Captain settings name one. Where the run executes sets
 	// it, from the run's own model.
 	CommitModel string `json:"-"`
+	// Author is who a hosted run's commits are by, the user who started it; nil makes gavel
+	// their author. Where the run executes commits as them, with gavel the committer.
+	Author *commitauthor.Author `json:"author,omitempty"`
 }
 
 // PRHooks is the data the hook for a step on a linked PR is rebuilt from: the PR, its source

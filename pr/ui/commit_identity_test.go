@@ -3,10 +3,16 @@
 package ui
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/flanksource/gavel/commitauthor"
+	"github.com/flanksource/gavel/sandbox"
+	"github.com/flanksource/gavel/tenant"
+	"github.com/flanksource/gavel/todos/remote"
+	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,4 +46,28 @@ func TestALocalDashboardHasNoCommitIdentity(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "local commits are by the machine's own git identity")
+}
+
+// A hosted run's commits are by the user who started it, as their commit identity says.
+func TestAHostedRunCommitsAsTheUserWhoStartedIt(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	ada, nobody := uuid.New(), uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id, name, email, github_login, github_id, commit_name)
+		VALUES (?, 'https://clerk.example', 'user_ada', 'Ada Lovelace', 'ada@example.com', 'ada', 42, 'Ada Lovelace')`, ada).Error)
+	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_nobody')`, nobody).Error)
+	srv := &Server{}
+	srv.SetOrg(org, db)
+	srv.SetHostedMode(true)
+	srv.SetAgentRuns(AgentRuns{Dispatcher: &sandbox.Dispatcher{}, Substrate: map[string]any{}, Sources: &sandbox.Sources{DataDir: t.TempDir()}})
+	todo := &types.TODO{ID: uuid.NewString()}
+	startedBy := func(user uuid.UUID) *commitauthor.Author {
+		t.Helper()
+		ctx := tenant.WithScope(context.Background(), tenant.Scope{OrgID: org, UserID: &user})
+		runner, err := srv.remoteRunner(ctx, HostedWorkspace{}, todo)
+		require.NoError(t, err)
+		return runner.(*remote.SubstrateRunner).Author
+	}
+
+	assert.Equal(t, &commitauthor.Author{Name: "Ada Lovelace", Email: "42+ada@users.noreply.github.com"}, startedBy(ada))
+	assert.Nil(t, startedBy(nobody), "with no email known, gavel is the author")
 }
