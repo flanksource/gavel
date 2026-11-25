@@ -100,3 +100,6 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - '@flanksource/clicky-ui@0.3.56'
+
+patchedDependencies:
+  '@vitest/runner@3.2.6': patches/@vitest__runner@3.2.6.patch

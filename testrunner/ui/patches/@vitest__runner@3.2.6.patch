@@ -1,0 +1,20 @@
+diff --git a/dist/chunk-hooks.js b/dist/chunk-hooks.js
+index 59908e26ff1e58a646673c14c2114609a035f54c..bce2644f1ed47228b5c64c9e0b85dbaa7423bae7 100644
+--- a/dist/chunk-hooks.js
++++ b/dist/chunk-hooks.js
+@@ -1489,8 +1489,13 @@ function throttle(fn, ms) {
+ 			pendingCall = undefined;
+ 			return fn.apply(this, args);
+ 		}
+-		// Make sure fn is still called even if there are no further calls
+-		pendingCall ?? (pendingCall = setTimeout(() => call.bind(this)(...args), ms));
++		// Make sure fn is still called even if there are no further calls. The fired timer
++		// clears itself first: Date.now() can read exactly ms later, so this call may defer
++		// again, and a stale timer would stop it scheduling, losing the update.
++		pendingCall ?? (pendingCall = setTimeout(() => {
++			pendingCall = undefined;
++			call.bind(this)(...args);
++		}, ms));
+ 	};
+ }
+ // throttle based on summary reporter's DURATION_UPDATE_INTERVAL_MS
