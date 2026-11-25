@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/commitauthor"
 	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/sandbox/runclient"
 	"github.com/flanksource/gavel/tenant"
@@ -38,6 +39,9 @@ type SubstrateRunner struct {
 	Transcripts func(ctx context.Context, run sandbox.RunRecord, source, name string, data io.Reader) error
 	// RunAPI is serve's run API, which answers what a run's program asks of its PR, as the run.
 	RunAPI http.Handler
+	// Author is who the run's commits are by, the user who started it; nil makes gavel their
+	// author.
+	Author *commitauthor.Author
 }
 
 // Run records run as an agent run of the dispatcher and runs it through captain's substrate
@@ -67,6 +71,13 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 	branch := sandbox.RunBranch(todo, id)
 
 	in := run.Input
+	if r.Author != nil {
+		hooks := run.Hooks
+		hooks.Author = r.Author
+		if in.HostData, err = json.Marshal(hooks); err != nil {
+			return promptrun.Result{}, fmt.Errorf("encode the step's hooks with its author: %w", err)
+		}
+	}
 	in.Config.SandboxSelection = &api.SandboxConfig{Kind: api.SandboxSubstrate, Name: "gavel-hosted", Options: r.runOptions(recorded, spec.SHA, branch)}
 	in.Resolved.Spec.Sandbox = &api.SandboxRef{Mode: api.SandboxSubstrate}
 	in.Repo = gitDir
