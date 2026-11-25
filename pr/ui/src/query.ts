@@ -1,6 +1,7 @@
 export const queryKeys = {
   me: () => ['me'] as const,
   sshKeys: () => ['ssh-keys'] as const,
+  commitIdentity: () => ['commit-identity'] as const,
   modelKeys: () => ['model-keys'] as const,
   sandboxRuns: () => ['sandbox-runs'] as const,
   usage: (window: string) => ['usage', window] as const,
