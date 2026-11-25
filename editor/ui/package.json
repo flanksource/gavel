@@ -10,9 +10,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@flanksource/facet": "workspace:*",
-    "@flanksource/page-runtime": "workspace:*",
-    "@flanksource/clicky-ui": "workspace:*",
+    "@flanksource/facet": "catalog:",
+    "@flanksource/page-runtime": "catalog:",
+    "@flanksource/clicky-ui": "catalog:",
     "@mdxeditor/editor": "catalog:",
     "@tanstack/react-query": "catalog:",
     "monaco-editor": "catalog:",
