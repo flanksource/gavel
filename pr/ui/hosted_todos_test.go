@@ -202,6 +202,25 @@ func TestAHostedDashboardWithoutWorkspacesReadsNoSessions(t *testing.T) {
 	}
 }
 
+// The new todo form's "Run after creation" lists the steps POST /api/todos/new accepts for the
+// workspace, which is one of the organization's repositories.
+func TestHostedTodoFormListsTheStepsANewTodoCanRun(t *testing.T) {
+	db, _, org := openOrgDB(t)
+	creator := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, issuer, clerk_user_id) VALUES (?, 'https://clerk.example', 'user_ada')`, creator).Error)
+	dataDir := t.TempDir()
+	workspace := "repo:" + pushedRepo(t, db, org, dataDir, "app").String()
+	base := hostedTodosServer(t, db, org, dataDir)
+
+	status, listed := hostedCall(t, base, http.MethodGet, "/api/todos/new/steps?status=draft&dir="+workspace, creator, "org:member", nil)
+	require.Equal(t, http.StatusOK, status, listed)
+	var names []string
+	for _, step := range listed["steps"].([]any) {
+		names = append(names, step.(map[string]any)["name"].(string))
+	}
+	assert.Equal(t, []string{"triage", "plan", "triage.new"}, names)
+}
+
 func TestHostedTodoFormCreatesTodosWithTheirVisibility(t *testing.T) {
 	db, _, org := openOrgDB(t)
 	creator := uuid.New()
