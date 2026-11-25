@@ -48,7 +48,9 @@ inputs:
     required: false
     default: "gavel"
   github-token:
-    description: Token used to post the PR comment. Defaults to the workflow's GITHUB_TOKEN.
+    description: >-
+      Token used to post the PR comment, and given to gavel to look up the versions of the tools it
+      installs. Defaults to the workflow's GITHUB_TOKEN.
     required: false
     default: ${{ github.token }}
   fail-on-error:
@@ -143,6 +145,9 @@ runs:
         # gavel test streams its in-flight results here and writes the run it
         # created to this step's ci_run_id output.
         GAVEL_CI_SERVER: ${{ inputs.gavel-server }}
+        # The tools gavel installs, such as golangci-lint, resolve their versions with GitHub's
+        # API, which allows 60 requests an hour per runner IP without a token.
+        GH_TOKEN: ${{ inputs.github-token }}
       run: |
         set +e
         rm -f "${JSON_FILE}" "${HTML_FILE}" "${GAVEL_LOG_FILE}"
