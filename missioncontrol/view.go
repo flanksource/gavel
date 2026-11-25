@@ -153,9 +153,9 @@ func series(rows []map[string]any, keys *timeseriesKeys) ([]Series, error) {
 	byLabels := map[string]*Series{}
 	for i, row := range rows {
 		raw := fmt.Sprint(row[timeKey])
-		at, err := time.Parse(time.RFC3339Nano, raw)
+		at, err := parseTime(raw)
 		if err != nil {
-			return nil, fmt.Errorf("row %d's %s %q isn't an RFC 3339 time", i+1, timeKey, raw)
+			return nil, fmt.Errorf("row %d's %s %q isn't an RFC 3339 time or Go's text for one", i+1, timeKey, raw)
 		}
 		value, err := number(row[valueKey])
 		if err != nil {
@@ -185,6 +185,18 @@ func series(rows []map[string]any, keys *timeseriesKeys) ([]Series, error) {
 		all = append(all, *line)
 	}
 	return all, nil
+}
+
+// goTimeText is how Go writes a time as text, which is how Mission Control's SQLite keeps the time
+// of a Prometheus sample that a panel's query reads.
+const goTimeText = "2006-01-02 15:04:05.999999999 -0700 MST"
+
+// parseTime reads a timeseries row's time, which Mission Control renders as RFC 3339 or as Go's text.
+func parseTime(raw string) (time.Time, error) {
+	if at, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return at, nil
+	}
+	return time.Parse(goTimeText, raw)
 }
 
 // labelKey is labels as one comparable string, in label-name order.

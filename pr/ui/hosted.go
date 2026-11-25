@@ -43,7 +43,7 @@ var hostedPassThrough = []string{
 	// The organization's CI runs, as its repositories' GitHub Actions jobs upload them (see ci_runs.go).
 	"GET /api/projects/{name}/ci-runs", "GET /api/projects/{name}/ci-runs/{run}",
 
-	"GET /api/todos/changes", "GET /api/projects", "/api/todos", "POST /api/todos/labels/batch", "POST /api/todos/new", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
+	"GET /api/todos/changes", "GET /api/projects", "/api/todos", "POST /api/todos/labels/batch", "POST /api/todos/new", "GET /api/todos/new/steps", "/api/todos/item", "/api/todos/labels", "/api/todos/links",
 	"/api/todos/pr-links", "POST /api/todos/criteria", "/api/todos/attachments", "GET /api/todos/attachments/{id}",
 	// Runs execute in sandbox jobs (see agent_runs.go).
 	"/api/todos/run", "POST /api/todos/plan/approve", "POST /api/todos/plan/revise", "POST /api/todos/plan/reject",

@@ -190,7 +190,7 @@ func promptTestOptions() Options {
 }
 
 var _ = Describe("Options model resolution", func() {
-	DescribeTable("message runtime prefers --model, then commit.message.model, then ai.model",
+	DescribeTable("message runtime prefers --model, then commit.message.model, then ai.model, then the run's model",
 		func(opts Options, expected string) {
 			opts.Saved = &captainconfig.Config{}
 			resolved, err := opts.resolvePrompt(commitPromptOptions{Prompt: opts.Config.Message, Name: "commit.message", Default: "Review"})
@@ -204,8 +204,17 @@ var _ = Describe("Options model resolution", func() {
 		Entry("flag wins", Options{Flags: modelFlags("api:gpt-5"), Config: msgSpecCfg("api:sonnet"), AI: aiBaseSpec("api:haiku")}, "gpt-5"),
 		Entry("message spec used when no flag", Options{Config: msgSpecCfg("api:sonnet"), AI: aiBaseSpec("api:haiku")}, "claude-sonnet-5-5"),
 		Entry("ai base used when no flag or op spec", Options{AI: aiBaseSpec("api:haiku")}, "claude-haiku-5-5"),
+		Entry("ai base beats the run's model", Options{AI: aiBaseSpec("api:sonnet"), DefaultModel: "api:haiku"}, "claude-sonnet-5-5"),
+		Entry("the run's model when nothing else names one", Options{DefaultModel: "api:haiku"}, "claude-haiku-5-5"),
 		Entry("empty when nothing configures a model", Options{}, ""),
 	)
+
+	It("prefers the saved default model to the run's model", func() {
+		opts := Options{DefaultModel: "api:haiku", Saved: &captainconfig.Config{AI: captainconfig.AIDefaults{DefaultModel: "api:sonnet"}}}
+		resolved, err := opts.resolvePrompt(commitPromptOptions{Prompt: opts.Config.Message, Name: "commit.message", Default: "Review"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved.Request.Name).To(Equal("claude-sonnet-5-5"))
+	})
 
 	DescribeTable("group runtime cascades --group-model -> --model -> commit.grouping.model -> ai.model",
 		func(opts Options, expected string) {

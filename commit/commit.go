@@ -153,6 +153,9 @@ type Options struct {
 	AI captainapi.Spec
 	// Saved is the Captain configuration snapshot shared by this invocation.
 	Saved *captainconfig.Config
+	// DefaultModel is the model selector ("agent:claude-sonnet-5") an AI operation falls back to
+	// when no flag, .gavel.yaml or saved Captain default names one: an agent run's own model.
+	DefaultModel string
 	// PR carries the pr: config (content spec, base branch, draft) for the
 	// push/PR-open flow. Populated from GavelConfig.PR.
 	PR     verify.PRConfig
