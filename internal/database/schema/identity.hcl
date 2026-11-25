@@ -35,6 +35,22 @@ table "users" {
     null = true
     type = text
   }
+  # The numeric ID of the user's GitHub connection in Clerk, for their GitHub noreply address,
+  # <id>+<login>@users.noreply.github.com, which GitHub links to their profile.
+  column "github_id" {
+    null = true
+    type = bigint
+  }
+  # The name and email the user's hosted runs commit as, set in their settings; NULL falls back
+  # to their GitHub identity, or their gavel account without one (see package commitauthor).
+  column "commit_name" {
+    null = true
+    type = text
+  }
+  column "commit_email" {
+    null = true
+    type = text
+  }
   # Whether the user's Clerk public_metadata.gavel_role is platform_admin, for the
   # platform dashboard that reads every organization.
   column "platform_admin" {
