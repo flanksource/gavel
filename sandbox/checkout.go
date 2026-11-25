@@ -65,12 +65,21 @@ func (s *Sources) GitDir(ctx context.Context, repo Repo) (string, error) {
 func (s *Sources) sourceDir(ctx context.Context, repo Repo) (string, error) {
 	switch repo.Source {
 	case "push":
-		return filepath.Join(s.DataDir, "repos", repo.Org.String(), repo.ID.String()+".git"), nil
+		return s.LocalGitDir(repo), nil
 	case "github":
 		return s.updateMirror(ctx, repo)
 	default:
 		return "", fmt.Errorf("repository %s has source %q, not push or github", repo.ID, repo.Source)
 	}
+}
+
+// LocalGitDir is repo's git directory on serve as it was last brought up to date, without
+// fetching: a pushed repository's bare repository, or a GitHub repository's mirror.
+func (s *Sources) LocalGitDir(repo Repo) string {
+	if repo.Source == "github" {
+		return s.mirrorDir(repo)
+	}
+	return filepath.Join(s.DataDir, "repos", repo.Org.String(), repo.ID.String()+".git")
 }
 
 // label names repo in messages: its name, or its ID when it has none.

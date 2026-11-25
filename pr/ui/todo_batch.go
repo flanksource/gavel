@@ -121,7 +121,7 @@ func (s *Server) loadTodoBatchWorkspace(ctx context.Context, dir string) todoBat
 		result.Error = todoBatchErrorFor(err)
 		return result
 	}
-	provider, _, err := s.todoProviderContext(ctx, todoSource{Dir: dir})
+	provider, source, err := s.todoProviderContext(ctx, todoSource{Dir: dir})
 	if err != nil {
 		result.Error = todoBatchErrorFor(err)
 		return result
@@ -139,10 +139,7 @@ func (s *Server) loadTodoBatchWorkspace(ctx context.Context, dir string) todoBat
 	counts := summarizeTodos(items)
 	result.Counts = &counts
 	result.Items = make([]todoSummary, 0, len(items))
-	stats, err := s.runDiffStats(ctx, provider)
-	if err != nil {
-		return todoBatchResult{Dir: dir, Error: todoBatchErrorFor(err)}
-	}
+	stats := s.todoDiffStats(ctx, provider, source)
 	if err := ctx.Err(); err != nil {
 		return todoBatchResult{Dir: dir, Error: todoBatchErrorFor(err)}
 	}
