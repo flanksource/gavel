@@ -72,9 +72,8 @@ describe('UserMenu', () => {
     expect(switcher.dataset.after).toBe('/');
     expect(screen.getByTestId('user-button')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeTruthy();
-    const page = screen.getByTestId('profile-page');
-    expect(page.dataset.label).toBe('SSH keys');
-    expect(page.dataset.url).toBe('ssh-keys');
+    const pages = screen.getAllByTestId('profile-page');
+    expect(pages.map(page => [page.dataset.label, page.dataset.url])).toEqual([['SSH keys', 'ssh-keys'], ['Commit identity', 'commit-identity']]);
     const orgPages = screen.getAllByTestId('organization-profile-page');
     expect(orgPages.map(orgPage => [orgPage.dataset.label, orgPage.dataset.url])).toEqual([['Model keys', 'model-keys'], ['Usage and budgets', 'usage']]);
     // The local identity isn't read; Connect GitHub asks only whether this gavel has a GitHub App.
