@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -17,6 +18,8 @@ type ClerkUser struct {
 	EmailVerified bool
 	// GitHubLogin is the username of the user's GitHub connection, empty without one.
 	GitHubLogin string
+	// GitHubID is the numeric ID of the user's GitHub connection, 0 without one.
+	GitHubID int64
 	// PlatformAdmin reports a user whose public_metadata.gavel_role is platformAdminRole:
 	// one who may read every organization on the platform dashboard.
 	PlatformAdmin bool
@@ -25,7 +28,7 @@ type ClerkUser struct {
 // platformAdminRole is the public_metadata.gavel_role of a platform admin.
 const platformAdminRole = "platform_admin"
 
-// User reads clerkUserID's profile: name, primary email, GitHub username, and whether
+// User reads clerkUserID's profile: name, primary email, GitHub username and ID, and whether
 // the user is a platform admin.
 func (c ClerkOrganizations) User(ctx context.Context, clerkUserID string) (ClerkUser, error) {
 	if err := validUserID(clerkUserID); err != nil {
@@ -44,8 +47,9 @@ func (c ClerkOrganizations) User(ctx context.Context, clerkUserID string) (Clerk
 			} `json:"verification"`
 		} `json:"email_addresses"`
 		ExternalAccounts []struct {
-			Provider string `json:"provider"`
-			Username string `json:"username"`
+			Provider       string `json:"provider"`
+			Username       string `json:"username"`
+			ProviderUserID string `json:"provider_user_id"`
 		} `json:"external_accounts"`
 		PublicMetadata struct {
 			GavelRole string `json:"gavel_role"`
@@ -69,6 +73,9 @@ func (c ClerkOrganizations) User(ctx context.Context, clerkUserID string) (Clerk
 	for _, account := range user.ExternalAccounts {
 		if account.Provider == "oauth_github" {
 			profile.GitHubLogin = account.Username
+			// GitHub's user IDs are numbers; an ID that isn't one leaves the login's own
+			// noreply address, which GitHub links for older accounts.
+			profile.GitHubID, _ = strconv.ParseInt(account.ProviderUserID, 10, 64)
 		}
 	}
 	return profile, nil
