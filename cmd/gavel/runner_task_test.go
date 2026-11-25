@@ -38,6 +38,10 @@ func substrateTaskDir(t *testing.T, hooks lifecycle.RunHooks) string {
 // repo at commit head.
 func substrateTaskDirFor(t *testing.T, hooksFor func(repo, head string) lifecycle.RunHooks) string {
 	t.Helper()
+	// The task sets the run's git identity in the process environment; the test gives it back.
+	for _, name := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(name, os.Getenv(name))
+	}
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q")
 	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "first")
@@ -271,9 +275,6 @@ func (a gitIdentityAgent) ExecuteStream(context.Context, api.Spec) (<-chan capta
 func runTaskSeeingGitIdentity(t *testing.T, hooks lifecycle.RunHooks) map[string]string {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
-		t.Setenv(name, "")
-	}
 	dir := substrateTaskDir(t, hooks)
 	agent := gitIdentityAgent{seen: map[string]string{}}
 	stdoutR, stdoutW := io.Pipe()
