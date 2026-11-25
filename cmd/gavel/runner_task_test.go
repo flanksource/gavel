@@ -237,3 +237,11 @@ func TestRunTaskServesTheRunAPIToWhatRunsUnderIt(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "the socket is gone once the run ends")
 	assert.Empty(t, os.Getenv(runclient.SocketEnv), "and no longer named")
 }
+
+// The environment has no saved Captain settings, so the run's own model writes its commit
+// messages when the repository's .gavel.yaml names none; the organization's key covers it.
+func TestRunTaskCommitsWithTheRunsModel(t *testing.T) {
+	model := api.Model{Name: "claude-sonnet-5", Provider: api.Anthropic, Mode: api.ModeAgent, Effort: api.EffortHigh}
+	assert.Equal(t, "agent:claude-sonnet-5", commitModel(model), "a commit message needs no reasoning effort")
+	assert.Equal(t, "claude-sonnet-5", commitModel(api.Model{Name: "claude-sonnet-5"}))
+}

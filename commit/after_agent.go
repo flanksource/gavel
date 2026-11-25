@@ -59,6 +59,9 @@ type AgentRun struct {
 	// PushBranch, with Push, is the remote branch HEAD is pushed to (see
 	// Options.PushBranch).
 	PushBranch string
+	// DefaultModel writes the commit message when nothing else names a model (see
+	// Options.DefaultModel).
+	DefaultModel string
 }
 
 // RunAfterAgent stages and commits what an agent changed, driving the same
@@ -105,22 +108,23 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 	}
 
 	opts := Options{
-		WorkDir:     commitDir,
-		Stage:       stage,
-		AddMetadata: true,
-		IssueID:     meta.IssueID,
-		SessionID:   meta.SessionID,
-		Config:      cfg.Commit,
-		AI:          cfg.AI,
-		PR:          cfg.PR,
-		Status:      cfg.Status,
-		Files:       run.Files,
-		Fixup:       run.Fixup,
-		Message:     run.Message,
-		DryRun:      run.DryRun,
-		Force:       run.SkipGates,
-		Push:        run.Push,
-		PushBranch:  run.PushBranch,
+		WorkDir:      commitDir,
+		Stage:        stage,
+		AddMetadata:  true,
+		IssueID:      meta.IssueID,
+		SessionID:    meta.SessionID,
+		Config:       cfg.Commit,
+		AI:           cfg.AI,
+		PR:           cfg.PR,
+		Status:       cfg.Status,
+		Files:        run.Files,
+		Fixup:        run.Fixup,
+		Message:      run.Message,
+		DryRun:       run.DryRun,
+		Force:        run.SkipGates,
+		Push:         run.Push,
+		PushBranch:   run.PushBranch,
+		DefaultModel: run.DefaultModel,
 		// Autosquash stays off here even for fixups: the caller cutting a chain
 		// collapses it once, at the end of the run, rather than rebasing after
 		// every turn.

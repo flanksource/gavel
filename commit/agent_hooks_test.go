@@ -7,7 +7,11 @@ import (
 	"github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
 	capcommit "github.com/flanksource/captain/pkg/ai/agent/commit"
+	"github.com/flanksource/captain/pkg/api"
+	clickyai "github.com/flanksource/gavel/ai"
+	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -105,4 +109,31 @@ func TestRunAfterAgentStagesOnlyTheNamedFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a.txt"}, committedFiles(t, repo))
 	assert.Contains(t, gitOutput(t, repo, "status", "--short"), "?? mine.txt")
+}
+
+// A hosted run's environment has no saved Captain settings, and a repository's .gavel.yaml often
+// names no model: the run's own model then writes the commit message.
+func TestAgentCommitterWritesTheMessageWithTheRunsModelWhenNothingElseNamesOne(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(testEnvVar, "")
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "a.txt", "agent edit\n")
+	previousAgent, previousAnalyzer := newAgentFunc, analyzeCommitMessageWithAIFunc
+	t.Cleanup(func() { newAgentFunc, analyzeCommitMessageWithAIFunc = previousAgent, previousAnalyzer })
+	var model api.Model
+	newAgentFunc = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) {
+		model = cfg.Model
+		return &agentLifecycleProbe{}, nil
+	}
+	analyzeCommitMessageWithAIFunc = func(context.Context, models.CommitAnalysis, clickyai.Agent, gavelgit.AnalyzeOptions) (models.CommitAnalysis, error) {
+		return models.CommitAnalysis{Commit: models.Commit{CommitType: models.CommitTypeFix, Subject: "drop unused checks"}}, nil
+	}
+	hc := &agent.HookContext{Context: context.Background(), Phase: agent.PhaseRun, Response: &ai.Response{}}
+
+	commit := agentCommitter(AgentHooksOptions{DefaultModel: "agent:claude-sonnet-5"}, false)
+	sha, err := commit(hc, capcommit.Plan{Dir: repo, Phase: agent.PhaseRun, Paths: []string{"a.txt"}})
+	require.NoError(t, err)
+	assert.Equal(t, api.ModeAgent, model.Mode)
+	assert.Contains(t, model.Name, "claude-sonnet-5")
+	assert.Contains(t, gitOutput(t, repo, "log", "-1", "--format=%s", sha), "drop unused checks")
 }

@@ -56,6 +56,10 @@ type RunHooks struct {
 	Labels  map[string]string       `json:"labels,omitempty"`
 	// PR is the linked PR a step works on; nil for a todo linked to none.
 	PR *PRHooks `json:"pr,omitempty"`
+	// CommitModel is the model selector that writes the commits' messages when neither the
+	// repository's .gavel.yaml nor the saved Captain settings name one. Where the run executes sets
+	// it, from the run's own model.
+	CommitModel string `json:"-"`
 }
 
 // PRHooks is the data the hook for a step on a linked PR is rebuilt from: the PR, its source
@@ -143,7 +147,7 @@ func (r RunHooks) Build() ([]any, []api.ToolDefinition, error) {
 func (r RunHooks) build(pr *prExecution) []any {
 	var hooks []any
 	if len(r.Commits) > 0 {
-		options := commit.AgentHooksOptions{Commits: r.Commits, Meta: r.Meta}
+		options := commit.AgentHooksOptions{Commits: r.Commits, Meta: r.Meta, DefaultModel: r.CommitModel}
 		if pr != nil && pr.write {
 			options.PRTarget, options.ShouldCommit = pr.target, pr.completedTurn
 		}
