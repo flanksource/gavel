@@ -439,12 +439,10 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 		stop(reason)
 	})
 	var startOnce sync.Once
-	began := make(chan struct{})
 	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: recorded.credentials, Template: recorded.template.Name, Log: writer, ctx: runCtx,
 		started: func() {
 			startOnce.Do(func() {
 				stopWatching()
-				close(began)
 				d.started(context.WithoutCancel(ctx), id)
 			})
 		},
@@ -456,7 +454,7 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 			defer stop(nil)
 			status, message := "succeeded", ""
 			if err != nil {
-				status, message = "failed", failureMessage(err, began)
+				status, message = "failed", err.Error()
 			}
 			// A stop has already recorded its reason on the run and cancelled the run's context with it.
 			_ = d.finish(context.WithoutCancel(ctx), id, status, nil, message)
@@ -474,11 +472,7 @@ func (d *Dispatcher) follow(ctx context.Context, id, org uuid.UUID, handle Handl
 	}
 	result, err := handle.Wait(ctx)
 	if err != nil {
-		var started <-chan struct{}
-		if provisioned, ok := handle.(Provisioned); ok {
-			started = provisioned.Started()
-		}
-		if stopped := d.finish(ctx, id, "failed", nil, failureMessage(err, started)); stopped != nil {
+		if stopped := d.finish(ctx, id, "failed", nil, err.Error()); stopped != nil {
 			return Result{}, fmt.Errorf("sandbox run %s stopped: %w", id, stopped)
 		}
 		return Result{}, fmt.Errorf("sandbox run %s: %w", id, err)
@@ -540,20 +534,6 @@ func (d *Dispatcher) started(ctx context.Context, id uuid.UUID) {
 		id, "running", "the sandbox started and the job is running in it").Error; err != nil {
 		logger.Warnf("record sandbox run %s as running: %v", id, err)
 	}
-}
-
-// failureMessage is why a job that failed with err failed, saying so when its sandbox never started
-// so the job never ran: a platform failure, not the job's. started is closed once the job ran; nil
-// when its backend doesn't say.
-func failureMessage(err error, started <-chan struct{}) string {
-	if started != nil {
-		select {
-		case <-started:
-		default:
-			return "the sandbox never started, so the job never ran: " + err.Error()
-		}
-	}
-	return err.Error()
 }
 
 // finish records how run id ended, and why when message says, as cancelled when the dispatcher

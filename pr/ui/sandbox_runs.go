@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/flanksource/gavel/blob"
+	"github.com/flanksource/gavel/sandbox"
 	"github.com/flanksource/gavel/tenant"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
@@ -50,8 +51,10 @@ type sandboxRun struct {
 	SpecText string `json:"-" gorm:"column:spec"`
 	// Events are what happened to the run, oldest first: [{at, source, kind, message}], from
 	// sandbox_run_events.
-	Events     json.RawMessage `json:"events,omitempty" gorm:"-"`
-	EventsText string          `json:"-" gorm:"column:events"`
+	Events     []sandbox.RunEvent `json:"events,omitempty" gorm:"-"`
+	EventsText string             `json:"-" gorm:"column:events"`
+	// Phase is the status the run is shown with, which its events refine (sandbox.RunPhase).
+	Phase string `json:"phase" gorm:"-"`
 	// TimeoutSeconds is the longest the run may work.
 	TimeoutSeconds int64 `json:"timeoutSeconds"`
 	// Lost marks a run still recorded as provisioning or running past its lifetime: its job can no longer
@@ -102,7 +105,11 @@ func (s *Server) handleSandboxRuns(w http.ResponseWriter, r *http.Request) {
 	timeout, lifetime := s.agentRuns.Dispatcher.RunTimeout(), s.agentRuns.Dispatcher.RunLifetime()
 	for i := range runs {
 		runs[i].Spec = json.RawMessage(runs[i].SpecText)
-		runs[i].Events = json.RawMessage(runs[i].EventsText)
+		if err := json.Unmarshal([]byte(runs[i].EventsText), &runs[i].Events); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, fmt.Errorf("decode the events of sandbox run %s: %w", runs[i].ID, err))
+			return
+		}
+		runs[i].Phase = sandbox.RunPhase(runs[i].Status, runs[i].Backend, runs[i].Events)
 		runs[i].TimeoutSeconds = int64(timeout / time.Second)
 		active := runs[i].Status == "provisioning" || runs[i].Status == "running"
 		runs[i].Lost = active && runs[i].StartedAt != nil && time.Since(*runs[i].StartedAt) > lifetime

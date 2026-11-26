@@ -62,7 +62,7 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (res
 	if err != nil {
 		return promptrun.Result{}, err
 	}
-	// The run's record says why it failed, and whether its environment ever started.
+	// The run's record says why it failed; its events say how far it got.
 	defer func() { recorded.Finish(err) }()
 	gitDir, err := r.Sources.GitDir(ctx, r.Repo)
 	if err != nil {
