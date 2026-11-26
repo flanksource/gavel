@@ -1057,7 +1057,7 @@
       "description": "Unified sandbox mode and provider-neutral isolation policy",
       "oneOf": [
         {
-          "description": "Isolation boundary: off, provider-native, Docker, or Git Agent",
+          "description": "Isolation boundary: off, provider-native, Docker, Git Agent, or Substrate",
           "enum": [
             "off",
             "native",
@@ -1110,7 +1110,7 @@
               "type": "object"
             },
             "mode": {
-              "description": "Isolation boundary: off, provider-native, Docker, or Git Agent",
+              "description": "Isolation boundary: off, provider-native, Docker, Git Agent, or Substrate",
               "enum": [
                 "off",
                 "native",

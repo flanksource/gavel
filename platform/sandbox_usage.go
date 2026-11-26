@@ -55,7 +55,7 @@ func (s Store) SandboxUsage(ctx context.Context, since time.Time) (SandboxUsage,
 	if err := db.Raw(`
 		SELECT run.org_id AS org, o.name AS org_name, run.kind, run.status, count(*) AS runs
 		FROM sandbox_runs run JOIN orgs o ON o.id = run.org_id
-		WHERE o.issuer = ? AND run.status IN ('queued', 'running')
+		WHERE o.issuer = ? AND run.status IN ('queued', 'provisioning', 'running')
 		GROUP BY 1, 2, 3, 4 ORDER BY 2, 3, 4`, s.Issuer).Scan(&usage.Active).Error; err != nil {
 		return SandboxUsage{}, fmt.Errorf("read the platform's active sandbox runs: %w", err)
 	}

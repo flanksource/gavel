@@ -49,7 +49,7 @@ type SubstrateRunner struct {
 // repository, with gavel's program rebuilding its hooks there and reaching the step's PR through
 // serve's run API over the run's channel. The run's output is its log, its transcripts are kept, and its commits come back
 // on its own branch, which becomes the repository's.
-func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (promptrun.Result, error) {
+func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (result promptrun.Result, err error) {
 	id := uuid.New()
 	todo := r.TodoID
 	spec := sandbox.RunSpec{Kind: "agent", RepoID: r.Repo.ID, Ref: "HEAD", SHA: r.SHA, TodoID: &todo}
@@ -62,8 +62,8 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 	if err != nil {
 		return promptrun.Result{}, err
 	}
-	succeeded := false
-	defer func() { recorded.Finish(succeeded) }()
+	// The run's record says why it failed; its events say how far it got.
+	defer func() { recorded.Finish(err) }()
 	gitDir, err := r.Sources.GitDir(ctx, r.Repo)
 	if err != nil {
 		return promptrun.Result{}, err
@@ -102,11 +102,12 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 	} else if capped && (in.Resolved.Spec.Budget.Cost == 0 || remaining < in.Resolved.Spec.Budget.Cost) {
 		in.Resolved.Spec.Budget.Cost = remaining
 	}
+	sandbox.WatchStart(&in, recorded.Started)
 	// The dispatcher's timeout bounds every run, whatever its step's own budget, so the run ends
 	// within its environment's lifetime; the dispatcher stops it sooner once its budgets are used up.
 	runCtx, cancel := context.WithTimeout(recorded.Context(), r.Dispatcher.RunTimeout())
 	defer cancel()
-	result, err := promptrun.Run(runCtx, in)
+	result, err = promptrun.Run(runCtx, in)
 	if stopped := context.Cause(recorded.Context()); stopped != nil && err != nil {
 		return result, fmt.Errorf("agent run %s stopped: %w", id, stopped)
 	}
@@ -118,7 +119,6 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (pro
 			return result, fmt.Errorf("agent run %s: %w", id, err)
 		}
 	}
-	succeeded = true
 	return result, nil
 }
 
