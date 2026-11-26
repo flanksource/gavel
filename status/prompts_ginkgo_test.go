@@ -31,4 +31,17 @@ var _ = Describe("status summary runtime", func() {
 		Expect(resolved.Config.Model).To(Equal(resolved.Request.Model))
 		Expect(resolved.Resolution.Provenance["/budget/timeout"].Source.Kind).To(Equal(api.FieldSourceSaved))
 	})
+
+	It("reads the summary prompt file only from inside its directory", func() {
+		dir := GinkgoT().TempDir()
+		outside := filepath.Join(GinkgoT().TempDir(), "secret.prompt")
+		Expect(os.WriteFile(outside, []byte("Summarize the change"), 0o600)).To(Succeed())
+		Expect(os.Symlink(outside, filepath.Join(dir, "link.prompt"))).To(Succeed())
+
+		for _, file := range []string{outside, "../" + filepath.Base(outside), "link.prompt"} {
+			_, err := ResolveSummaryPrompt(SummaryPromptOptions{Dir: dir, Override: verify.PromptSpec{File: file}})
+			Expect(err).To(MatchError(ContainSubstring("read status summary prompt")), file)
+			Expect(err).To(MatchError(ContainSubstring("escapes")), file)
+		}
+	})
 })

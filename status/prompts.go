@@ -1,8 +1,9 @@
+// Resolves the per-file AI summary prompt for `gavel status --ai`: its overridable template and
+// the runtime it runs with.
 package status
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/captainconfig"
@@ -47,11 +48,11 @@ func ResolveSummaryPrompt(options SummaryPromptOptions) (*SummaryPrompt, error) 
 	}
 	prepared := &SummaryPrompt{options: options}
 	if options.Override.File != "" {
-		raw, err := os.ReadFile(options.Override.ResolvedFilePath(options.Dir))
+		// TemplateSource reads the file only from inside the directory that declared it.
+		source, err := options.Override.TemplateSource(options.Dir, "")
 		if err != nil {
 			return nil, fmt.Errorf("read status summary prompt: %w", err)
 		}
-		source := string(raw)
 		prepared.fileSource = &source
 	}
 	return prepared, nil
