@@ -150,7 +150,10 @@ var _ = Describe("default outcomes", func() {
 		Entry("verifier passed", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(true), Verify: passed}, "verified"),
 		Entry("verifier failed", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(true), Verify: failedReport}, "unverified"),
 		Entry("verifier passed over the agent's own doubt", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(false), Verify: passed}, "verified"),
-		Entry("no verifier → pending", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(true)}, "pending"),
+		// Implemented with no definition of done to check it: finished, not "not started", so a
+		// backlog pass doesn't implement it again.
+		Entry("completed with no verifier → completed", lifecycle.StepResult{Run: succeeded, Envelope: completedRun(true)}, "completed"),
+		Entry("blocked with no verifier → pending", lifecycle.StepResult{Run: succeeded, Envelope: lifecycle.Envelope{Success: true, Event: "blocked"}}, "pending"),
 	)
 
 	DescribeTable("plan",
