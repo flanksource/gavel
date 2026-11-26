@@ -77,6 +77,9 @@ func TestDashboardOptionsValidate(t *testing.T) {
 			"--sandbox substrate requires --substrate-gavel-name, the name substrate's credential provider knows this gavel by",
 			"--sandbox substrate requires the GAVEL_CREDENTIAL_PROVIDER_TOKEN environment variable, the token substrate's credential provider fetches model keys with",
 		}},
+		{"substrate gavel name too long for its organizations' template names", func(o *DashboardOptions) {
+			o.Sandbox, o.SubstrateTemplate, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "gavel-runner", "gavel-staging-01", "provider-token"
+		}, []string{`--substrate-gavel-name must be at most 15 characters, since it names each organization's substrate template, got "gavel-staging-01" (16)`}},
 		{"substrate gavel name that isn't a DNS label", func(o *DashboardOptions) {
 			o.Sandbox, o.SubstrateTemplate, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "gavel-runner", "Beta/1", "provider-token"
 		}, []string{`--substrate-gavel-name must be a DNS label like beta, got "Beta/1"`}},
@@ -305,16 +308,19 @@ func TestContainerAndKubernetesSandboxesWarnTheyUseServesKeys(t *testing.T) {
 	assert.Contains(t, logged.String(), "--sandbox docker: runs get no model keys", "logged at startup, before the executor is checked")
 }
 
-// The chart passes serve its release's runner digest, which each organization's template copy runs.
+// The chart passes serve its release's runner digest, which each organization's template copy runs,
+// under serve's gavel name.
 func TestSubstrateOrganizationTemplatesRunTheSandboxImage(t *testing.T) {
 	templates, err := orgTemplates(DashboardOptions{
 		Sandbox: "substrate", SubstrateEnvAPI: "ate-env-api.ate-env.svc:7777", SubstrateControl: "api.ate-system.svc:443",
 		SubstrateAtespace: "ate-env", SubstrateTemplate: "gavel-runner", SandboxImage: "ghcr.io/flanksource/gavel-runner@sha256:8c91",
+		SubstrateGavelName: "beta",
 	}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = templates.Client.Close() })
 	assert.Equal(t, "gavel-runner", templates.Base)
 	assert.Equal(t, "ghcr.io/flanksource/gavel-runner@sha256:8c91", templates.Image)
+	assert.Equal(t, "beta", templates.Gavel, "each gavel names and sweeps only its own organizations' templates")
 }
 
 func TestSubstrateAgentBackendIsTheJobsSubstrateAsCaptainTakesIt(t *testing.T) {

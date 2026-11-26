@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/flanksource/gavel/sandbox"
 )
 
 const (
@@ -187,6 +189,9 @@ func (o DashboardOptions) Validate() error {
 				add("--sandbox substrate requires --substrate-gavel-name, the name substrate's credential provider knows this gavel by")
 			case !dnsLabel.MatchString(o.SubstrateGavelName):
 				add("--substrate-gavel-name must be a DNS label like beta, got %q", o.SubstrateGavelName)
+			case len(o.SubstrateGavelName) > sandbox.MaxGavelNameLength:
+				add("--substrate-gavel-name must be at most %d characters, since it names each organization's substrate template, got %q (%d)",
+					sandbox.MaxGavelNameLength, o.SubstrateGavelName, len(o.SubstrateGavelName))
 			}
 			if o.credentialProviderToken == "" {
 				add("--sandbox substrate requires the GAVEL_CREDENTIAL_PROVIDER_TOKEN environment variable, the token substrate's credential provider fetches model keys with")

@@ -175,7 +175,7 @@ func orgTemplates(opts DashboardOptions, db *gorm.DB) (*sandbox.OrgTemplates, er
 	if err != nil {
 		return nil, fmt.Errorf("--sandbox substrate: %w", err)
 	}
-	return &sandbox.OrgTemplates{DB: db, Client: client, Atespace: opts.SubstrateAtespace, Base: opts.SubstrateTemplate, Size: size, Image: opts.SandboxImage}, nil
+	return &sandbox.OrgTemplates{DB: db, Client: client, Atespace: opts.SubstrateAtespace, Base: opts.SubstrateTemplate, Size: size, Image: opts.SandboxImage, Gavel: opts.SubstrateGavelName}, nil
 }
 
 // substrateSize is --substrate-cpu and --substrate-memory; a flag left empty is zero, which the
