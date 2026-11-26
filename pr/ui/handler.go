@@ -637,6 +637,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ssh-keys", s.handleSSHKeyList)
 	mux.HandleFunc("POST /api/ssh-keys", s.handleSSHKeyAdd)
 	mux.HandleFunc("DELETE /api/ssh-keys/{id}", s.handleSSHKeyDelete)
+	mux.HandleFunc("GET /api/commit-identity", s.handleCommitIdentityGet)
+	mux.HandleFunc("PUT /api/commit-identity", s.handleCommitIdentitySet)
 	mux.HandleFunc("GET /api/model-keys", s.handleModelKeyList)
 	mux.HandleFunc("PUT /api/model-keys/{provider}", s.handleModelKeySet)
 	mux.HandleFunc("DELETE /api/model-keys/{provider}", s.handleModelKeyDelete)

@@ -51,7 +51,7 @@ type DashboardOptions struct {
 	SubstrateTemplate           string   `flag:"substrate-template" help:"Image template sandbox environments are created from, registered with ate-env manifest template --rootfs-image (substrate)"`
 	SubstrateCPU                string   `flag:"substrate-cpu" help:"CPU of an organization's sandbox environments unless a platform admin set its own, such as 2 or 500m; empty is --substrate-template's (substrate)"`
 	SubstrateMemory             string   `flag:"substrate-memory" help:"Memory of an organization's sandbox environments unless a platform admin set its own, such as 4Gi; empty is --substrate-template's (substrate)"`
-	SubstrateEgress             []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides gavel serve, the Go, npm and Python registries and GitHub; repeat for each (substrate)"`
+	SubstrateEgress             []string `flag:"substrate-egress" help:"More hosts sandbox environments may reach besides the Go, npm and Python registries and GitHub; repeat for each (substrate)"`
 	SubstrateGavelName          string   `flag:"substrate-gavel-name" help:"The name substrate's credential provider knows this gavel by, in each run's model key URI, e.g. beta (substrate)"`
 	SubstrateTrustBundle        string   `flag:"substrate-trust-bundle" help:"Path in the environment of the egress gateway's CA, which jobs trust for hosts with an injected credential (substrate)"`
 	MissionControlURL           string   `flag:"mission-control-url" help:"Mission Control backend the platform dashboard reads gavel's infrastructure from, e.g. https://mc.example.com/api (or GAVEL_MISSION_CONTROL_URL; its token is GAVEL_MISSION_CONTROL_TOKEN; --auth clerk)"`

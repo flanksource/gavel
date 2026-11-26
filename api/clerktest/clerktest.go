@@ -61,6 +61,8 @@ type User struct {
 	OrgRole string
 	// GitHubLogin is the username of the user's GitHub connection; empty means none.
 	GitHubLogin string
+	// GitHubID is the numeric ID of the user's GitHub connection.
+	GitHubID int64
 	// PublicMetadata is the user's public_metadata, e.g. {"gavel_role": "platform_admin"}.
 	PublicMetadata map[string]any
 }
@@ -366,7 +368,10 @@ func (s *Server) writeUser(w http.ResponseWriter) {
 	}
 	accounts := []map[string]any{}
 	if s.User.GitHubLogin != "" {
-		accounts = append(accounts, map[string]any{"object": "external_account", "id": "eac_clerktest", "provider": "oauth_github", "username": s.User.GitHubLogin})
+		accounts = append(accounts, map[string]any{
+			"object": "external_account", "id": "eac_clerktest", "provider": "oauth_github", "username": s.User.GitHubLogin,
+			"provider_user_id": strconv.FormatInt(s.User.GitHubID, 10),
+		})
 	}
 	writeJSON(w, map[string]any{
 		"object": "user", "id": s.User.ID, "first_name": first, "last_name": last, "username": nil,

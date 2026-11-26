@@ -223,13 +223,13 @@ func (m *Members) read(ctx context.Context, clerkUserID string) (member, error) 
 	}
 	var user struct{ ID uuid.UUID }
 	if err := m.db.WithContext(ctx).Raw(`
-		INSERT INTO users (issuer, clerk_user_id, name, email, email_verified, github_login, platform_admin)
-		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?)
+		INSERT INTO users (issuer, clerk_user_id, name, email, email_verified, github_login, github_id, platform_admin)
+		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, 0), ?)
 		ON CONFLICT (issuer, clerk_user_id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email,
-			email_verified = EXCLUDED.email_verified, github_login = EXCLUDED.github_login,
+			email_verified = EXCLUDED.email_verified, github_login = EXCLUDED.github_login, github_id = EXCLUDED.github_id,
 			platform_admin = EXCLUDED.platform_admin, updated_at = now()
 		RETURNING id`,
-		m.issuer, clerkUserID, profile.Name, profile.Email, profile.EmailVerified, profile.GitHubLogin, profile.PlatformAdmin).Scan(&user).Error; err != nil {
+		m.issuer, clerkUserID, profile.Name, profile.Email, profile.EmailVerified, profile.GitHubLogin, profile.GitHubID, profile.PlatformAdmin).Scan(&user).Error; err != nil {
 		return member{}, fmt.Errorf("record the user: %w", err)
 	}
 	if err := (IdentityStore{DB: m.db}).SyncMemberships(ctx, user.ID, memberships); err != nil {

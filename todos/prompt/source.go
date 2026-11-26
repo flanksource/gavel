@@ -1,12 +1,15 @@
+// Reads the source lines a todo's path refs name into its prompt, from files inside the
+// todo's working directory only.
 package prompt
 
 import (
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"strings"
 
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/utils"
 )
 
 const (
@@ -14,14 +17,13 @@ const (
 	contextRadius     = 10
 )
 
+// ReadSourceLines returns the lines ref names, numbered, from a file inside workDir. A todo's
+// path refs come from its frontmatter, which a hosted todo's author writes, so a ref that leads
+// outside workDir — by "..", an absolute path, or a symlink — is refused instead of read.
 func ReadSourceLines(workDir string, ref types.PathRef) (string, error) {
-	path := ref.File
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workDir, path)
-	}
-	data, err := os.ReadFile(path)
+	data, err := utils.ReadFileWithin(workDir, ref.File)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
 		}
 		return "", err

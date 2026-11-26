@@ -69,8 +69,31 @@ var _ = Describe("PromptSpec.TemplateSource", func() {
 		Expect(err).To(MatchError(ContainSubstring(dir)))
 	})
 
-	It("keeps an absolute file as the documented escape hatch", func() {
-		Expect(PromptSpec{File: filepath.Join(dir, relative)}.TemplateSource("", fallback)).To(Equal(body))
+	It("reads an absolute file inside the declaring directory", func() {
+		Expect(PromptSpec{File: filepath.Join(dir, relative)}.TemplateSource(dir, fallback)).To(Equal(body))
+	})
+
+	// A hosted run reads its repository's own .gavel.yaml on serve, so a prompt file it names
+	// must not lead to any other file serve can read.
+	It("refuses an absolute file outside the declaring directory", func() {
+		outside := filepath.Join(GinkgoT().TempDir(), "secret.prompt")
+		Expect(os.WriteFile(outside, []byte(body), 0o600)).To(Succeed())
+
+		_, err := PromptSpec{File: outside}.TemplateSource(dir, fallback)
+
+		Expect(err).To(MatchError(ContainSubstring(outside)))
+		Expect(err).To(MatchError(ContainSubstring(dir)))
+	})
+
+	It("refuses a file that is a symlink out of the declaring directory", func() {
+		outside := filepath.Join(GinkgoT().TempDir(), "secret.prompt")
+		Expect(os.WriteFile(outside, []byte(body), 0o600)).To(Succeed())
+		Expect(os.Symlink(outside, filepath.Join(dir, "link.prompt"))).To(Succeed())
+
+		source, err := PromptSpec{File: "link.prompt"}.TemplateSource(dir, fallback)
+
+		Expect(err).To(MatchError(ContainSubstring("escapes")))
+		Expect(source).To(BeEmpty())
 	})
 
 	It("falls back to the builtin body when no file and no prompt are set", func() {

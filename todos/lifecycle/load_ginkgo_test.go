@@ -98,6 +98,17 @@ var _ = Describe("Load", func() {
 		Expect(err).To(MatchError(ContainSubstring(outside)))
 	})
 
+	It("refuses an override file that is a symlink out of the work dir", func() {
+		outside := filepath.Join(GinkgoT().TempDir(), "lifecycle.yaml")
+		Expect(os.WriteFile(outside, []byte("name: acme\n"), 0o600)).To(Succeed())
+		Expect(os.Symlink(outside, filepath.Join(workDir, "lifecycle.yaml"))).To(Succeed())
+
+		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: "lifecycle.yaml"}, workDir)
+
+		Expect(err).To(MatchError(ContainSubstring("todos.lifecycle file")))
+		Expect(err).To(MatchError(ContainSubstring("escapes")))
+	})
+
 	It("fails on an override file that does not exist", func() {
 		_, err := lifecycle.LoadWith(verify.LifecycleConfig{File: "missing.yaml"}, workDir)
 		Expect(err).To(MatchError(ContainSubstring("todos.lifecycle file")))

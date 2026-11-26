@@ -3,7 +3,6 @@ package lifecycle
 import (
 	_ "embed"
 	"fmt"
-	"os"
 
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
@@ -80,7 +79,7 @@ func overlayFrom(override verify.LifecycleConfig, workDir string) (Lifecycle, er
 		if err != nil {
 			return Lifecycle{}, fmt.Errorf("todos.lifecycle file: %w", err)
 		}
-		data, err := os.ReadFile(path)
+		data, err := utils.ReadFileWithin(workDir, path)
 		if err != nil {
 			return Lifecycle{}, fmt.Errorf("todos.lifecycle file: %w", err)
 		}
