@@ -96,6 +96,9 @@ steps:
       - { status: verified, when: "verify.ran && verify.passed" }
       - { status: unverified, when: "verify.ran && !verify.passed" }
       - { status: failed, when: "!envelope.success" }
+      # Implemented with no definition of done to judge it: finished, so a backlog pass doesn't
+      # implement it again. A blocked run stays pending for a person to unblock.
+      - { status: completed, when: "envelope.event == 'completed'" }
       - { status: pending, when: "true" }
 
   - name: triage.new
