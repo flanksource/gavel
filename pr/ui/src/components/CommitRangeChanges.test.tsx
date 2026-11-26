@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TodoCommitFile } from '../types';
@@ -135,5 +136,24 @@ describe('CommitRangeChanges', () => {
     render(<CommitRangeChanges options={options} filesRequest={filesRequest} diffRequest={diffRequest} />, { wrapper: queryTestWrapper() });
 
     expect(await screen.findByText(/response has no files list/)).toBeTruthy();
+  });
+});
+
+// A hosted todo's land actions read the same request's response under the same query key, so the
+// cache holds what the URL answers and the viewer reads its files from it, whichever loads first.
+describe('CommitRangeChanges sharing its files query', () => {
+  it('shows the files of a response another reader of the same request cached', async () => {
+    stub();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+    client.setQueryData(filesRequest('all').queryKey, { files });
+
+    render(
+      <QueryClientProvider client={client}>
+        <CommitRangeChanges options={options} filesRequest={filesRequest} diffRequest={diffRequest} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText('diff:cmd/main.go')).toBeTruthy();
+    expect(screen.getByText('a.md')).toBeTruthy();
   });
 });

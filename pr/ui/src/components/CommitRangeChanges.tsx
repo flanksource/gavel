@@ -217,6 +217,8 @@ export function CommitRangeChanges({ options, filesRequest, diffRequest, summary
   const [composer, setComposer] = useState<Composer | null>(null);
   const activeId = options.some(option => option.id === picked) ? picked : options[0]?.id;
 
+  // The cache holds the response as the URL answers it, so another reader of the same request (a
+  // hosted todo's land actions) shares the entry; the viewer reads the files out of it.
   const filesQuery = useQuery({
     queryKey: activeId === undefined ? ['commit-range', 'none'] : filesRequest(activeId).queryKey,
     queryFn: async ({ signal }) => {
@@ -224,8 +226,9 @@ export function CommitRangeChanges({ options, filesRequest, diffRequest, summary
       const request = filesRequest(activeId);
       const data = await fetchJSON<TodoCommitFilesResponse>({ url: request.url, signal, context: request.context });
       if (!Array.isArray(data.files)) throw new Error(`${request.context}: response has no files list`);
-      return data.files;
+      return data;
     },
+    select: data => data.files,
     enabled: activeId !== undefined,
     staleTime: Infinity,
   });
