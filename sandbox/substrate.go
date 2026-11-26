@@ -41,6 +41,8 @@ var DefaultSubstrateEgress = []string{
 	"registry.npmjs.org",
 	"pypi.org", "files.pythonhosted.org",
 	"github.com", "codeload.github.com", "objects.githubusercontent.com",
+	// github.com redirects release asset downloads, such as golangci-lint's tarball, here.
+	"release-assets.githubusercontent.com",
 	// Tool installers, such as gavel's golangci-lint, resolve versions from GitHub's releases API.
 	"api.github.com",
 }
