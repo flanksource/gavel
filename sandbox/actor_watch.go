@@ -46,7 +46,7 @@ func (d *Dispatcher) watchActor(ctx context.Context, id uuid.UUID) {
 			logger.Debugf("sandbox run %s: %v", id, err)
 		case actor.Worker != "" && actor.Worker != worker:
 			worker = actor.Worker
-			d.substrateEvent(context.WithoutCancel(ctx), id, "assigned",
+			d.substrateEvent(context.Background(), id, "assigned",
 				fmt.Sprintf("placed on worker %s in pool %s on node %s (actor %s)", actor.Worker, actor.Pool, actor.Node, actor.State))
 		}
 		select {
@@ -57,10 +57,14 @@ func (d *Dispatcher) watchActor(ctx context.Context, id uuid.UUID) {
 	}
 }
 
-// substrateEvent records what substrate reported of run id's environment.
+// substrateEvent records what substrate reported of run id's environment while the run still
+// provisions: holding the run's row, so an event never lands after the run has ended.
 func (d *Dispatcher) substrateEvent(ctx context.Context, id uuid.UUID, kind, message string) {
-	if err := d.DB.WithContext(ctx).Exec(`INSERT INTO sandbox_run_events (run_id, source, kind, message) VALUES (?, 'substrate', ?, ?)`,
-		id, kind, message).Error; err != nil {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := d.DB.WithContext(ctx).Exec(`INSERT INTO sandbox_run_events (run_id, source, kind, message)
+		SELECT id, 'substrate', ?, ? FROM sandbox_runs WHERE id = ? AND status = 'provisioning' FOR UPDATE`,
+		kind, message, id).Error; err != nil {
 		logger.Warnf("record substrate event %s of sandbox run %s: %v", kind, id, err)
 	}
 }

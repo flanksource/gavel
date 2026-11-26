@@ -20,9 +20,10 @@ type RunEvent struct {
 //   - failed to start: it failed on its worker before its job ran;
 //
 // and status otherwise. Only substrate reports placing a run, so only its runs wait for a worker.
-// A run recorded before runs had events is shown as status.
+// A run recorded before runs had events, whose history lacks the queued event that creates every
+// run now, is shown as status.
 func RunPhase(status, backend string, events []RunEvent) string {
-	if len(events) == 0 {
+	if len(events) == 0 || events[0].Source != "gavel" || events[0].Kind != "queued" {
 		return status
 	}
 	var submitted, assigned, ran bool

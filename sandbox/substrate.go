@@ -141,8 +141,10 @@ func (e *substrateExecutor) Submit(ctx context.Context, job Job) (Handle, error)
 }
 
 // WatchStart calls started once in's program first shows it runs in its substrate environment: by
-// its first output, event or call to its host. Before that captain creates the environment and
-// substrate wakes it, which can fail without the program ever running.
+// its first output, relayed event or call to its host. Before that captain creates the environment
+// and substrate wakes it, which can fail without the program ever running. System events don't
+// count: captain emits them on the host, as when it applies a context hook before the environment
+// exists.
 func WatchStart(in *promptrun.Input, started func()) {
 	var once sync.Once
 	mark := func() { once.Do(started) }
@@ -151,7 +153,9 @@ func WatchStart(in *promptrun.Input, started func()) {
 	}
 	onEvent := in.OnEvent
 	in.OnEvent = func(iter int, event ai.Event) {
-		mark()
+		if event.Kind != ai.EventSystem {
+			mark()
+		}
 		if onEvent != nil {
 			onEvent(iter, event)
 		}

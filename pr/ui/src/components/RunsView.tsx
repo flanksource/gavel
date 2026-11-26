@@ -74,9 +74,12 @@ export function runStatus(run: SandboxRun): string {
   return run.status === 'failed' && run.exitCode !== undefined ? `${status} (exit ${run.exitCode})` : status;
 }
 
-// ranJob says whether a run's job ran; a run recorded before runs had events is taken to have.
+// ranJob says whether a run's job ran. A run recorded before runs had events, whose history lacks
+// the queued event that creates every run now, is taken to have (sandbox.RunPhase).
 function ranJob(run: SandboxRun): boolean {
-  return !run.events?.length || run.events.some(event => event.source === 'gavel' && event.kind === 'running');
+  const first = run.events?.[0];
+  if (first?.source !== 'gavel' || first.kind !== 'queued') return true;
+  return run.events!.some(event => event.source === 'gavel' && event.kind === 'running');
 }
 
 function runDot(run: SandboxRun): DotStatus | undefined {

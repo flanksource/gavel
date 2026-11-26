@@ -278,7 +278,8 @@ func (d *Dispatcher) launch(ctx context.Context, run *Run, scope tenant.Scope, s
 	provisioned, waits := handle.(Provisioned)
 	d.submitted(ctx, run.ID, handle.Ref(), logKey, waits)
 	if waits {
-		watchCtx, stopWatching := context.WithCancel(context.WithoutCancel(ctx))
+		// The watcher stops once the job starts or ends, and at the run's lifetime whatever happens.
+		watchCtx, stopWatching := context.WithTimeout(context.WithoutCancel(ctx), d.RunLifetime())
 		go d.watchActor(watchCtx, run.ID)
 		go func() {
 			defer stopWatching()
@@ -431,9 +432,10 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 		}
 	}
 	d.submitted(ctx, id, JobName(id), logKey, true)
-	watchCtx, stopWatching := context.WithCancel(context.WithoutCancel(ctx))
-	go d.watchActor(watchCtx, id)
 	runCtx, stop := context.WithCancelCause(ctx)
+	// The watcher stops once the run starts, ends or is stopped, and at its lifetime whatever happens.
+	watchCtx, stopWatching := context.WithTimeout(runCtx, d.RunLifetime())
+	go d.watchActor(watchCtx, id)
 	d.track(id, scope.OrgID, spec.Kind == "agent", func(reason error) {
 		d.setStatusMessage(context.WithoutCancel(ctx), id, "stopping", "stopped: "+reason.Error())
 		stop(reason)
@@ -471,6 +473,14 @@ func (d *Dispatcher) follow(ctx context.Context, id, org uuid.UUID, handle Handl
 		_ = logs.Close()
 	}
 	result, err := handle.Wait(ctx)
+	// A start the job signalled is recorded before how it ended, which would otherwise race it.
+	if provisioned, ok := handle.(Provisioned); ok {
+		select {
+		case <-provisioned.Started():
+			d.started(ctx, id)
+		default:
+		}
+	}
 	if err != nil {
 		if stopped := d.finish(ctx, id, "failed", nil, err.Error()); stopped != nil {
 			return Result{}, fmt.Errorf("sandbox run %s stopped: %w", id, stopped)
