@@ -48,9 +48,13 @@ type sandboxRun struct {
 	// SpecText holds spec::text as scanned: database/sql cannot store a text column in a
 	// json.RawMessage.
 	SpecText string `json:"-" gorm:"column:spec"`
+	// Events are what happened to the run, oldest first: [{at, source, kind, message}], from
+	// sandbox_run_events.
+	Events     json.RawMessage `json:"events,omitempty" gorm:"-"`
+	EventsText string          `json:"-" gorm:"column:events"`
 	// TimeoutSeconds is the longest the run may work.
 	TimeoutSeconds int64 `json:"timeoutSeconds"`
-	// Lost marks a run still recorded as running past its lifetime: its job can no longer
+	// Lost marks a run still recorded as provisioning or running past its lifetime: its job can no longer
 	// report how it ended.
 	Lost bool `json:"lost,omitempty"`
 }
@@ -64,7 +68,9 @@ func (s *Server) sandboxRunsQuery(r *http.Request, where string, args ...any) (s
 	query := `SELECT run.id, run.kind, run.status, run.status_message, run.exit_code, run.ref, run.sha, repo.name AS repo,
 			COALESCE(NULLIF(u.name, ''), u.email, '') AS "user", run.todo_id, todo.title AS todo_title, run.backend,
 			run.log_key <> '' AS has_log, run.created_at, run.started_at, run.finished_at,
-			run.backend_ref, run.template, run.cpu_millicores, run.memory_bytes, run.spec::text AS spec
+			run.backend_ref, run.template, run.cpu_millicores, run.memory_bytes, run.spec::text AS spec,
+			(SELECT COALESCE(json_agg(json_build_object('at', e.at, 'source', e.source, 'kind', e.kind, 'message', e.message) ORDER BY e.at, e.id), '[]')
+				FROM sandbox_run_events AS e WHERE e.run_id = run.id)::text AS events
 		FROM sandbox_runs AS run
 		LEFT JOIN repos AS repo ON repo.id = run.repo_id
 		LEFT JOIN users AS u ON u.id = run.user_id
@@ -96,8 +102,10 @@ func (s *Server) handleSandboxRuns(w http.ResponseWriter, r *http.Request) {
 	timeout, lifetime := s.agentRuns.Dispatcher.RunTimeout(), s.agentRuns.Dispatcher.RunLifetime()
 	for i := range runs {
 		runs[i].Spec = json.RawMessage(runs[i].SpecText)
+		runs[i].Events = json.RawMessage(runs[i].EventsText)
 		runs[i].TimeoutSeconds = int64(timeout / time.Second)
-		runs[i].Lost = runs[i].Status == "running" && runs[i].StartedAt != nil && time.Since(*runs[i].StartedAt) > lifetime
+		active := runs[i].Status == "provisioning" || runs[i].Status == "running"
+		runs[i].Lost = active && runs[i].StartedAt != nil && time.Since(*runs[i].StartedAt) > lifetime
 	}
 	writeJSON(w, runs)
 }

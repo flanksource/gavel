@@ -19,11 +19,11 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
 	github.com/eko/gocache/lib/v4 v4.2.3
-	github.com/flanksource/captain v0.0.89
+	github.com/flanksource/captain v0.0.95-0.20261126080733-2e9bb5a25680
 	github.com/flanksource/clicky v1.21.98
 	github.com/flanksource/clicky/aichat v1.21.94
 	github.com/flanksource/commons v1.64.2
-	github.com/flanksource/commons-db v0.1.73
+	github.com/flanksource/commons-db v0.1.87
 	github.com/flanksource/commons-db/cmd/query v0.1.73
 	github.com/flanksource/commons-db/recordstore v0.1.73
 	github.com/flanksource/commons-db/tracing v0.1.73
@@ -39,7 +39,7 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-cmp v0.7.0
-	github.com/google/pprof v0.0.0-20260507013755-92041b743c96
+	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
 	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
 	github.com/hairyhenderson/toml v0.4.2-0.20210923231440-40456b8e66cf
 	github.com/invopop/jsonschema v0.14.0
@@ -209,7 +209,7 @@ require (
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
-	github.com/flanksource/sqlglot-go v1.1.1 // indirect
+	github.com/flanksource/sqlglot-go v1.2.2 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
@@ -378,6 +378,8 @@ require (
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/ugorji/go/codec v1.3.2 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
+	github.com/valkey-io/valkey-go v1.0.79 // indirect
+	github.com/valkey-io/valkey-go/valkeycompat v1.0.79 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/woodsbury/decimal128 v1.4.1 // indirect

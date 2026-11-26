@@ -85,6 +85,13 @@ type Handle interface {
 	Ref() string
 }
 
+// Provisioned is a Handle whose job waits, after it is submitted, for its environment to be
+// created and to start. Started is closed once the job runs there; a job that ends first never
+// ran. A Handle that isn't one runs its job once it is submitted.
+type Provisioned interface {
+	Started() <-chan struct{}
+}
+
 // Executor submits jobs to a backend.
 type Executor interface {
 	Submit(ctx context.Context, job Job) (Handle, error)

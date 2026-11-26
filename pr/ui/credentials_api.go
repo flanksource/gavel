@@ -77,7 +77,7 @@ func (a *CredentialsAPI) handleFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case run.Status != "queued" && run.Status != "running":
+	case run.Status != "queued" && run.Status != "provisioning" && run.Status != "running":
 		refuse(http.StatusForbidden, fmt.Sprintf("run %s is %s, not active", run.ID, run.Status))
 		return
 	case time.Since(run.CreatedAt) > a.RunLifetime:

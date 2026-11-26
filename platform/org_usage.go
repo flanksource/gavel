@@ -92,7 +92,7 @@ func (s Store) OrgUsage(ctx context.Context, org uuid.UUID, since time.Time, run
 	if err := db.Raw(`
 		SELECT count(*) AS runs, COALESCE(sum(cpu_millicores), 0) AS cpu_millicores, COALESCE(sum(memory_bytes), 0) AS memory_bytes
 		FROM sandbox_runs
-		WHERE org_id = ? AND status = 'running' AND finished_at IS NULL AND cpu_millicores IS NOT NULL
+		WHERE org_id = ? AND status IN ('provisioning', 'running') AND finished_at IS NULL AND cpu_millicores IS NOT NULL
 			AND started_at > now() - ? * interval '1 second'`, org, runLifetime.Seconds()).Scan(&usage.Compute.Running).Error; err != nil {
 		return OrgUsage{}, fmt.Errorf("read organization %s's running runs: %w", org, err)
 	}

@@ -176,7 +176,7 @@ func (d *Dispatcher) StartRun(ctx context.Context, id uuid.UUID, scope tenant.Sc
 		return run, err
 	}
 	if queued, reason := ticket.Queued(); queued {
-		d.setStatusMessage(context.WithoutCancel(ctx), id, reason)
+		d.setStatusMessage(context.WithoutCancel(ctx), id, "waiting", reason)
 		waitCtx, stopWaiting := context.WithCancel(context.WithoutCancel(ctx))
 		run.stopWaiting = stopWaiting
 		go func() {
@@ -204,7 +204,7 @@ func (d *Dispatcher) admit(ctx context.Context, run, org uuid.UUID, demand Deman
 	}
 	ticket, err := d.Admission.Enter(ctx, org, demand)
 	if err != nil {
-		d.finishWith(context.WithoutCancel(ctx), run, "failed", nil, err.Error())
+		_ = d.finish(context.WithoutCancel(ctx), run, "failed", nil, err.Error())
 		return nil, fmt.Errorf("start sandbox run %s: %w", run, err)
 	}
 	return ticket, nil
@@ -220,9 +220,9 @@ func (d *Dispatcher) waitForRoom(ctx context.Context, run uuid.UUID, ticket *Tic
 	})
 	switch {
 	case errors.Is(err, context.Canceled):
-		d.finishWith(context.WithoutCancel(ctx), run, "cancelled", nil, "cancelled while it waited for room")
+		_ = d.finish(context.WithoutCancel(ctx), run, "cancelled", nil, "cancelled while it waited for room")
 	case err != nil:
-		d.finishWith(context.WithoutCancel(ctx), run, "failed", nil, err.Error())
+		_ = d.finish(context.WithoutCancel(ctx), run, "failed", nil, err.Error())
 	}
 	return err
 }
@@ -252,7 +252,7 @@ func (d *Dispatcher) launch(ctx context.Context, run *Run, scope tenant.Scope, s
 		if err != nil {
 			ticket.Release()
 			// The run is not tracked until it is submitted, so nothing can have stopped it yet.
-			_ = d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
+			_ = d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil, "could not find the commit to run: "+err.Error())
 			return fmt.Errorf("start sandbox run %s: %w", run.ID, err)
 		}
 		job.Source = source
@@ -262,22 +262,32 @@ func (d *Dispatcher) launch(ctx context.Context, run *Run, scope tenant.Scope, s
 	if err != nil {
 		ticket.Release()
 		// The run is not tracked until it is submitted, so nothing can have stopped it yet.
-		_ = d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil)
+		_ = d.finish(context.WithoutCancel(ctx), run.ID, "failed", nil, fmt.Sprintf("%s could not start the job: %v", d.Executor.Name(), err))
 		return fmt.Errorf("start sandbox run %s: %w", run.ID, err)
 	}
 	run.mu.Lock()
 	run.handle = handle
 	run.mu.Unlock()
 	d.track(run.ID, scope.OrgID, spec.Kind == "agent", func(reason error) {
-		d.setStatusMessage(context.WithoutCancel(ctx), run.ID, "stopped: "+reason.Error())
+		d.setStatusMessage(context.WithoutCancel(ctx), run.ID, "stopping", "stopped: "+reason.Error())
 		if err := handle.Cancel(context.WithoutCancel(ctx)); err != nil {
 			logger.Warnf("stop sandbox run %s: %v", run.ID, err)
 		}
 	})
 	logKey := "runs/" + run.ID.String() + "/log.txt"
-	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', status_message = '', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
-		handle.Ref(), logKey, run.ID).Error; err != nil {
-		logger.Warnf("record sandbox run %s as running: %v", run.ID, err)
+	provisioned, waits := handle.(Provisioned)
+	d.submitted(ctx, run.ID, handle.Ref(), logKey, waits)
+	if waits {
+		watchCtx, stopWatching := context.WithCancel(context.WithoutCancel(ctx))
+		go d.watchActor(watchCtx, run.ID)
+		go func() {
+			defer stopWatching()
+			select {
+			case <-provisioned.Started():
+				d.started(context.WithoutCancel(ctx), run.ID)
+			case <-run.done:
+			}
+		}()
 	}
 
 	follow := func(taskCtx commonscontext.Context, task *clickytask.Task) (Result, error) {
@@ -345,10 +355,10 @@ func (d *Dispatcher) record(ctx context.Context, id uuid.UUID, scope tenant.Scop
 	if spec.RepoID != uuid.Nil {
 		repo = &spec.RepoID
 	}
-	if err := d.DB.WithContext(ctx).Exec(`INSERT INTO sandbox_runs (id, org_id, user_id, repo_id, kind, ref, sha, todo_id, status, backend, spec, template, cpu_millicores, memory_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+	if err := d.DB.WithContext(ctx).Exec(withEvent(`INSERT INTO sandbox_runs (id, org_id, user_id, repo_id, kind, ref, sha, todo_id, status, backend, spec, template, cpu_millicores, memory_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`),
 		id, scope.OrgID, scope.UserID, repo, spec.Kind, spec.Ref, spec.SHA, spec.TodoID, d.Executor.Name(), string(encoded),
-		recorded.template.Name, cpu, memory).Error; err != nil {
+		recorded.template.Name, cpu, memory, "queued", "created").Error; err != nil {
 		return recordedRun{}, fmt.Errorf("record sandbox run: %w", err)
 	}
 	return recorded, nil
@@ -371,18 +381,24 @@ type RecordedRun struct {
 	// empty is the backend's own.
 	Template string
 	// Log takes the run's output, which is stored as its log and shown on its task.
-	Log    io.Writer
-	ctx    context.Context
-	finish func(succeeded bool)
+	Log     io.Writer
+	ctx     context.Context
+	started func()
+	finish  func(err error)
 }
 
 // Context ends when the dispatcher stops the run, with why as its cause; the run executes within it.
 func (r *RecordedRun) Context() context.Context { return r.ctx }
 
-// Finish stores the run's log and records whether it succeeded.
-func (r *RecordedRun) Finish(succeeded bool) { r.finish(succeeded) }
+// Started records the run as running once it runs in its environment, which until then is being
+// created and started; WatchStart tells when.
+func (r *RecordedRun) Started() { r.started() }
 
-// RecordRun files run id as running, for a run that executes elsewhere: it signs the run's token,
+// Finish stores the run's log and records how it ended: succeeded when err is nil, otherwise
+// failed with err as why.
+func (r *RecordedRun) Finish(err error) { r.finish(err) }
+
+// RecordRun files run id as provisioning, until Started, for a run that executes elsewhere: it signs the run's token,
 // gives it its organization's credentials, and stores what is written to its Log as its log. A
 // run its organization's budgets have no room for is refused; one that must wait for room waits
 // here, saying why in its log.
@@ -407,34 +423,44 @@ func (d *Dispatcher) RecordRun(ctx context.Context, id uuid.UUID, scope tenant.S
 		_, _ = typed.GetResult()
 	}()
 	if queued, reason := ticket.Queued(); queued {
-		d.setStatusMessage(context.WithoutCancel(ctx), id, reason)
+		d.setStatusMessage(context.WithoutCancel(ctx), id, "waiting", reason)
 		if err := d.waitForRoom(ctx, id, ticket, writer); err != nil {
 			_ = writer.Close()
 			<-stored
 			return nil, fmt.Errorf("start sandbox run %s: %w", id, err)
 		}
 	}
-	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'running', status_message = '', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`,
-		JobName(id), logKey, id).Error; err != nil {
-		logger.Warnf("record sandbox run %s as running: %v", id, err)
-	}
+	d.submitted(ctx, id, JobName(id), logKey, true)
+	watchCtx, stopWatching := context.WithCancel(context.WithoutCancel(ctx))
+	go d.watchActor(watchCtx, id)
 	runCtx, stop := context.WithCancelCause(ctx)
 	d.track(id, scope.OrgID, spec.Kind == "agent", func(reason error) {
-		d.setStatusMessage(context.WithoutCancel(ctx), id, "stopped: "+reason.Error())
+		d.setStatusMessage(context.WithoutCancel(ctx), id, "stopping", "stopped: "+reason.Error())
 		stop(reason)
 	})
-	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: recorded.credentials, Template: recorded.template.Name, Log: writer, ctx: runCtx, finish: func(succeeded bool) {
-		_ = writer.Close()
-		<-stored
-		ticket.Release()
-		defer stop(nil)
-		status := "succeeded"
-		if !succeeded {
-			status = "failed"
-		}
-		// A stop has already recorded its reason on the run and cancelled the run's context with it.
-		_ = d.finish(context.WithoutCancel(ctx), id, status, nil)
-	}}, nil
+	var startOnce sync.Once
+	began := make(chan struct{})
+	return &RecordedRun{ID: id, Token: d.runToken(id, scope.OrgID), Credentials: recorded.credentials, Template: recorded.template.Name, Log: writer, ctx: runCtx,
+		started: func() {
+			startOnce.Do(func() {
+				stopWatching()
+				close(began)
+				d.started(context.WithoutCancel(ctx), id)
+			})
+		},
+		finish: func(err error) {
+			stopWatching()
+			_ = writer.Close()
+			<-stored
+			ticket.Release()
+			defer stop(nil)
+			status, message := "succeeded", ""
+			if err != nil {
+				status, message = "failed", failureMessage(err, began)
+			}
+			// A stop has already recorded its reason on the run and cancelled the run's context with it.
+			_ = d.finish(context.WithoutCancel(ctx), id, status, nil, message)
+		}}, nil
 }
 
 // follow stores the job's log, waits for it and records how it ended.
@@ -448,7 +474,11 @@ func (d *Dispatcher) follow(ctx context.Context, id, org uuid.UUID, handle Handl
 	}
 	result, err := handle.Wait(ctx)
 	if err != nil {
-		if stopped := d.finish(ctx, id, "failed", nil); stopped != nil {
+		var started <-chan struct{}
+		if provisioned, ok := handle.(Provisioned); ok {
+			started = provisioned.Started()
+		}
+		if stopped := d.finish(ctx, id, "failed", nil, failureMessage(err, started)); stopped != nil {
 			return Result{}, fmt.Errorf("sandbox run %s stopped: %w", id, stopped)
 		}
 		return Result{}, fmt.Errorf("sandbox run %s: %w", id, err)
@@ -457,7 +487,7 @@ func (d *Dispatcher) follow(ctx context.Context, id, org uuid.UUID, handle Handl
 	if result.ExitCode != 0 {
 		status = "failed"
 	}
-	if stopped := d.finish(ctx, id, status, &result.ExitCode); stopped != nil {
+	if stopped := d.finish(ctx, id, status, &result.ExitCode, ""); stopped != nil {
 		return result, fmt.Errorf("sandbox run %s stopped: %w", id, stopped)
 	}
 	return result, nil
@@ -483,54 +513,100 @@ func (d *Dispatcher) storeLog(ctx context.Context, id, org uuid.UUID, logKey str
 	}
 }
 
-// finish records how run id ended, as cancelled when the dispatcher stopped it, and returns why it
-// was stopped: nil when it wasn't.
-func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, exitCode *int) (stopped error) {
-	stopped = d.untrack(id)
-	if stopped != nil {
-		status = "cancelled"
+// withEvent makes statement, an UPDATE or INSERT of sandbox_runs, also record a gavel event for
+// each run it touches, of kind with message, the two arguments after statement's own. A statement
+// that touches no run records none.
+func withEvent(statement string) string {
+	return `WITH run AS (` + statement + ` RETURNING id)
+		INSERT INTO sandbox_run_events (run_id, source, kind, message) SELECT id, 'gavel', ?, ? FROM run`
+}
+
+// submitted records run id's job as submitted as ref, its log kept under logKey: provisioning
+// while it waits for its environment, running otherwise.
+func (d *Dispatcher) submitted(ctx context.Context, id uuid.UUID, ref, logKey string, waits bool) {
+	status, message := "running", fmt.Sprintf("submitted to %s as %s", d.Executor.Name(), ref)
+	if waits {
+		status, message = "provisioning", fmt.Sprintf("creating sandbox %s on %s and waiting for it to start", ref, d.Executor.Name())
 	}
-	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = ?, exit_code = ?, finished_at = now() WHERE id = ?`,
-		status, exitCode, id).Error; err != nil {
+	if err := d.DB.WithContext(ctx).Exec(withEvent(`UPDATE sandbox_runs SET status = ?, status_message = '', backend_ref = ?, log_key = ?, started_at = now() WHERE id = ?`),
+		status, ref, logKey, id, status, message).Error; err != nil {
+		logger.Warnf("record sandbox run %s as %s: %v", id, status, err)
+	}
+}
+
+// started records provisioning run id as running: its sandbox started and its job runs there.
+func (d *Dispatcher) started(ctx context.Context, id uuid.UUID) {
+	if err := d.DB.WithContext(ctx).Exec(withEvent(`UPDATE sandbox_runs SET status = 'running' WHERE id = ? AND status = 'provisioning'`),
+		id, "running", "the sandbox started and the job is running in it").Error; err != nil {
+		logger.Warnf("record sandbox run %s as running: %v", id, err)
+	}
+}
+
+// failureMessage is why a job that failed with err failed, saying so when its sandbox never started
+// so the job never ran: a platform failure, not the job's. started is closed once the job ran; nil
+// when its backend doesn't say.
+func failureMessage(err error, started <-chan struct{}) string {
+	if started != nil {
+		select {
+		case <-started:
+		default:
+			return "the sandbox never started, so the job never ran: " + err.Error()
+		}
+	}
+	return err.Error()
+}
+
+// finish records how run id ended, and why when message says, as cancelled when the dispatcher
+// stopped it, and returns why it was stopped: nil when it wasn't. A stopped run keeps the reason
+// its stop recorded.
+func (d *Dispatcher) finish(ctx context.Context, id uuid.UUID, status string, exitCode *int, message string) (stopped error) {
+	stopped = d.untrack(id)
+	event := message
+	if stopped != nil {
+		status, message, event = "cancelled", "", "stopped: "+stopped.Error()
+	}
+	if event == "" && exitCode != nil {
+		event = fmt.Sprintf("the job exited with code %d", *exitCode)
+	}
+	if event == "" {
+		event = "the run " + status
+	}
+	if err := d.DB.WithContext(ctx).Exec(withEvent(`UPDATE sandbox_runs SET status = ?, status_message = CASE WHEN ?::text = '' THEN status_message ELSE ?::text END,
+		exit_code = ?, finished_at = now() WHERE id = ?`),
+		status, message, message, exitCode, id, status, event).Error; err != nil {
 		logger.Warnf("record sandbox run %s as %s: %v", id, status, err)
 	}
 	return stopped
 }
 
-// finishWith records how run id ended, and why.
-func (d *Dispatcher) finishWith(ctx context.Context, id uuid.UUID, status string, exitCode *int, message string) {
-	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = ?, status_message = ?, exit_code = ?, finished_at = now() WHERE id = ?`,
-		status, message, exitCode, id).Error; err != nil {
-		logger.Warnf("record sandbox run %s as %s: %v", id, status, err)
-	}
-}
-
-// setStatusMessage records why run id is as it is, such as why it waits.
-func (d *Dispatcher) setStatusMessage(ctx context.Context, id uuid.UUID, message string) {
-	if err := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status_message = ? WHERE id = ?`, message, id).Error; err != nil {
-		logger.Warnf("record why sandbox run %s is queued: %v", id, err)
+// setStatusMessage records why run id is as it is, such as why it waits, as an event of kind.
+func (d *Dispatcher) setStatusMessage(ctx context.Context, id uuid.UUID, kind, message string) {
+	if err := d.DB.WithContext(ctx).Exec(withEvent(`UPDATE sandbox_runs SET status_message = ? WHERE id = ?`), message, id, kind, message).Error; err != nil {
+		logger.Warnf("record why sandbox run %s is %s: %v", id, kind, err)
 	}
 }
 
 // FailQueuedRuns fails the runs left waiting for room when serve stopped: their callers are gone
 // with it. It returns how many it failed.
 func (d *Dispatcher) FailQueuedRuns(ctx context.Context) (int64, error) {
-	result := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'failed', status_message = 'serve restarted while the run waited for room', finished_at = now()
-		WHERE status = 'queued'`)
+	const message = "serve restarted while the run waited for room"
+	result := d.DB.WithContext(ctx).Exec(withEvent(`UPDATE sandbox_runs SET status = 'failed', status_message = ?, finished_at = now()
+		WHERE status = 'queued'`), message, "failed", message)
 	if result.Error != nil {
 		return 0, fmt.Errorf("fail the sandbox runs left queued: %w", result.Error)
 	}
 	return result.RowsAffected, nil
 }
 
-// FailExpiredRuns fails the runs still recorded as running past RunLifetime. No run lives that
+// FailExpiredRuns fails the runs still recorded as provisioning or running past RunLifetime. No run lives that
 // long: its token has expired and the sweeper deletes its environment, so serve lost track of it,
 // by restarting while it ran or by its follow never returning. It returns how many it failed.
 func (d *Dispatcher) FailExpiredRuns(ctx context.Context) (int64, error) {
 	lifetime := d.RunLifetime().Seconds()
-	result := d.DB.WithContext(ctx).Exec(`UPDATE sandbox_runs SET status = 'failed', status_message = 'serve lost track of the run: it did not end within its lifetime',
+	const message = "serve lost track of the run: it did not end within its lifetime"
+	result := d.DB.WithContext(ctx).Exec(withEvent(`UPDATE sandbox_runs SET status = 'failed', status_message = ?,
 		finished_at = started_at + ? * interval '1 second'
-		WHERE status = 'running' AND started_at < now() - ? * interval '1 second'`, lifetime, lifetime)
+		WHERE status IN ('provisioning', 'running') AND started_at < now() - ? * interval '1 second'`), message, lifetime, lifetime, "failed", message)
 	if result.Error != nil {
 		return 0, fmt.Errorf("fail the sandbox runs past their lifetime: %w", result.Error)
 	}
@@ -543,7 +619,7 @@ type RunRecord struct {
 	ID   uuid.UUID
 	Org  uuid.UUID
 	User *uuid.UUID
-	// Status is queued, running, succeeded or failed.
+	// Status is queued, provisioning, running, succeeded, failed or cancelled.
 	Status    string
 	CreatedAt time.Time
 	Spec      RunSpec

@@ -374,11 +374,12 @@ table "sandbox_runs" {
     null = true
     type = uuid
   }
+  # provisioning: its job was submitted and waits for its sandbox to start; running: the job runs.
   column "status" {
     null = false
     type = text
   }
-  # Why the run is queued, or why it was refused or failed before it ran; empty otherwise.
+  # Why the run is queued, or why it was refused or failed; empty otherwise.
   column "status_message" {
     null    = false
     type    = text
@@ -467,5 +468,52 @@ table "sandbox_runs" {
     }
   }
   check "sandbox_runs_kind_valid" { expr = "kind IN ('test', 'lint', 'push-check', 'agent')" }
-  check "sandbox_runs_status_valid" { expr = "status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')" }
+  check "sandbox_runs_status_valid" { expr = "status IN ('queued', 'provisioning', 'running', 'succeeded', 'failed', 'cancelled')" }
+}
+
+# What happened to a sandbox run, one row per event: gavel's own, such as queued or failed, and
+# substrate's, such as its actor's state changes. A run's events go with it.
+table "sandbox_run_events" {
+  schema = schema.public
+  column "id" {
+    null = false
+    type = bigserial
+  }
+  column "run_id" {
+    null = false
+    type = uuid
+  }
+  column "at" {
+    null    = false
+    type    = timestamptz
+    default = sql("clock_timestamp()")
+  }
+  # gavel for the dispatcher's own events, substrate for what substrate reported of the run's
+  # environment.
+  column "source" {
+    null = false
+    type = text
+  }
+  # gavel: the status the run moved to (queued, provisioning, running, succeeded, failed,
+  # cancelled), waiting or stopping.
+  column "kind" {
+    null = false
+    type = text
+  }
+  column "message" {
+    null    = false
+    type    = text
+    default = ""
+  }
+  primary_key { columns = [column.id] }
+  foreign_key "sandbox_run_events_run_id_fkey" {
+    columns     = [column.run_id]
+    ref_columns = [table.sandbox_runs.column.id]
+    on_delete   = CASCADE
+    on_update   = NO_ACTION
+  }
+  index "sandbox_run_events_run_at_idx" {
+    columns = [column.run_id, column.at]
+  }
+  check "sandbox_run_events_source_valid" { expr = "source IN ('gavel', 'substrate')" }
 }

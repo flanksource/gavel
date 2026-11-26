@@ -202,7 +202,7 @@ func TestDispatcherRunsEachRunFromItsOrganizationsTemplateAndRecordsItsSize(t *t
 
 	recorded, err := dispatcher.RecordRun(ctx, uuid.New(), tenant.Scope{OrgID: org}, RunSpec{Kind: "agent"})
 	require.NoError(t, err)
-	recorded.Finish(true)
+	recorded.Finish(nil)
 	assert.Equal(t, want.Name, recorded.Template, "an agent run's environment comes from its organization's template too")
 	assert.Equal(t, want.Name, readRun(t, db, recorded.ID).Template)
 
@@ -422,11 +422,15 @@ func TestDispatcherRecordsARunThatExecutesElsewhere(t *testing.T) {
 	}}, run.Credentials)
 	record, err := LoadRun(t.Context(), dispatcher.DB, id)
 	require.NoError(t, err)
+	assert.Equal(t, "provisioning", record.Status, "the run waits for its environment until it starts there")
+	run.Started()
+	record, err = LoadRun(t.Context(), dispatcher.DB, id)
+	require.NoError(t, err)
 	assert.Equal(t, "running", record.Status)
 
 	_, err = io.WriteString(run.Log, "the environment's output\n")
 	require.NoError(t, err)
-	run.Finish(false)
+	run.Finish(errors.New("the run failed"))
 
 	record, err = LoadRun(t.Context(), dispatcher.DB, id)
 	require.NoError(t, err)
@@ -580,9 +584,9 @@ func TestAnAgentRunWaitsForRoomWritingWhyToItsLog(t *testing.T) {
 	holding.Release()
 	run := <-recorded
 	status, message := runMessage(t, db, id)
-	assert.Equal(t, "running", status)
+	assert.Equal(t, "provisioning", status)
 	assert.Empty(t, message)
-	run.Finish(true)
+	run.Finish(nil)
 
 	stored, err := dispatcher.Logs(org).Read(ctx, "runs/"+id.String()+"/log.txt")
 	require.NoError(t, err)

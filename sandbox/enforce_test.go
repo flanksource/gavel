@@ -94,7 +94,7 @@ func TestEnforceStopsAnOrganizationsRunsOnceACPUBudgetIsUsedUp(t *testing.T) {
 	require.NoError(t, db.Exec(`INSERT INTO orgs (id, issuer, clerk_org_id, name) VALUES (?, 'https://clerk.example', ?, 'Other')`, otherOrg, otherOrg.String()).Error)
 	untouched, err := dispatcher.RecordRun(ctx, other, tenant.Scope{OrgID: otherOrg}, RunSpec{Kind: "agent"})
 	require.NoError(t, err)
-	defer untouched.Finish(true)
+	defer untouched.Finish(nil)
 
 	require.NoError(t, dispatcher.Enforce(ctx, org))
 	assert.NoError(t, agent.Context().Err(), "within its budgets nothing is stopped")
@@ -113,7 +113,7 @@ func TestEnforceStopsAnOrganizationsRunsOnceACPUBudgetIsUsedUp(t *testing.T) {
 	assert.Contains(t, message, "of its 2 core-hours cpu budget")
 	require.Error(t, agent.Context().Err(), "the agent run's context ends")
 	assert.Contains(t, context.Cause(agent.Context()).Error(), "of its 2 core-hours cpu budget", "with why as its cause")
-	agent.Finish(false)
+	agent.Finish(errors.New("the run failed"))
 	status, _ = runMessage(t, db, agent.ID)
 	assert.Equal(t, "cancelled", status)
 	assert.NoError(t, untouched.Context().Err(), "another organization's runs go on")
@@ -135,7 +135,7 @@ func TestEnforceStopsOnlyAgentRunsOnceAModelBudgetIsUsedUp(t *testing.T) {
 
 	require.Error(t, agent.Context().Err())
 	assert.Contains(t, context.Cause(agent.Context()).Error(), "this organization has used $6.00 of its $5.00 model cost budget")
-	agent.Finish(false)
+	agent.Finish(errors.New("the run failed"))
 	status, _ := runMessage(t, db, job.ID)
 	assert.Equal(t, "running", status, "a job makes no model calls")
 	require.NoError(t, job.Cancel(ctx))

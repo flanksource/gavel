@@ -131,10 +131,50 @@ func (e *substrateExecutor) Submit(ctx context.Context, job Job) (Handle, error)
 		},
 		Timeout: timeout,
 	}
+	WatchStart(&in, handle.markStarted)
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	handle.cancel = cancel
 	go handle.run(runCtx, in)
 	return handle, nil
+}
+
+// WatchStart calls started once in's program first shows it runs in its substrate environment: by
+// its first output, event or call to its host. Before that captain creates the environment and
+// substrate wakes it, which can fail without the program ever running.
+func WatchStart(in *promptrun.Input, started func()) {
+	var once sync.Once
+	mark := func() { once.Do(started) }
+	if in.EnvironmentOutput != nil {
+		in.EnvironmentOutput = startWriter{to: in.EnvironmentOutput, mark: mark}
+	}
+	onEvent := in.OnEvent
+	in.OnEvent = func(iter int, event ai.Event) {
+		mark()
+		if onEvent != nil {
+			onEvent(iter, event)
+		}
+	}
+	calls := make(map[string]func(context.Context, json.RawMessage) (json.RawMessage, error), len(in.HostCalls))
+	for name, call := range in.HostCalls {
+		calls[name] = func(ctx context.Context, request json.RawMessage) (json.RawMessage, error) {
+			mark()
+			return call(ctx, request)
+		}
+	}
+	in.HostCalls = calls
+}
+
+// startWriter marks its program started on the first output it is given.
+type startWriter struct {
+	to   io.Writer
+	mark func()
+}
+
+func (w startWriter) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		w.mark()
+	}
+	return w.to.Write(p)
 }
 
 // injections names each credential the egress gateway puts into a job's requests by its host,
@@ -243,12 +283,19 @@ type substrateHandle struct {
 	cancel context.CancelFunc
 	result Result
 	err    error
+	// started is closed once the job runs in its environment.
+	started chan struct{}
 }
 
 func newSubstrateHandle(ref string) *substrateHandle {
 	reader, writer := io.Pipe()
-	return &substrateHandle{ref: ref, log: &runLog{to: writer}, logs: reader, done: make(chan struct{})}
+	return &substrateHandle{ref: ref, log: &runLog{to: writer}, logs: reader, done: make(chan struct{}), started: make(chan struct{})}
 }
+
+// Started is closed once the job runs in its environment, which substrate has then woken.
+func (h *substrateHandle) Started() <-chan struct{} { return h.started }
+
+func (h *substrateHandle) markStarted() { close(h.started) }
 
 // run runs in, then ends the log and records how the job ended.
 func (h *substrateHandle) run(ctx context.Context, in promptrun.Input) {

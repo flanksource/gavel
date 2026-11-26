@@ -36,13 +36,31 @@ export interface SandboxRun {
   timeoutSeconds?: number;
   // lost marks a run still recorded as running past its lifetime: its job can no longer report.
   lost?: boolean;
+  // events are what happened to the run, oldest first.
+  events?: RunEvent[];
+}
+
+// RunEvent is one thing that happened to a run. source is gavel, whose kind is the status the run
+// moved to or waiting/stopping, or substrate, whose kind is what it reported of the run's sandbox.
+export interface RunEvent {
+  at: string;
+  source: string;
+  kind: string;
+  message: string;
 }
 
 export const kindLabels: Record<string, string> = { 'push-check': 'Push check', agent: 'Agent run', test: 'Test', lint: 'Lint' };
 
 type DotStatus = 'success' | 'error' | 'warning' | 'info';
 
-const statusDots: Record<string, DotStatus> = { succeeded: 'success', failed: 'error', running: 'info', cancelled: 'warning' };
+const statusDots: Record<string, DotStatus> = { succeeded: 'success', failed: 'error', provisioning: 'info', running: 'info', cancelled: 'warning' };
+
+// A run is active while it waits for room, for its sandbox, or runs.
+const activeStatuses = ['queued', 'provisioning', 'running'];
+
+function isActive(run: SandboxRun): boolean {
+  return !run.lost && activeStatuses.includes(run.status);
+}
 
 // While a run is queued or running the list refreshes, so its status and log follow it.
 const activeRefreshMs = 5000;
@@ -93,14 +111,14 @@ export function useSandboxRuns() {
   return useQuery({
     queryKey: queryKeys.sandboxRuns(),
     queryFn: ({ signal }) => fetchJSON<SandboxRun[]>({ url: '/api/sandbox-runs', signal, context: 'load sandbox runs' }),
-    refetchInterval: query => (query.state.data ?? []).some(run => !run.lost && (run.status === 'queued' || run.status === 'running')) ? activeRefreshMs : false,
+    refetchInterval: query => (query.state.data ?? []).some(isActive) ? activeRefreshMs : false,
   });
 }
 
 type RunFilter = 'all' | 'active' | 'failed';
 
 function matchesFilter(run: SandboxRun, filter: RunFilter): boolean {
-  if (filter === 'active') return !run.lost && (run.status === 'queued' || run.status === 'running');
+  if (filter === 'active') return isActive(run);
   if (filter === 'failed') return run.status === 'failed' || !!run.lost;
   return true;
 }
@@ -182,12 +200,13 @@ function RunTime({ run }: { run: SandboxRun }) {
   const color = run.lost ? 'bg-amber-500' : run.status === 'failed' ? 'bg-red-500' : run.status === 'succeeded' ? 'bg-green-500' : 'bg-blue-500';
   let caption = '';
   if (run.lost) caption = `Still recorded as running ${formatSeconds(worked - timeout)} past its ${formatSeconds(timeout)} timeout. Its job is gone and can no longer report how it ended.`;
+  else if (run.status === 'provisioning') caption = `Waiting ${formatSeconds(worked)} for its sandbox to start. The job has not started yet.`;
   else if (run.status === 'running' && timeout) caption = `${formatSeconds(worked)} of ${formatSeconds(timeout)} used. Stopped at ${new Date(new Date(run.startedAt!).getTime() + timeout * 1000).toLocaleTimeString()} if still running.`;
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex justify-between text-xs text-muted-foreground">
-        <span>Queued {formatSeconds(queued)}{run.startedAt ? `, ran ${formatSeconds(worked)}` : ''}</span>
+        <span>Queued {formatSeconds(queued)}{run.startedAt ? `, ${run.status === 'provisioning' || neverStarted(run) ? 'waited for its sandbox' : 'ran'} ${formatSeconds(worked)}` : ''}</span>
         {timeout > 0 && <span>Timeout {formatSeconds(timeout)}</span>}
       </div>
       <div className="relative">
@@ -197,7 +216,7 @@ function RunTime({ run }: { run: SandboxRun }) {
           formatValue={formatSeconds}
           segments={[
             { count: queued, color: 'bg-zinc-400', label: 'queued' },
-            { count: worked, color, label: run.finishedAt ? 'ran' : 'running' },
+            { count: worked, color, label: run.finishedAt ? 'ran' : run.status },
           ]}
         />
         {timeout > 0 && (
@@ -207,6 +226,14 @@ function RunTime({ run }: { run: SandboxRun }) {
       {caption && <span className="text-xs text-muted-foreground">{caption}</span>}
     </div>
   );
+}
+
+// sandboxNeverStarted starts the message of a run whose sandbox failed before its job ran
+// (sandbox.failureMessage).
+const sandboxNeverStarted = 'the sandbox never started, so the job never ran: ';
+
+function neverStarted(run: SandboxRun): boolean {
+  return run.status === 'failed' && !!run.statusMessage?.startsWith(sandboxNeverStarted);
 }
 
 // failure says why a run failed, or why it is still shown running when it can't be.
@@ -219,6 +246,12 @@ function failure(run: SandboxRun): { variant: 'caution' | 'warning'; title: stri
   }
   if (run.status !== 'failed' && run.status !== 'cancelled') return undefined;
   const ended = run.status === 'cancelled' ? 'Cancelled' : run.exitCode !== undefined ? `Exited with code ${run.exitCode}` : 'Failed';
+  if (neverStarted(run)) {
+    return {
+      variant: 'warning', title: 'The sandbox never started, so the job never ran',
+      body: `This is a platform failure, not the job's: ${run.statusMessage!.slice(sandboxNeverStarted.length)}`,
+    };
+  }
   if (run.statusMessage) return { variant: 'caution', title: ended, body: run.statusMessage };
   if (run.exitCode !== undefined) return { variant: 'caution', title: ended, body: 'The job exited non-zero. The errors are in the log below.' };
   return { variant: 'caution', title: ended, body: 'The job ended without an exit code or a message. The log, if one was kept, is the only record of what happened.' };
@@ -247,7 +280,7 @@ function RunLog({ run }: { run: SandboxRun }) {
   );
 
   if (log.error) {
-    return <p className="text-xs text-muted-foreground">{run.status === 'running' && !run.lost ? 'The log is kept once the run ends. ' : ''}{log.error.message}</p>;
+    return <p className="text-xs text-muted-foreground">{isActive(run) ? 'The log is kept once the run ends. ' : ''}{log.error.message}</p>;
   }
   if (log.data === undefined) return <p className="text-xs text-muted-foreground">Loading the log…</p>;
   const download = () => {
@@ -275,6 +308,29 @@ function RunLog({ run }: { run: SandboxRun }) {
   );
 }
 
+const eventDots: Record<string, DotStatus> = { ...statusDots, waiting: 'info', stopping: 'warning', assigned: 'info' };
+
+// RunEvents lists what happened to a run, oldest first, with the time since the one before.
+function RunEvents({ run }: { run: SandboxRun }) {
+  const events = run.events ?? [];
+  if (events.length === 0) return <p className="text-xs text-muted-foreground">No events were recorded for this run.</p>;
+  return (
+    <ol aria-label="Run events" className="flex flex-col text-xs">
+      {events.map((event, i) => (
+        <li key={i} className="grid grid-cols-[auto_11rem_10rem_minmax(0,1fr)] items-baseline gap-x-3 border-b border-border py-1.5">
+          {eventDots[event.kind] ? <StatusDot status={eventDots[event.kind]} size="sm" /> : <span className="size-2 rounded-full bg-muted-foreground/40" />}
+          <span className="whitespace-nowrap tabular-nums text-muted-foreground">
+            <Timestamp value={event.at} format="short" />
+            {i > 0 && <span className="ml-1">+{formatSeconds(seconds(events[i - 1].at, event.at))}</span>}
+          </span>
+          <span className="font-medium">{event.kind}<span className="ml-1 font-normal text-muted-foreground">{event.source}</span></span>
+          <span className="break-words">{event.message}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function RunDetail({ run }: { run: SandboxRun }) {
   const [tab, setTab] = useState('log');
   const why = failure(run);
@@ -299,6 +355,7 @@ function RunDetail({ run }: { run: SandboxRun }) {
 
       {why && <Callout variant={why.variant} title={why.title}>{why.body}</Callout>}
       {!why && run.status === 'queued' && run.statusMessage && <Callout variant="note" title="Waiting">{run.statusMessage}</Callout>}
+      {!why && run.status === 'provisioning' && <Callout variant="note" title="Starting its sandbox">The job runs once its sandbox has started. A sandbox that never starts fails the run with the reason.</Callout>}
 
       <RunTime run={run} />
 
@@ -324,8 +381,10 @@ function RunDetail({ run }: { run: SandboxRun }) {
       </dl>
 
       <div className="flex flex-col gap-3">
-        <Tabs tabs={[{ id: 'log', label: 'Log' }, { id: 'spec', label: 'Spec' }]} value={tab} onChange={setTab} />
-        {tab === 'log' ? <RunLog run={run} /> : <JsonView data={run.spec ?? {}} defaultOpenDepth={2} />}
+        <Tabs tabs={[{ id: 'log', label: 'Log' }, { id: 'events', label: `Events ${run.events?.length ?? 0}` }, { id: 'spec', label: 'Spec' }]} value={tab} onChange={setTab} />
+        {tab === 'log' && <RunLog run={run} />}
+        {tab === 'events' && <RunEvents run={run} />}
+        {tab === 'spec' && <JsonView data={run.spec ?? {}} defaultOpenDepth={2} />}
       </div>
     </div>
   );
