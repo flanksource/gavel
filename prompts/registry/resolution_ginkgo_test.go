@@ -94,8 +94,9 @@ var _ = Describe("Registered prompt resolution", func() {
 			File: filepath.Join(dir, "missing.prompt"), Spec: api.Spec{Model: api.Model{Effort: api.EffortHigh}},
 		}}}
 		project := verify.GavelConfig{Commit: verify.CommitConfig{Message: verify.PromptSpec{File: path}}}
+		// The project's prompt file is read only from inside the project, here dir.
 		item, err := ResolveOne(ResolveOptions{Preview: true, Trace: verify.GavelConfigTrace{
-			Merged: verify.MergeGavelConfig(home, project), Sources: []verify.GavelConfigSource{
+			TargetDir: dir, Merged: verify.MergeGavelConfig(home, project), Sources: []verify.GavelConfigSource{
 				{Path: "/home/.gavel.yaml", Config: home}, {Path: "/project/.gavel.yaml", Config: project},
 			},
 		}}, desc)
