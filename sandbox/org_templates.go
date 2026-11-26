@@ -57,7 +57,8 @@ func (o *OrgTemplates) Resolve(ctx context.Context, org uuid.UUID) (OrgTemplate,
 	if err != nil {
 		return OrgTemplate{}, err
 	}
-	if _, err := o.Client.CopyTemplate(ctx, o.Base, template.Name, template.Size); err != nil && !errors.Is(err, substrate.ErrTemplateExists) {
+	// The copy runs the base template's own image.
+	if _, err := o.Client.CopyTemplate(ctx, o.Base, template.Name, template.Size, ""); err != nil && !errors.Is(err, substrate.ErrTemplateExists) {
 		return OrgTemplate{}, fmt.Errorf("give organization %s its substrate template: %w", org, err)
 	}
 	return template, nil
