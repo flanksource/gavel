@@ -1,5 +1,6 @@
 // Tests each organization's substrate template against an in-process Substrate: a copy of the base
-// template at the organization's size, made on first use, followed when the base or the size changes.
+// template at the organization's size running serve's runner image, made on first use, followed when
+// the base, the size or the runner image changes.
 package sandbox
 
 import (
@@ -186,4 +187,42 @@ func TestSweepDeletesTheTemplatesOfOrganizationsGavelNoLongerHas(t *testing.T) {
 	assert.Equal(t, []string{removed}, swept)
 	_, ok := server.Template("ate-env", current.Name)
 	assert.True(t, ok, "an organization that hasn't run in a while keeps its template: without a golden snapshot it costs nothing")
+}
+
+// Each gavel release ships its runner's digest, and its runs execute that runner: the organization's
+// copy of the base template runs it, and the previous release's copy is swept.
+func TestAnOrganizationsTemplateRunsServesRunnerImage(t *testing.T) {
+	templates, server, org := newOrgTemplates(t, substrate.Size{})
+	ctx := context.Background()
+	templates.Image = "ghcr.io/flanksource/gavel-runner@sha256:aaaa"
+
+	previous, err := templates.Resolve(ctx, org)
+	require.NoError(t, err)
+	created, ok := server.Template("ate-env", previous.Name)
+	require.True(t, ok)
+	assert.Equal(t, "ghcr.io/flanksource/gavel-runner@sha256:aaaa", created.GetContainers()[0].GetImage())
+
+	templates.Image = "ghcr.io/flanksource/gavel-runner@sha256:bbbb"
+	got, err := templates.Resolve(ctx, org)
+	require.NoError(t, err)
+	assert.NotEqual(t, previous.Name, got.Name, "a new runner image is a new template: a template can't change")
+	created, ok = server.Template("ate-env", got.Name)
+	require.True(t, ok)
+	assert.Equal(t, "ghcr.io/flanksource/gavel-runner@sha256:bbbb", created.GetContainers()[0].GetImage())
+
+	swept, err := templates.Sweep(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{previous.Name}, swept)
+}
+
+// Without a runner image of its own, serve's runs execute the base template's.
+func TestWithoutARunnerImageAnOrganizationsTemplateRunsTheBases(t *testing.T) {
+	templates, server, org := newOrgTemplates(t, substrate.Size{})
+
+	got, err := templates.Resolve(context.Background(), org)
+	require.NoError(t, err)
+	base, _ := server.Template("ate-env", "gavel-runner")
+	created, ok := server.Template("ate-env", got.Name)
+	require.True(t, ok)
+	assert.Equal(t, base.GetContainers()[0].GetImage(), created.GetContainers()[0].GetImage())
 }

@@ -94,6 +94,10 @@ spec:
             - {{ .atespace | quote }}
             - --substrate-template
             - {{ .template | quote }}
+            {{- with $.Values.sandbox.image }}
+            - --sandbox-image
+            - {{ . | quote }}
+            {{- end }}
             {{- with .size }}
             {{- if .cpu }}
             - --substrate-cpu

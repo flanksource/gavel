@@ -164,7 +164,8 @@ func sweepSandbox(ctx context.Context, sweeper sandbox.Sweeper, lifetime time.Du
 }
 
 // orgTemplates gives each organization's runs their own copy of --substrate-template, at
-// --substrate-cpu and --substrate-memory unless a platform admin set the organization's size.
+// --substrate-cpu and --substrate-memory unless a platform admin set the organization's size,
+// running --sandbox-image, the runner of serve's release, when it is set.
 func orgTemplates(opts DashboardOptions, db *gorm.DB) (*sandbox.OrgTemplates, error) {
 	size, err := substrateSize(opts)
 	if err != nil {
@@ -174,7 +175,7 @@ func orgTemplates(opts DashboardOptions, db *gorm.DB) (*sandbox.OrgTemplates, er
 	if err != nil {
 		return nil, fmt.Errorf("--sandbox substrate: %w", err)
 	}
-	return &sandbox.OrgTemplates{DB: db, Client: client, Atespace: opts.SubstrateAtespace, Base: opts.SubstrateTemplate, Size: size}, nil
+	return &sandbox.OrgTemplates{DB: db, Client: client, Atespace: opts.SubstrateAtespace, Base: opts.SubstrateTemplate, Size: size, Image: opts.SandboxImage}, nil
 }
 
 // substrateSize is --substrate-cpu and --substrate-memory; a flag left empty is zero, which the
