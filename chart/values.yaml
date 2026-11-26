@@ -83,12 +83,16 @@ missionControl:
 sandbox:
   # Run push checks and agent runs as agent-substrate environments.
   enabled: false
+  # Runner image each organization's copy of substrate.template runs, by digest, in place of the
+  # template's own. A release's chart sets it to that release's runner, so each release's runs
+  # execute its runner without the template being registered again; empty runs the template's image.
+  image: ""
   substrate:
     envAPI: ate-env-api.ate-env.svc.cluster.local:7777
     control: api.ate-system.svc.cluster.local:443
     atespace: ate-env
-    # Image template environments are created from, which sets the runner image they run (see
-    # sandbox/runner.Dockerfile): register it with `ate-env manifest template --rootfs-image`.
+    # Template environments are created from, registered with `ate-env manifest template
+    # --rootfs-image`: the cluster's settings for a runner, whose image sandbox.image replaces.
     template: ""
     # Size of each organization's environments: a copy of the template at this CPU and memory is
     # made for every organization. Empty is the template's own size. A platform admin can give an

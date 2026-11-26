@@ -352,6 +352,15 @@ func TestChartReadsBlobStorageFromABroughtSecret(t *testing.T) {
 	assert.NotContains(t, m["Secret"], "gavel-config")
 }
 
+// A release's chart carries its runner's digest, which serve gives each organization's copy of the
+// template to run.
+func TestChartGivesSubstrateServeItsReleasesRunnerImage(t *testing.T) {
+	requireHelm(t)
+	m := render(t, append(substrateSandbox(), "sandbox.image=ghcr.io/flanksource/gavel-runner@sha256:8c91")...)
+	args := strings.Join(serveContainer(t, m).Args, " ")
+	assert.Contains(t, args, " --substrate-template gavel-runner --sandbox-image ghcr.io/flanksource/gavel-runner@sha256:8c91")
+}
+
 func TestChartRunsSandboxJobsOnSubstrate(t *testing.T) {
 	requireHelm(t)
 	m := render(t,
@@ -367,7 +376,7 @@ func TestChartRunsSandboxJobsOnSubstrate(t *testing.T) {
 	assert.Contains(t, args, " --substrate-egress api.anthropic.com --substrate-egress api.openai.com")
 	assert.Contains(t, args, " --substrate-gavel-name beta")
 	assert.NotContains(t, args, "--substrate-credential")
-	assert.NotContains(t, args, "--sandbox-image", "the template sets the image")
+	assert.NotContains(t, args, "--sandbox-image", "without a runner image, the template's own runs")
 	assert.Equal(t, "secret:gavel-credential-provider/token", env(container)["GAVEL_CREDENTIAL_PROVIDER_TOKEN"])
 	assert.Contains(t, args, " --substrate-trust-bundle /run/ate/egress-trust-bundle/trust-bundle.pem")
 	assert.NotContains(t, args, "--substrate-ca-file", "an unset CA is not passed")

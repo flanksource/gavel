@@ -1,6 +1,6 @@
 // Gives each organization its own substrate template: a copy of the base template at the
-// organization's size, so substrate holds its environments to that size and tells them apart, and
-// deletes the copies no organization runs from any more.
+// organization's size, running serve's runner image, so substrate holds its environments to that
+// size and tells them apart, and deletes the copies no organization runs from any more.
 package sandbox
 
 import (
@@ -29,6 +29,10 @@ type OrgTemplates struct {
 	// Size is an organization's size unless a platform admin set one of its own; a field left
 	// zero is the base template's.
 	Size substrate.Size
+	// Image is the runner image the organizations' copies run in place of the base template's: the
+	// runner of serve's own release, so each release's runs execute its runner without the base
+	// being registered again. Empty runs the base template's image.
+	Image string
 
 	// mu keeps Sweep from deleting a template Resolve is handing a run.
 	mu sync.Mutex
@@ -44,8 +48,8 @@ type OrgTemplate struct {
 const orgTemplatePrefix = "gavel-org-"
 
 // Resolve is org's template, which it makes from the base on first use. Its name names the base
-// template's UID and the size, so a new base, registered for the runner's next image, or a new
-// size gives the organization a new template: a template can't change.
+// template's UID, the size and the runner image, so a new base, a new size or a new release's
+// runner gives the organization a new template: a template can't change.
 func (o *OrgTemplates) Resolve(ctx context.Context, org uuid.UUID) (OrgTemplate, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -57,8 +61,7 @@ func (o *OrgTemplates) Resolve(ctx context.Context, org uuid.UUID) (OrgTemplate,
 	if err != nil {
 		return OrgTemplate{}, err
 	}
-	// The copy runs the base template's own image.
-	if _, err := o.Client.CopyTemplate(ctx, o.Base, template.Name, template.Size, ""); err != nil && !errors.Is(err, substrate.ErrTemplateExists) {
+	if _, err := o.Client.CopyTemplate(ctx, o.Base, template.Name, template.Size, o.Image); err != nil && !errors.Is(err, substrate.ErrTemplateExists) {
 		return OrgTemplate{}, fmt.Errorf("give organization %s its substrate template: %w", org, err)
 	}
 	return template, nil
@@ -95,7 +98,7 @@ func (o *OrgTemplates) wanted(ctx context.Context, org uuid.UUID, base substrate
 		defaults := o.defaultSize(base)
 		size = &defaults
 	}
-	sum := sha256.Sum256([]byte(base.UID + "/" + strconv.FormatInt(size.CPUMillicores, 10) + "/" + strconv.FormatInt(size.MemoryBytes, 10)))
+	sum := sha256.Sum256([]byte(base.UID + "/" + strconv.FormatInt(size.CPUMillicores, 10) + "/" + strconv.FormatInt(size.MemoryBytes, 10) + "/" + o.Image))
 	return OrgTemplate{Name: orgTemplatePrefix + org.String() + "-" + hex.EncodeToString(sum[:4]), Size: *size}, nil
 }
 

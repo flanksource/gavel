@@ -70,9 +70,9 @@ func TestDashboardOptionsValidate(t *testing.T) {
 		{"substrate sandbox without a template", func(o *DashboardOptions) {
 			o.Sandbox, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "beta", "provider-token"
 		}, []string{"--sandbox substrate requires --substrate-template, the image template its environments are created from (ate-env manifest template --rootfs-image)"}},
-		{"substrate sandbox with an image", func(o *DashboardOptions) {
+		{"substrate sandbox with its release's runner image", func(o *DashboardOptions) {
 			o.Sandbox, o.SubstrateTemplate, o.SandboxImage, o.SubstrateGavelName, o.credentialProviderToken = "substrate", "gavel-runner", "runner@sha256:1", "beta", "provider-token"
-		}, []string{"--sandbox substrate takes its image from --substrate-template; --sandbox-image is for docker, podman and kubernetes"}},
+		}, nil},
 		{"substrate sandbox without a gavel name or provider token", func(o *DashboardOptions) { o.Sandbox, o.SubstrateTemplate = "substrate", "gavel-runner" }, []string{
 			"--sandbox substrate requires --substrate-gavel-name, the name substrate's credential provider knows this gavel by",
 			"--sandbox substrate requires the GAVEL_CREDENTIAL_PROVIDER_TOKEN environment variable, the token substrate's credential provider fetches model keys with",
@@ -303,6 +303,18 @@ func TestContainerAndKubernetesSandboxesWarnTheyUseServesKeys(t *testing.T) {
 	}, nil, nil, nil, nil, nil)
 	require.Error(t, err, "the network doesn't exist")
 	assert.Contains(t, logged.String(), "--sandbox docker: runs get no model keys", "logged at startup, before the executor is checked")
+}
+
+// The chart passes serve its release's runner digest, which each organization's template copy runs.
+func TestSubstrateOrganizationTemplatesRunTheSandboxImage(t *testing.T) {
+	templates, err := orgTemplates(DashboardOptions{
+		Sandbox: "substrate", SubstrateEnvAPI: "ate-env-api.ate-env.svc:7777", SubstrateControl: "api.ate-system.svc:443",
+		SubstrateAtespace: "ate-env", SubstrateTemplate: "gavel-runner", SandboxImage: "ghcr.io/flanksource/gavel-runner@sha256:8c91",
+	}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = templates.Client.Close() })
+	assert.Equal(t, "gavel-runner", templates.Base)
+	assert.Equal(t, "ghcr.io/flanksource/gavel-runner@sha256:8c91", templates.Image)
 }
 
 func TestSubstrateAgentBackendIsTheJobsSubstrateAsCaptainTakesIt(t *testing.T) {

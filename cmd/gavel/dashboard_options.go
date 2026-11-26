@@ -34,7 +34,7 @@ type DashboardOptions struct {
 	GitHubAppSlug               string   `flag:"github-app-slug" help:"URL name of the GitHub App, as in github.com/apps/<slug>"`
 	GitHubAppPrivateKey         string   `flag:"github-app-private-key" help:"Path to the GitHub App's private key PEM (or GAVEL_GITHUB_APP_PRIVATE_KEY_FILE)"`
 	Sandbox                     string   `flag:"sandbox" help:"Run hosted push checks and agent runs in a sandbox: docker, podman, kubernetes or substrate (--auth clerk); empty runs none"`
-	SandboxImage                string   `flag:"sandbox-image" help:"Runner image sandbox jobs start from, e.g. ghcr.io/flanksource/gavel-runner:<version> (docker, podman, kubernetes)"`
+	SandboxImage                string   `flag:"sandbox-image" help:"Runner image sandbox jobs start from, e.g. ghcr.io/flanksource/gavel-runner:<version> (docker, podman, kubernetes); with substrate, the image each organization's copy of --substrate-template runs, by digest, or the template's own when empty"`
 	SandboxNetwork              string   `flag:"sandbox-network" help:"Bridge network sandbox containers join (docker, podman); see docs/sandbox.md" default:"gavel-sandbox"`
 	SandboxServeAddr            string   `flag:"sandbox-serve-addr" help:"IP:port sandbox containers reach gavel serve at, the one private address the firewall allows (docker, podman)"`
 	SandboxNamespace            string   `flag:"sandbox-namespace" help:"Namespace sandbox Jobs run in (kubernetes)" default:"gavel-sandbox"`
@@ -167,9 +167,6 @@ func (o DashboardOptions) Validate() error {
 		case "substrate":
 			if o.SubstrateTemplate == "" {
 				add("--sandbox substrate requires --substrate-template, the image template its environments are created from (ate-env manifest template --rootfs-image)")
-			}
-			if o.SandboxImage != "" {
-				add("--sandbox substrate takes its image from --substrate-template; --sandbox-image is for docker, podman and kubernetes")
 			}
 		case "docker", "podman", "kubernetes":
 			if o.SandboxImage == "" {
