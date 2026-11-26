@@ -33,6 +33,9 @@ type OrgTemplates struct {
 	// runner of serve's own release, so each release's runs execute its runner without the base
 	// being registered again. Empty runs the base template's image.
 	Image string
+	// Gavel is this gavel's name, which starts its organizations' template names, so gavels
+	// sharing a substrate cluster each sweep only their own.
+	Gavel string
 
 	// mu keeps Sweep from deleting a template Resolve is handing a run.
 	mu sync.Mutex
@@ -44,8 +47,14 @@ type OrgTemplate struct {
 	Size substrate.Size
 }
 
-// orgTemplatePrefix starts the name of every organization's template.
-const orgTemplatePrefix = "gavel-org-"
+// prefix starts the name of every template of this gavel's organizations.
+func (o *OrgTemplates) prefix() string {
+	return "gavel-" + o.Gavel + "-"
+}
+
+// MaxGavelNameLength is the longest gavel name whose organizations' template names, the prefix,
+// the organization's 32 hex digits and an 8-digit hash, still fit a 63-character DNS label.
+const MaxGavelNameLength = 15
 
 // Resolve is org's template, which it makes from the base on first use. Its name names the base
 // template's UID, the size and the runner image, so a new base, a new size or a new release's
@@ -99,7 +108,7 @@ func (o *OrgTemplates) wanted(ctx context.Context, org uuid.UUID, base substrate
 		size = &defaults
 	}
 	sum := sha256.Sum256([]byte(base.UID + "/" + strconv.FormatInt(size.CPUMillicores, 10) + "/" + strconv.FormatInt(size.MemoryBytes, 10) + "/" + o.Image))
-	return OrgTemplate{Name: orgTemplatePrefix + org.String() + "-" + hex.EncodeToString(sum[:4]), Size: *size}, nil
+	return OrgTemplate{Name: o.prefix() + hex.EncodeToString(org[:]) + "-" + hex.EncodeToString(sum[:4]), Size: *size}, nil
 }
 
 // Sweep deletes the organizations' templates that no actor runs and that are not their
@@ -129,7 +138,7 @@ func (o *OrgTemplates) Sweep(ctx context.Context) ([]string, error) {
 	var swept []string
 	var errs []error
 	for _, template := range templates {
-		org, ok := templateOrg(template.Name)
+		org, ok := o.templateOrg(template.Name)
 		if !ok || running[template.Name] {
 			continue
 		}
@@ -150,13 +159,13 @@ func (o *OrgTemplates) Sweep(ctx context.Context) ([]string, error) {
 	return swept, errors.Join(errs...)
 }
 
-// templateOrg is the organization whose template name is, when it is one.
-func templateOrg(name string) (uuid.UUID, bool) {
-	rest, ok := strings.CutPrefix(name, orgTemplatePrefix)
-	if !ok || len(rest) <= 36 || rest[36] != '-' {
+// templateOrg is the organization of this gavel whose template name is, when it is one.
+func (o *OrgTemplates) templateOrg(name string) (uuid.UUID, bool) {
+	rest, ok := strings.CutPrefix(name, o.prefix())
+	if !ok || len(rest) <= 32 || rest[32] != '-' {
 		return uuid.Nil, false
 	}
-	org, err := uuid.Parse(rest[:36])
+	org, err := uuid.Parse(rest[:32])
 	return org, err == nil
 }
 

@@ -5,6 +5,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/hex"
 	"testing"
 
 	"github.com/flanksource/captain/pkg/substrate"
@@ -35,7 +36,7 @@ func orgTemplatesOn(t *testing.T, db *gorm.DB, size substrate.Size) (*OrgTemplat
 	client, err := substrate.Dial(server.Options())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	return &OrgTemplates{DB: db, Client: client, Atespace: "ate-env", Base: "gavel-runner", Size: size}, server
+	return &OrgTemplates{DB: db, Client: client, Atespace: "ate-env", Base: "gavel-runner", Size: size, Gavel: "beta"}, server
 }
 
 func TestAnOrganizationGetsItsOwnTemplateAtTheBaseSize(t *testing.T) {
@@ -44,7 +45,7 @@ func TestAnOrganizationGetsItsOwnTemplateAtTheBaseSize(t *testing.T) {
 
 	got, err := templates.Resolve(ctx, org)
 	require.NoError(t, err)
-	assert.Regexp(t, "^gavel-org-"+org.String()+"-[0-9a-f]{8}$", got.Name)
+	assert.Regexp(t, "^gavel-beta-"+hex.EncodeToString(org[:])+"-[0-9a-f]{8}$", got.Name)
 	assert.LessOrEqual(t, len(got.Name), 63, "a template's name is a DNS label")
 	assert.Equal(t, baseSize, got.Size)
 	created, ok := server.Template("ate-env", got.Name)
@@ -140,14 +141,14 @@ func TestSweepDeletesTheTemplatesAnOrganizationNoLongerRunsFrom(t *testing.T) {
 	current, err := templates.Resolve(ctx, org)
 	require.NoError(t, err)
 	server.AddTemplate("ate-env", "someone-elses", baseSize)
-	server.AddTemplate("ate-env", orgTemplatePrefix+"not-an-organization", baseSize)
+	server.AddTemplate("ate-env", "gavel-beta-not-an-organization", baseSize)
 
 	swept, err := templates.Sweep(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []string{old.Name}, swept)
 	_, ok := server.Template("ate-env", old.Name)
 	assert.False(t, ok, "the template of the organization's old size is deleted")
-	for _, kept := range []string{current.Name, "gavel-runner", "someone-elses", orgTemplatePrefix + "not-an-organization"} {
+	for _, kept := range []string{current.Name, "gavel-runner", "someone-elses", "gavel-beta-not-an-organization"} {
 		_, ok := server.Template("ate-env", kept)
 		assert.True(t, ok, "%s is kept: it is the organization's current template, or not an organization's", kept)
 	}
@@ -179,7 +180,8 @@ func TestSweepDeletesTheTemplatesOfOrganizationsGavelNoLongerHas(t *testing.T) {
 	ctx := context.Background()
 	current, err := templates.Resolve(ctx, org)
 	require.NoError(t, err)
-	removed := orgTemplatePrefix + uuid.NewString() + "-0123abcd"
+	gone := uuid.New()
+	removed := "gavel-beta-" + hex.EncodeToString(gone[:]) + "-0123abcd"
 	server.AddTemplate("ate-env", removed, baseSize)
 
 	swept, err := templates.Sweep(ctx)
@@ -225,4 +227,32 @@ func TestWithoutARunnerImageAnOrganizationsTemplateRunsTheBases(t *testing.T) {
 	created, ok := server.Template("ate-env", got.Name)
 	require.True(t, ok)
 	assert.Equal(t, base.GetContainers()[0].GetImage(), created.GetContainers()[0].GetImage())
+}
+
+// gavel-beta and gavel-prod share a substrate cluster: each sweeps only its own organizations'
+// copies, so neither deletes the other's as belonging to an organization it doesn't have.
+func TestSweepKeepsAnotherGavelsTemplates(t *testing.T) {
+	templates, server, org := newOrgTemplates(t, substrate.Size{})
+	ctx := context.Background()
+	_, err := templates.Resolve(ctx, org)
+	require.NoError(t, err)
+	theirs := uuid.New()
+	prods := "gavel-prod-" + hex.EncodeToString(theirs[:]) + "-0123abcd"
+	server.AddTemplate("ate-env", prods, baseSize)
+
+	swept, err := templates.Sweep(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, swept)
+	_, ok := server.Template("ate-env", prods)
+	assert.True(t, ok, "gavel-prod's organization's template is gavel-prod's to sweep")
+}
+
+// A gavel's name is at most 15 characters, so its organizations' template names fit a DNS label.
+func TestTheLongestGavelNameStillGivesADNSLabel(t *testing.T) {
+	templates, _, org := newOrgTemplates(t, substrate.Size{})
+	templates.Gavel = "gavel-staging01"
+
+	got, err := templates.Resolve(context.Background(), org)
+	require.NoError(t, err)
+	assert.Len(t, got.Name, 63)
 }
