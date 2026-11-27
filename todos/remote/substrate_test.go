@@ -22,6 +22,7 @@ import (
 	"github.com/flanksource/captain/pkg/substrate"
 	"github.com/flanksource/captain/pkg/substrate/substratetest"
 	commonsdbtest "github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/blob"
 	"github.com/flanksource/gavel/budget"
 	"github.com/flanksource/gavel/commitauthor"
@@ -111,8 +112,13 @@ func (e *environment) RunRemote(ctx context.Context, in promptrun.Input, started
 	branch := e.selection.Options["branch"].(string)
 	work := e.t.TempDir()
 	gitRun(e.t, work, "clone", "-q", in.Repo, ".")
-	gitRun(e.t, work, "checkout", "-q", "-b", "run", e.selection.Options["ref"].(string))
-	require.NoError(e.t, os.WriteFile(filepath.Join(work, "fix.txt"), []byte("fixed\n"), 0o644))
+	start := e.selection.Options["ref"].(string)
+	if setup := in.Resolved.Spec.Setup; setup != nil && setup.Checkout != nil && setup.Checkout.Worktree != nil && setup.Checkout.Worktree.Branch != "" {
+		// A step that continues on a branch works on it, as the sandbox checks it out.
+		start = "origin/" + setup.Checkout.Worktree.Branch
+	}
+	gitRun(e.t, work, "checkout", "-q", "-b", "run", start)
+	require.NoError(e.t, os.WriteFile(filepath.Join(work, "fix.txt"), []byte("fixed in "+e.selection.Options["environment"].(string)+"\n"), 0o644))
 	gitRun(e.t, work, "add", "fix.txt")
 	gitRun(e.t, work, "commit", "-q", "-m", "fix the build")
 	gitRun(e.t, work, "push", "-q", in.Repo, "run:refs/heads/"+branch)
@@ -240,6 +246,74 @@ func TestSubstrateRunnerRunsAHostedStepOnSubstrate(t *testing.T) {
 
 	branch := sandbox.RunBranch(hosted.todo, id)
 	assert.Equal(t, result.Response.Workspace.Worktree.Head, gitRun(t, hosted.gitDir, "rev-parse", "refs/heads/"+branch), "the run's branch is the repository's")
+}
+
+// continuing is a hosted step that continues on branch, a run branch of the todo's.
+func continuing(branch string) lifecycle.RemoteRun {
+	run := step()
+	run.Input.Resolved.Spec.Setup = &shell.Setup{Checkout: &shell.Checkout{
+		Mode: shell.CheckoutLocal, Worktree: &shell.Worktree{Mode: shell.WorktreeBranch, Branch: branch},
+	}}
+	return run
+}
+
+// A step that continues on the todo's previous run's branch brings its commits back on that branch,
+// which moves forward, rather than on a branch of its own.
+func TestSubstrateRunnerContinuesOnTheTodosRunBranch(t *testing.T) {
+	env := &environment{t: t}
+	hosted := newHostedRun(t, env)
+	first, err := hosted.runner.Run(t.Context(), step())
+	require.NoError(t, err)
+	previous := first.Response.Workspace.Worktree
+
+	result, err := hosted.runner.Run(t.Context(), continuing(previous.Branch))
+	require.NoError(t, err)
+	assert.Equal(t, previous.Branch, env.selection.Options["branch"], "the run's commits come back on the branch it continued on")
+	head := result.Response.Workspace.Worktree.Head
+	assert.Equal(t, head, gitRun(t, hosted.gitDir, "rev-parse", "refs/heads/"+previous.Branch), "the branch moved to the run's head")
+	assert.Equal(t, previous.Head, gitRun(t, hosted.gitDir, "rev-parse", head+"^"), "on top of the previous run's commits")
+	assert.Equal(t, previous.Branch, gitRun(t, hosted.gitDir, "for-each-ref", "--format=%(refname:short)", "refs/heads/gavel/"),
+		"the run made no branch of its own")
+}
+
+// onGitHub makes hosted's repository a GitHub repository that serve mirrors, and returns GitHub's
+// repository.
+func onGitHub(t *testing.T, hosted *hostedRun) string {
+	t.Helper()
+	remotes := t.TempDir()
+	remote := filepath.Join(remotes, "acme", "app.git")
+	gitRun(t, t.TempDir(), "clone", "-q", "--bare", hosted.gitDir, remote)
+	repo := &hosted.runner.Repo
+	repo.Source, repo.Name, repo.GitHubRepoID, repo.InstallationID = "github", "acme/app", 42, 7
+	hosted.runner.Sources.GitHubURL = "file://" + remotes
+	hosted.runner.Sources.Token = func(context.Context, int64) (string, error) { return "installation-token", nil }
+	return remote
+}
+
+// On GitHub, the branch a step continues on moves forward to the run's head.
+func TestSubstrateRunnerMovesTheBranchItContinuedOnForwardOnGitHub(t *testing.T) {
+	env := &environment{t: t}
+	hosted := newHostedRun(t, env)
+	remote := onGitHub(t, hosted)
+	first, err := hosted.runner.Run(t.Context(), step())
+	require.NoError(t, err)
+	previous := first.Response.Workspace.Worktree
+	require.Equal(t, previous.Head, gitRun(t, remote, "rev-parse", "refs/heads/"+previous.Branch), "the first run's branch is on GitHub")
+
+	result, err := hosted.runner.Run(t.Context(), continuing(previous.Branch))
+	require.NoError(t, err)
+	assert.Equal(t, result.Response.Workspace.Worktree.Head, gitRun(t, remote, "rev-parse", "refs/heads/"+previous.Branch),
+		"the branch moved forward on GitHub")
+}
+
+func TestSubstrateRunnerRefusesToContinueOnABranchThatIsGone(t *testing.T) {
+	env := &environment{t: t}
+	hosted := newHostedRun(t, env)
+	gone := sandbox.RunBranch(hosted.todo, uuid.New())
+
+	_, err := hosted.runner.Run(t.Context(), continuing(gone))
+	require.EqualError(t, err, "branch "+gone+" of app is gone, so a run can't continue on it: run the todo on a new branch")
+	assert.Empty(t, env.in.Repo, "the run never started")
 }
 
 func TestSubstrateRunnerCreatesTheRunsEnvironmentFromItsOrganizationsTemplate(t *testing.T) {

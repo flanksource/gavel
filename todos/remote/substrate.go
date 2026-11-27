@@ -13,6 +13,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/promptrun"
+	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/commitauthor"
 	"github.com/flanksource/gavel/sandbox"
@@ -48,7 +49,8 @@ type SubstrateRunner struct {
 // sandbox: in environment JobName(run), from the todo's commit in serve's git directory of the
 // repository, with gavel's program rebuilding its hooks there and reaching the step's PR through
 // serve's run API over the run's channel. The run's output is its log, its transcripts are kept, and its commits come back
-// on its own branch, which becomes the repository's.
+// on its own branch, which becomes the repository's, or, for a step that continues on one of the
+// todo's run branches, on that branch, which moves forward.
 func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (result promptrun.Result, err error) {
 	id := uuid.New()
 	todo := r.TodoID
@@ -68,7 +70,13 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (res
 	if err != nil {
 		return promptrun.Result{}, err
 	}
-	branch := sandbox.RunBranch(todo, id)
+	branch, from := sandbox.RunBranch(todo, id), ""
+	if continued := continuedRunBranch(run.Input.Resolved.Spec, todo); continued != "" {
+		if from, err = r.Sources.RunBranchTip(ctx, r.Repo, continued); err != nil {
+			return promptrun.Result{}, err
+		}
+		branch = continued
+	}
 
 	in := run.Input
 	if r.Author != nil {
@@ -115,11 +123,33 @@ func (r *SubstrateRunner) Run(ctx context.Context, run lifecycle.RemoteRun) (res
 		return result, err
 	}
 	if worktree := runWorktree(result); worktree != nil && worktree.Branch == branch {
-		if err := r.Sources.PublishRunBranch(ctx, r.Repo, branch, worktree.Head); err != nil {
+		if err := r.publish(ctx, branch, from, worktree.Head); err != nil {
 			return result, fmt.Errorf("agent run %s: %w", id, err)
 		}
 	}
 	return result, nil
+}
+
+// publish makes branch, at head, the repository's: a branch of the run's own is created, and a
+// branch the run continued on from from moves forward.
+func (r *SubstrateRunner) publish(ctx context.Context, branch, from, head string) error {
+	if from == "" {
+		return r.Sources.PublishRunBranch(ctx, r.Repo, branch, head)
+	}
+	return r.Sources.ContinueRunBranch(ctx, r.Repo, branch, from, head)
+}
+
+// continuedRunBranch is the run branch of todo the step's setup checks out to continue on, or ""
+// when the step starts a branch of its own.
+func continuedRunBranch(spec api.Spec, todo uuid.UUID) string {
+	if spec.Setup == nil || spec.Setup.Checkout == nil || spec.Setup.Checkout.Worktree == nil {
+		return ""
+	}
+	worktree := spec.Setup.Checkout.Worktree
+	if worktree.Mode != shell.WorktreeBranch || !sandbox.RunBranchOf(todo, worktree.Branch) {
+		return ""
+	}
+	return worktree.Branch
 }
 
 // runOptions are the substrate backend's options with the run's own: its environment, the commit
