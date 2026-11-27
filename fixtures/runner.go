@@ -23,6 +23,9 @@ import (
 	"github.com/flanksource/gavel/traces"
 )
 
+// ErrNoFixtures reports that the runner's paths declared no fixtures.
+var ErrNoFixtures = errors.New("no fixtures found")
+
 // RunnerOptions configures the fixture runner
 type RunnerOptions struct {
 	ProcessRuntime processruntime.Options
@@ -255,7 +258,7 @@ func (r *Runner) prepareFixtureTree() (*FixtureNode, error) {
 	}
 
 	if len(r.fixtures) == 0 {
-		return nil, fmt.Errorf("no fixtures found")
+		return nil, ErrNoFixtures
 	}
 
 	return r.tree, nil
@@ -292,11 +295,6 @@ func (r *Runner) parseFixtureFiles() error {
 				return fmt.Errorf("failed to parse fixture file '%s': %w", filepath, err)
 			}
 
-			// Merge file tree into main tree
-			if fileTree != nil {
-				r.tree.AddChild(fileTree)
-			}
-
 			fileFixtureCount := 0
 			fileTree.Walk(func(node *FixtureNode) {
 				if node.Test != nil {
@@ -305,6 +303,11 @@ func (r *Runner) parseFixtureFiles() error {
 				}
 			})
 			logger.Debugf("Parsed %d fixtures from %s", fileFixtureCount, filepath)
+			// Markdown that only supports fixtures (shared templates, notes)
+			// would otherwise surface as a file node that never runs.
+			if fileFixtureCount > 0 {
+				r.tree.AddChild(fileTree)
+			}
 		}
 	}
 
