@@ -1,6 +1,7 @@
 package testrunner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -10,6 +11,10 @@ import (
 )
 
 var _ = Describe("unified Go runner", func() {
+	BeforeEach(func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+	})
+
 	It("uses a recursive selector for an unfocused mixed run", func() {
 		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: ".", Recursive: true}}
 		plans, err := o.planGoBatches(map[Framework][]string{
@@ -56,6 +61,41 @@ var _ = Describe("unified Go runner", func() {
 			"example.com/service":       ".",
 			"example.com/service/empty": "./empty",
 		}))
+	})
+
+	It("does not map a nested package to a selected package that only shares its suffix", func() {
+		workDir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/service\n\ngo 1.26.1\n"), 0o600)).To(Succeed())
+		paths, err := resolveGoBatchPaths(workDir, []string{"./har"}, []string{"example.com/service/examples/har", "example.com/service/har"}, true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(Equal(map[string]string{
+			"example.com/service/har":          "./har",
+			"example.com/service/examples/har": "./examples/har",
+		}))
+	})
+
+	It("maps packages exactly when the workdir is a subdirectory of a module", func() {
+		module := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(module, "go.mod"), []byte("module example.com/service\n\ngo 1.26.1\n"), 0o600)).To(Succeed())
+		workDir := filepath.Join(module, "sub")
+		Expect(os.MkdirAll(workDir, 0o755)).To(Succeed())
+		paths, err := resolveGoBatchPaths(workDir, []string{"./har"}, []string{"example.com/service/sub/examples/har", "example.com/service/sub/har"}, true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(Equal(map[string]string{
+			"example.com/service/sub/har":          "./har",
+			"example.com/service/sub/examples/har": "./examples/har",
+		}))
+	})
+
+	It("limits a Ginkgo-only run of a mixed package to its RunSpecs bootstrap", func() {
+		workDir, err := filepath.Abs("..")
+		Expect(err).NotTo(HaveOccurred())
+		pkg := "./testrunner/runners/testdata/overlayfixture"
+		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir}}
+		plans, err := o.planGoBatches(map[Framework][]string{parsers.Ginkgo: {pkg}}, map[Framework][]string{parsers.Ginkgo: {"--focus=reports metadata"}}, false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plans).To(HaveLen(1))
+		Expect(plans[0].args).To(Equal([]string{"-ginkgo.focus=reports metadata", "-run=^(?:TestSuite)$"}))
 	})
 
 	It("runs a mixed Go and Ginkgo package once and replays both results from cache", func() {
@@ -182,9 +222,15 @@ var _ = Describe("unified Go runner", func() {
 
 	It("keeps distinct Ginkgo runtime arguments on the test binary", func() {
 		workDir := GinkgoT().TempDir()
-		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
 		Expect(os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte("test: {frameworks: {ginkgo: {args: [--focus=selected]}}}\n"), 0o600)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(workDir, "sample_test.go"), []byte("package sample\nimport \"github.com/onsi/ginkgo/v2\"\n"), 0o600)).To(Succeed())
+		code := `package sample
+import (
+	"testing"
+	. "github.com/onsi/ginkgo/v2"
+)
+func TestSample(t *testing.T) { RunSpecs(t, "sample") }
+`
+		Expect(os.WriteFile(filepath.Join(workDir, "sample_test.go"), []byte(code), 0o600)).To(Succeed())
 		o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir}}
 		plans, err := o.planGoBatches(map[Framework][]string{parsers.GoTest: {"."}, parsers.Ginkgo: {"."}}, nil, false)
 		Expect(err).NotTo(HaveOccurred())
@@ -197,6 +243,38 @@ var _ = Describe("unified Go runner", func() {
 		}
 		process, err := o.buildGoBatchCommand(ginkgoPlan)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(process.Args).To(ContainElements("-args", "-ginkgo.focus=selected"))
+		Expect(process.Args).To(ContainElements("-run=^(?:TestSample)$", "-args", "-ginkgo.focus=selected"))
 	})
+
+	DescribeTable("preserves explicit Go selectors for Ginkgo batches", func(configArgs string, passThroughArgs, wantGoArgs []string) {
+		workDir := GinkgoT().TempDir()
+		config := fmt.Sprintf("test: {frameworks: {ginkgo: {args: [%s]}}}\n", configArgs)
+		Expect(os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte(config), 0o600)).To(Succeed())
+		code, err := os.ReadFile("runners/testdata/overlayfixture/fixture_test.go")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(os.WriteFile(filepath.Join(workDir, "sample_test.go"), code, 0o600)).To(Succeed())
+		for _, mixed := range []bool{false, true} {
+			packages := map[Framework][]string{parsers.Ginkgo: {"."}}
+			if mixed {
+				packages[parsers.GoTest] = []string{"."}
+			}
+			o := &TestOrchestrator{RunOptions: RunOptions{WorkDir: workDir}}
+			plans, err := o.planGoBatches(packages, map[Framework][]string{parsers.Ginkgo: passThroughArgs}, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plans).To(HaveLen(len(packages)))
+			plan := plans[len(plans)-1]
+			Expect(plan.framework).To(Equal(parsers.Ginkgo))
+			Expect(plan.args).To(Equal(passThroughArgs))
+			process, err := o.buildGoBatchCommand(plan)
+			Expect(err).NotTo(HaveOccurred())
+			wantTail := append(append([]string(nil), wantGoArgs...), ".", "-args", "-ginkgo.focus=selected")
+			Expect(process.Args[len(process.Args)-len(wantTail):]).To(Equal(wantTail))
+		}
+	},
+		Entry("configured equals form", "--focus=selected, -run=^$", nil, []string{"-run=^$"}),
+		Entry("configured separate value", "--focus=selected, -run, ^$", nil, []string{"-run", "^$"}),
+		Entry("pass-through equals form", "--focus=selected", []string{"-run=^$"}, []string{"-run=^$"}),
+		Entry("pass-through separate value", "--focus=selected", []string{"-run", "^$"}, []string{"-run", "^$"}),
+		Entry("pass-through overrides configuration", "--focus=selected, -run=^$", []string{"-run=^TestOrdinary$"}, []string{"-run=^$", "-run=^TestOrdinary$"}),
+	)
 })
