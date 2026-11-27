@@ -18,7 +18,8 @@ const SEND_CONTEXT = 'Send session message';
 
 /** Captain's ChatMessageResponse (pkg/cli/prompt_chat_types.go). */
 export interface SessionMessageResponse {
-  runId: string;
+  runId?: string;
+  channel?: 'claude-socket' | 'codex-queue' | 'cmux-message';
   messageId: string;
   status: string;
   capabilities: SessionChatCapabilities;
@@ -32,11 +33,14 @@ function parseSessionMessageResponse(payload: unknown): SessionMessageResponse {
   const response = payload as Partial<SessionMessageResponse> | null;
   const caps = response?.capabilities as Record<string, unknown> | undefined;
   const flagsValid = !!caps && (['interrupt', 'steer', 'followUp', 'resume'] as const).every(flag => typeof caps[flag] === 'boolean');
-  if (typeof response?.runId !== 'string' || !response.runId
-    || typeof response.messageId !== 'string'
-    || typeof response.status !== 'string'
-    || !flagsValid) {
-    throw new Error(`${SEND_CONTEXT}: invalid response ${JSON.stringify(payload)}, expected {runId, messageId, status, capabilities}`);
+  const channel = response?.channel;
+  const targetValid = channel === undefined
+    ? typeof response?.runId === 'string' && !!response.runId
+    : response?.runId === undefined
+      && ((channel === 'claude-socket' && response?.status === 'sent')
+        || ((channel === 'codex-queue' || channel === 'cmux-message') && response?.status === 'queued'));
+  if (!targetValid || typeof response?.messageId !== 'string' || typeof response.status !== 'string' || !flagsValid) {
+    throw new Error(`${SEND_CONTEXT}: invalid response ${JSON.stringify(payload)}, expected a run or live delivery with messageId, status, and capabilities`);
   }
   return response as SessionMessageResponse;
 }
@@ -96,8 +100,8 @@ export function useSessionMessageComposer(session: AgentSession, { startTimeoutM
     ...action,
     onSuccess: response => {
       sawLive.current = processActive;
-      setCapabilities(response.capabilities);
-      setFollowing(true);
+      setCapabilities(response.channel === undefined ? response.capabilities : undefined);
+      setFollowing(response.channel === undefined);
       void queryClient.invalidateQueries({ queryKey: queryKeys.agentSessions() });
       refreshChat();
     },
