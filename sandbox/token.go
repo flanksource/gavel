@@ -38,7 +38,8 @@ func VerifyRunToken(key []byte, token string, now time.Time) (uuid.UUID, uuid.UU
 	if !ok {
 		return uuid.Nil, uuid.Nil, fmt.Errorf("%w: run token is malformed", ErrInvalidRunToken)
 	}
-	signature, err := base64.RawURLEncoding.DecodeString(encodedSignature)
+	// Strict, so a signature has one encoding: its last character's unused bits must be zero.
+	signature, err := base64.RawURLEncoding.Strict().DecodeString(encodedSignature)
 	if err != nil {
 		return uuid.Nil, uuid.Nil, fmt.Errorf("%w: run token is malformed", ErrInvalidRunToken)
 	}
