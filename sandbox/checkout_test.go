@@ -52,6 +52,41 @@ func TestCheckoutKeepsTheDefaultBranchCurrent(t *testing.T) {
 	assert.Equal(t, "todos: {lifecycle: custom}\n", string(config), "the checkout follows the default branch")
 }
 
+func TestCheckoutRemovesTheLocksOfAKilledGit(t *testing.T) {
+	dataDir := t.TempDir()
+	org, repo := uuid.New(), uuid.New()
+	bare := filepath.Join(dataDir, "repos", org.String(), repo.String()+".git")
+	work := newWork(t)
+	commitFile(t, work, ".gavel.yaml", "todos: {}\n")
+	git(t, work, "clone", "-q", "--bare", work, bare)
+	sources := &Sources{DataDir: dataDir}
+	target := Repo{ID: repo, Org: org, Source: "push"}
+	checkout, err := sources.Checkout(context.Background(), target)
+	require.NoError(t, err)
+
+	// A git killed mid-checkout leaves the index locked, and one killed mid-fetch a ref.
+	locks := []string{
+		filepath.Join(checkout.Dir, ".git", "index.lock"),
+		filepath.Join(checkout.Dir, ".git", "refs", "remotes", "origin", "main.lock"),
+	}
+	for _, lock := range locks {
+		require.NoError(t, os.MkdirAll(filepath.Dir(lock), 0o755))
+		require.NoError(t, os.WriteFile(lock, nil, 0o644))
+	}
+	commitFile(t, work, ".gavel.yaml", "todos: {lifecycle: custom}\n")
+	git(t, work, "push", "-q", bare, "main")
+
+	checkout, err = sources.Checkout(context.Background(), target)
+	require.NoError(t, err)
+	assert.Equal(t, git(t, work, "rev-parse", "HEAD"), checkout.SHA)
+	config, err := os.ReadFile(filepath.Join(checkout.Dir, ".gavel.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "todos: {lifecycle: custom}\n", string(config))
+	for _, lock := range locks {
+		assert.NoFileExists(t, lock)
+	}
+}
+
 func TestCheckoutOfAnEmptyRepository(t *testing.T) {
 	dataDir := t.TempDir()
 	org, repo := uuid.New(), uuid.New()
