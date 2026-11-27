@@ -386,8 +386,8 @@ github.com/flanksource/is-healthy v1.0.93 h1:hpXkPfMXG+zawNs0HTjc/3ZIjrW7obAPDR/
 github.com/flanksource/is-healthy v1.0.93/go.mod h1:Ee0lzss7zeLlfYOcr4r3eOUJqTD3fjVnxT5cv79UVF8=
 github.com/flanksource/kubectl-neat v1.0.4 h1:t5/9CqgE84oEtB0KitgJ2+WIeLfD+RhXSxYrqb4X8yI=
 github.com/flanksource/kubectl-neat v1.0.4/go.mod h1:Un/Voyh3cmiZNKQrW/TkAl28nAA7vwnwDGVjRErKjOw=
-github.com/flanksource/mission-control-sdk/go v0.0.1 h1:c3BrAynPzmS1fwZHzk/IBsMRtJCHgOAK/wzc+bwwJoI=
-github.com/flanksource/mission-control-sdk/go v0.0.1/go.mod h1:cN5FY9N/G/QAdlS25O5Z6omzMumvLluWH+aYSdntc24=
+github.com/flanksource/mission-control-sdk/go v0.0.2 h1:SovqqxWZLnTN4kl+YYnsusMpzMoIMBGvvGdujSsAN7Y=
+github.com/flanksource/mission-control-sdk/go v0.0.2/go.mod h1:0v2DT233La7BqM08JlJXxfx02zM+Pqtpd268ebkITNA=
 github.com/flanksource/repomap v0.4.1 h1:Cl5CiwYJX/NKes9qy0U3fKshO4jR0+wzND8+VfBIXII=
 github.com/flanksource/repomap v0.4.1/go.mod h1:cEV1sJNWhOruzSU65LtH/k6kkjZSZW4rOUwl86DrO7w=
 github.com/flanksource/sandbox-runtime v1.0.2 h1:dEaVyUpeaCAn3GOiWcNDrPguaey1Gx9eTsPAc27W3Eg=
