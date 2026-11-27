@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flanksource/incident-commander/clientapi"
+	"github.com/flanksource/mission-control-sdk/go/clientapi"
 )
 
 // infrastructureLimit bounds how many resources of each kind one read returns.

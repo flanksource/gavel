@@ -36,7 +36,7 @@ import (
 	"github.com/flanksource/gavel/modelkeys"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/sshkeys"
-	"github.com/flanksource/incident-commander/clientapi"
+	"github.com/flanksource/mission-control-sdk/go/clientapi"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

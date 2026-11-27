@@ -9,7 +9,7 @@ import (
 
 	"github.com/flanksource/gavel/missioncontrol"
 	"github.com/flanksource/gavel/missioncontrol/missioncontroltest"
-	"github.com/flanksource/incident-commander/clientapi"
+	"github.com/flanksource/mission-control-sdk/go/clientapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

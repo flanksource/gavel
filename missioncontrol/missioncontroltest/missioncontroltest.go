@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/flanksource/incident-commander/clientapi"
+	"github.com/flanksource/mission-control-sdk/go/clientapi"
 )
 
 // Token is the only access token the server accepts.

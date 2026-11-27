@@ -30,7 +30,7 @@ require (
 	github.com/flanksource/deps v1.0.52-0.20261116192909-7d15f95777f7
 	github.com/flanksource/deps/start v0.0.0-20261103114210-92d640aba10a
 	github.com/flanksource/gomplate/v4 v4.0.3
-	github.com/flanksource/incident-commander v0.0.2051
+	github.com/flanksource/mission-control-sdk/go v0.0.1
 	github.com/flanksource/repomap v0.4.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/ghodss/yaml v1.0.0
