@@ -117,6 +117,17 @@ describe('postSessionMessage', () => {
   });
 
   it.each([
+    ['claude-socket', 'sent'],
+    ['codex-queue', 'queued'],
+    ['cmux-message', 'queued'],
+  ])('accepts %s without a new run ID', async (channel, status) => {
+    const delivery = { messageId: 'msg-1', status, channel, capabilities: RUN_RESPONSE.capabilities };
+    fetchMock.mockResolvedValue(jsonResponse(delivery));
+
+    await expect(postSessionMessage({ sessionId: SESSION_ID, text: 'hi', messageId: 'm' })).resolves.toEqual(delivery);
+  });
+
+  it.each([
     ['a missing runId', { ...RUN_RESPONSE, runId: undefined }],
     ['missing capabilities', { ...RUN_RESPONSE, capabilities: undefined }],
     ['non-boolean capability flags', { ...RUN_RESPONSE, capabilities: { ...RUN_RESPONSE.capabilities, steer: 'yes' } }],
@@ -129,6 +140,18 @@ describe('postSessionMessage', () => {
 });
 
 describe('useSessionMessageComposer', () => {
+  it('refreshes after Codex queue delivery without expecting a new process', async () => {
+    const capabilities = { interrupt: false, steer: false, followUp: true, resume: false };
+    routeFetch({ message: () => jsonResponse({ messageId: 'msg-1', status: 'queued', channel: 'codex-queue', capabilities }) });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useSessionMessageComposer(session({ source: 'codex' })), { wrapper });
+
+    act(() => result.current.send('keep going'));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.agentSessions() }));
+    expect(result.current).toMatchObject({ follow: false, error: undefined });
+  });
+
   it('is idle and resumable for a finished session, and running for a live one', () => {
     const finished = renderHook(() => useSessionMessageComposer(session()), { wrapper });
     expect(finished.result.current).toMatchObject({
