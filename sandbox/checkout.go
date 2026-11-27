@@ -5,6 +5,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,8 +41,13 @@ func (s *Sources) Checkout(ctx context.Context, repo Repo) (Checkout, error) {
 		if err := cloneWhole(ctx, dir, "clone", "--quiet", "--no-checkout", "--config", "core.symlinks=false", source); err != nil {
 			return Checkout{}, fmt.Errorf("clone the workspace of %s: %w", repo.label(), err)
 		}
-	} else if _, err := runGit(ctx, nil, "-C", dir, "fetch", "--quiet", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
-		return Checkout{}, fmt.Errorf("refresh the workspace of %s: %w", repo.label(), err)
+	} else {
+		if err := removeGitLocks(filepath.Join(dir, ".git")); err != nil {
+			return Checkout{}, fmt.Errorf("unlock the workspace of %s: %w", repo.label(), err)
+		}
+		if _, err := runGit(ctx, nil, "-C", dir, "fetch", "--quiet", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+			return Checkout{}, fmt.Errorf("refresh the workspace of %s: %w", repo.label(), err)
+		}
 	}
 	head, err := runGit(ctx, nil, "-C", source, "rev-parse", "HEAD^{commit}")
 	if err != nil {
@@ -52,6 +58,25 @@ func (s *Sources) Checkout(ctx context.Context, repo Repo) (Checkout, error) {
 		return Checkout{}, fmt.Errorf("check out the default branch of %s: %w", repo.label(), err)
 	}
 	return Checkout{Dir: dir, SHA: sha}, nil
+}
+
+// removeGitLocks deletes the lock files in gitDir that a git killed mid-command left behind, as
+// one is when serve's pod is replaced or a request is cancelled. Only Checkout runs git in a
+// workspace, holding the workspace's mutex, so no git holds a lock found while it is held. Git
+// takes no locks among the objects, which are skipped.
+func removeGitLocks(gitDir string) error {
+	return filepath.WalkDir(gitDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && entry.Name() == "objects" {
+			return filepath.SkipDir
+		}
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".lock") {
+			return os.Remove(path)
+		}
+		return nil
+	})
 }
 
 // sourceDir is the repository Sources reads repo from: its pushed bare repository, or its GitHub
