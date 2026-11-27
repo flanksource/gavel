@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/flanksource/incident-commander/sdk/client"
+	"github.com/flanksource/mission-control-sdk/go/client"
 )
 
 // Source reads one Mission Control instance.

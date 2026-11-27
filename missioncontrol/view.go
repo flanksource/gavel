@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/incident-commander/sdk/client"
+	"github.com/flanksource/mission-control-sdk/go/client"
 )
 
 // View is what a Mission Control View's panels show.
