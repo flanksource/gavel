@@ -20,7 +20,8 @@ import (
 // RunBranchPrefix starts the name of every branch a run's commits go on.
 const RunBranchPrefix = "gavel/"
 
-// ErrBranchExists is a run branch that is already there: a run's branch is created once.
+// ErrBranchExists is a run branch that is already there: a run's branch is created once, and a
+// later run that continues on it moves it forward with ContinueRunBranch.
 var ErrBranchExists = errors.New("the branch already exists")
 
 // ErrNoRunBranch is a run whose commits are on no run branch.
@@ -29,9 +30,33 @@ var ErrNoRunBranch = errors.New("no run branch holds the run's commits")
 // ErrInvalidLeaveOut is a choice of files to leave out of a landing that can't be made.
 var ErrInvalidLeaveOut = errors.New("can't leave those files out")
 
-// RunBranch is the branch serve puts the commits of run, a sandbox run of todo, on.
+// RunBranch is the branch serve puts the commits of run, a sandbox run of todo, on. A later run of
+// todo that continues on it puts its commits there too.
 func RunBranch(todo, run uuid.UUID) string {
-	return RunBranchPrefix + todo.String()[:8] + "-" + run.String()[:8]
+	return runBranchesOf(todo) + run.String()[:8]
+}
+
+// RunBranchOf reports whether branch is one of todo's run branches.
+func RunBranchOf(todo uuid.UUID, branch string) bool {
+	return strings.HasPrefix(branch, runBranchesOf(todo))
+}
+
+// runBranchesOf starts the name of every run branch of todo.
+func runBranchesOf(todo uuid.UUID) string {
+	return RunBranchPrefix + todo.String()[:8] + "-"
+}
+
+// RunBranchTip is the commit branch, a run branch, is at in repo's git directory on serve as it was
+// last brought up to date.
+func (s *Sources) RunBranchTip(ctx context.Context, repo Repo, branch string) (string, error) {
+	if strings.HasPrefix(branch, "-") {
+		return "", fmt.Errorf("branch %q can't start with \"-\"", branch)
+	}
+	tip, err := runGit(ctx, nil, "-C", s.LocalGitDir(repo), "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("branch %s of %s is gone, so a run can't continue on it: run the todo on a new branch", branch, repo.label())
+	}
+	return strings.TrimSpace(tip), nil
 }
 
 // RunBranchAt is the branch, of those todo's runs put their commits on in repo, whose tip is
@@ -42,7 +67,7 @@ func (s *Sources) RunBranchAt(ctx context.Context, repo Repo, todo uuid.UUID, he
 		return "", err
 	}
 	refs, err := runGit(ctx, nil, "-C", dir, "for-each-ref", "--format=%(objectname) %(refname:strip=2)",
-		"refs/heads/"+RunBranchPrefix+todo.String()[:8]+"-*")
+		"refs/heads/"+runBranchesOf(todo)+"*")
 	if err != nil {
 		return "", fmt.Errorf("list the run branches of todo %s in %s: %w", todo, repo.label(), err)
 	}
@@ -81,11 +106,8 @@ func (s *Sources) CommitSubjects(ctx context.Context, repo Repo, base, head stri
 // first, since a refresh prunes what GitHub doesn't have, which may be the branch; its commits
 // stay in the mirror either way, which is why sha is pushed rather than the branch.
 func (s *Sources) PublishRunBranch(ctx context.Context, repo Repo, branch, sha string) error {
-	if !strings.HasPrefix(branch, RunBranchPrefix) || strings.HasPrefix(branch, "-") {
-		return fmt.Errorf("a run's commits go on a %s branch, not %q", RunBranchPrefix, branch)
-	}
-	if !commitSHA.MatchString(sha) {
-		return fmt.Errorf("the run's head %q is not a commit SHA", sha)
+	if err := validRunBranch(branch, sha); err != nil {
+		return err
 	}
 	switch repo.Source {
 	case "push":
@@ -102,6 +124,54 @@ func (s *Sources) PublishRunBranch(ctx context.Context, repo Repo, branch, sha s
 	default:
 		return fmt.Errorf("repository %s has source %q, not push or github", repo.ID, repo.Source)
 	}
+}
+
+// ContinueRunBranch moves branch, a run's branch a later run continued on from from, forward to
+// sha, the later run's head, whose commits came back to repo's git directory on the branch: a
+// pushed repository's bare repository has it at sha, and a GitHub repository's is pushed from from
+// to sha, never over a branch that moved on GitHub since. A head that doesn't build on from is
+// refused: a run's branch only moves forward.
+func (s *Sources) ContinueRunBranch(ctx context.Context, repo Repo, branch, from, sha string) error {
+	if err := validRunBranch(branch, sha); err != nil {
+		return err
+	}
+	if !commitSHA.MatchString(from) {
+		return fmt.Errorf("the commit the run started from %q is not a commit SHA", from)
+	}
+	if from == sha {
+		return nil
+	}
+	dir := s.LocalGitDir(repo)
+	if _, err := runGit(ctx, nil, "-C", dir, "merge-base", "--is-ancestor", from, sha); err != nil {
+		return fmt.Errorf("branch %s of %s is at %s, and the run's head %s doesn't build on it: a run's branch only moves forward",
+			branch, repo.label(), from, sha)
+	}
+	switch repo.Source {
+	case "push":
+		if _, err := runGit(ctx, nil, "-C", dir, "update-ref", "refs/heads/"+branch, sha); err != nil {
+			return fmt.Errorf("put branch %s of %s at %s: %w", branch, repo.label(), sha, err)
+		}
+		return nil
+	case "github":
+		if err := s.moveBranch(ctx, repo, dir, branch, from, sha); err != nil {
+			return fmt.Errorf("move branch %s of %s on GitHub from %s to %s (if the branch moved on GitHub since the run started, run the todo on a new branch): %w",
+				branch, repo.label(), from, sha, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("repository %s has source %q, not push or github", repo.ID, repo.Source)
+	}
+}
+
+// validRunBranch refuses a branch that isn't a run's, or a head that isn't a commit SHA.
+func validRunBranch(branch, sha string) error {
+	if !strings.HasPrefix(branch, RunBranchPrefix) || strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("a run's commits go on a %s branch, not %q", RunBranchPrefix, branch)
+	}
+	if !commitSHA.MatchString(sha) {
+		return fmt.Errorf("the run's head %q is not a commit SHA", sha)
+	}
+	return nil
 }
 
 // pushNewBranch creates branch at sha on GitHub, from source, repo's mirror. A branch GitHub has

@@ -215,3 +215,98 @@ func TestPublishRunBranchPutsAPushedRepositorysBranchAtTheRunsHead(t *testing.T)
 	require.NoError(t, sources.PublishRunBranch(context.Background(), pushed, "gavel/todo-run", tip))
 	assert.Equal(t, tip, git(t, dir, "rev-parse", "refs/heads/gavel/todo-run"))
 }
+
+func TestRunBranchOfIsATodosRunBranch(t *testing.T) {
+	todo := uuid.New()
+	assert.True(t, RunBranchOf(todo, RunBranch(todo, uuid.New())))
+	assert.False(t, RunBranchOf(todo, RunBranch(uuid.New(), uuid.New())), "another todo's run branch")
+	assert.False(t, RunBranchOf(todo, "main"))
+}
+
+// A later run of a todo that continued on a run's branch moves it forward on GitHub from where the
+// run found it. A branch that moved on GitHub since, or a run that didn't build on it, is never
+// pushed over.
+func TestContinueRunBranchFastForwardsARunsBranchOnGitHub(t *testing.T) {
+	dataDir, remotes := t.TempDir(), t.TempDir()
+	org, repo := uuid.New(), uuid.New()
+	work := newWork(t)
+	base := commitFile(t, work, "README.md", "first")
+	remote := filepath.Join(remotes, "acme", "app.git")
+	git(t, work, "clone", "-q", "--bare", work, remote)
+	sources := &Sources{
+		DataDir:   dataDir,
+		GitHubURL: "file://" + remotes,
+		Token:     func(context.Context, int64) (string, error) { return "installation-token", nil },
+	}
+	github := Repo{ID: repo, Org: org, Source: "github", Name: "acme/app", GitHubRepoID: 42, InstallationID: 7}
+	mirror, err := sources.GitDir(context.Background(), github)
+	require.NoError(t, err)
+	first, tip := runCommits(t, mirror, base, "first-run")
+	cameBack(t, mirror, first, "first-run", "gavel/todo-run")
+	require.NoError(t, sources.PublishRunBranch(context.Background(), github, "gavel/todo-run", tip))
+
+	// The later run's commits came back on the same branch, on top of the first run's.
+	second, head := runCommits(t, mirror, tip, "second-run")
+	cameBack(t, mirror, second, "second-run", "gavel/todo-run")
+	require.NoError(t, sources.ContinueRunBranch(context.Background(), github, "gavel/todo-run", tip, head))
+	assert.Equal(t, head, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"), "the branch moved forward on GitHub")
+	require.NoError(t, sources.ContinueRunBranch(context.Background(), github, "gavel/todo-run", head, head), "a run that committed nothing leaves the branch")
+
+	stale, staleHead := runCommits(t, mirror, tip, "stale-run")
+	cameBack(t, mirror, stale, "stale-run", "gavel/stale-run")
+	err = sources.ContinueRunBranch(context.Background(), github, "gavel/todo-run", tip, staleHead)
+	require.Error(t, err, "a branch that moved past where the run found it isn't pushed over")
+	assert.Contains(t, err.Error(), "move branch gavel/todo-run of acme/app on GitHub from "+tip+" to "+staleHead+
+		" (if the branch moved on GitHub since the run started, run the todo on a new branch)")
+	assert.Equal(t, head, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"))
+
+	sideways, sidewaysHead := runCommits(t, mirror, base, "sideways-run")
+	cameBack(t, mirror, sideways, "sideways-run", "gavel/sideways-run")
+	err = sources.ContinueRunBranch(context.Background(), github, "gavel/todo-run", head, sidewaysHead)
+	require.EqualError(t, err, "branch gavel/todo-run of acme/app is at "+head+", and the run's head "+sidewaysHead+
+		" doesn't build on it: a run's branch only moves forward")
+	assert.Equal(t, head, git(t, remote, "rev-parse", "refs/heads/gavel/todo-run"))
+}
+
+func TestContinueRunBranchMovesAPushedRepositorysBranchForward(t *testing.T) {
+	sources := &Sources{DataDir: t.TempDir()}
+	pushed := Repo{ID: uuid.New(), Org: uuid.New(), Source: "push", Name: "app"}
+	dir, err := sources.GitDir(context.Background(), pushed)
+	require.NoError(t, err)
+	work := newWork(t)
+	base := commitFile(t, work, "README.md", "first")
+	git(t, work, "clone", "-q", "--bare", work, dir)
+	first, tip := runCommits(t, dir, base, "first-run")
+	cameBack(t, dir, first, "first-run", "gavel/todo-run")
+	second, head := runCommits(t, dir, tip, "second-run")
+	cameBack(t, dir, second, "second-run", "gavel/todo-run")
+
+	require.NoError(t, sources.ContinueRunBranch(context.Background(), pushed, "gavel/todo-run", tip, head))
+	assert.Equal(t, head, git(t, dir, "rev-parse", "refs/heads/gavel/todo-run"))
+
+	sideways, sidewaysHead := runCommits(t, dir, base, "sideways-run")
+	cameBack(t, dir, sideways, "sideways-run", "gavel/sideways-run")
+	err = sources.ContinueRunBranch(context.Background(), pushed, "gavel/todo-run", head, sidewaysHead)
+	require.EqualError(t, err, "branch gavel/todo-run of app is at "+head+", and the run's head "+sidewaysHead+
+		" doesn't build on it: a run's branch only moves forward")
+	assert.Equal(t, head, git(t, dir, "rev-parse", "refs/heads/gavel/todo-run"))
+}
+
+func TestRunBranchTipIsWhereTheRepositoryHasTheBranch(t *testing.T) {
+	sources := &Sources{DataDir: t.TempDir()}
+	pushed := Repo{ID: uuid.New(), Org: uuid.New(), Source: "push", Name: "app"}
+	dir, err := sources.GitDir(context.Background(), pushed)
+	require.NoError(t, err)
+	work := newWork(t)
+	base := commitFile(t, work, "README.md", "first")
+	git(t, work, "clone", "-q", "--bare", work, dir)
+	run, tip := runCommits(t, dir, base, "first-run")
+	cameBack(t, dir, run, "first-run", "gavel/todo-run")
+
+	got, err := sources.RunBranchTip(context.Background(), pushed, "gavel/todo-run")
+	require.NoError(t, err)
+	assert.Equal(t, tip, got)
+
+	_, err = sources.RunBranchTip(context.Background(), pushed, "gavel/gone")
+	require.EqualError(t, err, "branch gavel/gone of app is gone, so a run can't continue on it: run the todo on a new branch")
+}
