@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, CopyButton, DetailEmptyState, SegmentedControl, SplitPane, Tabs } from '@flanksource/clicky-ui/components';
-import { JsonView, LogViewer, ProgressBar, StatusDot, Timestamp } from '@flanksource/clicky-ui/data';
+import { JsonView, LogViewer, StatusDot, Timestamp } from '@flanksource/clicky-ui/data';
 import { fetchJSON, queryKeys, responseError } from '../query';
 import { useNow } from '../useNow';
 
@@ -72,14 +72,6 @@ export function runStatus(run: SandboxRun): string {
   if (run.lost) return 'lost';
   const status = run.phase || run.status;
   return run.status === 'failed' && run.exitCode !== undefined ? `${status} (exit ${run.exitCode})` : status;
-}
-
-// ranJob says whether a run's job ran. A run recorded before runs had events, whose history lacks
-// the queued event that creates every run now, is taken to have (sandbox.RunPhase).
-function ranJob(run: SandboxRun): boolean {
-  const first = run.events?.[0];
-  if (first?.source !== 'gavel' || first.kind !== 'queued') return true;
-  return run.events!.some(event => event.source === 'gavel' && event.kind === 'running');
 }
 
 function runDot(run: SandboxRun): DotStatus | undefined {
@@ -197,45 +189,6 @@ function RunList({ runs, selectedId, onSelect }: { runs: SandboxRun[]; selectedI
           </button>
         ))}
       </div>
-    </div>
-  );
-}
-
-// RunTime shows a run's time queued and working against its timeout.
-function RunTime({ run }: { run: SandboxRun }) {
-  const now = useNow();
-  const timeout = run.timeoutSeconds ?? 0;
-  const queued = seconds(run.createdAt, run.startedAt ?? (run.status === 'queued' ? now : run.finishedAt ?? now));
-  const worked = run.startedAt ? seconds(run.startedAt, run.finishedAt ?? now) : 0;
-  const total = queued + Math.max(timeout, worked);
-  if (total <= 0) return null;
-  const color = run.lost ? 'bg-amber-500' : run.status === 'failed' ? 'bg-red-500' : run.status === 'succeeded' ? 'bg-green-500' : 'bg-blue-500';
-  let caption = '';
-  if (run.lost) caption = `Still recorded as running ${formatSeconds(worked - timeout)} past its ${formatSeconds(timeout)} timeout. Its job is gone and can no longer report how it ended.`;
-  else if (run.status === 'provisioning') caption = `Waiting ${formatSeconds(worked)} for its sandbox to start. The job has not started yet.`;
-  else if (run.status === 'running' && timeout) caption = `${formatSeconds(worked)} of ${formatSeconds(timeout)} used. Stopped at ${new Date(new Date(run.startedAt!).getTime() + timeout * 1000).toLocaleTimeString()} if still running.`;
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex justify-between text-xs text-muted-foreground">
-        <span>Queued {formatSeconds(queued)}{run.startedAt ? `, ${ranJob(run) ? 'ran' : 'waited for its sandbox'} ${formatSeconds(worked)}` : ''}</span>
-        {timeout > 0 && <span>Timeout {formatSeconds(timeout)}</span>}
-      </div>
-      <div className="relative">
-        <ProgressBar
-          label="Run time"
-          total={total}
-          formatValue={formatSeconds}
-          segments={[
-            { count: queued, color: 'bg-zinc-400', label: 'queued' },
-            { count: worked, color, label: run.finishedAt ? 'ran' : run.status },
-          ]}
-        />
-        {timeout > 0 && (
-          <div title="Timeout" className="absolute -top-1 h-4 w-px bg-foreground/60" style={{ left: `${((queued + timeout) / total) * 100}%` }} />
-        )}
-      </div>
-      {caption && <span className="text-xs text-muted-foreground">{caption}</span>}
     </div>
   );
 }
@@ -374,14 +327,13 @@ function RunDetail({ run }: { run: SandboxRun }) {
 
       <RunEventChain run={run} />
 
-      <RunTime run={run} />
-
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-3 xl:grid-cols-4">
         {[
           { label: 'Created', value: <Timestamp value={run.createdAt} format="short" /> },
           { label: 'Started', value: run.startedAt ? <Timestamp value={run.startedAt} format="short" /> : '—' },
           { label: 'Finished', value: run.finishedAt ? <Timestamp value={run.finishedAt} format="short" /> : '—' },
           { label: 'Size', value: formatSize(run) },
+          { label: 'Timeout', value: run.timeoutSeconds ? formatSeconds(run.timeoutSeconds) : undefined },
           { label: 'Template', value: run.template, mono: true },
           { label: 'Backend', value: run.backend },
           { label: 'Job', value: run.backendRef, mono: true },
